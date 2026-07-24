@@ -1,0 +1,48 @@
+﻿<Solution>
+  <Folder Name="/Infrastructure/">
+    <Project Path="src/Infrastructure/LingFan.Media.Abstractions/LingFan.Media.Abstractions.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Core/LingFan.Media.Core.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Sources/LingFan.Media.Sources.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Formats/LingFan.Media.Formats.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Video/LingFan.Media.Video.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Audio/LingFan.Media.Audio.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Extensions/LingFan.Media.Extensions.csproj" />
+  </Folder>
+  <Folder Name="/Backends/">
+    <Project Path="src/Backends/LingFan.Media.Backends.FFmpeg/LingFan.Media.Backends.FFmpeg.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.VLC/LingFan.Media.Backends.VLC.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.MediaFoundation/LingFan.Media.Backends.MediaFoundation.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.GStreamer/LingFan.Media.Backends.GStreamer.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.WebRTC/LingFan.Media.Backends.WebRTC.csproj" />
+  </Folder>
+  <Folder Name="/Renderers/">
+    <Project Path="src/Renderers/LingFan.Media.Renderers.D3D11/LingFan.Media.Renderers.D3D11.csproj" />
+    <Project Path="src/Renderers/LingFan.Media.Renderers.Vulkan/LingFan.Media.Renderers.Vulkan.csproj" />
+    <Project Path="src/Renderers/LingFan.Media.Renderers.Metal/LingFan.Media.Renderers.Metal.csproj" />
+    <Project Path="src/Renderers/LingFan.Media.Renderers.OpenGL/LingFan.Media.Renderers.OpenGL.csproj" />
+    <Project Path="src/Renderers/LingFan.Media.Renderers.Shared/LingFan.Media.Renderers.Shared.csproj" />
+  </Folder>
+  <Folder Name="/Outputs/">
+    <Project Path="src/Outputs/LingFan.Media.Outputs/LingFan.Media.Outputs.csproj" />
+    <Project Path="src/Outputs/LingFan.Media.Outputs.Shared/LingFan.Media.Outputs.Shared.csproj" />
+  </Folder>
+  <Folder Name="/Platforms/">
+    <Project Path="src/Platforms/LingFan.Media.Platforms/LingFan.Media.Platforms.csproj" />
+  </Folder>
+  <Folder Name="/UI/">
+    <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="src/Tests/LingFan.Media.Abstractions.Tests/LingFan.Media.Abstractions.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Core.Tests/LingFan.Media.Core.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Sources.Tests/LingFan.Media.Sources.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Formats.Tests/LingFan.Media.Formats.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Video.Tests/LingFan.Media.Video.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Audio.Tests/LingFan.Media.Audio.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Backends.FFmpeg.Tests/LingFan.Media.Backends.FFmpeg.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Outputs.Tests/LingFan.Media.Outputs.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Avalonia.Tests/LingFan.Media.Avalonia.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.IntegrationTests/LingFan.Media.IntegrationTests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Renderers.D3D11.Tests/LingFan.Media.Renderers.D3D11.Tests.csproj" />
+  </Folder>
+</Solution>

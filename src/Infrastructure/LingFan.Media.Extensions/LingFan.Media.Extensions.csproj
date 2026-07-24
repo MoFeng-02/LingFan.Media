@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <ProjectReference Include="..\LingFan.Media.Core\LingFan.Media.Core.csproj" />
+    <ProjectReference Include="..\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+    <ProjectReference Include="..\LingFan.Media.Formats\LingFan.Media.Formats.csproj" />
+    <ProjectReference Include="..\LingFan.Media.Video\LingFan.Media.Video.csproj" />
+    <ProjectReference Include="..\LingFan.Media.Audio\LingFan.Media.Audio.csproj" />
+  </ItemGroup>
+
+</Project>

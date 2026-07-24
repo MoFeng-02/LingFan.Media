@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <ProjectReference Include="..\LingFan.Media.Outputs.Shared\LingFan.Media.Outputs.Shared.csproj" />
+  </ItemGroup>
+
+</Project>
