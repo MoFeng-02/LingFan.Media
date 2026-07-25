@@ -1,0 +1,128 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:lc="using:LingFan.Media.Avalonia">
+
+    <!-- ProgressBar 默认 ControlTheme -->
+    <!-- 使用 ScaleTransform 缩放 Border 来表示进度（ScaleX 绑定 Progress/BufferedProgress） -->
+    <ControlTheme x:Key="{x:Type lc:ProgressBar}" TargetType="lc:ProgressBar">
+        <Setter Property="Height" Value="6" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid Height="6" ClipToBounds="True">
+                    <!-- 缓冲进度背景（轨道） -->
+                    <Border Background="#40FFFFFF" CornerRadius="3" />
+                    <!-- 缓冲进度（ScaleTransform 缩放） -->
+                    <Border Background="#60FFFFFF"
+                            CornerRadius="3"
+                            HorizontalAlignment="Stretch"
+                            RenderTransformOrigin="0,0">
+                        <Border.RenderTransform>
+                            <ScaleTransform ScaleX="{TemplateBinding BufferedProgress}" />
+                        </Border.RenderTransform>
+                    </Border>
+                    <!-- 播放进度（ScaleTransform 缩放） -->
+                    <Border Background="White"
+                            CornerRadius="3"
+                            HorizontalAlignment="Stretch"
+                            RenderTransformOrigin="0,0">
+                        <Border.RenderTransform>
+                            <ScaleTransform ScaleX="{TemplateBinding Progress}" />
+                        </Border.RenderTransform>
+                    </Border>
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <!-- VolumeSlider 默认 ControlTheme -->
+    <!-- Slider.Value 使用 TwoWay 绑定：用户拖拽 → VolumeSlider.Volume 变化 -->
+    <ControlTheme x:Key="{x:Type lc:VolumeSlider}" TargetType="lc:VolumeSlider">
+        <Setter Property="Width" Value="80" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Slider Minimum="0"
+                        Maximum="1"
+                        Value="{Binding Volume, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                        Width="80" />
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <!-- TimeDisplay 默认 ControlTheme -->
+    <ControlTheme x:Key="{x:Type lc:TimeDisplay}" TargetType="lc:TimeDisplay">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <TextBlock Text="{TemplateBinding DisplayText}"
+                           FontSize="12"
+                           Foreground="White"
+                           VerticalAlignment="Center" />
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <!-- AudioVisualizer 默认 ControlTheme -->
+    <ControlTheme x:Key="{x:Type lc:AudioVisualizer}" TargetType="lc:AudioVisualizer">
+    </ControlTheme>
+
+    <!-- MediaControl 默认 ControlTheme -->
+    <!-- 子控件通过 TemplateBinding 绑定到 MediaControl 的 StyledProperty -->
+    <ControlTheme x:Key="{x:Type lc:MediaControl}" TargetType="lc:MediaControl">
+        <Setter Property="Background" Value="#80000000" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Height" Value="48" />
+        <Setter Property="VerticalAlignment" Value="Bottom" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid Background="{TemplateBinding Background}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 播放/暂停按钮 -->
+                    <Button x:Name="PART_PlayButton"
+                            Grid.Column="0"
+                            Content="▶"
+                            Margin="4,0" />
+
+                    <!-- 进度条（绑定 Progress，V1 缓冲进度=播放进度） -->
+                    <lc:ProgressBar Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Margin="8,0"
+                                    Progress="{TemplateBinding Progress}"
+                                    BufferedProgress="{TemplateBinding Progress}"
+                                    IsVisible="{TemplateBinding ShowProgressBar}" />
+
+                    <!-- 时间显示（绑定 Position/Duration） -->
+                    <lc:TimeDisplay Grid.Column="2"
+                                    Margin="8,0"
+                                    Position="{TemplateBinding Position}"
+                                    Duration="{TemplateBinding Duration}"
+                                    IsVisible="{TemplateBinding ShowTime}" />
+
+                    <!-- 音量滑块（TwoWay：用户拖拽 → MediaControl.Volume → Player.Volume） -->
+                    <lc:VolumeSlider Grid.Column="3"
+                                     Margin="8,0"
+                                     Volume="{Binding Volume, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                     IsMuted="{Binding IsMuted, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                     IsVisible="{TemplateBinding ShowVolume}" />
+
+                    <!-- 全屏按钮 -->
+                    <Button x:Name="PART_FullscreenButton"
+                            Grid.Column="4"
+                            Content="⛶"
+                            Margin="4,0"
+                            IsVisible="{TemplateBinding ShowFullscreen}" />
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+</ResourceDictionary>
