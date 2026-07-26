@@ -4,8 +4,9 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// WASAPI COM 互操作声明。包含 COM 接口、GUID、常量和 P/Invoke。
 /// </summary>
 /// <remarks>
-/// <para><b>AOT 兼容</b>：使用 [ComImport] + [InterfaceType(InterfaceIsIUnknown)]，
-/// COM 调用存根在编译期生成，不依赖运行时反射。</para>
+/// <para><b>AOT 兼容</b>：使用原始 vtable P/Invoke（纯 Marshal 封送，无 [ComImport]/RCW），
+/// 在 NativeAOT 下完全兼容。（注：本环境 .NET 10 运行时未提供 GeneratedComInterfaceAttribute，
+/// 故采用 vtable 委托方式，而非源生成式 COM。）</para>
 /// <para><b>不使用 NAudio</b>：NAudio 内部使用反射，不满足 AOT 友好要求。</para>
 /// </remarks>
 internal static class WasapiInterop
@@ -128,169 +129,59 @@ internal struct WAVEFORMATEXTENSIBLE
     public Guid SubFormat;
 }
 
-// ── COM 接口声明 ──
-// vtable 顺序：IUnknown(0=QI, 1=AddRef, 2=Release) + 接口方法(3+)
-// 使用 [PreserveSig] 保留 HRESULT，手动用 Marshal.ThrowExceptionForHR 处理
+// ── COM vtable 调用（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）──
+// WASAPI 接口 vtable 布局：IUnknown(0=QueryInterface, 1=AddRef, 2=Release) + 接口方法(3+)
+// 每个委托首个参数为 COM 对象指针（this），调用时由 ComVTable.Get 从 vtable 槽位读取函数指针。
+// 所有 HRESULT 均 PreserveSig 返回，由调用方用 Marshal.ThrowExceptionForHR 处理（与原始 [ComImport] 行为一致）。
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMMDeviceEnumerator_GetDefaultAudioEndpoint(IntPtr self, int dataFlow, int role, out IntPtr endpoint);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMMDevice_Activate(IntPtr self, ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IntPtr ppInterface);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_Initialize(IntPtr self, int shareMode, int streamFlags, long hnsBufferDuration, long hnsPeriodicity, IntPtr pWaveFormat, ref Guid pAudioSessionGuid);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_GetBufferSize(IntPtr self, out uint pNumBufferFrames);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_GetCurrentPadding(IntPtr self, out uint pNumPaddingFrames);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_Start(IntPtr self);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_Stop(IntPtr self);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_Reset(IntPtr self);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_GetService(IntPtr self, ref Guid riid, out IntPtr ppv);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioRenderClient_GetBuffer(IntPtr self, uint numFramesRequested, out IntPtr pData);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioRenderClient_ReleaseBuffer(IntPtr self, uint numFramesWritten, int dwFlags);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int ISimpleAudioVolume_SetMasterVolume(IntPtr self, float fLevel, ref Guid EventContext);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClock_GetPosition(IntPtr self, out ulong pu64DevicePosition, out ulong pu64QPCPosition);
 
 /// <summary>
-/// IMMDeviceEnumerator：音频设备枚举器。
+/// 从 COM 接口指针读取第 (3 + slotIndex) 个 vtable 槽位的函数指针并转为强类型委托。
 /// </summary>
-[ComImport]
-[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMMDeviceEnumerator
+internal static class ComVTable
 {
-    // vtable[3]
-    [PreserveSig]
-    int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr collection);
-
-    // vtable[4]
-    [PreserveSig]
-    int GetDefaultAudioEndpoint(int dataFlow, int role, out IntPtr endpoint);
-}
-
-/// <summary>
-/// IMMDevice：音频端点设备。
-/// </summary>
-[ComImport]
-[Guid("D666063F-1587-4E43-81F1-B948E807363F")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMMDevice
-{
-    // vtable[3]
-    [PreserveSig]
-    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IntPtr ppInterface);
-}
-
-/// <summary>
-/// IAudioClient：WASAPI 音频客户端。
-/// </summary>
-[ComImport]
-[Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IAudioClient
-{
-    // vtable[3]
-    [PreserveSig]
-    int Initialize(
-        int shareMode,
-        int streamFlags,
-        long hnsBufferDuration,
-        long hnsPeriodicity,
-        IntPtr pWaveFormat,
-        Guid pAudioSessionGuid);
-
-    // vtable[4]
-    [PreserveSig]
-    int GetBufferSize(out uint pNumBufferFrames);
-
-    // vtable[5]
-    [PreserveSig]
-    int GetStreamLatency(out long phnsLatency);
-
-    // vtable[6]
-    [PreserveSig]
-    int GetCurrentPadding(out uint pNumPaddingFrames);
-
-    // vtable[7]
-    [PreserveSig]
-    int IsFormatSupported(
-        int shareMode,
-        IntPtr pWaveFormat,
-        out IntPtr pClosestMatch);
-
-    // vtable[8]
-    [PreserveSig]
-    int GetMixFormat(out IntPtr pDeviceFormat);
-
-    // vtable[9]
-    [PreserveSig]
-    int GetDevicePeriod(out long phnsDefaultDevicePeriod, out long phnsMinimumDevicePeriod);
-
-    // vtable[10]
-    [PreserveSig]
-    int Start();
-
-    // vtable[11]
-    [PreserveSig]
-    int Stop();
-
-    // vtable[12]
-    [PreserveSig]
-    int Reset();
-
-    // vtable[13]
-    [PreserveSig]
-    int SetEventHandle(IntPtr eventHandle);
-
-    // vtable[14]
-    [PreserveSig]
-    int GetService(ref Guid riid, out IntPtr ppv);
-}
-
-/// <summary>
-/// IAudioRenderClient：音频渲染（播放）缓冲区。
-/// </summary>
-[ComImport]
-[Guid("F294ACFC-3146-4483-A7BF-ADD077DB4D09")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IAudioRenderClient
-{
-    // vtable[3]
-    [PreserveSig]
-    int GetBuffer(uint numFramesRequested, out IntPtr pData);
-
-    // vtable[4]
-    [PreserveSig]
-    int ReleaseBuffer(uint numFramesWritten, int dwFlags);
-}
-
-/// <summary>
-/// ISimpleAudioVolume：简单音量控制。
-/// </summary>
-[ComImport]
-[Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface ISimpleAudioVolume
-{
-    // vtable[3]
-    [PreserveSig]
-    int SetMasterVolume(float fLevel, Guid EventContext);
-
-    // vtable[4]
-    [PreserveSig]
-    int GetMasterVolume(out float pfLevel);
-
-    // vtable[5]
-    [PreserveSig]
-    int SetMute(int bMute, Guid EventContext);
-
-    // vtable[6]
-    [PreserveSig]
-    int GetMute(out int pbMute);
-}
-
-/// <summary>
-/// IAudioClock：音频播放时钟，用于查询已播放位置。
-/// </summary>
-[ComImport]
-[Guid("CD63314F-3FBA-4a1b-812C-EF96358728E7")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IAudioClock
-{
-    // vtable[3]
-    [PreserveSig]
-    int Start();
-
-    // vtable[4]
-    [PreserveSig]
-    int Stop();
-
-    // vtable[5]
-    [PreserveSig]
-    int GetPosition(out ulong pu64DevicePosition, out ulong pu64QPCPosition);
-
-    // vtable[6]
-    [PreserveSig]
-    int GetCharacteristics(out uint pdwCharacteristics);
+    public static TDelegate Get<TDelegate>(IntPtr comPtr, int slotIndex) where TDelegate : Delegate
+    {
+        IntPtr vtable = Marshal.ReadIntPtr(comPtr);
+        IntPtr methodPtr = Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
+        return Marshal.GetDelegateForFunctionPointer<TDelegate>(methodPtr);
+    }
 }

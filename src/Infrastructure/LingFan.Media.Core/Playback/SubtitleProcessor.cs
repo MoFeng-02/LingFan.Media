@@ -33,6 +33,7 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
     /// 即使暂停确认超时（处理线程卡在长解码中），锁也能确保安全。
     /// </summary>
     private readonly SemaphoreSlim _decodeLock = new(1, 1);
+    private volatile bool _pendingDecoderReset;
     private bool _disposed;
 
     private readonly object _subtitleLock = new();
@@ -156,12 +157,13 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
             }
             else
             {
-                _logger.LogError("字幕处理解码锁获取超时（2s），跳过 Reset 防止竞态崩溃");
+                _logger.LogError("字幕处理解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
                 lock (_subtitleLock)
                 {
                     _cachedSubtitles.Clear();
                     _currentSubtitle = null;
                 }
+                _pendingDecoderReset = true;   // 锁超时未做 Reset，待处理线程下次进入锁时补做，确保解码器状态必然复位
             }
         }
         else
@@ -233,12 +235,13 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
             }
             else
             {
-                _logger.LogError("字幕处理解码锁获取超时（2s），跳过 Reset 防止竞态崩溃");
+                _logger.LogError("字幕处理解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
                 lock (_subtitleLock)
                 {
                     _cachedSubtitles.Clear();
                     _currentSubtitle = null;
                 }
+                _pendingDecoderReset = true;   // 锁超时未做 Reset，待处理线程下次进入锁时补做，确保解码器状态必然复位
             }
         }
         else
@@ -275,15 +278,22 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
                 // 1. 解码新的字幕包（加锁防止与 Clear/Reset 竞态）
                 if (_packetQueue.TryDequeue(out var packet) && packet != null)
                 {
-                    await _decodeLock.WaitAsync(_cts.Token);
-                    try
+                await _decodeLock.WaitAsync(_cts.Token);
+                try
+                {
+                    // 隐患B修复：解码锁获取超时期间 Clear 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
+                    if (_pendingDecoderReset)
                     {
-                        // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Clear 暂停）
-                        if (_isPaused)
-                        {
-                            packet.Dispose();
-                            continue; // finally 会释放锁，跳回循环顶部进入暂停分支
-                        }
+                        _decoder.Reset();
+                        _pendingDecoderReset = false;
+                    }
+
+                    // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Clear 暂停）
+                    if (_isPaused)
+                    {
+                        packet.Dispose();
+                        continue; // finally 会释放锁，跳回循环顶部进入暂停分支
+                    }
 
                         SubtitleFrame? subtitleFrame;
                         try
@@ -374,8 +384,36 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        // 隐患A修复：释放信号量前确保处理线程已退出，避免 SemaphoreSlim.Dispose 与并发 WaitAsync/Release 的未定义行为
+        EnsureThreadStopped();
+
         _decodeLock.Dispose();
         _cts.Dispose();
+    }
+
+    /// <summary>
+    /// 隐患A修复：释放解码锁前停止并 join 处理线程。
+    /// 仅当当前不在处理线程自身上调用时才等待，避免自死锁。
+    /// 正常流程（MediaPlayer 已先 join）下任务已完成，Wait 立即返回，无阻塞。
+    /// </summary>
+    private void EnsureThreadStopped()
+    {
+        if (_processTask is null)
+            return;
+        if (Task.CurrentId == _processTask.Id)
+            return; // 防御：若在处理线程自身上调用则不等待（理论上不会发生）
+
+        _isRunning = false;
+        _isPaused = false;
+        _cts.Cancel();
+        try
+        {
+            _processTask.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "字幕处理线程 join 失败，仍继续释放资源");
+        }
     }
 
     /// <summary>

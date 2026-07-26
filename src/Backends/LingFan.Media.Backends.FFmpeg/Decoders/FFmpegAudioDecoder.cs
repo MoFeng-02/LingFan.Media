@@ -29,8 +29,9 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     private bool _disposed;
     private bool _initialized;
 
-    /// <summary>FFmpeg EAGAIN 错误码（POSIX EAGAIN = 11）。</summary>
-    private const int EAGAIN = -11;
+    /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 ffmpeg.AVERROR(ffmpeg.EAGAIN) 计算，
+    /// 禁止硬编码 -11（Windows 正确，但 macOS/iOS 的 EAGAIN=35，会误判"需要更多数据"为解码失败）。</summary>
+    private static readonly int EAGAIN = ffmpeg.AVERROR(ffmpeg.EAGAIN);
 
     /// <summary>
     /// 初始化 <see cref="FFmpegAudioDecoder"/> 的新实例。

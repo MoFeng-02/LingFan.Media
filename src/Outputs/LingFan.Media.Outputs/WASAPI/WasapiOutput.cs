@@ -21,9 +21,9 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// </list>
 /// <para><b>线程安全</b>：非线程安全。Submit 在音频管线线程调用，Pause/Resume/Flush 在控制线程调用，
 /// 不可并发。COM 使用 MTA（COINIT_MULTITHREADED），允许跨线程调用。</para>
-/// <para><b>AOT 兼容</b>：sealed 类，无反射，COM 接口使用 [ComImport] 编译期生成存根。</para>
+/// <para><b>AOT 兼容</b>：sealed 类，无反射，采用原始 vtable P/Invoke（ComVTable 委托封送），不使用 [ComImport]/RCW，NativeAOT 兼容。</para>
 /// <para><b>资源所有权</b>：IMMDeviceEnumerator/IMMDevice/IAudioClient/IAudioRenderClient/ISimpleAudioVolume/IAudioClock
-/// 均由本类持有（Session 级），Dispose 时通过 Marshal.ReleaseComObject 释放。</para>
+/// 的原生指针均由本类持有（Session 级），Dispose 时通过 Marshal.Release(IntPtr) 逆序释放。</para>
 /// <para><b>Submit 所有权</b>：V2 变更——Submit 不再接管帧所有权，不 Dispose 帧。
 /// 调用方（AudioPipeline）负责 Return 到 FramePool 或 Dispose。</para>
 /// <para><b>V1 限制</b>：仅支持共享模式 + 32 位浮点输出。S16/S32 输入会转换为 F32。</para>
@@ -35,13 +35,28 @@ internal sealed class WasapiOutput : IAudioOutput
     private readonly ILogger<WasapiOutput> _logger;
     private readonly bool _exclusiveMode;
 
-    // COM 对象（Session 级，Dispose 时释放）
-    private IMMDeviceEnumerator? _enumerator;
-    private IMMDevice? _device;
-    private IAudioClient? _audioClient;
-    private IAudioRenderClient? _renderClient;
-    private ISimpleAudioVolume? _simpleVolume;
-    private IAudioClock? _audioClock;
+    // COM 对象（原生指针，Session 级，Dispose 时 Marshal.Release）
+    private IntPtr _enumeratorPtr;
+    private IntPtr _devicePtr;
+    private IntPtr _audioClientPtr;
+    private IntPtr _renderClientPtr;
+    private IntPtr _simpleVolumePtr;
+    private IntPtr _audioClockPtr;
+
+    // 缓存的 vtable 委托（AOT 兼容：避免 [ComImport]/RCW）
+    private IMMDeviceEnumerator_GetDefaultAudioEndpoint? _enumeratorGetDefault;
+    private IMMDevice_Activate? _deviceActivate;
+    private IAudioClient_Initialize? _audioClientInitialize;
+    private IAudioClient_GetBufferSize? _audioClientGetBufferSize;
+    private IAudioClient_GetCurrentPadding? _audioClientGetCurrentPadding;
+    private IAudioClient_Start? _audioClientStart;
+    private IAudioClient_Stop? _audioClientStop;
+    private IAudioClient_Reset? _audioClientReset;
+    private IAudioClient_GetService? _audioClientGetService;
+    private IAudioRenderClient_GetBuffer? _renderClientGetBuffer;
+    private IAudioRenderClient_ReleaseBuffer? _renderClientReleaseBuffer;
+    private ISimpleAudioVolume_SetMasterVolume? _simpleVolumeSetMasterVolume;
+    private IAudioClock_GetPosition? _audioClockGetPosition;
 
     // 状态
     private bool _comInitialized;
@@ -89,7 +104,7 @@ internal sealed class WasapiOutput : IAudioOutput
         if (channels <= 0)
             throw new ArgumentOutOfRangeException(nameof(channels), "声道数必须大于 0。");
 
-        if (_device is null)
+        if (_devicePtr == IntPtr.Zero)
             throw new InvalidOperationException("InitializeAsync 尚未调用，无法 Initialize。");
 
         _sampleRate = sampleRate;
@@ -99,17 +114,17 @@ internal sealed class WasapiOutput : IAudioOutput
         {
             // 1. 激活 IAudioClient
             var iid = WasapiInterop.IID_IAudioClient;
-            int hr = _device.Activate(ref iid, WasapiInterop.CLSCTX_ALL, IntPtr.Zero, out IntPtr pAudioClient);
+            int hr = _deviceActivate!(_devicePtr, ref iid, WasapiInterop.CLSCTX_ALL, IntPtr.Zero, out IntPtr pAudioClient);
             Marshal.ThrowExceptionForHR(hr);
 
-            try
-            {
-                _audioClient = (IAudioClient)Marshal.GetObjectForIUnknown(pAudioClient);
-            }
-            finally
-            {
-                Marshal.Release(pAudioClient);
-            }
+            _audioClientPtr = pAudioClient;   // 持有 Activate 返回的引用
+            _audioClientInitialize = ComVTable.Get<IAudioClient_Initialize>(pAudioClient, 0);
+            _audioClientGetBufferSize = ComVTable.Get<IAudioClient_GetBufferSize>(pAudioClient, 1);
+            _audioClientGetCurrentPadding = ComVTable.Get<IAudioClient_GetCurrentPadding>(pAudioClient, 3);
+            _audioClientStart = ComVTable.Get<IAudioClient_Start>(pAudioClient, 7);
+            _audioClientStop = ComVTable.Get<IAudioClient_Stop>(pAudioClient, 8);
+            _audioClientReset = ComVTable.Get<IAudioClient_Reset>(pAudioClient, 9);
+            _audioClientGetService = ComVTable.Get<IAudioClient_GetService>(pAudioClient, 11);
 
             // 2. 构建 WAVEFORMATEX（32 位浮点）
             var format = new WAVEFORMATEX
@@ -130,15 +145,17 @@ internal sealed class WasapiOutput : IAudioOutput
 
             long bufferDurationHns = (long)(_options.BufferDuration.TotalSeconds * WasapiInterop.ReftimesPerSec);
 
+            var sessionGuid = Guid.Empty;
             unsafe
             {
-                hr = _audioClient.Initialize(
+                hr = _audioClientInitialize(
+                    _audioClientPtr,
                     shareMode,
                     0,                     // 无流标志（V1 不用事件驱动）
                     bufferDurationHns,
                     _exclusiveMode ? bufferDurationHns : 0, // 独占模式需指定 periodicity，共享模式 = 0
                     (IntPtr)(&format),
-                    Guid.Empty);
+                    ref sessionGuid);
             }
 
             if (hr < 0)
@@ -148,37 +165,26 @@ internal sealed class WasapiOutput : IAudioOutput
             }
 
             // 4. 获取缓冲区大小
-            hr = _audioClient.GetBufferSize(out uint bufferFrames);
+            hr = _audioClientGetBufferSize(_audioClientPtr, out uint bufferFrames);
             Marshal.ThrowExceptionForHR(hr);
             _bufferSize = (int)bufferFrames;
 
             // 5. 获取 IAudioRenderClient
             var iidRender = WasapiInterop.IID_IAudioRenderClient;
-            hr = _audioClient.GetService(ref iidRender, out IntPtr pRenderClient);
+            hr = _audioClientGetService(_audioClientPtr, ref iidRender, out IntPtr pRenderClient);
             Marshal.ThrowExceptionForHR(hr);
 
-            try
-            {
-                _renderClient = (IAudioRenderClient)Marshal.GetObjectForIUnknown(pRenderClient);
-            }
-            finally
-            {
-                Marshal.Release(pRenderClient);
-            }
+            _renderClientPtr = pRenderClient;
+            _renderClientGetBuffer = ComVTable.Get<IAudioRenderClient_GetBuffer>(pRenderClient, 0);
+            _renderClientReleaseBuffer = ComVTable.Get<IAudioRenderClient_ReleaseBuffer>(pRenderClient, 1);
 
             // 6. 获取 ISimpleAudioVolume（音量控制）
             var iidVolume = WasapiInterop.IID_ISimpleAudioVolume;
-            hr = _audioClient.GetService(ref iidVolume, out IntPtr pVolume);
+            hr = _audioClientGetService(_audioClientPtr, ref iidVolume, out IntPtr pVolume);
             if (hr >= 0)
             {
-                try
-                {
-                    _simpleVolume = (ISimpleAudioVolume)Marshal.GetObjectForIUnknown(pVolume);
-                }
-                finally
-                {
-                    Marshal.Release(pVolume);
-                }
+                _simpleVolumePtr = pVolume;
+                _simpleVolumeSetMasterVolume = ComVTable.Get<ISimpleAudioVolume_SetMasterVolume>(pVolume, 0);
             }
             else
             {
@@ -187,17 +193,11 @@ internal sealed class WasapiOutput : IAudioOutput
 
             // 7. 获取 IAudioClock（播放位置查询）
             var iidClock = WasapiInterop.IID_IAudioClock;
-            hr = _audioClient.GetService(ref iidClock, out IntPtr pClock);
+            hr = _audioClientGetService(_audioClientPtr, ref iidClock, out IntPtr pClock);
             if (hr >= 0)
             {
-                try
-                {
-                    _audioClock = (IAudioClock)Marshal.GetObjectForIUnknown(pClock);
-                }
-                finally
-                {
-                    Marshal.Release(pClock);
-                }
+                _audioClockPtr = pClock;
+                _audioClockGetPosition = ComVTable.Get<IAudioClock_GetPosition>(pClock, 2);
             }
             else
             {
@@ -205,9 +205,10 @@ internal sealed class WasapiOutput : IAudioOutput
             }
 
             // 8. 应用初始音量
-            if (_simpleVolume is not null)
+            if (_simpleVolumePtr != IntPtr.Zero)
             {
-                hr = _simpleVolume.SetMasterVolume(_volume, Guid.Empty);
+                var ec = Guid.Empty;
+                hr = _simpleVolumeSetMasterVolume!(_simpleVolumePtr, _volume, ref ec);
                 if (hr < 0)
                     _logger.LogWarning("设置初始音量失败：HRESULT=0x{HR:X8}", hr);
             }
@@ -239,7 +240,7 @@ internal sealed class WasapiOutput : IAudioOutput
 
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-            if (!_initialized || _audioClient is null || _renderClient is null)
+            if (!_initialized || _audioClientPtr == IntPtr.Zero || _renderClientPtr == IntPtr.Zero)
                 throw new InvalidOperationException("WASAPI 输出尚未初始化，无法 Submit。");
 
             // 验证声道数匹配（管线应保证一致，不匹配是管线bug）
@@ -272,7 +273,7 @@ internal sealed class WasapiOutput : IAudioOutput
             WaitForBufferSpace((uint)frame.FrameCount);
 
             // 获取 WASAPI 缓冲区指针
-            int hr = _renderClient.GetBuffer((uint)frame.FrameCount, out IntPtr pData);
+            int hr = _renderClientGetBuffer!(_renderClientPtr, (uint)frame.FrameCount, out IntPtr pData);
             Marshal.ThrowExceptionForHR(hr);
 
             // GetBuffer 成功后必须调用 ReleaseBuffer，否则缓冲区永久锁定
@@ -315,7 +316,7 @@ internal sealed class WasapiOutput : IAudioOutput
                 }
 
                 // 释放 WASAPI 缓冲区（写入完成）
-                hr = _renderClient.ReleaseBuffer((uint)frame.FrameCount, 0);
+                hr = _renderClientReleaseBuffer!(_renderClientPtr, (uint)frame.FrameCount, 0);
                 releaseBufferCalled = true;
                 Marshal.ThrowExceptionForHR(hr);
             }
@@ -324,7 +325,7 @@ internal sealed class WasapiOutput : IAudioOutput
                 // 如果拷贝或ReleaseBuffer抛异常，必须用0帧+SILENT释放缓冲区
                 if (!releaseBufferCalled)
                 {
-                    try { _renderClient.ReleaseBuffer(0, WasapiInterop.AUDCLNT_BUFFERFLAGS_SILENT); }
+                    try { _renderClientReleaseBuffer!(_renderClientPtr, 0, WasapiInterop.AUDCLNT_BUFFERFLAGS_SILENT); }
                     catch { /* 尽力释放，忽略二次异常 */ }
                 }
             }
@@ -334,9 +335,9 @@ internal sealed class WasapiOutput : IAudioOutput
     public void Pause()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized || _audioClient is null) return;
+        if (!_initialized || _audioClientPtr == IntPtr.Zero) return;
 
-        int hr = _audioClient.Stop();
+        int hr = _audioClientStop!(_audioClientPtr);
         if (hr < 0 && hr != unchecked((int)0x88890004)) // AUDCLNT_E_NOT_INITIALIZED 可忽略
             _logger.LogWarning("IAudioClient.Stop 失败：HRESULT=0x{HR:X8}", hr);
     }
@@ -345,9 +346,9 @@ internal sealed class WasapiOutput : IAudioOutput
     public void Resume()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized || _audioClient is null) return;
+        if (!_initialized || _audioClientPtr == IntPtr.Zero) return;
 
-        int hr = _audioClient.Start();
+        int hr = _audioClientStart!(_audioClientPtr);
         if (hr < 0)
             _logger.LogWarning("IAudioClient.Start 失败：HRESULT=0x{HR:X8}", hr);
     }
@@ -356,9 +357,9 @@ internal sealed class WasapiOutput : IAudioOutput
     public void Flush()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized || _audioClient is null) return;
+        if (!_initialized || _audioClientPtr == IntPtr.Zero) return;
 
-        int hr = _audioClient.Reset();
+        int hr = _audioClientReset!(_audioClientPtr);
         if (hr < 0)
             _logger.LogWarning("IAudioClient.Reset 失败：HRESULT=0x{HR:X8}", hr);
     }
@@ -367,10 +368,10 @@ internal sealed class WasapiOutput : IAudioOutput
     public TimeSpan GetPlaybackPosition()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_audioClock is null)
+        if (_audioClockPtr == IntPtr.Zero)
             return TimeSpan.Zero;
 
-        int hr = _audioClock.GetPosition(out ulong devicePosition, out _);
+        int hr = _audioClockGetPosition!(_audioClockPtr, out ulong devicePosition, out _);
         if (hr < 0)
             return TimeSpan.Zero;
 
@@ -405,9 +406,10 @@ internal sealed class WasapiOutput : IAudioOutput
             float clamped = Math.Clamp(value, 0.0f, 1.0f);
             _volume = clamped;
 
-            if (_simpleVolume is not null)
+            if (_simpleVolumePtr != IntPtr.Zero)
             {
-                int hr = _simpleVolume.SetMasterVolume(clamped, Guid.Empty);
+                var ec = Guid.Empty;
+                int hr = _simpleVolumeSetMasterVolume!(_simpleVolumePtr, clamped, ref ec);
                 if (hr < 0)
                     _logger.LogWarning("SetMasterVolume 失败：HRESULT=0x{HR:X8}", hr);
             }
@@ -458,7 +460,7 @@ internal sealed class WasapiOutput : IAudioOutput
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_device is not null)
+        if (_devicePtr != IntPtr.Zero)
             throw new InvalidOperationException("InitializeAsync 已调用，请勿重复调用。");
 
         // 1. CoInitializeEx（MTA）
@@ -492,30 +494,19 @@ internal sealed class WasapiOutput : IAudioOutput
                 ref iid, out IntPtr pEnumerator);
             Marshal.ThrowExceptionForHR(hr);
 
-            try
-            {
-                _enumerator = (IMMDeviceEnumerator)Marshal.GetObjectForIUnknown(pEnumerator);
-            }
-            finally
-            {
-                Marshal.Release(pEnumerator);
-            }
+            _enumeratorPtr = pEnumerator;   // 持有 CoCreateInstance 返回的引用（refcount 由本类拥有）
+            _enumeratorGetDefault = ComVTable.Get<IMMDeviceEnumerator_GetDefaultAudioEndpoint>(pEnumerator, 1);
 
             // 3. 获取默认音频渲染设备
-            hr = _enumerator.GetDefaultAudioEndpoint(
+            hr = _enumeratorGetDefault(
+                _enumeratorPtr,
                 WasapiInterop.EDataFlow_Render,
                 WasapiInterop.ERole_Console,
                 out IntPtr pDevice);
             Marshal.ThrowExceptionForHR(hr);
 
-            try
-            {
-                _device = (IMMDevice)Marshal.GetObjectForIUnknown(pDevice);
-            }
-            finally
-            {
-                Marshal.Release(pDevice);
-            }
+            _devicePtr = pDevice;   // 持有 GetDefaultAudioEndpoint 返回的引用
+            _deviceActivate = ComVTable.Get<IMMDevice_Activate>(pDevice, 0);
         }
         catch
         {
@@ -538,7 +529,7 @@ internal sealed class WasapiOutput : IAudioOutput
     /// <param name="requiredFrames">需要的帧数。</param>
     private void WaitForBufferSpace(uint requiredFrames)
     {
-        if (_audioClient is null) return;
+        if (_audioClientPtr == IntPtr.Zero) return;
 
         // 快速失败：请求帧数超过缓冲区总大小，永远无法满足，避免空转2秒超时
         if (requiredFrames > (uint)_bufferSize)
@@ -553,7 +544,7 @@ internal sealed class WasapiOutput : IAudioOutput
 
         while (true)
         {
-            int hr = _audioClient.GetCurrentPadding(out uint padding);
+            int hr = _audioClientGetCurrentPadding!(_audioClientPtr, out uint padding);
             Marshal.ThrowExceptionForHR(hr);
 
             uint available = (uint)_bufferSize - padding;
@@ -578,19 +569,37 @@ internal sealed class WasapiOutput : IAudioOutput
     private void ReleaseComObjects()
     {
         // 停止音频客户端（防止后续 COM 调用阻塞）
-        if (_audioClient is not null)
+        if (_audioClientPtr != IntPtr.Zero && _audioClientStop is not null)
         {
-            try { _audioClient.Stop(); }
+            try { _audioClientStop(_audioClientPtr); }
             catch { /* 忽略释放时的错误 */ }
         }
 
-        // 逆序释放
-        ReleaseComObject(ref _audioClock);
-        ReleaseComObject(ref _simpleVolume);
-        ReleaseComObject(ref _renderClient);
-        ReleaseComObject(ref _audioClient);
-        ReleaseComObject(ref _device);
-        ReleaseComObject(ref _enumerator);
+        // 逆序释放（原生指针 Marshal.Release，清空委托缓存）
+        ReleaseComPtr(ref _audioClockPtr);
+        _audioClockGetPosition = null;
+
+        ReleaseComPtr(ref _simpleVolumePtr);
+        _simpleVolumeSetMasterVolume = null;
+
+        ReleaseComPtr(ref _renderClientPtr);
+        _renderClientGetBuffer = null;
+        _renderClientReleaseBuffer = null;
+
+        ReleaseComPtr(ref _audioClientPtr);
+        _audioClientInitialize = null;
+        _audioClientGetBufferSize = null;
+        _audioClientGetCurrentPadding = null;
+        _audioClientStart = null;
+        _audioClientStop = null;
+        _audioClientReset = null;
+        _audioClientGetService = null;
+
+        ReleaseComPtr(ref _devicePtr);
+        _deviceActivate = null;
+
+        ReleaseComPtr(ref _enumeratorPtr);
+        _enumeratorGetDefault = null;
     }
 
     /// <summary>
@@ -599,29 +608,43 @@ internal sealed class WasapiOutput : IAudioOutput
     /// </summary>
     private void ReleaseInitializeObjects()
     {
-        if (_audioClient is not null)
+        if (_audioClientPtr != IntPtr.Zero && _audioClientStop is not null)
         {
-            try { _audioClient.Stop(); }
+            try { _audioClientStop(_audioClientPtr); }
             catch { /* 忽略释放时的错误 */ }
         }
 
-        ReleaseComObject(ref _audioClock);
-        ReleaseComObject(ref _simpleVolume);
-        ReleaseComObject(ref _renderClient);
-        ReleaseComObject(ref _audioClient);
+        ReleaseComPtr(ref _audioClockPtr);
+        _audioClockGetPosition = null;
+
+        ReleaseComPtr(ref _simpleVolumePtr);
+        _simpleVolumeSetMasterVolume = null;
+
+        ReleaseComPtr(ref _renderClientPtr);
+        _renderClientGetBuffer = null;
+        _renderClientReleaseBuffer = null;
+
+        ReleaseComPtr(ref _audioClientPtr);
+        _audioClientInitialize = null;
+        _audioClientGetBufferSize = null;
+        _audioClientGetCurrentPadding = null;
+        _audioClientStart = null;
+        _audioClientStop = null;
+        _audioClientReset = null;
+        _audioClientGetService = null;
     }
 
     /// <summary>
-    /// 安全释放单个 COM 对象。
+    /// 安全释放单个原生 COM 指针（Marshal.Release 减引用计数并置零）。
     /// </summary>
-    private void ReleaseComObject<T>(ref T? obj) where T : class
+    private static void ReleaseComPtr(ref IntPtr ptr)
     {
-        if (obj is null) return;
+        if (ptr == IntPtr.Zero) return;
         try
         {
-            Marshal.ReleaseComObject(obj);
+            Marshal.Release(ptr);
         }
         catch { /* 忽略释放时的错误 */ }
-        obj = null;
+        ptr = IntPtr.Zero;
     }
 }

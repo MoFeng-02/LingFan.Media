@@ -36,6 +36,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     /// 即使暂停确认超时（管线线程卡在长解码中），锁也能确保安全。
     /// </summary>
     private readonly SemaphoreSlim _decodeLock = new(1, 1);
+    private volatile bool _pendingDecoderReset;
     private bool _disposed;
 
     /// <summary>
@@ -184,9 +185,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             }
             else
             {
-                _logger.LogError("音频管线解码锁获取超时（2s），跳过 Reset 防止竞态崩溃");
+                _logger.LogError("音频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
                 _sampleQueue.Clear(_framePool);
                 _output.Flush();
+                _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
             }
         }
         else
@@ -251,9 +253,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             }
             else
             {
-                _logger.LogError("音频管线解码锁获取超时（2s），跳过 Reset 防止竞态崩溃");
+                _logger.LogError("音频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
                 _sampleQueue.Clear(_framePool);
                 _output.Flush();
+                _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
             }
         }
         else
@@ -308,6 +311,13 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 await _decodeLock.WaitAsync(_cts.Token);
                 try
                 {
+                    // 隐患B修复：解码锁获取超时期间 Flush 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
+                    if (_pendingDecoderReset)
+                    {
+                        _decoder.Reset();
+                        _pendingDecoderReset = false;
+                    }
+
                     // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Flush 暂停）
                     if (_isPaused)
                     {
@@ -383,8 +393,36 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        // 隐患A修复：释放信号量前确保管线线程已退出，避免 SemaphoreSlim.Dispose 与并发 WaitAsync/Release 的未定义行为
+        EnsureThreadStopped();
+
         _decodeLock.Dispose();
         _cts.Dispose();
+    }
+
+    /// <summary>
+    /// 隐患A修复：释放解码锁前停止并 join 管线线程。
+    /// 仅当当前不在管线线程自身上调用时才等待，避免自死锁。
+    /// 正常流程（MediaPlayer 已先 join）下任务已完成，Wait 立即返回，无阻塞。
+    /// </summary>
+    private void EnsureThreadStopped()
+    {
+        if (_pipelineTask is null)
+            return;
+        if (Task.CurrentId == _pipelineTask.Id)
+            return; // 防御：若在管线线程自身上调用则不等待（理论上不会发生）
+
+        _isRunning = false;
+        _isPaused = false;
+        _cts.Cancel();
+        try
+        {
+            _pipelineTask.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "音频管线线程 join 失败，仍继续释放资源");
+        }
     }
 
     /// <summary>
