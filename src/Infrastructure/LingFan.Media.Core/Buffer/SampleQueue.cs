@@ -122,11 +122,15 @@ public sealed class SampleQueue
     /// <summary>
     /// 清空队列并 Dispose 所有帧。
     /// </summary>
-    public void Clear()
+    /// <param name="pool">帧对象池（V2，可为 null = Dispose 帧而非归还到池）。</param>
+    public void Clear(IFramePool<AudioFrame>? pool = null)
     {
         while (_channel.Reader.TryRead(out var frame))
         {
-            frame.Dispose();
+            if (pool != null)
+                pool.Return(frame);
+            else
+                frame.Dispose();
         }
 
         _totalBytes = 0;

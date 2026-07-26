@@ -92,12 +92,15 @@
                             Content="▶"
                             Margin="4,0" />
 
-                    <!-- 进度条（绑定 Progress，V1 缓冲进度=播放进度） -->
-                    <lc:ProgressBar Grid.Column="1"
+                    <!-- 进度条（绑定 Progress/IsSeekable/Duration，支持拖拽 Seek） -->
+                    <lc:ProgressBar x:Name="PART_ProgressBar"
+                                    Grid.Column="1"
                                     VerticalAlignment="Center"
                                     Margin="8,0"
                                     Progress="{TemplateBinding Progress}"
                                     BufferedProgress="{TemplateBinding Progress}"
+                                    IsSeekable="{TemplateBinding IsSeekable}"
+                                    Duration="{TemplateBinding Duration}"
                                     IsVisible="{TemplateBinding ShowProgressBar}" />
 
                     <!-- 时间显示（绑定 Position/Duration） -->

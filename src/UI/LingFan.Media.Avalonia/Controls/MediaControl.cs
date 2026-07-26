@@ -10,8 +10,10 @@ namespace LingFan.Media.Avalonia;
 /// 播放控制条控件。封装常用播放控件（播放/暂停、进度条、音量、时间、全屏）。
 /// </summary>
 /// <remarks>
-/// <para><b>异步策略</b>：全部 sync 分类——UI 绑定/命令路由，纯内存操作。
-/// SeekAsync 通过 async void 事件处理器调用（有真实 await），非伪异步。</para>
+/// <para><b>异步策略</b>：config/sync 分类——UI 绑定/命令路由，纯内存操作。
+/// 播放控制方法返回 <see cref="Task"/>（<c>TogglePlayPauseAsync</c>/<c>SeekToAsync</c>），
+/// 供消费方 <c>await</c>。void 事件处理器内 fire-and-forget 调用（<c>_ = SomeAsync()</c>），
+/// **async void 绝对禁止**。</para>
 /// <para><b>数据绑定</b>：使用 Avalonia 原生 StyledProperty，不依赖 MVVM 框架。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射。</para>
 /// </remarks>
@@ -21,6 +23,7 @@ public sealed class MediaControl : TemplatedControl
     private bool _suppressPositionUpdate;
     private Button? _playButton;
     private Button? _fullscreenButton;
+    private ProgressBar? _progressBar;
 
     #region Events
 
@@ -50,6 +53,10 @@ public sealed class MediaControl : TemplatedControl
     /// <summary>是否显示全屏按钮。</summary>
     public static readonly StyledProperty<bool> ShowFullscreenProperty =
         AvaloniaProperty.Register<MediaControl, bool>(nameof(ShowFullscreen), defaultValue: true);
+
+    /// <summary>是否允许拖拽进度条 Seek 的 StyledProperty。</summary>
+    public static readonly StyledProperty<bool> IsSeekableProperty =
+        AvaloniaProperty.Register<MediaControl, bool>(nameof(IsSeekable), defaultValue: true);
 
     /// <summary>是否自动隐藏。</summary>
     public static readonly StyledProperty<bool> AutoHideProperty =
@@ -118,6 +125,13 @@ public sealed class MediaControl : TemplatedControl
         set => SetValue(ShowFullscreenProperty, value);
     }
 
+    /// <summary>是否允许拖拽进度条 Seek。</summary>
+    public bool IsSeekable
+    {
+        get => GetValue(IsSeekableProperty);
+        set => SetValue(IsSeekableProperty, value);
+    }
+
     /// <summary>是否自动隐藏。</summary>
     public bool AutoHide
     {
@@ -174,20 +188,25 @@ public sealed class MediaControl : TemplatedControl
     {
         base.OnApplyTemplate(e);
 
-        // 解绑旧按钮（模板可能被重新应用）
+        // 解绑旧控件（模板可能被重新应用）
         if (_playButton != null)
             _playButton.Click -= OnPlayButtonClick;
         if (_fullscreenButton != null)
             _fullscreenButton.Click -= OnFullscreenButtonClick;
+        if (_progressBar != null)
+            _progressBar.Seek -= OnProgressBarSeek;
 
-        // 查找模板中的按钮并绑定事件
+        // 查找模板中的控件并绑定事件
         _playButton = e.NameScope.Find<Button>("PART_PlayButton");
         _fullscreenButton = e.NameScope.Find<Button>("PART_FullscreenButton");
+        _progressBar = e.NameScope.Find<ProgressBar>("PART_ProgressBar");
 
         if (_playButton != null)
             _playButton.Click += OnPlayButtonClick;
         if (_fullscreenButton != null)
             _fullscreenButton.Click += OnFullscreenButtonClick;
+        if (_progressBar != null)
+            _progressBar.Seek += OnProgressBarSeek;
 
         // 同步当前播放状态到按钮内容
         UpdatePlayButtonContent();
@@ -297,9 +316,10 @@ public sealed class MediaControl : TemplatedControl
     }
 
     /// <summary>
-    /// 播放/暂停切换。
+    /// 播放/暂停切换。返回 <see cref="Task"/> 供消费方 await。
+    /// PlayAsync/PauseAsync 是接口契约（返回 Task.CompletedTask），此处 await 是真异步契约。
     /// </summary>
-    public async void TogglePlayPause()
+    public async Task TogglePlayPauseAsync()
     {
         if (_player == null)
             return;
@@ -315,10 +335,11 @@ public sealed class MediaControl : TemplatedControl
     }
 
     /// <summary>
-    /// 定位到指定位置。async void 事件处理器——有真实 await，非伪异步。
+    /// 定位到指定位置。返回 <see cref="Task"/> 供消费方 await。
+    /// SeekAsync 包含真实 I/O（demuxer.SeekAsync）。
     /// </summary>
     /// <param name="position">目标位置。</param>
-    public async void SeekTo(TimeSpan position)
+    public async Task SeekToAsync(TimeSpan position)
     {
         if (_player == null)
             return;
@@ -352,9 +373,18 @@ public sealed class MediaControl : TemplatedControl
     }
 
     /// <summary>
-    /// 播放按钮点击事件处理器。
+    /// 播放按钮点击事件处理器。void 事件处理器（EventHandler 委托签名要求），
+    /// 内部 fire-and-forget 调用 async Task 方法（**async void 绝对禁止**）。
     /// </summary>
-    private void OnPlayButtonClick(object? sender, RoutedEventArgs e) => TogglePlayPause();
+    private void OnPlayButtonClick(object? sender, RoutedEventArgs e)
+        => _ = TogglePlayPauseAsync();
+
+    /// <summary>
+    /// 进度条拖拽 Seek 事件处理器。void 事件处理器（EventHandler&lt;SeekEventArgs&gt; 委托签名要求），
+    /// 内部 fire-and-forget 调用 async Task 方法（**async void 绝对禁止**）。
+    /// </summary>
+    private void OnProgressBarSeek(object? sender, SeekEventArgs e)
+        => _ = SeekToAsync(e.Position);
 
     /// <summary>
     /// 全屏按钮点击事件处理器。触发 FullscreenRequested 事件供消费方处理。

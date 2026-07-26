@@ -13,7 +13,7 @@ namespace LingFan.Media.Core;
 /// <para>SubtitleFrame 不实现 IDisposableFrame（仅含 string + TimeSpan，无原生资源）。</para>
 /// <para>所有方法均为同步 void。</para>
 /// </remarks>
-public sealed class SubtitleProcessor
+public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
 {
     private readonly ISubtitleDecoder _decoder;
     private readonly SubtitlePacketQueue _packetQueue;
@@ -24,6 +24,16 @@ public sealed class SubtitleProcessor
     private Task? _processTask;
     private volatile bool _isRunning;
     private volatile bool _isPaused;
+    private volatile bool _pauseAcknowledged;
+    private TaskCompletionSource<bool>? _pauseAckTcs;
+
+    /// <summary>
+    /// 解码锁：确保 DecodeAsync 与 Reset 不会并发执行。
+    /// SubtitleLoop 在解码+缓存期间持有锁，Clear/ClearAsync 在 Clear+Reset 前获取锁。
+    /// 即使暂停确认超时（处理线程卡在长解码中），锁也能确保安全。
+    /// </summary>
+    private readonly SemaphoreSlim _decodeLock = new(1, 1);
+    private bool _disposed;
 
     private readonly object _subtitleLock = new();
     private readonly List<SubtitleFrame> _cachedSubtitles = new();
@@ -94,16 +104,158 @@ public sealed class SubtitleProcessor
     }
 
     /// <summary>
-    /// 清空缓存的字幕帧（Seek 后调用）。
+    /// 清空缓存的字幕帧（Seek 后调用）。同步版本，用于无法 await 的场景。
+    /// V2 修复（L2）：先暂停处理线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
     /// </summary>
+    /// <remarks>
+    /// <para>两阶段安全保证：</para>
+    /// <list type="number">
+    /// <item>暂停确认（150ms 超时）：快速路径，处理线程空闲时立即确认</item>
+    /// <item>解码锁（2s 超时）：慢速路径，处理线程卡在长解码中时等待解码完成</item>
+    /// </list>
+    /// <para>即使暂停确认超时，解码锁也能确保 Reset 不与 DecodeAsync 并发。</para>
+    /// <para>字幕循环频率低（10Hz），超时设为 150ms 以覆盖 Task.Delay(100)。</para>
+    /// <para>优先使用异步版本 <see cref="ClearAsync"/>（无 Thread.Sleep 阻塞）。</para>
+    /// </remarks>
     public void Clear()
     {
-        lock (_subtitleLock)
+        var shouldResume = _isRunning && !_isPaused;
+        if (_isRunning)
         {
-            _cachedSubtitles.Clear();
-            _currentSubtitle = null;
+            _pauseAcknowledged = false;
+            _isPaused = true;
+
+            // 阶段1: 等待暂停确认（快速路径，150ms 超时）
+            // 字幕循环频率低（Task.Delay(100)），需更长超时
+            for (var i = 0; i < 150 && !_pauseAcknowledged; i++)
+            {
+                Thread.Sleep(1);
+            }
+
+            if (!_pauseAcknowledged)
+            {
+                _logger.LogWarning("字幕处理暂停确认超时（150ms），等待解码锁确保安全");
+            }
+
+            // 阶段2: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）
+            if (_decodeLock.Wait(TimeSpan.FromSeconds(2)))
+            {
+                try
+                {
+                    lock (_subtitleLock)
+                    {
+                        _cachedSubtitles.Clear();
+                        _currentSubtitle = null;
+                    }
+                    _decoder.Reset();
+                }
+                finally
+                {
+                    _decodeLock.Release();
+                }
+            }
+            else
+            {
+                _logger.LogError("字幕处理解码锁获取超时（2s），跳过 Reset 防止竞态崩溃");
+                lock (_subtitleLock)
+                {
+                    _cachedSubtitles.Clear();
+                    _currentSubtitle = null;
+                }
+            }
         }
-        _decoder.Reset();
+        else
+        {
+            // 处理线程未运行，无需锁
+            lock (_subtitleLock)
+            {
+                _cachedSubtitles.Clear();
+                _currentSubtitle = null;
+            }
+            _decoder.Reset();
+        }
+
+        if (shouldResume)
+        {
+            _isPaused = false;
+        }
+    }
+
+    /// <summary>
+    /// 清空缓存的字幕帧（Seek 后调用）。异步版本，优先使用。
+    /// V2 修复（L2）：先暂停处理线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// </summary>
+    /// <remarks>
+    /// <para>两阶段安全保证：</para>
+    /// <list type="number">
+    /// <item>暂停确认（150ms 超时）：快速路径，使用 TaskCompletionSource 信号通知</item>
+    /// <item>解码锁（2s 超时）：慢速路径，处理线程卡在长解码中时等待解码完成</item>
+    /// </list>
+    /// <para>即使暂停确认超时，解码锁也能确保 Reset 不与 DecodeAsync 并发。</para>
+    /// <para>字幕循环频率低（10Hz），超时设为 150ms 以覆盖 Task.Delay(100)。</para>
+    /// <para>RunContinuationsAsynchronously 避免续体在处理线程执行。</para>
+    /// </remarks>
+    public async Task ClearAsync()
+    {
+        var shouldResume = _isRunning && !_isPaused;
+        if (_isRunning)
+        {
+            _pauseAckTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pauseAcknowledged = false;
+            _isPaused = true;
+
+            // 阶段1: 等待暂停确认（快速路径，150ms 超时）
+            try
+            {
+                await _pauseAckTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(150));
+            }
+            catch (TimeoutException)
+            {
+                _logger.LogWarning("字幕处理暂停确认超时（150ms），等待解码锁确保安全");
+            }
+
+            // 阶段2: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）
+            if (await _decodeLock.WaitAsync(TimeSpan.FromSeconds(2)))
+            {
+                try
+                {
+                    lock (_subtitleLock)
+                    {
+                        _cachedSubtitles.Clear();
+                        _currentSubtitle = null;
+                    }
+                    _decoder.Reset();
+                }
+                finally
+                {
+                    _decodeLock.Release();
+                }
+            }
+            else
+            {
+                _logger.LogError("字幕处理解码锁获取超时（2s），跳过 Reset 防止竞态崩溃");
+                lock (_subtitleLock)
+                {
+                    _cachedSubtitles.Clear();
+                    _currentSubtitle = null;
+                }
+            }
+        }
+        else
+        {
+            // 处理线程未运行，无需锁
+            lock (_subtitleLock)
+            {
+                _cachedSubtitles.Clear();
+                _currentSubtitle = null;
+            }
+            _decoder.Reset();
+        }
+
+        if (shouldResume)
+        {
+            _isPaused = false;
+        }
     }
 
     private async Task SubtitleLoop()
@@ -114,29 +266,46 @@ public sealed class SubtitleProcessor
             {
                 if (_isPaused)
                 {
+                    _pauseAcknowledged = true;
+                    _pauseAckTcs?.TrySetResult(true);
                     await Task.Delay(50, _cts.Token);
                     continue;
                 }
 
-                // 1. 解码新的字幕包
+                // 1. 解码新的字幕包（加锁防止与 Clear/Reset 竞态）
                 if (_packetQueue.TryDequeue(out var packet) && packet != null)
                 {
-                    SubtitleFrame? subtitleFrame;
+                    await _decodeLock.WaitAsync(_cts.Token);
                     try
                     {
-                        subtitleFrame = await _decoder.DecodeAsync(packet);
+                        // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Clear 暂停）
+                        if (_isPaused)
+                        {
+                            packet.Dispose();
+                            continue; // finally 会释放锁，跳回循环顶部进入暂停分支
+                        }
+
+                        SubtitleFrame? subtitleFrame;
+                        try
+                        {
+                            subtitleFrame = await _decoder.DecodeAsync(packet);
+                        }
+                        finally
+                        {
+                            packet.Dispose();
+                        }
+
+                        if (subtitleFrame != null)
+                        {
+                            lock (_subtitleLock)
+                            {
+                                _cachedSubtitles.Add(subtitleFrame);
+                            }
+                        }
                     }
                     finally
                     {
-                        packet.Dispose();
-                    }
-
-                    if (subtitleFrame != null)
-                    {
-                        lock (_subtitleLock)
-                        {
-                            _cachedSubtitles.Add(subtitleFrame);
-                        }
+                        _decodeLock.Release();
                     }
                 }
 
@@ -192,5 +361,29 @@ public sealed class SubtitleProcessor
 
         // 在锁外触发事件
         SubtitleReceived?.Invoke(this, newSubtitle);
+    }
+
+    /// <summary>
+    /// 释放处理组件资源（解码锁和 CTS）。
+    /// </summary>
+    /// <remarks>
+    /// <para>必须在处理线程退出后调用。DisposeAsync 路径在 Step_StopPipelinesAsync join 后调用。</para>
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        _decodeLock.Dispose();
+        _cts.Dispose();
+    }
+
+    /// <summary>
+    /// 异步释放处理组件资源。优先使用（MediaPlayer.DisposeAsync 在线程 join 后调用）。
+    /// </summary>
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
     }
 }

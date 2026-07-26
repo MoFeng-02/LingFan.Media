@@ -44,6 +44,10 @@ public sealed class MediaPlayer : IMediaPlayer
     private MediaPipelineHost? _pipelineHost;
     private PlaybackController? _controller;
 
+    // V2 帧对象池（Session 级）
+    private FramePool<VideoFrame>? _videoFramePool;
+    private FramePool<AudioFrame>? _audioFramePool;
+
     // 播放控制
     private readonly object _stateLock = new();
     private MediaState _state = MediaState.Idle;
@@ -192,6 +196,21 @@ public sealed class MediaPlayer : IMediaPlayer
                 _audioDecoder = _audioDecoderFactory.Create(audioTrack.AudioCodec.Value, new AudioSettings());
             }
 
+            // V2: 创建帧对象池并注入解码器（Session 级）
+            _videoFramePool = new FramePool<VideoFrame>(
+                factory: static () => new VideoFrame(),
+                reset: static frame => frame.Reset(0, 0, default, null!, default, default, false),
+                maxSize: 16);
+            _audioFramePool = new FramePool<AudioFrame>(
+                factory: static () => new AudioFrame(),
+                reset: null, // AudioFrame.Dispose 是 no-op，无需 reset
+                maxSize: 16);
+
+            if (_videoDecoder is IFramePoolAware<VideoFrame> videoPoolAware)
+                videoPoolAware.SetFramePool(_videoFramePool);
+            if (_audioDecoder is IFramePoolAware<AudioFrame> audioPoolAware)
+                audioPoolAware.SetFramePool(_audioFramePool);
+
             // 6. 创建渲染器和输出
             _videoRenderer = _videoRendererFactory.Create();
             _audioOutput = _audioOutputFactory.Create();
@@ -205,7 +224,8 @@ public sealed class MediaPlayer : IMediaPlayer
                 _videoPipeline = new VideoPipeline(
                     _bufferManager.VideoPacketQueue, _videoDecoder, _videoRenderer,
                     _frameQueue, _synchronizer, _clock,
-                    _loggerFactory.CreateLogger<VideoPipeline>());
+                    _loggerFactory.CreateLogger<VideoPipeline>(),
+                    _videoFramePool);
             }
 
             if (_audioDecoder != null && _audioOutput != null && audioTrack != null)
@@ -213,7 +233,8 @@ public sealed class MediaPlayer : IMediaPlayer
                 _audioPipeline = new AudioPipeline(
                     _bufferManager.AudioPacketQueue, _audioDecoder, _audioOutput,
                     _sampleQueue, _synchronizer, _clock,
-                    _loggerFactory.CreateLogger<AudioPipeline>());
+                    _loggerFactory.CreateLogger<AudioPipeline>(),
+                    _audioFramePool);
             }
 
             // 9. 字幕轨道（条件创建，仅有字幕轨道时）
@@ -330,26 +351,25 @@ public sealed class MediaPlayer : IMediaPlayer
                 try { await _bufferManager.ReaderTask; } catch { }
             }
 
-            // 2. 时钟跳转
+            // 2. 清空缓冲队列（V2: 移到 Flush 之前，确保管线恢复后包队列已空，不会处理旧包）
+            _bufferManager?.Clear();
+
+            // 3. 时钟跳转
             if (_clock != null)
                 _synchronizer?.OnSeek(position);
 
-            // 3. Demuxer 定位（此时读取线程已退出，无竞争）
+            // 4. Demuxer 定位（此时读取线程已退出，无竞争）
             if (_demuxer != null)
                 await _demuxer.SeekAsync(position, ct);
 
-            // 4. 解码器重置
-            _videoDecoder?.Reset();
-            _audioDecoder?.Reset();
-            _subtitleDecoder?.Reset();
+            // 5. 管线刷新（V2 修复 L2: 异步等待管线暂停确认后再清空+重置，无 Thread.Sleep 阻塞。
+            //    内部先暂停管线线程防止 DecodeAsync 与 Reset 竞争，清空帧队列+重置解码器，然后恢复）
+            if (_pipelineHost != null)
+                await _pipelineHost.FlushAsync();
 
-            // 5. 管线刷新（清帧队列 + decoder.Reset）
-            _pipelineHost?.Flush();
-
-            // 6. 清空并重新填充缓冲
+            // 6. 重新填充缓冲（从新的 Demuxer 位置开始读取）
             if (_bufferManager != null)
             {
-                _bufferManager.Clear();
                 await _bufferManager.StartAsync(ct);
             }
         }
@@ -375,7 +395,7 @@ public sealed class MediaPlayer : IMediaPlayer
         // 1. 停管线线程 (cts.Cancel + join 5s 超时)
         await Step_StopPipelinesAsync();
 
-        // 2. 清空帧队列 (Dispose 所有帧)
+        // 2. 清空帧队列 (V2: 归还到 FramePool)
         Step_ClearFrameQueues();
 
         // 3. 刷新解码器 (FlushAsync 取剩余帧并 Dispose)
@@ -390,19 +410,22 @@ public sealed class MediaPlayer : IMediaPlayer
         // 6. 释放音频输出
         Step_DisposeAudioOutput();
 
-        // 7. 清空 BufferManager
+        // 7. 释放帧对象池（所有帧已归还）
+        Step_DisposeFramePools();
+
+        // 8. 清空 BufferManager
         Step_ClearBufferManager();
 
-        // 8. 关闭 Demuxer
+        // 9. 关闭 Demuxer
         Step_CloseDemuxer();
 
-        // 9. 关闭 MediaStream
+        // 10. 关闭 MediaStream
         Step_CloseStream();
 
-        // 10. 重置 Clock
+        // 11. 重置 Clock
         Step_ResetClock();
 
-        // 11. 关闭 Session
+        // 12. 关闭 Session
         await Step_CloseSessionAsync();
     }
 
@@ -418,15 +441,36 @@ public sealed class MediaPlayer : IMediaPlayer
         {
             _positionTimer?.Dispose();
 
-            // 同步停止管线（只发 cts.Cancel，不等待线程退出）
+            // 同步停止管线（发 cts.Cancel）
             try { _bufferManager?.Stop(); } catch { }
             try { _videoPipeline?.Stop(); } catch { }
             try { _audioPipeline?.Stop(); } catch { }
             try { _subtitleProcessor?.Stop(); } catch { }
 
-            // 同步清空帧队列
-            try { _frameQueue?.Clear(); } catch { }
-            try { _sampleQueue?.Clear(); } catch { }
+            // 等待管线线程退出（同步，2s 超时）
+            // 确保 SemaphoreSlim.Dispose 不与正在进行的 WaitAsync/Release 并发
+            try
+            {
+                var tasks = new List<Task>();
+                if (_videoPipeline?.PipelineTask != null)
+                    tasks.Add(_videoPipeline.PipelineTask);
+                if (_audioPipeline?.PipelineTask != null)
+                    tasks.Add(_audioPipeline.PipelineTask);
+                if (_subtitleProcessor?.ProcessTask != null)
+                    tasks.Add(_subtitleProcessor.ProcessTask);
+                if (tasks.Count > 0)
+                    Task.WaitAll(tasks.ToArray(), TimeSpan.FromSeconds(2));
+            }
+            catch { } // AggregateException（线程异常）或 TimeoutException 均忽略
+
+            // 线程已退出（或超时），安全释放管线内部资源（解码锁和 CTS）
+            try { _videoPipeline?.Dispose(); } catch { }
+            try { _audioPipeline?.Dispose(); } catch { }
+            try { _subtitleProcessor?.Dispose(); } catch { }
+
+            // V2: 同步清空帧队列（归还到池）
+            try { _frameQueue?.Clear(_videoFramePool); } catch { }
+            try { _sampleQueue?.Clear(_audioFramePool); } catch { }
 
             // 同步释放原生资源（每步独立 try-catch）
             try { _videoDecoder?.Dispose(); } catch { }
@@ -438,6 +482,10 @@ public sealed class MediaPlayer : IMediaPlayer
             try { _demuxer?.Dispose(); } catch { }
             try { _stream?.Close(); } catch { }
             try { _bufferManager?.Clear(); } catch { }
+
+            // V2: 释放帧对象池
+            try { _videoFramePool?.Dispose(); } catch { }
+            try { _audioFramePool?.Dispose(); } catch { }
         }
         catch (Exception ex)
         {
@@ -514,6 +562,11 @@ public sealed class MediaPlayer : IMediaPlayer
                     _logger.LogWarning("管线线程退出超时（5s），继续释放");
                 }
             }
+
+            // 线程已退出（或超时），安全释放管线内部资源（解码锁和 CTS）
+            try { _videoPipeline?.Dispose(); } catch { }
+            try { _audioPipeline?.Dispose(); } catch { }
+            try { _subtitleProcessor?.Dispose(); } catch { }
         }
         catch (Exception ex)
         {
@@ -525,8 +578,8 @@ public sealed class MediaPlayer : IMediaPlayer
     {
         try
         {
-            _frameQueue?.Clear();
-            _sampleQueue?.Clear();
+            _frameQueue?.Clear(_videoFramePool);
+            _sampleQueue?.Clear(_audioFramePool);
         }
         catch (Exception ex)
         {
@@ -541,13 +594,25 @@ public sealed class MediaPlayer : IMediaPlayer
             if (_videoDecoder != null)
             {
                 var frame = await _videoDecoder.FlushAsync();
-                frame?.Dispose();
+                if (frame != null)
+                {
+                    if (_videoFramePool != null)
+                        _videoFramePool.Return(frame);
+                    else
+                        frame.Dispose();
+                }
             }
 
             if (_audioDecoder != null)
             {
                 var frame = await _audioDecoder.FlushAsync();
-                frame?.Dispose();
+                if (frame != null)
+                {
+                    if (_audioFramePool != null)
+                        _audioFramePool.Return(frame);
+                    else
+                        frame.Dispose();
+                }
             }
 
             if (_subtitleDecoder != null)
@@ -585,6 +650,15 @@ public sealed class MediaPlayer : IMediaPlayer
     {
         try { _audioOutput?.Dispose(); }
         catch (Exception ex) { _logger.LogWarning(ex, "DisposeAsync 步骤6: 释放音频输出异常"); }
+    }
+
+    /// <summary>
+    /// V2: 释放帧对象池（步骤7，所有帧已归还后调用）。
+    /// </summary>
+    private void Step_DisposeFramePools()
+    {
+        try { _videoFramePool?.Dispose(); } catch (Exception ex) { _logger.LogWarning(ex, "DisposeAsync 步骤7: 释放视频帧池异常"); }
+        try { _audioFramePool?.Dispose(); } catch (Exception ex) { _logger.LogWarning(ex, "DisposeAsync 步骤7: 释放音频帧池异常"); }
     }
 
     private void Step_ClearBufferManager()
@@ -631,17 +705,38 @@ public sealed class MediaPlayer : IMediaPlayer
         try { _videoPipeline?.Stop(); } catch { }
         try { _audioPipeline?.Stop(); } catch { }
         try { _subtitleProcessor?.Stop(); } catch { }
-        try { _frameQueue?.Clear(); } catch { }
-        try { _sampleQueue?.Clear(); } catch { }
+
+        // 等待管线线程退出（异步，2s 超时）
+        // OpenAsync 失败时管线通常未 Start（PipelineTask==null），但防御性处理
+        var tasks = new List<Task>();
+        if (_videoPipeline?.PipelineTask != null)
+            tasks.Add(_videoPipeline.PipelineTask);
+        if (_audioPipeline?.PipelineTask != null)
+            tasks.Add(_audioPipeline.PipelineTask);
+        if (_subtitleProcessor?.ProcessTask != null)
+            tasks.Add(_subtitleProcessor.ProcessTask);
+        if (tasks.Count > 0)
+        {
+            try { await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(2)); }
+            catch { }
+        }
+
+        // 线程已退出（或超时），安全释放管线内部资源
+        try { _videoPipeline?.Dispose(); } catch { }
+        try { _audioPipeline?.Dispose(); } catch { }
+        try { _subtitleProcessor?.Dispose(); } catch { }
+        try { _frameQueue?.Clear(_videoFramePool); } catch { }
+        try { _sampleQueue?.Clear(_audioFramePool); } catch { }
         try { _videoDecoder?.Dispose(); } catch { }
         try { _audioDecoder?.Dispose(); } catch { }
         try { _subtitleDecoder?.Dispose(); } catch { }
         try { _videoRenderer?.Dispose(); } catch { }
         try { _audioOutput?.Dispose(); } catch { }
+        try { _videoFramePool?.Dispose(); } catch { }
+        try { _audioFramePool?.Dispose(); } catch { }
         try { _demuxer?.Close(); } catch { }
         try { _demuxer?.Dispose(); } catch { }
         try { _stream?.Close(); } catch { }
         try { _bufferManager?.Clear(); } catch { }
-        await Task.CompletedTask;
     }
 }

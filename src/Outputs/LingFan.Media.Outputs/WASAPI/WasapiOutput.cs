@@ -24,7 +24,8 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，COM 接口使用 [ComImport] 编译期生成存根。</para>
 /// <para><b>资源所有权</b>：IMMDeviceEnumerator/IMMDevice/IAudioClient/IAudioRenderClient/ISimpleAudioVolume/IAudioClock
 /// 均由本类持有（Session 级），Dispose 时通过 Marshal.ReleaseComObject 释放。</para>
-/// <para><b>Submit 所有权</b>：调用后 WasapiOutput 拥有 frame 所有权，内部拷贝到 WASAPI 缓冲后立即 Dispose。</para>
+/// <para><b>Submit 所有权</b>：V2 变更——Submit 不再接管帧所有权，不 Dispose 帧。
+/// 调用方（AudioPipeline）负责 Return 到 FramePool 或 Dispose。</para>
 /// <para><b>V1 限制</b>：仅支持共享模式 + 32 位浮点输出。S16/S32 输入会转换为 F32。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
@@ -228,16 +229,15 @@ internal sealed class WasapiOutput : IAudioOutput
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// V2 变更：Submit 不再接管帧所有权，不 Dispose 帧。
+    /// 调用方（AudioPipeline）负责 Return 到 FramePool 或 Dispose。
+    /// </remarks>
     public void Submit(AudioFrame frame)
     {
-        // ArgumentNullException 必须在最前——null frame 无法 Dispose
         ArgumentNullException.ThrowIfNull(frame);
 
-        // 接口契约：Submit 一旦被调用（frame 非 null）即取走 frame 所有权，
-        // 无论后续验证是否通过、是否抛异常，都必须 Dispose frame。
-        try
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
             if (!_initialized || _audioClient is null || _renderClient is null)
                 throw new InvalidOperationException("WASAPI 输出尚未初始化，无法 Submit。");
@@ -328,12 +328,6 @@ internal sealed class WasapiOutput : IAudioOutput
                     catch { /* 尽力释放，忽略二次异常 */ }
                 }
             }
-        }
-        finally
-        {
-            // 取走所有权，立即释放——覆盖所有异常路径（含早期验证失败）
-            frame.Dispose();
-        }
     }
 
     /// <inheritdoc/>

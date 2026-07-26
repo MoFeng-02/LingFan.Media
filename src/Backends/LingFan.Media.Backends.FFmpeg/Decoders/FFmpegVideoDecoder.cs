@@ -21,10 +21,11 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// <para><b>线程安全</b>：单线程使用（管线线程），非线程安全。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，SafeHandle，无反射。</para>
 /// </remarks>
-internal sealed class FFmpegVideoDecoder : IVideoDecoder
+internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoFrame>
 {
     private readonly ILogger<FFmpegVideoDecoder> _logger;
     private SafeAVCodecContextHandle? _codecContextHandle;
+    private IFramePool<VideoFrame>? _framePool;
     private bool _disposed;
     private bool _initialized;
 
@@ -224,6 +225,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder
     }
 
     /// <inheritdoc/>
+    public void SetFramePool(IFramePool<VideoFrame>? pool)
+    {
+        _framePool = pool;
+    }
+
+    /// <inheritdoc/>
     public unsafe void Reset()
     {
         if (!_initialized || _codecContextHandle == null) return;
@@ -253,20 +260,25 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder
     // ── 辅助方法 ──
 
     /// <summary>从 AVFrame 创建 VideoFrame（软件解码路径：拷贝数据到独立 buffer）。</summary>
-    private static unsafe VideoFrame CreateVideoFrameFromAVFrame(AVFrame* avFrame)
+    /// <remarks>
+    /// V2 池化：若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 VideoFrame 实例减少 GC。
+    /// SoftwareFrameResource 仍每次新建（ArrayPool 已优化底层 buffer），V2-05 考虑池化 Resource。
+    /// </remarks>
+    private unsafe VideoFrame CreateVideoFrameFromAVFrame(AVFrame* avFrame)
     {
         int width = avFrame->width;
         int height = avFrame->height;
         AVPixelFormat pixFmt = (AVPixelFormat)avFrame->format;
         PixelFormat format = MapPixelFormatFromFFmpeg(pixFmt);
 
-        // 使用 FFmpeg av_image_copy_to_buffer 正确处理所有像素格式（YUV420P/YUV422P/YUV444P/NV12 等），
-        // 避免手动计算色度平面高度导致的非 YUV420 格式数据损坏。
+        // 使用 FFmpeg av_image_get_buffer_size 计算所需缓冲区大小
         int bufSize = ffmpeg.av_image_get_buffer_size(pixFmt, width, height, 1);
         if (bufSize <= 0)
             throw new InvalidOperationException(
                 $"av_image_get_buffer_size 返回 {bufSize}（format={pixFmt}, {width}x{height}）");
-        byte[] buffer = new byte[bufSize];
+
+        // V2 L12: 使用 ArrayPool 租借内存，减少 GC 压力（60fps 每秒 60 个帧）
+        var resource = new SoftwareFrameResource(width, height, format, bufSize);
 
         // AVFrame.data/linesize 是 Array8，av_image_copy_to_buffer 需要 Array4，需转换
         var srcData = new byte_ptrArray4();
@@ -281,15 +293,14 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder
         srcLinesize[2] = avFrame->linesize[2];
         srcLinesize[3] = avFrame->linesize[3];
 
-        fixed (byte* pBuf = buffer)
-        {
-            ffmpeg.av_image_copy_to_buffer(
-                pBuf, bufSize,
-                srcData, srcLinesize,
-                pixFmt, width, height, 1);
-        }
-
-        var resource = new SoftwareFrameResource(width, height, format, buffer);
+        // 使用 av_image_copy_to_buffer 正确处理所有像素格式（YUV420P/YUV422P/YUV444P/NV12 等），
+        // 避免手动计算色度平面高度导致的非 YUV420 格式数据损坏。
+        // Pin Memory<byte> 获取原始指针供 FFmpeg 互操作（using var 确保方法返回前释放 GCHandle）
+        using var pin = resource.Data.Pin();
+        ffmpeg.av_image_copy_to_buffer(
+            (byte*)pin.Pointer, bufSize,
+            srcData, srcLinesize,
+            pixFmt, width, height, 1);
 
         TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
             ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
@@ -299,7 +310,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder
             : TimeSpan.Zero;
         bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
 
-        return new VideoFrame(width, height, format, resource, timestamp, duration, keyFrame);
+        // V2 池化：从池中 Rent 帧壳并 Reset 填充数据，复用 VideoFrame 实例
+        var frame = _framePool?.Rent() ?? new VideoFrame();
+        frame.Reset(width, height, format, resource, timestamp, duration, keyFrame);
+        return frame;
     }
 
     private static AVCodecID MapVideoCodecToFFmpeg(VideoCodec codec) => codec switch

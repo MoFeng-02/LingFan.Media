@@ -5,25 +5,25 @@ using Avalonia.Platform;
 
 namespace LingFan.Media.Avalonia;
 
-/// <summary>
-/// Skia 视频呈现器。IVideoPresenter 的默认实现，复用 Avalonia 渲染管线的 SkiaSharp 实例。
-/// </summary>
-/// <remarks>
-/// <para><b>关键原则</b>：不独立引用 SkiaSharp NuGet 包，通过 Avalonia 的 WriteableBitmap
-/// 复用底层 SkiaSharp 渲染实例。WriteableBitmap 是 Avalonia 对 Skia 像素缓冲区的封装，
-/// 内部由 SkiaSharp 驱动，避免版本冲突、原生库冲突和 AOT 部署问题。</para>
-/// <para><b>异步策略</b>：全部同步（sync / native 分类）——
-/// Present/Clear/Resize/Dispose 为 sync（纯内存 + GPU 操作）；
-/// Render 为 native（Avalonia Render 覆写，void 签名是框架硬限制）。
-/// 绝对无伪异步——所有 void 方法体内无 await，无 .Wait()，无 .Result。</para>
-/// <para><b>线程安全</b>：Present（渲染线程）和 Render（Avalonia 渲染线程）需同步访问 _bitmap。
-/// 使用 lock 保护位图引用。位图在锁内 Lock/写入/Unlock，Render 在锁内读取引用后锁外绘制。</para>
-/// <para><b>帧所有权</b>：Present 接管帧所有权，完成后 Dispose 帧。
-/// 旧位图在新帧到达且尺寸变化时 Dispose。</para>
-/// <para><b>AOT 兼容</b>：sealed 类，无反射，pattern matching 匹配 IFrameResource 类型。</para>
-/// <para><b>V1 限制</b>：仅支持 BGRA32/RGBA32 像素格式的 SoftwareFrameResource。
-/// GPU 资源（D3D11TextureResource 等）回退路径 V2 实现。</para>
-/// </remarks>
+    /// <summary>
+    /// Skia 视频呈现器。IVideoPresenter 的默认实现，复用 Avalonia 渲染管线的 SkiaSharp 实例。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>关键原则</b>：不独立引用 SkiaSharp NuGet 包，通过 Avalonia 的 WriteableBitmap
+    /// 复用底层 SkiaSharp 渲染实例。WriteableBitmap 是 Avalonia 对 Skia 像素缓冲区的封装，
+    /// 内部由 SkiaSharp 驱动，避免版本冲突、原生库冲突和 AOT 部署问题。</para>
+    /// <para><b>异步策略</b>：全部同步（sync / native 分类）——
+    /// Present/Clear/Resize/Dispose 为 sync（纯内存 + GPU 操作）；
+    /// Render 为 native（Avalonia Render 覆写，void 签名是框架硬限制）。
+    /// 绝对无伪异步——所有 void 方法体内无 await，无 .Wait()，无 .Result。</para>
+    /// <para><b>线程安全</b>：Present（渲染线程）和 Render（Avalonia 渲染线程）需同步访问 _bitmap。
+    /// 使用 lock 保护位图引用。位图在锁内 Lock/写入/Unlock，Render 在锁内读取引用后锁外绘制。</para>
+    /// <para><b>帧所有权</b>：V2 变更——Present 不再接管帧所有权，完成后不 Dispose 帧。
+    /// 调用方（VideoPipeline）负责 Return 到 FramePool 或 Dispose。</para>
+    /// <para><b>AOT 兼容</b>：sealed 类，无反射，pattern matching 匹配 IFrameResource 类型。</para>
+    /// <para><b>V1 限制</b>：仅支持 BGRA32/RGBA32 像素格式的 SoftwareFrameResource。
+    /// GPU 资源（D3D11TextureResource 等）回退路径 V2 实现。</para>
+    /// </remarks>
 public sealed class SkiaVideoPresenter : IVideoPresenter
 {
     private readonly object _frameLock = new();
@@ -53,16 +53,13 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     {
         ArgumentNullException.ThrowIfNull(frame);
 
-        // 防御性检查：如果已 Dispose，立即释放帧并返回（避免竞态下创建泄漏位图）
+        // 防御性检查：如果已 Dispose，直接返回（V2: 调用方负责帧生命周期）
         if (_disposed)
         {
-            frame.Dispose();
             return;
         }
 
-        try
-        {
-            if (frame.Resource is SoftwareFrameResource sw)
+        if (frame.Resource is SoftwareFrameResource sw)
             {
                 var avFormat = sw.Format switch
                 {
@@ -108,14 +105,9 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
             else
             {
                 throw new NotSupportedException(
-                    $"帧资源类型 {frame.Resource.GetType().Name} 在 Skia UI 模式下暂不支持。V1 仅支持 SoftwareFrameResource。");
-            }
+                    $"帧资源类型 {frame.Resource?.GetType().Name ?? "null"} 在 Skia UI 模式下暂不支持。V1 仅支持 SoftwareFrameResource。");
         }
-        finally
-        {
-            // 无论成功或异常，都 Dispose 输入帧（所有权转移语义）
-            frame.Dispose();
-        }
+        // V2: Present 不再 Dispose 帧——调用方（VideoPipeline）负责 Return 到 FramePool
     }
 
     /// <inheritdoc/>

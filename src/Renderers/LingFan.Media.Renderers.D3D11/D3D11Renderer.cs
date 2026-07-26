@@ -170,6 +170,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
         }
 
         // Pattern matching 匹配 IFrameResource 类型（AOT 安全）
+        // V2: Resource 可为 null（池化空壳），null 走 default 分支
         switch (frame.Resource)
         {
             case SoftwareFrameResource sw:
@@ -182,7 +183,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
 
             default:
                 throw new NotSupportedException(
-                    $"不支持的帧资源类型：{frame.Resource.GetType().Name}。" +
+                    $"不支持的帧资源类型：{frame.Resource?.GetType().Name ?? "null"}。" +
                     "D3D11 渲染器支持 SoftwareFrameResource 和 D3D11TextureResource。");
         }
 

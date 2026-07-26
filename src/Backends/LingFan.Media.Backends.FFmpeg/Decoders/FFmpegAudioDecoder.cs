@@ -21,10 +21,11 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// AudioFrame 以 <see cref="ReadOnlyMemory{T}"/> 封装，消费方用
 /// <c>MemoryMarshal.Cast&lt;byte, float&gt;</c> 零拷贝访问。</para>
 /// </remarks>
-internal sealed class FFmpegAudioDecoder : IAudioDecoder
+internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioFrame>
 {
     private readonly ILogger<FFmpegAudioDecoder> _logger;
     private SafeAVCodecContextHandle? _codecContextHandle;
+    private IFramePool<AudioFrame>? _framePool;
     private bool _disposed;
     private bool _initialized;
 
@@ -195,6 +196,12 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder
     }
 
     /// <inheritdoc/>
+    public void SetFramePool(IFramePool<AudioFrame>? pool)
+    {
+        _framePool = pool;
+    }
+
+    /// <inheritdoc/>
     public unsafe void Reset()
     {
         if (!_initialized || _codecContextHandle == null) return;
@@ -223,7 +230,10 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder
     // ── 辅助方法 ──
 
     /// <summary>从 AVFrame 创建 AudioFrame（V1 无重采样，直接拷贝 PCM 数据）。</summary>
-    private static unsafe AudioFrame CreateAudioFrameFromAVFrame(AVFrame* avFrame, AVCodecContext* ctx)
+    /// <remarks>
+    /// V2 池化：若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 AudioFrame 实例减少 GC。
+    /// </remarks>
+    private unsafe AudioFrame CreateAudioFrameFromAVFrame(AVFrame* avFrame, AVCodecContext* ctx)
     {
         TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
             ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(ctx->time_base) * TimeSpan.TicksPerSecond))
@@ -271,7 +281,10 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder
             ? TimeSpan.FromTicks((long)frameCount * TimeSpan.TicksPerSecond / sampleRate)
             : TimeSpan.Zero;
 
-        return new AudioFrame(buffer, sampleRate, channels, outFormat, timestamp, duration, frameCount);
+        // V2 池化：从池中 Rent 帧壳并 Reset 填充数据
+        var frame = _framePool?.Rent() ?? new AudioFrame();
+        frame.Reset(buffer, sampleRate, channels, outFormat, timestamp, duration, frameCount);
+        return frame;
     }
 
     private static AVCodecID MapAudioCodecToFFmpeg(AudioCodec codec) => codec switch

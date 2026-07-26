@@ -13,7 +13,7 @@ namespace LingFan.Media.Core;
 /// <para>线程 join（5s 超时）在 MediaPlayer.DisposeAsync 第1步中处理，不在 Stop() 中。</para>
 /// <para>丢帧必须 Dispose（释放 GPU 资源）。Present 后 Dispose 帧（同步消费约定）。</para>
 /// </remarks>
-public sealed class VideoPipeline
+public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 {
     private readonly Channel<MediaPacket> _packetQueue;
     private readonly IVideoDecoder _decoder;
@@ -22,12 +22,23 @@ public sealed class VideoPipeline
     private readonly Synchronizer _synchronizer;
     private readonly IMediaClock _clock;
     private readonly ILogger<VideoPipeline> _logger;
+    private readonly IFramePool<VideoFrame>? _framePool;
 
     private CancellationTokenSource _cts = new();
     private Task? _pipelineTask;
     private volatile bool _isRunning;
     private volatile bool _isPaused;
+    private volatile bool _pauseAcknowledged;
+    private TaskCompletionSource<bool>? _pauseAckTcs;
     private long _droppedFrames;
+
+    /// <summary>
+    /// 解码锁：确保 DecodeAsync 与 Reset 不会并发执行。
+    /// PipelineLoop 在解码+入队期间持有锁，Flush/FlushAsync 在 Clear+Reset 前获取锁。
+    /// 即使暂停确认超时（管线线程卡在长解码中），锁也能确保安全。
+    /// </summary>
+    private readonly SemaphoreSlim _decodeLock = new(1, 1);
+    private bool _disposed;
 
     /// <summary>
     /// 初始化 <see cref="VideoPipeline"/> 的新实例。
@@ -39,6 +50,7 @@ public sealed class VideoPipeline
     /// <param name="synchronizer">同步器。</param>
     /// <param name="clock">媒体时钟。</param>
     /// <param name="logger">日志器。</param>
+    /// <param name="framePool">帧对象池（V2，可为 null = 无池化回退 V1 行为）。</param>
     public VideoPipeline(
         Channel<MediaPacket> packetQueue,
         IVideoDecoder decoder,
@@ -46,7 +58,8 @@ public sealed class VideoPipeline
         FrameQueue frameQueue,
         Synchronizer synchronizer,
         IMediaClock clock,
-        ILogger<VideoPipeline> logger)
+        ILogger<VideoPipeline> logger,
+        IFramePool<VideoFrame>? framePool = null)
     {
         _packetQueue = packetQueue;
         _decoder = decoder;
@@ -55,6 +68,18 @@ public sealed class VideoPipeline
         _synchronizer = synchronizer;
         _clock = clock;
         _logger = logger;
+        _framePool = framePool;
+    }
+
+    /// <summary>
+    /// 归还帧到池（若池可用）或 Dispose（V1 兼容）。
+    /// </summary>
+    private void ReturnFrame(VideoFrame frame)
+    {
+        if (_framePool != null)
+            _framePool.Return(frame);
+        else
+            frame.Dispose();
     }
 
     /// <summary>管线是否运行。</summary>
@@ -113,12 +138,131 @@ public sealed class VideoPipeline
     }
 
     /// <summary>
-    /// 清空队列和解码器缓冲（Seek 后调用）。
+    /// 清空队列和解码器缓冲（Seek 后调用）。同步版本，用于无法 await 的场景。
+    /// V2 修复（L2）：先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
     /// </summary>
+    /// <remarks>
+    /// <para>两阶段安全保证：</para>
+    /// <list type="number">
+    /// <item>暂停确认（50ms 超时）：快速路径，管线空闲时立即确认</item>
+    /// <item>解码锁（2s 超时）：慢速路径，管线卡在长解码中时等待解码完成</item>
+    /// </list>
+    /// <para>即使暂停确认超时，解码锁也能确保 Reset 不与 DecodeAsync 并发。</para>
+    /// <para>优先使用异步版本 <see cref="FlushAsync"/>（无 Thread.Sleep 阻塞）。</para>
+    /// </remarks>
     public void Flush()
     {
-        _frameQueue.Clear();
-        _decoder.Reset();
+        var shouldResume = _isRunning && !_isPaused;
+        if (_isRunning)
+        {
+            _pauseAcknowledged = false;
+            _isPaused = true;
+
+            // 阶段1: 等待暂停确认（快速路径，50ms 超时）
+            for (var i = 0; i < 50 && !_pauseAcknowledged; i++)
+            {
+                Thread.Sleep(1);
+            }
+
+            if (!_pauseAcknowledged)
+            {
+                _logger.LogWarning("视频管线暂停确认超时（50ms），等待解码锁确保安全");
+            }
+
+            // 阶段2: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）
+            if (_decodeLock.Wait(TimeSpan.FromSeconds(2)))
+            {
+                try
+                {
+                    _frameQueue.Clear(_framePool);
+                    _decoder.Reset();
+                }
+                finally
+                {
+                    _decodeLock.Release();
+                }
+            }
+            else
+            {
+                _logger.LogError("视频管线解码锁获取超时（2s），跳过 Reset 防止竞态崩溃");
+                _frameQueue.Clear(_framePool); // Channel 线程安全，仍然清空
+            }
+        }
+        else
+        {
+            // 管线未运行，无需锁
+            _frameQueue.Clear(_framePool);
+            _decoder.Reset();
+        }
+
+        if (shouldResume)
+        {
+            _isPaused = false;
+        }
+    }
+
+    /// <summary>
+    /// 清空队列和解码器缓冲（Seek 后调用）。异步版本，优先使用。
+    /// V2 修复（L2）：先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// </summary>
+    /// <remarks>
+    /// <para>两阶段安全保证：</para>
+    /// <list type="number">
+    /// <item>暂停确认（50ms 超时）：快速路径，使用 TaskCompletionSource 信号通知</item>
+    /// <item>解码锁（2s 超时）：慢速路径，管线卡在长解码中时等待解码完成</item>
+    /// </list>
+    /// <para>即使暂停确认超时，解码锁也能确保 Reset 不与 DecodeAsync 并发。</para>
+    /// <para>RunContinuationsAsynchronously 避免续体在管线线程执行。</para>
+    /// </remarks>
+    public async Task FlushAsync()
+    {
+        var shouldResume = _isRunning && !_isPaused;
+        if (_isRunning)
+        {
+            _pauseAckTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pauseAcknowledged = false;
+            _isPaused = true;
+
+            // 阶段1: 等待暂停确认（快速路径，50ms 超时）
+            try
+            {
+                await _pauseAckTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(50));
+            }
+            catch (TimeoutException)
+            {
+                _logger.LogWarning("视频管线暂停确认超时（50ms），等待解码锁确保安全");
+            }
+
+            // 阶段2: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）
+            if (await _decodeLock.WaitAsync(TimeSpan.FromSeconds(2)))
+            {
+                try
+                {
+                    _frameQueue.Clear(_framePool);
+                    _decoder.Reset();
+                }
+                finally
+                {
+                    _decodeLock.Release();
+                }
+            }
+            else
+            {
+                _logger.LogError("视频管线解码锁获取超时（2s），跳过 Reset 防止竞态崩溃");
+                _frameQueue.Clear(_framePool); // Channel 线程安全，仍然清空
+            }
+        }
+        else
+        {
+            // 管线未运行，无需锁
+            _frameQueue.Clear(_framePool);
+            _decoder.Reset();
+        }
+
+        if (shouldResume)
+        {
+            _isPaused = false;
+        }
     }
 
     private async Task PipelineLoop()
@@ -129,6 +273,8 @@ public sealed class VideoPipeline
             {
                 if (_isPaused)
                 {
+                    _pauseAcknowledged = true;
+                    _pauseAckTcs?.TrySetResult(true);
                     await Task.Delay(10, _cts.Token);
                     continue;
                 }
@@ -153,21 +299,36 @@ public sealed class VideoPipeline
                     break;
                 }
 
-                // 3. 解码（无 CT，热路径）
-                VideoFrame? decodedFrame;
+                // 3. 解码 + 入队（加锁防止与 Flush/Reset 竞态）
+                await _decodeLock.WaitAsync(_cts.Token);
                 try
                 {
-                    decodedFrame = await _decoder.DecodeAsync(packet);
+                    // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Flush 暂停）
+                    if (_isPaused)
+                    {
+                        packet.Dispose();
+                        continue; // finally 会释放锁
+                    }
+
+                    VideoFrame? decodedFrame;
+                    try
+                    {
+                        decodedFrame = await _decoder.DecodeAsync(packet);
+                    }
+                    finally
+                    {
+                        packet.Dispose();
+                    }
+
+                    if (decodedFrame != null)
+                    {
+                        if (!_frameQueue.TryEnqueue(decodedFrame))
+                            ReturnFrame(decodedFrame); // V2: 队列满，归还帧到池
+                    }
                 }
                 finally
                 {
-                    packet.Dispose();
-                }
-
-                if (decodedFrame != null)
-                {
-                    if (!_frameQueue.TryEnqueue(decodedFrame))
-                        decodedFrame.Dispose(); // 队列满，丢弃帧防泄漏
+                    _decodeLock.Release();
                 }
             }
         }
@@ -193,20 +354,46 @@ public sealed class VideoPipeline
         {
             case SyncAction.Present:
                 try { _renderer.Present(frame); }
-                finally { frame.Dispose(); } // Present 异常也必须释放帧
+                finally { ReturnFrame(frame); } // V2: Present 后归还到池
                 break;
 
             case SyncAction.Wait:
-                // 视频超前，重新入队等待
-                if (!_frameQueue.TryEnqueue(frame))
-                    frame.Dispose(); // 队列满，丢弃帧防泄漏
+                // 视频超前，重新入队等待（暂停期间不重新入队，防 Flush 清空后残留旧帧）
+                if (_isPaused || !_frameQueue.TryEnqueue(frame))
+                    ReturnFrame(frame);
                 Thread.Sleep(1); // 短暂等待
                 break;
 
             case SyncAction.Drop:
-                frame.Dispose();
+                ReturnFrame(frame); // V2: 丢帧归还到池
                 Interlocked.Increment(ref _droppedFrames);
                 break;
         }
+    }
+
+    /// <summary>
+    /// 释放管线资源（解码锁和 CTS）。
+    /// </summary>
+    /// <remarks>
+    /// <para>必须在管线线程退出后调用。DisposeAsync 路径在 Step_StopPipelinesAsync join 后调用。</para>
+    /// <para>同步 Dispose 路径在 Stop() 后调用——若线程仍在运行，SemaphoreSlim.Dispose 可能
+    /// 与正在进行的 WaitAsync/Release 并发，但不会导致未处理异常（管线 catch 已兜底）。</para>
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        _decodeLock.Dispose();
+        _cts.Dispose();
+    }
+
+    /// <summary>
+    /// 异步释放管线资源。优先使用（MediaPlayer.DisposeAsync 在线程 join 后调用）。
+    /// </summary>
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
     }
 }

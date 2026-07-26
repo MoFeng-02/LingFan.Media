@@ -1,32 +1,92 @@
+using System.Collections.Concurrent;
+
 namespace LingFan.Media.Core;
 
 /// <summary>
-/// 帧对象池。V2 预留，V1 直接 new + Dispose。
+/// 帧对象池。V2 实现——复用帧实例减少 GC 压力。
 /// </summary>
 /// <remarks>
-/// <para>当前为 V1 占位实现——直接 new 实例，不池化。</para>
-/// <para>V2 可改为 ArrayPool/MemoryPool 复用帧底层 buffer，减少 GC 压力。</para>
+/// <para>线程安全：使用 <see cref="ConcurrentStack{T}"/> 天然线程安全。</para>
+/// <para>生命周期：Session 级（每个 <see cref="MediaPlayer"/> 拥有独立池）。</para>
+/// <para>工作流程：</para>
+/// <list type="number">
+/// <item><see cref="Rent"/>：从池中弹出一个帧壳（或通过工厂创建新壳）</item>
+/// <item>解码器调用 <c>VideoFrame.Reset(...)</c> 填充帧数据</item>
+/// <item>管线消费帧（Present/Submit）</item>
+/// <item><see cref="Return"/>：重置帧状态（释放 Resource）后推回池中</item>
+/// </list>
+/// <para><b>异步策略</b>：sync（纯内存操作，无 I/O）。<see cref="Rent"/> 和 <see cref="Return"/> 均为同步。</para>
+/// <para><b>AOT 兼容</b>：sealed 类，泛型 + ConcurrentStack，无反射。</para>
 /// </remarks>
-/// <typeparam name="T">帧类型。</typeparam>
-public sealed class FramePool<T> : IFramePool<T> where T : class
+/// <typeparam name="T">帧类型（VideoFrame / AudioFrame）。</typeparam>
+public sealed class FramePool<T> : IFramePool<T>, IDisposable where T : class
 {
-    /// <inheritdoc />
-    public T Rent()
+    private readonly ConcurrentStack<T> _pool = new();
+    private readonly Func<T> _factory;
+    private readonly Action<T>? _reset;
+    private readonly int _maxSize;
+    private bool _disposed;
+
+    /// <summary>
+    /// 初始化 <see cref="FramePool{T}"/> 的新实例。
+    /// </summary>
+    /// <param name="factory">创建新帧的工厂（池为空时调用）。</param>
+    /// <param name="reset">重置帧状态的回调（Return 时调用，释放 Resource 等）。可为 null。</param>
+    /// <param name="maxSize">最大池大小，防内存泄漏（默认 16）。</param>
+    public FramePool(Func<T> factory, Action<T>? reset = null, int maxSize = 16)
     {
-        // V1: 直接 new（由调用方通过工厂创建）
-        // V2: 从池中租用
-        throw new NotSupportedException(
-            "V1 直接 new 帧实例，不使用对象池。V2 将实现池化。");
+        _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _reset = reset;
+        _maxSize = maxSize > 0 ? maxSize : 16;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// 租用一个帧实例。池中有可用帧时弹出，否则通过工厂创建。
+    /// </summary>
+    /// <returns>帧实例（需调用方通过 Reset 填充数据）。</returns>
+    public T Rent()
+    {
+        if (_pool.TryPop(out var frame))
+            return frame;
+        return _factory();
+    }
+
+    /// <summary>
+    /// 归还帧实例到池中。池满时 Dispose 帧而非入池。
+    /// </summary>
+    /// <param name="frame">要归还的帧。</param>
     public void Return(T frame)
     {
-        // V1: 直接 Dispose（如果帧实现了 IDisposable）
-        if (frame is IDisposable disposable)
+        ArgumentNullException.ThrowIfNull(frame);
+
+        if (_disposed)
         {
-            disposable.Dispose();
+            if (frame is IDisposable d) d.Dispose();
+            return;
         }
-        // V2: 归还到池中
+
+        if (_pool.Count >= _maxSize)
+        {
+            // 池满，释放帧
+            if (frame is IDisposable d) d.Dispose();
+            return;
+        }
+
+        _reset?.Invoke(frame);
+        _pool.Push(frame);
+    }
+
+    /// <summary>
+    /// 释放池中所有帧。池 Dispose 后 Return 的帧也会被 Dispose。
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        while (_pool.TryPop(out var frame))
+        {
+            if (frame is IDisposable d) d.Dispose();
+        }
     }
 }

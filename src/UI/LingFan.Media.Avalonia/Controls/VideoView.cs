@@ -23,15 +23,28 @@ namespace LingFan.Media.Avalonia;
 /// <para><b>异步策略</b>（遵守异步同步分类表）：</para>
 /// <list type="bullet">
 /// <item>OnAttachedToVisualTree：sync——创建 Presenter + Initialize，纯内存</item>
-    /// <item>OnDetachedFromVisualTree：V1 sync（SkiaVideoPresenter.Dispose 同步，无 I/O 可 await）。
-    /// V2 原生 GPU 模式新增 async ValueTask DisposePlayerAsync() 供消费方显式调用（**async void 绝对禁止**），
-    /// void 覆写内调同步 Dispose() 兜底。</item>
+/// <item>OnDetachedFromVisualTree：V1 sync（SkiaVideoPresenter.Dispose 同步，无 I/O 可 await）。
+/// V2 原生 GPU 模式新增 <see cref="DisposePlayerAsync"/> 供消费方显式调用（**async void 绝对禁止**），
+/// void 覆写内调同步清理兜底。</item>
 /// <item>Render(DrawingContext)：native——Avalonia 框架 void 签名硬限制</item>
 /// <item>OnSizeChanged：sync——通知 Presenter.Resize，纯内存</item>
 /// <item>OnPlayerChanged：sync 设置——检查 Session 是否已就绪（V1 不 await OpenAsync，消费方应先调用 OpenAsync 再绑定 Player）</item>
 /// </list>
 /// <para><b>数据绑定</b>：使用 Avalonia 原生 StyledProperty&lt;T&gt;，不依赖 MVVM 框架。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射。</para>
+/// <example>
+/// 推荐用法——消费方应先 <c>await player.OpenAsync()</c> 完成（Session 就绪后），
+/// 再将 player 绑定到 VideoView.Player 属性：
+/// <code>
+/// var player = serviceProvider.GetRequiredService&lt;IMediaPlayer&gt;();
+/// await player.OpenAsync(source); // 先 Open
+/// videoView.Player = player;      // 再绑定
+/// </code>
+/// 释放时推荐异步路径：
+/// <code>
+/// await videoView.DisposePlayerAsync(); // V2 推荐路径
+/// </code>
+/// </example>
 /// </remarks>
 public sealed class VideoView : Control, IRenderTarget
 {
@@ -173,10 +186,10 @@ public sealed class VideoView : Control, IRenderTarget
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <b>V1 同步实现</b>：SkiaVideoPresenter.Dispose 是同步的，无 I/O 可 await。
-    /// <b>V2 原生 GPU 模式</b>：新增 async ValueTask DisposePlayerAsync() 供消费方显式调用，
-    /// await renderer.DisposeAsync() 释放 GPU 资源（GPU flush + SwapChain 释放是真实异步 I/O，不能同步阻塞 UI 线程）。
-    /// void 覆写不可改签名为 Task/ValueTask（**async void 绝对禁止**），内调同步 Dispose() 兜底。
+    /// <b>V1 同步兜底</b>：SkiaVideoPresenter.Dispose 是同步的，无 I/O 可 await。
+    /// <b>V2 推荐路径</b>：消费方先 <c>await DisposePlayerAsync()</c> 释放 GPU 资源（GPU flush + SwapChain 释放是真实异步 I/O），
+    /// 再让控件 Detach。void 覆写不可改签名为 Task/ValueTask（<b>async void 绝对禁止</b>），
+    /// 内调同步清理兜底——解绑播放器事件 + 同步释放 Presenter。
     /// 当前 V1 无伪异步——方法体内无 await 故不加 async 关键字。
     /// </remarks>
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -187,6 +200,36 @@ public sealed class VideoView : Control, IRenderTarget
         DetachPlayer();
 
         // 释放 Presenter（SkiaVideoPresenter.Dispose 是同步的）
+        _presenter?.Dispose();
+        _presenter = null;
+    }
+
+    /// <summary>
+    /// 异步释放播放器和渲染器资源。供消费方在控件 Detach 前显式调用。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>V2 推荐路径</b>：原生 GPU 模式下，<c>await _player.DisposeAsync()</c> 释放 GPU 资源
+    /// （GPU flush + SwapChain 释放是真实异步 I/O，不能同步阻塞 UI 线程）。</para>
+    /// <para><b>ValueTask</b> 与 <see cref="IMediaPlayer.DisposeAsync()"/> 返回类型一致。</para>
+    /// <para><b>async void 绝对禁止</b>——此方法不是 void 覆写，是新增独立 async 方法。</para>
+    /// <para>void 覆写 <see cref="OnDetachedFromVisualTree"/> 内调同步清理兜底（解绑事件 + 同步释放 Presenter），
+    /// 禁止调 <c>DisposeAsync().GetResult()</c> 伪异步。</para>
+    /// </remarks>
+    public async ValueTask DisposePlayerAsync()
+    {
+        // 1. 捕获 Player 引用（DetachPlayer 会将 _player 置 null）
+        var player = _player;
+
+        // 2. 解绑播放器事件（内部会将 _player 置 null）
+        DetachPlayer();
+
+        // 3. 如果绑定了 Player，异步释放（GPU flush + SwapChain + 线程 join）
+        if (player != null)
+        {
+            await player.DisposeAsync();
+        }
+
+        // 4. 释放 Presenter（SkiaVideoPresenter.Dispose 是同步的）
         _presenter?.Dispose();
         _presenter = null;
     }
@@ -270,6 +313,14 @@ public sealed class VideoView : Control, IRenderTarget
         EnsurePresenter();
     }
 
+    /// <summary>
+    /// 绑定的播放器变化时触发。void 回调不可改签名（<b>async void 绝对禁止</b>）。
+    /// </summary>
+    /// <remarks>
+    /// <b>调用方契约</b>：消费方应先 <c>await player.OpenAsync()</c> 完成（Session 就绪后），
+    /// 再将 player 绑定到 <see cref="Player"/> 属性。此方法是 void 回调不可改签名为 Task/ValueTask，
+    /// 因此不能在此方法内 await OpenAsync。
+    /// </remarks>
     private void OnPlayerChanged(IMediaPlayer? oldPlayer, IMediaPlayer? newPlayer)
     {
         if (oldPlayer != null)
@@ -288,6 +339,11 @@ public sealed class VideoView : Control, IRenderTarget
     /// <summary>
     /// 绑定播放器：订阅事件 + 检查 Session 是否已就绪。
     /// </summary>
+    /// <remarks>
+    /// <b>调用方契约</b>：消费方应先 <c>await player.OpenAsync()</c> 完成（Session 就绪后），
+    /// 再将 player 绑定到 <see cref="Player"/> 属性。
+    /// 此方法由 void 回调 <see cref="OnPlayerChanged"/> 调用，不可改签名为 Task/ValueTask（<b>async void 绝对禁止</b>）。
+    /// </remarks>
     private void AttachPlayer(IMediaPlayer player)
     {
         _player = player;
