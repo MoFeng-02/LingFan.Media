@@ -23,7 +23,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\UI\LingFan.Media.Avalonia.D3D11\LingFan.Media.Avalonia.D3D11.csproj" />
+    <ProjectReference Include="..\..\Presenters\LingFan.Media.GpuPresenter\LingFan.Media.GpuPresenter.csproj" />
+    <ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
   </ItemGroup>
 
 </Project>

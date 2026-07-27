@@ -511,7 +511,8 @@ public sealed class MediaPlayer : IMediaPlayer
             try { _videoDecoder?.Dispose(); } catch { }
             try { _audioDecoder?.Dispose(); } catch { }
             try { _subtitleDecoder?.Dispose(); } catch { }
-            try { _videoRenderer?.Dispose(); } catch { }
+            // 注意：共享单例渲染器（D3D11RendererFactory 缓存单例）不在此处置——
+            // 其生命周期归工厂，SwapChain 由 UI Presenter.Detach 释放（方案 A）。
             try { _audioOutput?.Dispose(); } catch { }
             try { _demuxer?.Close(); } catch { }
             try { _demuxer?.Dispose(); } catch { }
@@ -670,17 +671,15 @@ public sealed class MediaPlayer : IMediaPlayer
         try { _subtitleDecoder?.Dispose(); } catch (Exception ex) { _logger.LogWarning(ex, "释放字幕解码器异常"); }
     }
 
+    // 方案 A（P0 修复）共享单例渲染器生命周期说明：
+    // _videoRenderer 是 D3D11RendererFactory 的缓存单例，Core 视频管线与 UI 层 D3D11GpuPresenter
+    // 通过同一工厂解析到同一 D3D11Renderer 实例（R1==R2）。其生命周期由工厂（DI Singleton）持有，
+    // SwapChain 与 HWND 的绑定由 UI Presenter.Detach 管理。
+    // 因此 MediaPlayer 绝不能 Detach/Dispose 共享单例——否则会释放 UI 层正在使用（或待重开复用）的
+    // 同一实例，导致重开后管线 Present 命中未附加/已释放的渲染器（D3D11 不显示）。
+    // 此处刻意不处置渲染器：共享单例由工厂在容器释放时 Dispose，SwapChain 由 UI Presenter 释放。
     private void Step_DisposeRenderer()
     {
-        try
-        {
-            _videoRenderer?.Detach();
-            _videoRenderer?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "DisposeAsync 步骤5: 释放渲染器异常");
-        }
     }
 
     private void Step_DisposeAudioOutput()
@@ -767,7 +766,7 @@ public sealed class MediaPlayer : IMediaPlayer
         try { _videoDecoder?.Dispose(); } catch { }
         try { _audioDecoder?.Dispose(); } catch { }
         try { _subtitleDecoder?.Dispose(); } catch { }
-        try { _videoRenderer?.Dispose(); } catch { }
+        // 共享单例渲染器不在此处置（生命周期归工厂，SwapChain 由 UI Presenter.Detach）——方案 A。
         try { _audioOutput?.Dispose(); } catch { }
         try { _videoFramePool?.Dispose(); } catch { }
         try { _audioFramePool?.Dispose(); } catch { }

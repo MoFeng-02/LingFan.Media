@@ -4,7 +4,9 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using LingFan.Media.Presenters;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Avalonia;
 
@@ -49,10 +51,11 @@ namespace LingFan.Media.Avalonia;
 /// </remarks>
 public sealed class VideoView : Control, IRenderTarget
 {
-    private IVideoPresenter? _presenter;
+    private IGpuPresenter? _presenter;
     private IMediaPlayer? _player;
     private SubtitleFrame? _currentSubtitle;
     private IServiceProvider? _services;
+    private ILogger? _logger;
 
     #region StyledProperties
 
@@ -252,8 +255,11 @@ public sealed class VideoView : Control, IRenderTarget
     {
         base.Render(drawingContext);
 
-        // 委托给 Presenter 绘制视频帧
-        _presenter?.Render(drawingContext);
+        // 委托给 Presenter 绘制视频帧（GPU Presenter 实现 IGpuPresenter 不含 Render，自然跳过无空域合成）
+        if (_presenter is IVideoPresenter presenter)
+        {
+            presenter.Render(drawingContext);
+        }
 
         // 绘制字幕叠加层
         RenderSubtitle(drawingContext);
@@ -298,13 +304,14 @@ public sealed class VideoView : Control, IRenderTarget
 
         var rendererType = RendererType ?? typeof(SkiaVideoPresenter);
 
-        IVideoPresenter? created = null;
+        IGpuPresenter? created = null;
 
-        // 优先通过 DI 注册的 IVideoPresenterFactory 按 RendererType 匹配（D1 方案 B）。
-        // VideoView 不引用桥接项目（如 Avalonia.D3D11），仅用 Type 对象比较，符合依赖倒置。
+        // 优先通过 DI 注册的 IGpuPresenterFactory 按 RendererType 匹配（D1 方案 B 演进）。
+        // VideoView 不引用具体 GPU 项目（如 GpuPresenter.D3D11），仅用 Type 对象比较，符合依赖倒置。
+        // 工厂集合同时包含 SkiaPresenterFactory（继承 IGpuPresenterFactory）与各后端 GPU 工厂。
         if (_services is not null)
         {
-            foreach (var factory in _services.GetServices<IVideoPresenterFactory>())
+            foreach (var factory in _services.GetServices<IGpuPresenterFactory>())
             {
                 if (factory.PresenterType == rendererType)
                 {
@@ -317,16 +324,55 @@ public sealed class VideoView : Control, IRenderTarget
         created ??= (rendererType == typeof(SkiaVideoPresenter))
             ? new SkiaVideoPresenter()
             : throw new NotSupportedException(
-                $"渲染器类型 {rendererType.Name} 未注册对应的 IVideoPresenterFactory，且非 SkiaVideoPresenter。" +
-                "请调用 AddD3D11Presenter()（或对应后端注册方法）以注册匹配的 IVideoPresenterFactory。");
+                $"渲染器类型 {rendererType.Name} 未注册对应的 IGpuPresenterFactory，且非 SkiaVideoPresenter。" +
+                "请调用 AddD3D11Presenter()（或对应后端注册方法）以注册匹配的 IGpuPresenterFactory。");
 
         _presenter = created;
-        _presenter.Initialize(this);
+
+        // 统一初始化：尝试解析窗口 HWND 并构造 Pointer 渲染目标。
+        // - GPU 路径（D3D11GpuPresenter 等）：需要 HWND 建 SwapChain。
+        // - Skia 路径：只读 Width/Height/Scale（不碰 NativeHandle），GpuRenderTarget 同样满足。
+        // HWND 解析依赖 Avalonia Visual/TopLevel，故放在 UI 层；IGpuPresenter 本身保持与 UI 无关。
+        var hwnd = TryResolveHwnd();
+        IRenderTarget initTarget = hwnd is not null
+            ? new GpuRenderTarget(hwnd.Value, (int)Bounds.Width, (int)Bounds.Height,
+                (float)(TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0))
+            : this;
+
+        // GPU 后端（D3D11 等）初始化可能因环境/驱动失败（非 Windows、无 GPU、Attach 异常等）。
+        // 捕获异常并安全降级到内置 SkiaVideoPresenter，保证 UI 不崩、视频仍可软渲染呈现（无空域渲染）。
+        try
+        {
+            _presenter.Initialize(initTarget);
+        }
+        catch (Exception ex)
+        {
+            _logger ??= _services?.GetService<ILogger<VideoView>>();
+            _logger?.LogWarning(ex,
+                "GPU Presenter（{RendererType}）初始化失败，降级到 SkiaVideoPresenter 软渲染。",
+                rendererType.Name);
+            try { _presenter.Dispose(); } catch { } // 释放失败的 GPU Presenter（其 Initialize 已清理部分资源）
+
+            IGpuPresenter fallback = new SkiaVideoPresenter();
+            try { fallback.Initialize(this); }       // Skia 用 VideoView 自身作渲染目标（只读尺寸/缩放）
+            catch { /* 最后兜底：保留 fallback，后续 Present/Clear/Resize 均为安全空操作 */ }
+            _presenter = fallback;
+        }
 
         if (_presenter is SkiaVideoPresenter skia)
         {
             skia.AspectRatioMode = AspectRatioMode;
         }
+    }
+
+    /// <summary>
+    /// 从 Avalonia 视觉树解析窗口平台句柄（HWND）。GPU Presenter 需要它创建 SwapChain。
+    /// HWND 解析属于 UI 框架职责，推回 Avalonia 层；中立的 IGpuPresenter 只消费 Pointer 渲染目标。
+    /// </summary>
+    private IntPtr? TryResolveHwnd()
+    {
+        var handle = TopLevel.GetTopLevel(this)?.TryGetPlatformHandle()?.Handle;
+        return handle is { } h && h != IntPtr.Zero ? h : null;
     }
 
     private void OnRendererTypeChanged()

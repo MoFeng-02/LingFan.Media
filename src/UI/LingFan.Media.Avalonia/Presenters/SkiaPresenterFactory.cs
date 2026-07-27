@@ -1,3 +1,5 @@
+using LingFan.Media.Presenters;
+
 namespace LingFan.Media.Avalonia;
 
 /// <summary>
@@ -11,6 +13,11 @@ public sealed class SkiaPresenterFactory : IVideoPresenterFactory
 {
     /// <inheritdoc />
     public IVideoPresenter Create() => new SkiaVideoPresenter();
+
+    // 显式实现基接口 Create（返回 IGpuPresenter），满足 IGpuPresenterFactory 契约；
+    // IVideoPresenterFactory.Create()（new 声明，返回更具体的 IVideoPresenter）由上方 public Create() 实现。
+    // C# 接口方法不支持返回类型协变，故基接口方法需显式实现。
+    IGpuPresenter IGpuPresenterFactory.Create() => Create();
 
     /// <inheritdoc />
     public Type PresenterType => typeof(SkiaVideoPresenter);

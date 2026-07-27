@@ -1,41 +1,41 @@
 using LingFan.Media.Abstractions;
-using LingFan.Media.Avalonia;
-using LingFan.Media.Avalonia.D3D11;
+using LingFan.Media.Presenters;
+using LingFan.Media.Presenters.D3D11;
+using LingFan.Media.Renderers.D3D11;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
-namespace LingFan.Media.Avalonia.D3D11.Tests;
+namespace LingFan.Media.GpuPresenter.Tests;
 
 /// <summary>
-/// D3D11PresenterFactory 单元测试。验证工厂类型匹配机制（VideoView 按 RendererType 解析 Presenter 的关键）。
+/// D3D11GpuPresenterFactory 单元测试。验证工厂类型匹配机制（VideoView 按 RendererType 解析 Presenter 的关键）。
 /// 不触真实 D3D11 设备——D3D11GpuPresenter 的设备创建延迟到 Initialize→Attach，Create() 仅 new 对象。
 /// </summary>
-public class D3D11PresenterFactoryTests
+public class D3D11GpuPresenterFactoryTests
 {
     [Fact]
     public void PresenterType_ReturnsD3D11GpuPresenter()
     {
-        var factory = new D3D11PresenterFactory(new StubVideoRendererFactory(), NullLoggerFactory.Instance);
+        var factory = new D3D11GpuPresenterFactory(new StubVideoRendererFactory(), NullLoggerFactory.Instance);
         Assert.Equal(typeof(D3D11GpuPresenter), factory.PresenterType);
     }
 
     [Fact]
     public void Create_ReturnsD3D11GpuPresenterInstance()
     {
-        var factory = new D3D11PresenterFactory(new StubVideoRendererFactory(), NullLoggerFactory.Instance);
+        var factory = new D3D11GpuPresenterFactory(new StubVideoRendererFactory(), NullLoggerFactory.Instance);
         var presenter = factory.Create();
         Assert.IsType<D3D11GpuPresenter>(presenter);
     }
 
     [Fact]
-    public void PresenterType_DiffersFromSkiaFactory()
+    public void PresenterType_DiffersFromOtherBackends()
     {
         // VideoView 的工厂匹配机制依赖 PresenterType 的 Type 比较区分后端；
-        // D3D11 与 Skia 工厂的 PresenterType 必须不同，否则无法区分。
-        var d3d11 = new D3D11PresenterFactory(new StubVideoRendererFactory(), NullLoggerFactory.Instance);
-        var skia = new SkiaPresenterFactory();
-        Assert.NotEqual(d3d11.PresenterType, skia.PresenterType);
+        // D3D11 与 Vulkan 工厂的 PresenterType 必须不同，否则无法区分。
+        var d3d11 = new D3D11GpuPresenterFactory(new StubVideoRendererFactory(), NullLoggerFactory.Instance);
+        Assert.NotEqual(typeof(LingFan.Media.Presenters.Vulkan.VulkanGpuPresenter), d3d11.PresenterType);
     }
 }
 

@@ -17,7 +17,10 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>。
 /// D3D11 GPU 释放为快速同步 COM 调用，无 I/O 可 await，非伪异步。</item>
 /// </list>
-/// <para><b>线程安全</b>：非线程安全。Attach/Detach 在 UI 线程，Present/Clear 在渲染线程，不可并发调用。</para>
+/// <para><b>线程安全（方案 A 修复）</b>：内部 <c>_gate</c> 锁串行化 Attach/Detach/Present/Clear/Dispose，
+/// 可安全应对<b>管线线程 Present</b> 与 <b>UI 线程 Resize/Detach</b> 的并发竞态
+/// （D3D11GpuPresenter 的 <c>_rendererLock</c> 与 Core VideoPipeline 的 Present 均汇聚到本锁）。
+/// 单例渲染器被 UI 与 Core 管线共享时，本锁是唯一的跨调用方序列化点。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，pattern matching 匹配 IFrameResource 类型。</para>
 /// <para><b>资源所有权</b>：ID3D11Device/ID3D11DeviceContext 由工厂持有（共享 Singleton，本类不 Dispose），
 /// SwapChain/BackBuffer/RenderTargetView/StagingTexture 由本类持有（Session 级，Detach/Dispose 释放）。</para>
@@ -40,6 +43,12 @@ internal sealed class D3D11Renderer : IVideoRenderer
     private bool _attached;
 
     /// <summary>
+    /// 串行化所有原生方法（Attach/Detach/Present/Clear/Dispose），化解管线线程 Present 与
+    /// UI 线程 Resize/Detach 的并发原生竞态（方案 A）。普通 <see langword="lock"/>，同线程可重入。
+    /// </summary>
+    private readonly object _gate = new();
+
+    /// <summary>
     /// 初始化 <see cref="D3D11Renderer"/> 的新实例。
     /// </summary>
     /// <param name="device">共享 D3D11 设备（不由本类释放）。</param>
@@ -51,6 +60,11 @@ internal sealed class D3D11Renderer : IVideoRenderer
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
+
+    /// <summary>
+    /// 是否已释放。供工厂判断缓存单例是否需要重建（方案 A 单例安全复用）。
+    /// </summary>
+    internal bool IsDisposed => _disposed;
 
     /// <inheritdoc/>
     /// <remarks>接口契约：设备由工厂创建，无 I/O，返回 <see cref="Task.CompletedTask"/>。</remarks>
@@ -66,155 +80,174 @@ internal sealed class D3D11Renderer : IVideoRenderer
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(target);
 
-        if (_attached)
+        lock (_gate)
         {
-            _logger.LogWarning("D3D11 渲染器已附加渲染目标，先 Detach 再 Attach。");
-            Detach();
+            if (_disposed) return; // 锁外已检查，二次确认防御竞态
+
+            if (_attached)
+            {
+                _logger.LogWarning("D3D11 渲染器已附加渲染目标，先 Detach 再 Attach。");
+                Detach();
+            }
+
+            // 验证渲染目标句柄类型
+            if (target.HandleType != RenderHandleType.Pointer)
+            {
+                throw new NotSupportedException(
+                    $"D3D11 渲染器仅支持 {nameof(RenderHandleType.Pointer)} 句柄类型，收到 {target.HandleType}。");
+            }
+
+            if (target.NativeHandle is not IntPtr hwnd || hwnd == IntPtr.Zero)
+            {
+                throw new ArgumentException(
+                    "渲染目标的原生句柄无效——期望 IntPtr 类型的 HWND。", nameof(target));
+            }
+
+            if (target.Width <= 0 || target.Height <= 0)
+            {
+                throw new ArgumentException(
+                    $"渲染目标尺寸无效：{target.Width}x{target.Height}。", nameof(target));
+            }
+
+            // 获取 DXGI 工厂（通过设备链获取，确保同一适配器）
+            using var dxgiDevice = _device.QueryInterface<IDXGIDevice>();
+            using var adapter = dxgiDevice.GetParent<IDXGIAdapter>();
+            using var factory = adapter.GetParent<IDXGIFactory2>();
+
+            // 创建 SwapChainDescription1（DXGI 1.2+，支持 FlipDiscard）
+            var swapChainDesc = new SwapChainDescription1(
+                (uint)target.Width,                        // Width
+                (uint)target.Height,                       // Height
+                Format.B8G8R8A8_UNorm,                     // Format
+                false,                                      // Stereo
+                Vortice.DXGI.Usage.RenderTargetOutput,     // BufferUsage（DXGI.Usage）
+                2u,                                         // BufferCount
+                Scaling.Stretch,                            // Scaling
+                SwapEffect.FlipDiscard,                    // SwapEffect
+                AlphaMode.Ignore,                          // AlphaMode
+                SwapChainFlags.None);                       // Flags
+
+            // 创建 SwapChain 及后续资源——若中途失败必须清理已创建的 COM 对象
+            // （_attached 尚未设为 true，Detach() 不会清理，需 try-catch 兜底）
+            try
+            {
+                // 创建 SwapChain（通过 CreateSwapChainForHwnd，现代 API）
+                _swapChain = factory.CreateSwapChainForHwnd(
+                    _device,
+                    hwnd,
+                    swapChainDesc,
+                    null,   // 无全屏描述（窗口模式）
+                    null);  // 无输出限制
+
+                // 获取 BackBuffer
+                _backBuffer = _swapChain.GetBuffer<ID3D11Texture2D>(0);
+
+                // 创建 RenderTargetView（用于 Clear）
+                _renderTargetView = _device.CreateRenderTargetView(_backBuffer, null);
+            }
+            catch
+            {
+                // 清理已创建的部分资源，防止 COM 泄漏
+                ReleaseSessionResources();
+                throw;
+            }
+
+            _attached = true;
+            _logger.LogDebug("D3D11 渲染器已附加渲染目标：{Width}x{Height}", target.Width, target.Height);
         }
-
-        // 验证渲染目标句柄类型
-        if (target.HandleType != RenderHandleType.Pointer)
-        {
-            throw new NotSupportedException(
-                $"D3D11 渲染器仅支持 {nameof(RenderHandleType.Pointer)} 句柄类型，收到 {target.HandleType}。");
-        }
-
-        if (target.NativeHandle is not IntPtr hwnd || hwnd == IntPtr.Zero)
-        {
-            throw new ArgumentException(
-                "渲染目标的原生句柄无效——期望 IntPtr 类型的 HWND。", nameof(target));
-        }
-
-        if (target.Width <= 0 || target.Height <= 0)
-        {
-            throw new ArgumentException(
-                $"渲染目标尺寸无效：{target.Width}x{target.Height}。", nameof(target));
-        }
-
-        // 获取 DXGI 工厂（通过设备链获取，确保同一适配器）
-        using var dxgiDevice = _device.QueryInterface<IDXGIDevice>();
-        using var adapter = dxgiDevice.GetParent<IDXGIAdapter>();
-        using var factory = adapter.GetParent<IDXGIFactory2>();
-
-        // 创建 SwapChainDescription1（DXGI 1.2+，支持 FlipDiscard）
-        var swapChainDesc = new SwapChainDescription1(
-            (uint)target.Width,                        // Width
-            (uint)target.Height,                       // Height
-            Format.B8G8R8A8_UNorm,                     // Format
-            false,                                      // Stereo
-            Vortice.DXGI.Usage.RenderTargetOutput,     // BufferUsage（DXGI.Usage）
-            2u,                                         // BufferCount
-            Scaling.Stretch,                            // Scaling
-            SwapEffect.FlipDiscard,                    // SwapEffect
-            AlphaMode.Ignore,                          // AlphaMode
-            SwapChainFlags.None);                       // Flags
-
-        // 创建 SwapChain 及后续资源——若中途失败必须清理已创建的 COM 对象
-        // （_attached 尚未设为 true，Detach() 不会清理，需 try-catch 兜底）
-        try
-        {
-            // 创建 SwapChain（通过 CreateSwapChainForHwnd，现代 API）
-            _swapChain = factory.CreateSwapChainForHwnd(
-                _device,
-                hwnd,
-                swapChainDesc,
-                null,   // 无全屏描述（窗口模式）
-                null);  // 无输出限制
-
-            // 获取 BackBuffer
-            _backBuffer = _swapChain.GetBuffer<ID3D11Texture2D>(0);
-
-            // 创建 RenderTargetView（用于 Clear）
-            _renderTargetView = _device.CreateRenderTargetView(_backBuffer, null);
-        }
-        catch
-        {
-            // 清理已创建的部分资源，防止 COM 泄漏
-            ReleaseSessionResources();
-            throw;
-        }
-
-        _attached = true;
-        _logger.LogDebug("D3D11 渲染器已附加渲染目标：{Width}x{Height}", target.Width, target.Height);
     }
 
     /// <inheritdoc/>
     public void Detach()
     {
-        if (!_attached) return;
+        lock (_gate)
+        {
+            if (_disposed || !_attached) return;
 
-        ReleaseSessionResources();
-        _attached = false;
-        _logger.LogDebug("D3D11 渲染器已解绑渲染目标");
+            ReleaseSessionResources();
+            _attached = false;
+            _logger.LogDebug("D3D11 渲染器已解绑渲染目标");
+        }
     }
 
     /// <inheritdoc/>
     public void Present(VideoFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_attached || _backBuffer is null || _swapChain is null)
-        {
-            throw new InvalidOperationException("渲染器未附加渲染目标，无法 Present。");
-        }
         ArgumentNullException.ThrowIfNull(frame);
 
-        // V1 限制：视频帧尺寸须与 BackBuffer 尺寸一致
-        var backBufferDesc = _backBuffer.Description;
-        if ((uint)frame.Width != backBufferDesc.Width ||
-            (uint)frame.Height != backBufferDesc.Height)
+        lock (_gate)
         {
-            throw new NotSupportedException(
-                $"V1 限制：视频帧尺寸 {frame.Width}x{frame.Height} 须与渲染目标尺寸 " +
-                $"{backBufferDesc.Width}x{backBufferDesc.Height} 一致。" +
-                "请使用 SkiaVideoPresenter 进行缩放渲染。");
-        }
+            if (_disposed) return; // ���态兜底：Dispose 已在锁外置位，丢弃本帧避免触碰已释放 SwapChain
+            if (!_attached || _backBuffer is null || _swapChain is null)
+            {
+                throw new InvalidOperationException("渲染器未附加渲染目标，无法 Present。");
+            }
 
-        // Pattern matching 匹配 IFrameResource 类型（AOT 安全）
-        // V2: Resource 可为 null（池化空壳），null 走 default 分支
-        switch (frame.Resource)
-        {
-            case SoftwareFrameResource sw:
-                PresentSoftwareFrame(sw, frame.Width, frame.Height);
-                break;
-
-            case D3D11TextureResource d3d11:
-                PresentD3D11Texture(d3d11);
-                break;
-
-            default:
+            // V1 限制：视频帧尺寸须与 BackBuffer 尺寸一致
+            var backBufferDesc = _backBuffer.Description;
+            if ((uint)frame.Width != backBufferDesc.Width ||
+                (uint)frame.Height != backBufferDesc.Height)
+            {
                 throw new NotSupportedException(
-                    $"不支持的帧资源类型：{frame.Resource?.GetType().Name ?? "null"}。" +
-                    "D3D11 渲染器支持 SoftwareFrameResource 和 D3D11TextureResource。");
-        }
+                    $"V1 限制：视频帧尺寸 {frame.Width}x{frame.Height} 须与渲染目标尺寸 " +
+                    $"{backBufferDesc.Width}x{backBufferDesc.Height} 一致。" +
+                    "请使用 SkiaVideoPresenter 进行缩放渲染。");
+            }
 
-        // 交换 SwapChain（VSync = 1）
-        _swapChain.Present(1u, PresentFlags.None);
+            // Pattern matching 匹配 IFrameResource 类型（AOT 安全）
+            // V2: Resource 可为 null（池化空壳），null 走 default 分支
+            switch (frame.Resource)
+            {
+                case SoftwareFrameResource sw:
+                    PresentSoftwareFrame(sw, frame.Width, frame.Height);
+                    break;
+
+                case D3D11TextureResource d3d11:
+                    PresentD3D11Texture(d3d11);
+                    break;
+
+                default:
+                    throw new NotSupportedException(
+                        $"不支持的帧资源类型：{frame.Resource?.GetType().Name ?? "null"}。" +
+                        "D3D11 渲染器支持 SoftwareFrameResource 和 D3D11TextureResource。");
+            }
+
+            // 交换 SwapChain（VSync = 1）
+            _swapChain.Present(1u, PresentFlags.None);
+        }
     }
 
     /// <inheritdoc/>
     public void Clear()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_attached || _renderTargetView is null || _swapChain is null) return;
+        lock (_gate)
+        {
+            if (_disposed || !_attached || _renderTargetView is null || _swapChain is null) return;
 
-        // 清除为透明黑色
-        _context.ClearRenderTargetView(_renderTargetView, new Color4(0, 0, 0, 0));
+            // 清除为透明黑色
+            _context.ClearRenderTargetView(_renderTargetView, new Color4(0, 0, 0, 0));
 
-        // 呈现清除后的画面（SyncInterval=0 立即显示，不等 VSync）
-        _swapChain.Present(0u, PresentFlags.None);
+            // 呈现清除后的画面（SyncInterval=0 立即显示，不等 VSync）
+            _swapChain.Present(0u, PresentFlags.None);
+        }
     }
 
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
 
-        // 直接释放资源，不依赖 Detach()（Detach 检查 _attached，
-        // 若 Attach 中途失败 _attached=false 会导致泄漏）
-        ReleaseSessionResources();
-        _attached = false;
-        _logger.LogDebug("D3D11 渲染器已释放");
+            // 直接释放资源，不依赖 Detach()（Detach 检查 _attached，
+            // 若 Attach 中途失败 _attached=false 会导致泄漏）
+            ReleaseSessionResources();
+            _attached = false;
+            _logger.LogDebug("D3D11 渲染器已释放");
+        }
     }
 
     /// <inheritdoc/>
@@ -228,7 +261,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
         return ValueTask.CompletedTask;
     }
 
-    // ── 内部方法 ──
+    // ── 内部方法（均由加锁的公开方法调用，自身不再加锁）──
 
     /// <summary>
     /// 软件帧渲染路径：CPU 数据 → D3D11 Texture → CopyResource → BackBuffer。

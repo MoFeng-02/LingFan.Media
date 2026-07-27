@@ -31,7 +31,9 @@
   </Folder>
   <Folder Name="/UI/">
     <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
-    <Project Path="src/UI/LingFan.Media.Avalonia.D3D11/LingFan.Media.Avalonia.D3D11.csproj" />
+  </Folder>
+  <Folder Name="/Presenters/">
+    <Project Path="src/Presenters/LingFan.Media.GpuPresenter/LingFan.Media.GpuPresenter.csproj" />
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="src/Tests/LingFan.Media.Abstractions.Tests/LingFan.Media.Abstractions.Tests.csproj" />
@@ -45,6 +47,6 @@
     <Project Path="src/Tests/LingFan.Media.Avalonia.Tests/LingFan.Media.Avalonia.Tests.csproj" />
     <Project Path="src/Tests/LingFan.Media.IntegrationTests/LingFan.Media.IntegrationTests.csproj" />
     <Project Path="src/Tests/LingFan.Media.Renderers.D3D11.Tests/LingFan.Media.Renderers.D3D11.Tests.csproj" />
-    <Project Path="src/Tests/LingFan.Media.Avalonia.D3D11.Tests/LingFan.Media.Avalonia.D3D11.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.GpuPresenter.Tests/LingFan.Media.GpuPresenter.Tests.csproj" />
   </Folder>
 </Solution>
