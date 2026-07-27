@@ -25,6 +25,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private readonly IFramePool<VideoFrame>? _framePool;
     private readonly IReadOnlyList<Func<VideoFrame, VideoFrame?>>? _processors;
     private readonly Action? _processorReset;
+    private readonly Action<VideoFrame>? _videoFrameSink;
     private volatile bool _pendingProcessorReset;
 
     private CancellationTokenSource _cts = new();
@@ -67,7 +68,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         ILogger<VideoPipeline> logger,
         IFramePool<VideoFrame>? framePool = null,
         IReadOnlyList<Func<VideoFrame, VideoFrame?>>? processors = null,
-        Action? processorReset = null)
+        Action? processorReset = null,
+        Action<VideoFrame>? videoFrameSink = null)
     {
         _packetQueue = packetQueue;
         _decoder = decoder;
@@ -79,6 +81,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _framePool = framePool;
         _processors = processors;
         _processorReset = processorReset;
+        _videoFrameSink = videoFrameSink;
     }
 
     /// <summary>
@@ -395,7 +398,16 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         switch (syncAction)
         {
             case SyncAction.Present:
-                try { _renderer.Present(frame); }
+                try
+                {
+                    // V2-12: 若 UI 订阅了视频帧 sink（Skia 软渲染模式），将帧投递给 sink
+                    // （UI Presenter 同步拷贝到 WriteableBitmap）。否则（D3D11 原生 GPU 模式）
+                    // 直接 Present 到已 Attach 的共享 SwapChain。二者互斥，由 VideoView 按 RendererType 决定订阅与否。
+                    if (_videoFrameSink != null)
+                        _videoFrameSink(frame);
+                    else
+                        _renderer.Present(frame);
+                }
                 finally { ReturnFrame(frame); } // V2: Present 后归还到池
                 break;
 

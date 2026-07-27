@@ -58,6 +58,7 @@ public sealed class MediaPlayer : IMediaPlayer
     private readonly Action? _videoTransformsReset;
     private readonly Action? _audioTransformsReset;
     private Action<AudioFrame>? _audioDataSink;
+    private Action<VideoFrame>? _videoFrameSink;
     private bool _isMuted;
     private float _playbackRate = 1.0f;
     private Timer? _positionTimer;
@@ -180,6 +181,13 @@ public sealed class MediaPlayer : IMediaPlayer
     }
 
     /// <inheritdoc />
+    public event Action<VideoFrame>? VideoFrameAvailable
+    {
+        add => _videoFrameSink += value;
+        remove => _videoFrameSink -= value;
+    }
+
+    /// <inheritdoc />
     public async Task OpenAsync(IMediaSource source, CancellationToken ct = default)
     {
         // V2-06 C1: 重置状态机（从 Error/Stopped 恢复到 Idle）后再进入 Opening
@@ -255,7 +263,8 @@ public sealed class MediaPlayer : IMediaPlayer
                     _loggerFactory.CreateLogger<VideoPipeline>(),
                 _videoFramePool,
                 _videoTransforms,
-                _videoTransformsReset);
+                _videoTransformsReset,
+                videoFrameSink: frame => _videoFrameSink?.Invoke(frame));
             }
 
             if (_audioDecoder != null && _audioOutput != null && audioTrack != null)

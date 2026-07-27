@@ -56,6 +56,7 @@ public sealed class VideoView : Control, IRenderTarget
     private SubtitleFrame? _currentSubtitle;
     private IServiceProvider? _services;
     private ILogger? _logger;
+    private bool _videoSinkSubscribed;
 
     #region StyledProperties
 
@@ -363,6 +364,10 @@ public sealed class VideoView : Control, IRenderTarget
         {
             skia.AspectRatioMode = AspectRatioMode;
         }
+
+        // V2-12: Presenter 创建/重建后重新评估视频帧 sink 订阅（Skia 订阅、D3D11/GPU 退订）。
+        // GPU 初始化失败降级 Skia 时，此处会自动订阅 sink，使管线切到软渲染喂帧路径。
+        UpdateVideoSinkSubscription();
     }
 
     /// <summary>
@@ -422,6 +427,10 @@ public sealed class VideoView : Control, IRenderTarget
         player.StateChanged += OnPlayerStateChanged;
         player.SubtitleReceived += OnSubtitleReceived;
 
+        // V2-12: 若当前为 Skia 软渲染 Presenter，订阅视频帧 sink（管线线程同步投递帧）。
+        // D3D11 原生 GPU 模式不订阅——管线直接 Present 到已 Attach 的共享 SwapChain。
+        UpdateVideoSinkSubscription();
+
         // 如果 Session 已就绪（OpenAsync 已完成），直接附加渲染器
         if (player.Session != null)
         {
@@ -441,10 +450,39 @@ public sealed class VideoView : Control, IRenderTarget
         if (_player == null)
             return;
 
+        // V2-12: 退订视频帧 sink（避免管线线程继续向已解绑 Player 投递帧）
+        if (_videoSinkSubscribed)
+        {
+            _player.VideoFrameAvailable -= PresentFrame;
+            _videoSinkSubscribed = false;
+        }
+
         _player.StateChanged -= OnPlayerStateChanged;
         _player.SubtitleReceived -= OnSubtitleReceived;
         _player = null;
         _currentSubtitle = null;
+    }
+
+    /// <summary>
+    /// V2-12: 根据当前 Presenter 类型与绑定 Player 维护视频帧 sink 订阅。
+    /// 仅当 Presenter 为 <see cref="SkiaVideoPresenter"/>（软渲染）且已绑定 Player 时订阅
+    /// <see cref="IMediaPlayer.VideoFrameAvailable"/>；D3D11/GPU Presenter 或未绑定时退订。
+    /// 幂等（由 <c>_videoSinkSubscribed</c> 标记防重复订阅）。
+    /// 订阅后管线线程同步触发 <see cref="PresentFrame"/>，后者写位图并调度 UI 重绘。
+    /// </summary>
+    private void UpdateVideoSinkSubscription()
+    {
+        var shouldSubscribe = _player != null && _presenter is SkiaVideoPresenter;
+        if (shouldSubscribe && !_videoSinkSubscribed)
+        {
+            _player!.VideoFrameAvailable += PresentFrame;
+            _videoSinkSubscribed = true;
+        }
+        else if (!shouldSubscribe && _videoSinkSubscribed)
+        {
+            _player?.VideoFrameAvailable -= PresentFrame;
+            _videoSinkSubscribed = false;
+        }
     }
 
     private void OnPlayerStateChanged(object? sender, MediaStateChangedEventArgs e)
