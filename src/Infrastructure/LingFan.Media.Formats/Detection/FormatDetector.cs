@@ -231,32 +231,42 @@ public static class FormatDetector
     /// </summary>
     /// <remarks>
     /// MPEG-TS 同步字节 0x47（ASCII 'G'）每 188 字节重复一次。
-    /// 为降低误报率，至少要求 2 个同步字节（offset 0 和 offset 188）。
-    /// <b>V1 限制</b>：仅检测从 offset 0 开始的 TS 流，
-    /// 某些录制文件可能从非零偏移开始（漏报场景，V1 可接受）。
+    /// <b>V2-11 L5</b>：扫描探测窗口内所有偏移（不仅是 offset 0），
+    /// 以识别从非零偏移开始的录制文件（V1 仅检测 offset 0，存在漏报）。
+    /// 为降低误报，要求从某偏移起连续至少 3 个同步字节（间隔 188 字节），与任务规格一致。
     /// </remarks>
     /// <param name="data">探测数据。</param>
     /// <returns>是 MPEG-TS 返回 true。</returns>
     private static bool IsMpegTs(ReadOnlySpan<byte> data)
     {
-        // 至少需要 2 个同步字节位置的数据
-        if (data.Length < FormatSignature.TsPacketSize + 1)
+        const int packetSize = 188;
+        const byte sync = FormatSignature.TsSyncByte;
+
+        // 至少需要一个完整包长度（189 字节）才能验证 sync@offset 与 sync@offset+188
+        if (data.Length < packetSize + 1)
             return false;
 
-        if (data[0] != FormatSignature.TsSyncByte)
-            return false;
+        // 扫描前 64KB（受探测窗口 data.Length 限制），覆盖非零偏移起始的 TS 流
+        int scanLimit = Math.Min(data.Length, 65536);
 
-        // 检查第二个同步字节（offset 188）
-        if (data[FormatSignature.TsPacketSize] != FormatSignature.TsSyncByte)
-            return false;
-
-        // 可选：检查第三个同步字节（offset 376），进一步降低误报
-        if (data.Length >= FormatSignature.TsPacketSize * 2 + 1)
+        for (int offset = 0; offset < scanLimit; offset++)
         {
-            return data[FormatSignature.TsPacketSize * 2] == FormatSignature.TsSyncByte;
+            if (data[offset] != sync)
+                continue;
+
+            // 从本偏移起，校验后续 sync byte（间隔 packetSize），连续至少 3 个命中降低误报（对齐任务规格）
+            int validCount = 1;
+            for (int i = 1; i < 5 && offset + i * packetSize < data.Length; i++)
+            {
+                if (data[offset + i * packetSize] == sync)
+                    validCount++;
+            }
+
+            if (validCount >= 3)
+                return true;
         }
 
-        return true;
+        return false;
     }
 
     /// <summary>

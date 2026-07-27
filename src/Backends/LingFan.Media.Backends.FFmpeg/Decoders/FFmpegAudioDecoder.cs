@@ -16,8 +16,10 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// <item><see cref="FlushAsync"/>：热路径异步，同上。</item>
 /// <item><see cref="Reset"/>：同步，avcodec_flush_buffers。</item>
 /// </list>
-/// <para><b>V1 限制</b>：不做重采样（SwrContext），解码输出使用源格式。
-/// 格式转换由 AudioPipeline 消费方处理。未来 V2 可接入 SwrContext。</para>
+/// <para><b>重采样（V2 B11）</b>：当 AudioSettings 指定的目标采样率/声道数/采样格式
+/// 与解码源不同时，在 Initialize 中创建 SwrContext 重采样上下文；
+/// 解码帧经 swr_convert_frame 重采样为目标格式后再封装为 AudioFrame。
+/// 若目标与源一致则不创建（行为与 V1 相同）。重采样为纯原生同步操作，不引入异步。</para>
 /// <para><b>内存安全</b>：PCM 数据通过独立 byte[] 拷贝（不引用 FFmpeg 内部帧内存），
 /// AudioFrame 以 <see cref="ReadOnlyMemory{T}"/> 封装，消费方用
 /// <c>MemoryMarshal.Cast&lt;byte, float&gt;</c> 零拷贝访问。</para>
@@ -27,7 +29,18 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     private readonly ILogger<FFmpegAudioDecoder> _logger;
     private SafeAVCodecContextHandle? _codecContextHandle;
     private IFramePool<AudioFrame>? _framePool;
+    private SafeSwrContextHandle? _swrContext;
+    private AVSampleFormat _targetSampleFormat;
+    private int _targetSampleRate;
+    private int _targetChannels;
     private bool _disposed;
+
+    /// <summary>解码器实际输出采样率（源采样率，或 B11 重采样目标采样率）。</summary>
+    /// <remarks>Initialize 内赋值；供 MediaPlayer 初始化 WASAPI 设备率。</remarks>
+    public int OutputSampleRate { get; private set; }
+
+    /// <summary>解码器实际输出声道数（源声道数，或 B11 重采样目标声道数）。</summary>
+    public int OutputChannels { get; private set; }
     private bool _initialized;
 
     /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 ffmpeg.AVERROR(ffmpeg.EAGAIN) 计算，
@@ -81,10 +94,50 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             throw new InvalidOperationException($"avcodec_open2 失败: {GetErrorString(ret)} (code={ret})");
         }
 
-        // V1: 不做重采样，解码输出使用源格式
+        // V2 (B11): 若目标采样率/声道数/采样格式与源不同，创建 SwrContext 重采样上下文。
+        // 纯原生同步操作（swr_alloc_set_opts2 + swr_init），保持 Initialize 为 sync void，不引入异步。
+        _targetSampleRate = settings.OutputSampleRate ?? ctx->sample_rate;
+        _targetChannels = settings.OutputChannels ?? ctx->ch_layout.nb_channels;
+        _targetSampleFormat = settings.OutputSampleFormat.HasValue
+            ? MapTargetSampleFormat(settings.OutputSampleFormat.Value)
+            : ctx->sample_fmt;
+
+        // B11 输出率/声道数回写（供 MediaPlayer 初始化 WASAPI 设备率，确保与帧率一致）。
+        OutputSampleRate = _targetSampleRate;
+        OutputChannels = _targetChannels;
+
+        bool needResample = _targetSampleFormat != ctx->sample_fmt
+                            || _targetSampleRate != ctx->sample_rate
+                            || _targetChannels != ctx->ch_layout.nb_channels;
+        if (needResample)
+        {
+            AVChannelLayout outLayout;
+            ffmpeg.av_channel_layout_default(&outLayout, _targetChannels);
+
+            SwrContext* swr = null;
+            SwrContext** pSwr = &swr;
+            int sret = ffmpeg.swr_alloc_set_opts2(
+                pSwr,
+                &outLayout, _targetSampleFormat, _targetSampleRate,
+                &ctx->ch_layout, ctx->sample_fmt, ctx->sample_rate,
+                0, (void*)null);
+            if (sret < 0)
+            {
+                throw new InvalidOperationException($"swr_alloc_set_opts2 失败: {GetErrorString(sret)} (code={sret})");
+            }
+            sret = ffmpeg.swr_init(swr);
+            if (sret < 0)
+            {
+                var bad = new SafeSwrContextHandle((IntPtr)swr);
+                bad.Dispose();
+                throw new InvalidOperationException($"swr_init 失败: {GetErrorString(sret)} (code={sret})");
+            }
+            _swrContext = new SafeSwrContextHandle((IntPtr)swr);
+        }
+
         _initialized = true;
-        _logger.LogInformation("音频解码器初始化: {Codec}, {Rate}Hz/{Ch}ch/{Fmt}",
-            codec, ctx->sample_rate, ctx->ch_layout.nb_channels, ctx->sample_fmt);
+        _logger.LogInformation("音频解码器初始化: {Codec}, {Rate}Hz/{Ch}ch/{Fmt}（重采样={Resample}）",
+            codec, ctx->sample_rate, ctx->ch_layout.nb_channels, ctx->sample_fmt, _swrContext != null);
     }
 
     /// <inheritdoc/>
@@ -143,7 +196,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
                     return null;
                 }
 
-                return CreateAudioFrameFromAVFrame(avFrame, ctx);
+                return ReceiveToAudioFrame(avFrame, ctx);
             }
             finally
             {
@@ -188,7 +241,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             ret = ffmpeg.avcodec_receive_frame(ctx, avFrame);
             if (ret < 0)
                 return null;
-            return CreateAudioFrameFromAVFrame(avFrame, ctx);
+            return ReceiveToAudioFrame(avFrame, ctx);
         }
         finally
         {
@@ -217,6 +270,8 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     {
         if (_disposed) return;
         _disposed = true;
+        _swrContext?.Dispose();
+        _swrContext = null;
         _codecContextHandle?.Dispose();
         _codecContextHandle = null;
         _initialized = false;
@@ -246,9 +301,9 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             : TimeSpan.Zero;
 
         int frameCount = avFrame->nb_samples;
-        int channels = ctx->ch_layout.nb_channels;
-        int sampleRate = ctx->sample_rate;
-        AVSampleFormat sampleFmt = ctx->sample_fmt;
+        int channels = avFrame->ch_layout.nb_channels;
+        int sampleRate = avFrame->sample_rate;
+        AVSampleFormat sampleFmt = (AVSampleFormat)avFrame->format;
         SampleFormat outFormat = MapSampleFormatFromFFmpeg(sampleFmt);
 
         bool isPlanar = ffmpeg.av_sample_fmt_is_planar(sampleFmt) != 0;
@@ -311,6 +366,72 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         frame.Reset(data, sampleRate, channels, outFormat, timestamp, duration, frameCount, dataOwner);
         return frame;
     }
+
+    // ── 重采样（B11） ──
+
+    /// <summary>将已解码的源格式 AVFrame 重采样为目标格式（如需要）。</summary>
+    /// <remarks>纯原生同步操作（swr_convert_frame），不引入异步。</remarks>
+    private unsafe AVFrame* ConvertWithSwr(AVFrame* inFrame)
+    {
+        AVFrame* outFrame = ffmpeg.av_frame_alloc();
+        if (outFrame == null)
+            throw new InvalidOperationException("av_frame_alloc 失败（重采样输出）");
+        try
+        {
+            outFrame->format = (int)_targetSampleFormat;
+            outFrame->sample_rate = _targetSampleRate;
+            ffmpeg.av_channel_layout_default(&outFrame->ch_layout, _targetChannels);
+
+            SwrContext* swr = (SwrContext*)_swrContext!.DangerousGetHandle();
+            int outSamples = ffmpeg.swr_get_out_samples(swr, inFrame->nb_samples);
+            outFrame->nb_samples = outSamples > 0 ? outSamples : inFrame->nb_samples;
+
+            int ret = ffmpeg.av_frame_get_buffer(outFrame, 0);
+            if (ret < 0)
+                throw new InvalidOperationException($"av_frame_get_buffer 失败: {GetErrorString(ret)} (code={ret})");
+
+            ret = ffmpeg.swr_convert_frame(swr, outFrame, inFrame);
+            if (ret < 0)
+                throw new InvalidOperationException($"swr_convert_frame 失败: {GetErrorString(ret)} (code={ret})");
+            return outFrame;
+        }
+        catch
+        {
+            AVFrame* p = outFrame;
+            ffmpeg.av_frame_free(&p);
+            throw;
+        }
+    }
+
+    /// <summary>将 AVFrame 封装为 AudioFrame，必要时先经 SwrContext 重采样。</summary>
+    /// <remarks>重采样为纯原生同步操作，不引入异步；<see cref="DecodeAsync"/> 仍返回 <see cref="ValueTask"/>。</remarks>
+    private unsafe AudioFrame? ReceiveToAudioFrame(AVFrame* avFrame, AVCodecContext* ctx)
+    {
+        if (_swrContext == null)
+            return CreateAudioFrameFromAVFrame(avFrame, ctx);
+
+        AVFrame* outFrame = ConvertWithSwr(avFrame);
+        try
+        {
+            // 重采样不改变时间戳：源帧无 PTS 时沿用源，确保音频时间轴连续
+            if (outFrame->pts == ffmpeg.AV_NOPTS_VALUE)
+                outFrame->pts = avFrame->pts;
+            return CreateAudioFrameFromAVFrame(outFrame, ctx);
+        }
+        finally
+        {
+            AVFrame* p = outFrame;
+            ffmpeg.av_frame_free(&p);
+        }
+    }
+
+    private static AVSampleFormat MapTargetSampleFormat(SampleFormat fmt) => fmt switch
+    {
+        SampleFormat.S16 => AVSampleFormat.AV_SAMPLE_FMT_S16,
+        SampleFormat.S32 => AVSampleFormat.AV_SAMPLE_FMT_S32,
+        SampleFormat.F32 => AVSampleFormat.AV_SAMPLE_FMT_FLT,
+        _ => AVSampleFormat.AV_SAMPLE_FMT_S16
+    };
 
     private static AVCodecID MapAudioCodecToFFmpeg(AudioCodec codec) => codec switch
     {

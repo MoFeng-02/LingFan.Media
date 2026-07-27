@@ -11,22 +11,30 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，返回 <see cref="Task.CompletedTask"/>。
 /// CoInitializeEx + COM 设备枚举均为同步 COM 调用，无 I/O 可 await，非伪异步。</item>
-/// <item><see cref="Initialize"/>：同步（sync 分类），IAudioClient + IAudioRenderClient 创建。</item>
-/// <item><see cref="Submit"/>：同步边界（native 分类），COM GetBuffer + 拷贝 + ReleaseBuffer，缓冲满时阻塞（COM 背压）。</item>
+/// <item><see cref="Initialize"/>：同步（sync 分类），IAudioClient + IAudioRenderClient 创建 +
+/// V2 格式协商（GetMixFormat / IsFormatSupported）+ V2 事件驱动初始化（SetEventHandle）。</item>
+/// <item><see cref="Submit"/>：同步边界（native 分类），COM GetBuffer + 拷贝/转换 + ReleaseBuffer，缓冲满时阻塞（COM 背压）。
+/// V2 多格式直出：帧格式与设备格式匹配时零转换直拷。</item>
 /// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），IAudioClient.Stop/Start/Reset。</item>
 /// <item><see cref="GetPlaybackPosition"/>：同步（sync 分类），IAudioClock.GetPosition。</item>
-/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），释放 COM 对象 + CoUninitialize。</item>
+/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），释放 COM 对象 + 事件句柄 + CoUninitialize。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>。
-/// V1 无回调线程，COM 释放为快速同步调用，无 I/O 可 await，非伪异步。</item>
+/// COM 释放为快速同步调用，无 I/O 可 await，非伪异步。</item>
 /// </list>
 /// <para><b>线程安全</b>：非线程安全。Submit 在音频管线线程调用，Pause/Resume/Flush 在控制线程调用，
 /// 不可并发。COM 使用 MTA（COINIT_MULTITHREADED），允许跨线程调用。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，采用原始 vtable P/Invoke（ComVTable 委托封送），不使用 [ComImport]/RCW，NativeAOT 兼容。</para>
 /// <para><b>资源所有权</b>：IMMDeviceEnumerator/IMMDevice/IAudioClient/IAudioRenderClient/ISimpleAudioVolume/IAudioClock
-/// 的原生指针均由本类持有（Session 级），Dispose 时通过 Marshal.Release(IntPtr) 逆序释放。</para>
+/// 的原生指针均由本类持有（Session 级），Dispose 时通过 Marshal.Release(IntPtr) 逆序释放。
+/// V2 事件句柄（EventWaitHandle）由本类创建并持有，Dispose 时释放。</para>
 /// <para><b>Submit 所有权</b>：V2 变更——Submit 不再接管帧所有权，不 Dispose 帧。
 /// 调用方（AudioPipeline）负责 Return 到 FramePool 或 Dispose。</para>
-/// <para><b>V1 限制</b>：仅支持共享模式 + 32 位浮点输出。S16/S32 输入会转换为 F32。</para>
+/// <para><b>V2 增强（Task-V2-13）</b>：</para>
+/// <list type="bullet">
+/// <item>O7 独占模式完善：IsFormatSupported 格式协商 + AUDCLNT_E_DEVICE_IN_USE/UNSUPPORTED_FORMAT 错误处理</item>
+/// <item>O8 事件驱动模式：AUDCLNT_STREAMFLAGS_EVENTCALLBACK + SetEventHandle + EventWaitHandle.WaitOne 替代 Thread.Sleep 轮询</item>
+/// <item>O9 多格式直出：GetMixFormat 检测设备原生格式 + S16/S32/F32 直出（匹配时零转换拷贝）</item>
+/// </list>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal sealed class WasapiOutput : IAudioOutput
@@ -34,6 +42,7 @@ internal sealed class WasapiOutput : IAudioOutput
     private readonly WasapiOptions _options;
     private readonly ILogger<WasapiOutput> _logger;
     private readonly bool _exclusiveMode;
+    private volatile bool _eventDrivenMode;  // 非 readonly：SetEventHandle 失败时回退到轮询；volatile 确保跨线程可见性
 
     // COM 对象（原生指针，Session 级，Dispose 时 Marshal.Release）
     private IntPtr _enumeratorPtr;
@@ -49,9 +58,12 @@ internal sealed class WasapiOutput : IAudioOutput
     private IAudioClient_Initialize? _audioClientInitialize;
     private IAudioClient_GetBufferSize? _audioClientGetBufferSize;
     private IAudioClient_GetCurrentPadding? _audioClientGetCurrentPadding;
+    private IAudioClient_IsFormatSupported? _audioClientIsFormatSupported;
+    private IAudioClient_GetMixFormat? _audioClientGetMixFormat;
     private IAudioClient_Start? _audioClientStart;
     private IAudioClient_Stop? _audioClientStop;
     private IAudioClient_Reset? _audioClientReset;
+    private IAudioClient_SetEventHandle? _audioClientSetEventHandle;
     private IAudioClient_GetService? _audioClientGetService;
     private IAudioRenderClient_GetBuffer? _renderClientGetBuffer;
     private IAudioRenderClient_ReleaseBuffer? _renderClientReleaseBuffer;
@@ -67,6 +79,12 @@ internal sealed class WasapiOutput : IAudioOutput
     private int _channels;
     private float _volume = 1.0f;
 
+    // V2: 事件驱动模式
+    private EventWaitHandle? _bufferEvent;
+
+    // V2: 设备原生采样格式（Initialize 时检测，Submit 时用于直出判断）
+    private SampleFormat _deviceSampleFormat = SampleFormat.F32;
+
     /// <summary>
     /// 初始化 <see cref="WasapiOutput"/> 的新实例。
     /// </summary>
@@ -77,6 +95,7 @@ internal sealed class WasapiOutput : IAudioOutput
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _exclusiveMode = options.ExclusiveMode;
+        _eventDrivenMode = options.EventDrivenMode;
     }
 
     /// <inheritdoc/>
@@ -121,27 +140,40 @@ internal sealed class WasapiOutput : IAudioOutput
             _audioClientInitialize = ComVTable.Get<IAudioClient_Initialize>(pAudioClient, 0);
             _audioClientGetBufferSize = ComVTable.Get<IAudioClient_GetBufferSize>(pAudioClient, 1);
             _audioClientGetCurrentPadding = ComVTable.Get<IAudioClient_GetCurrentPadding>(pAudioClient, 3);
+            // V2: IsFormatSupported (vtable slot 4)
+            _audioClientIsFormatSupported = ComVTable.Get<IAudioClient_IsFormatSupported>(pAudioClient, 4);
+            // V2: GetMixFormat (vtable slot 5)
+            _audioClientGetMixFormat = ComVTable.Get<IAudioClient_GetMixFormat>(pAudioClient, 5);
             _audioClientStart = ComVTable.Get<IAudioClient_Start>(pAudioClient, 7);
             _audioClientStop = ComVTable.Get<IAudioClient_Stop>(pAudioClient, 8);
             _audioClientReset = ComVTable.Get<IAudioClient_Reset>(pAudioClient, 9);
+            // V2: SetEventHandle (vtable slot 10)
+            _audioClientSetEventHandle = ComVTable.Get<IAudioClient_SetEventHandle>(pAudioClient, 10);
             _audioClientGetService = ComVTable.Get<IAudioClient_GetService>(pAudioClient, 11);
 
-            // 2. 构建 WAVEFORMATEX（32 位浮点）
-            var format = new WAVEFORMATEX
+            // 2. V2 格式协商（O7 独占模式 + O9 多格式直出）
+            WAVEFORMATEX format;
+            if (_exclusiveMode)
             {
-                wFormatTag = WasapiInterop.WAVE_FORMAT_IEEE_FLOAT,
-                nChannels = (ushort)channels,
-                nSamplesPerSec = (uint)sampleRate,
-                wBitsPerSample = 32,
-                nBlockAlign = (ushort)(channels * 4),
-                nAvgBytesPerSec = (uint)(sampleRate * channels * 4),
-                cbSize = 0
-            };
+                format = NegotiateExclusiveFormat(sampleRate, channels);
+            }
+            else
+            {
+                format = NegotiateSharedFormat(sampleRate, channels);
+            }
+
+            _logger.LogDebug("WASAPI 格式协商完成：设备格式={Format}, 采样率={SampleRate}Hz, 声道={Channels}",
+                _deviceSampleFormat, sampleRate, channels);
 
             // 3. 初始化 IAudioClient
             int shareMode = _exclusiveMode
                 ? WasapiInterop.AUDCLNT_SHAREMODE_EXCLUSIVE
                 : WasapiInterop.AUDCLNT_SHAREMODE_SHARED;
+
+            // V2 O8: 事件驱动模式
+            int streamFlags = _eventDrivenMode
+                ? WasapiInterop.AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                : 0;
 
             long bufferDurationHns = (long)(_options.BufferDuration.TotalSeconds * WasapiInterop.ReftimesPerSec);
 
@@ -151,25 +183,56 @@ internal sealed class WasapiOutput : IAudioOutput
                 hr = _audioClientInitialize(
                     _audioClientPtr,
                     shareMode,
-                    0,                     // 无流标志（V1 不用事件驱动）
+                    streamFlags,
                     bufferDurationHns,
                     _exclusiveMode ? bufferDurationHns : 0, // 独占模式需指定 periodicity，共享模式 = 0
                     (IntPtr)(&format),
                     ref sessionGuid);
             }
 
+            // V2 O7: 独占模式错误处理
+            if (hr == WasapiInterop.AUDCLNT_E_DEVICE_IN_USE)
+            {
+                throw new InvalidOperationException(
+                    "音频设备已被其他应用程序独占占用，无法以独占模式初始化。请关闭其他音频应用或切换到共享模式。",
+                    new COMException("AUDCLNT_E_DEVICE_IN_USE", hr));
+            }
+            if (hr == WasapiInterop.AUDCLNT_E_UNSUPPORTED_FORMAT)
+            {
+                throw new NotSupportedException(
+                    $"音频设备不支持请求的格式：{_deviceSampleFormat} {sampleRate}Hz {channels}ch。" +
+                    "请尝试共享模式（自动使用设备原生格式）或调整 WasapiOptions.PreferredSampleFormat。");
+            }
             if (hr < 0)
             {
                 _logger.LogError("IAudioClient.Initialize 失败：HRESULT=0x{HR:X8}", hr);
                 Marshal.ThrowExceptionForHR(hr);
             }
 
-            // 4. 获取缓冲区大小
+            // 4. V2 O8: 事件驱动模式——注册事件句柄
+            if (_eventDrivenMode)
+            {
+                _bufferEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
+                hr = _audioClientSetEventHandle!(_audioClientPtr, _bufferEvent.SafeWaitHandle.DangerousGetHandle());
+                if (hr < 0)
+                {
+                    _logger.LogWarning("SetEventHandle 失败：HRESULT=0x{HR:X8}，回退到轮询模式", hr);
+                    _bufferEvent.Dispose();
+                    _bufferEvent = null;
+                    _eventDrivenMode = false; // 回退到轮询
+                }
+                else
+                {
+                    _logger.LogDebug("WASAPI 事件驱动模式已启用");
+                }
+            }
+
+            // 5. 获取缓冲区大小
             hr = _audioClientGetBufferSize(_audioClientPtr, out uint bufferFrames);
             Marshal.ThrowExceptionForHR(hr);
             _bufferSize = (int)bufferFrames;
 
-            // 5. 获取 IAudioRenderClient
+            // 6. 获取 IAudioRenderClient
             var iidRender = WasapiInterop.IID_IAudioRenderClient;
             hr = _audioClientGetService(_audioClientPtr, ref iidRender, out IntPtr pRenderClient);
             Marshal.ThrowExceptionForHR(hr);
@@ -178,7 +241,7 @@ internal sealed class WasapiOutput : IAudioOutput
             _renderClientGetBuffer = ComVTable.Get<IAudioRenderClient_GetBuffer>(pRenderClient, 0);
             _renderClientReleaseBuffer = ComVTable.Get<IAudioRenderClient_ReleaseBuffer>(pRenderClient, 1);
 
-            // 6. 获取 ISimpleAudioVolume（音量控制）
+            // 7. 获取 ISimpleAudioVolume（音量控制）
             var iidVolume = WasapiInterop.IID_ISimpleAudioVolume;
             hr = _audioClientGetService(_audioClientPtr, ref iidVolume, out IntPtr pVolume);
             if (hr >= 0)
@@ -191,7 +254,7 @@ internal sealed class WasapiOutput : IAudioOutput
                 _logger.LogWarning("无法获取 ISimpleAudioVolume（HRESULT=0x{HR:X8}），音量控制不可用。", hr);
             }
 
-            // 7. 获取 IAudioClock（播放位置查询）
+            // 8. 获取 IAudioClock（播放位置查询）
             var iidClock = WasapiInterop.IID_IAudioClock;
             hr = _audioClientGetService(_audioClientPtr, ref iidClock, out IntPtr pClock);
             if (hr >= 0)
@@ -206,7 +269,7 @@ internal sealed class WasapiOutput : IAudioOutput
                 _logger.LogWarning("无法获取 IAudioClock（HRESULT=0x{HR:X8}），播放位置查询不可用。", hr);
             }
 
-            // 8. 应用初始音量
+            // 9. 应用初始音量
             if (_simpleVolumePtr != IntPtr.Zero)
             {
                 var ec = Guid.Empty;
@@ -216,17 +279,28 @@ internal sealed class WasapiOutput : IAudioOutput
             }
 
             _initialized = true;
-            _logger.LogDebug("WASAPI 输出已初始化：{SampleRate}Hz, {Channels}ch, 缓冲={BufferSize}帧 ({BufferMs:F1}ms)",
-                sampleRate, channels, _bufferSize, (double)_bufferSize / sampleRate * 1000);
+            _logger.LogDebug("WASAPI 输出已初始化：{SampleRate}Hz, {Channels}ch, 格式={Format}, 缓冲={BufferSize}帧 ({BufferMs:F1}ms), 事件驱动={EventDriven}",
+                sampleRate, channels, _deviceSampleFormat, _bufferSize,
+                (double)_bufferSize / sampleRate * 1000, _eventDrivenMode);
         }
         catch
         {
             // Initialize 失败时仅清理 Initialize 创建的 COM 对象（_audioClient/_renderClient/_simpleVolume/_audioClock），
             // 不释放 _device/_enumerator（它们由 InitializeAsync 创建，保留以便用户重试 Initialize）。
             ReleaseInitializeObjects();
+            if (_bufferEvent != null)
+            {
+                _bufferEvent.Dispose();
+                _bufferEvent = null;
+            }
             _bufferSize = 0;
             _sampleRate = 0;
             _channels = 0;
+            _deviceSampleFormat = SampleFormat.F32;
+            // 审计修复：重置 _eventDrivenMode 到用户配置值。
+            // SetEventHandle 失败时会将 _eventDrivenMode 改为 false（回退轮询），
+            // 若不重置，重试 Initialize 时会使用轮询模式而非用户配置的事件驱动模式。
+            _eventDrivenMode = _options.EventDrivenMode;
             throw;
         }
     }
@@ -235,6 +309,7 @@ internal sealed class WasapiOutput : IAudioOutput
     /// <remarks>
     /// V2 变更：Submit 不再接管帧所有权，不 Dispose 帧。
     /// 调用方（AudioPipeline）负责 Return 到 FramePool 或 Dispose。
+    /// V2 O9 多格式直出：帧格式与设备格式匹配时零转换直拷。
     /// </remarks>
     public void Submit(AudioFrame frame)
     {
@@ -252,7 +327,7 @@ internal sealed class WasapiOutput : IAudioOutput
                 $"音频帧声道数 {frame.Channels} 与输出配置 {_channels} 不匹配。", nameof(frame));
         }
 
-        // 计算每样本字节数
+        // 计算每样本字节数（基于输入帧格式）
         int bytesPerSample = frame.SampleFormat switch
         {
             SampleFormat.S16 => 2,
@@ -290,31 +365,7 @@ internal sealed class WasapiOutput : IAudioOutput
 
             unsafe
             {
-                var dstPtr = (float*)pData;
-
-                if (frame.SampleFormat == SampleFormat.F32)
-                {
-                    // F32 → F32 直接拷贝
-                    var src = MemoryMarshal.Cast<byte, float>(validSrc);
-                    var dst = new Span<float>(dstPtr, sampleCount);
-                    src.CopyTo(dst);
-                }
-                else if (frame.SampleFormat == SampleFormat.S16)
-                {
-                    // S16 → F32 转换
-                    var src = MemoryMarshal.Cast<byte, short>(validSrc);
-                    var dst = new Span<float>(dstPtr, sampleCount);
-                    for (int i = 0; i < sampleCount; i++)
-                        dst[i] = src[i] / 32768.0f;
-                }
-                else if (frame.SampleFormat == SampleFormat.S32)
-                {
-                    // S32 → F32 转换
-                    var src = MemoryMarshal.Cast<byte, int>(validSrc);
-                    var dst = new Span<float>(dstPtr, sampleCount);
-                    for (int i = 0; i < sampleCount; i++)
-                        dst[i] = src[i] / 2147483648.0f;
-                }
+                CopyOrConvert(validSrc, pData, sampleCount, frame.SampleFormat, _deviceSampleFormat);
             }
 
             // 释放 WASAPI 缓冲区（写入完成）
@@ -340,8 +391,14 @@ internal sealed class WasapiOutput : IAudioOutput
         if (!_initialized || _audioClientPtr == IntPtr.Zero) return;
 
         int hr = _audioClientStop!(_audioClientPtr);
-        if (hr < 0 && hr != unchecked((int)0x88890004)) // AUDCLNT_E_NOT_INITIALIZED 可忽略
+        // 审计修复：0x88890004 实际是 AUDCLNT_E_DEVICE_INVALIDATED（设备移除），非 AUDCLNT_E_NOT_INITIALIZED（0x88890001）。
+        // 两者在 Stop() 上下文中均可安全忽略：设备已移除时 Stop 无意义，未初始化时 Stop 也无意义。
+        if (hr < 0
+            && hr != WasapiInterop.AUDCLNT_E_DEVICE_INVALIDATED
+            && hr != WasapiInterop.AUDCLNT_E_NOT_INITIALIZED)
+        {
             _logger.LogWarning("IAudioClient.Stop 失败：HRESULT=0x{HR:X8}", hr);
+        }
     }
 
     /// <inheritdoc/>
@@ -424,6 +481,12 @@ internal sealed class WasapiOutput : IAudioOutput
     /// <summary>是否独占模式（从 WasapiOptions 配置，初始化后只读）。</summary>
     public bool ExclusiveMode => _exclusiveMode;
 
+    /// <summary>是否事件驱动模式（V2，初始化后只读）。</summary>
+    public bool EventDrivenMode => _eventDrivenMode;
+
+    /// <summary>设备原生采样格式（V2，Initialize 后可用）。</summary>
+    public SampleFormat DeviceSampleFormat => _deviceSampleFormat;
+
     /// <inheritdoc/>
     public void Dispose()
     {
@@ -431,6 +494,13 @@ internal sealed class WasapiOutput : IAudioOutput
         _disposed = true;
 
         ReleaseComObjects();
+
+        // V2: 释放事件句柄
+        if (_bufferEvent != null)
+        {
+            _bufferEvent.Dispose();
+            _bufferEvent = null;
+        }
 
         if (_comInitialized)
         {
@@ -444,7 +514,7 @@ internal sealed class WasapiOutput : IAudioOutput
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 接口契约：V1 无回调线程，COM 释放为快速同步调用，无 I/O 可 await。
+    /// 接口契约：COM 释放为快速同步调用，无 I/O 可 await。
     /// 委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。
     /// </remarks>
     public ValueTask DisposeAsync()
@@ -525,15 +595,307 @@ internal sealed class WasapiOutput : IAudioOutput
         _logger.LogDebug("WASAPI 设备枚举器已创建，默认渲染设备已获取。");
     }
 
+    // ── V2 格式协商方法（O7 独占模式 + O9 多格式直出）──
+
+    /// <summary>
+    /// 共享模式格式协商：通过 GetMixFormat 获取设备原生格式。
+    /// </summary>
+    /// <param name="sampleRate">请求的采样率。</param>
+    /// <param name="channels">请求的声道数。</param>
+    /// <returns>用于 IAudioClient::Initialize 的 WAVEFORMATEX。</returns>
+    private WAVEFORMATEX NegotiateSharedFormat(int sampleRate, int channels)
+    {
+        // 1. 获取设备原生混音格式
+        int hr = _audioClientGetMixFormat!(_audioClientPtr, out IntPtr pMixFormat);
+        if (hr < 0 || pMixFormat == IntPtr.Zero)
+        {
+            // 审计修复：GetMixFormat 失败时仍可能已分配内存（极端情况），需安全释放
+            if (pMixFormat != IntPtr.Zero)
+                WasapiInterop.CoTaskMemFree(pMixFormat);
+            _logger.LogWarning("GetMixFormat 失败 (HRESULT=0x{HR:X8})，回退到 F32 格式", hr);
+            _deviceSampleFormat = SampleFormat.F32;
+            return BuildWaveFormat(sampleRate, channels, SampleFormat.F32);
+        }
+
+        try
+        {
+            // 2. 解析设备原生采样格式
+            _deviceSampleFormat = ParseSampleFormat(pMixFormat);
+
+            // 3. 如果指定了 PreferredSampleFormat 且与设备格式不同，尝试 IsFormatSupported
+            if (_options.PreferredSampleFormat.HasValue &&
+                _options.PreferredSampleFormat.Value != _deviceSampleFormat)
+            {
+                var preferred = _options.PreferredSampleFormat.Value;
+                var preferredFormat = BuildWaveFormat(sampleRate, channels, preferred);
+
+                unsafe
+                {
+                    // 审计修复：ppClosestMatch 传 IntPtr.Zero（按值），避免 WASAPI 分配 CoTaskMem 内存后泄漏
+                    hr = _audioClientIsFormatSupported!(
+                        _audioClientPtr,
+                        WasapiInterop.AUDCLNT_SHAREMODE_SHARED,
+                        (IntPtr)(&preferredFormat),
+                        IntPtr.Zero);
+                }
+
+                if (hr == WasapiInterop.S_OK)
+                {
+                    _logger.LogDebug("共享模式：设备支持首选格式 {Preferred}（覆盖设备原生格式 {Native}）",
+                        preferred, _deviceSampleFormat);
+                    _deviceSampleFormat = preferred;
+                    return preferredFormat;
+                }
+
+                _logger.LogDebug("共享模式：设备不支持首选格式 {Preferred} (HRESULT=0x{HR:X8})，使用设备原生格式 {Native}",
+                    preferred, hr, _deviceSampleFormat);
+            }
+
+            // 4. 使用设备原生采样格式构建 WAVEFORMATEX
+            //    共享模式下 WASAPI 会自动重采样到 mix format 的采样率/声道数，
+            //    但使用相同的采样格式可避免格式转换开销
+            return BuildWaveFormat(sampleRate, channels, _deviceSampleFormat);
+        }
+        finally
+        {
+            WasapiInterop.CoTaskMemFree(pMixFormat);
+        }
+    }
+
+    /// <summary>
+    /// 独占模式格式协商：通过 IsFormatSupported 逐一尝试格式。
+    /// </summary>
+    /// <param name="sampleRate">请求的采样率。</param>
+    /// <param name="channels">请求的声道数。</param>
+    /// <returns>用于 IAudioClient::Initialize 的 WAVEFORMATEX。</returns>
+    /// <remarks>
+    /// 独占模式下 IsFormatSupported 的 ppClosestMatch 必须为 NULL（不支持最接近格式）。
+    /// 返回 S_OK 表示支持，AUDCLNT_E_UNSUPPORTED_FORMAT 表示不支持。
+    /// </remarks>
+    private WAVEFORMATEX NegotiateExclusiveFormat(int sampleRate, int channels)
+    {
+        // 构建尝试顺序：PreferredSampleFormat（若有）→ F32 → S32 → S16
+        // 审计修复：使用 HashSet 去重，替代 IndexOf!=LastIndexOf（后者跳过所有重复实例而非仅后续重复）
+        var tried = new HashSet<SampleFormat>();
+        var formatsToTry = new List<SampleFormat>(4);
+        if (_options.PreferredSampleFormat.HasValue)
+            formatsToTry.Add(_options.PreferredSampleFormat.Value);
+        formatsToTry.Add(SampleFormat.F32);
+        formatsToTry.Add(SampleFormat.S32);
+        formatsToTry.Add(SampleFormat.S16);
+
+        foreach (var format in formatsToTry)
+        {
+            if (!tried.Add(format))
+                continue; // 跳过已尝试的格式（PreferredSampleFormat 可能与 F32/S32/S16 重复）
+
+            var wfx = BuildWaveFormat(sampleRate, channels, format);
+
+            unsafe
+            {
+                // 独占模式：ppClosestMatch 必须为 NULL（传 IntPtr.Zero 按值）
+                int hr = _audioClientIsFormatSupported!(
+                    _audioClientPtr,
+                    WasapiInterop.AUDCLNT_SHAREMODE_EXCLUSIVE,
+                    (IntPtr)(&wfx),
+                    IntPtr.Zero);
+
+                if (hr == WasapiInterop.S_OK)
+                {
+                    _logger.LogDebug("独占模式：设备支持格式 {Format}", format);
+                    _deviceSampleFormat = format;
+                    return wfx;
+                }
+            }
+        }
+
+        // 所有格式都不支持
+        _deviceSampleFormat = SampleFormat.F32;
+        throw new NotSupportedException(
+            $"独占模式下设备不支持任何可用格式（F32/S32/S16 {sampleRate}Hz {channels}ch）。" +
+            "请尝试共享模式或调整采样率/声道数。");
+    }
+
+    /// <summary>
+    /// 构建指定格式的 WAVEFORMATEX 结构体。
+    /// </summary>
+    /// <param name="sampleRate">采样率。</param>
+    /// <param name="channels">声道数。</param>
+    /// <param name="format">采样格式。</param>
+    /// <returns>WAVEFORMATEX 结构体。</returns>
+    internal static WAVEFORMATEX BuildWaveFormat(int sampleRate, int channels, SampleFormat format)
+    {
+        ushort bitsPerSample = format switch
+        {
+            SampleFormat.S16 => 16,
+            SampleFormat.S32 => 32,
+            SampleFormat.F32 => 32,
+            _ => 32
+        };
+
+        ushort formatTag = format switch
+        {
+            SampleFormat.F32 => WasapiInterop.WAVE_FORMAT_IEEE_FLOAT,
+            _ => WasapiInterop.WAVE_FORMAT_PCM
+        };
+
+        return new WAVEFORMATEX
+        {
+            wFormatTag = formatTag,
+            nChannels = (ushort)channels,
+            nSamplesPerSec = (uint)sampleRate,
+            wBitsPerSample = bitsPerSample,
+            nBlockAlign = (ushort)(channels * (bitsPerSample / 8)),
+            nAvgBytesPerSec = (uint)(sampleRate * channels * (bitsPerSample / 8)),
+            cbSize = 0
+        };
+    }
+
+    /// <summary>
+    /// 从 WAVEFORMATEX 指针解析采样格式。
+    /// 支持 WAVE_FORMAT_PCM、WAVE_FORMAT_IEEE_FLOAT 和 WAVE_FORMAT_EXTENSIBLE。
+    /// </summary>
+    /// <param name="pFormat">WAVEFORMATEX 指针（由 CoTaskMemAlloc 分配）。</param>
+    /// <returns>解析出的采样格式，无法识别时返回 F32。</returns>
+    internal static SampleFormat ParseSampleFormat(IntPtr pFormat)
+    {
+        if (pFormat == IntPtr.Zero)
+            return SampleFormat.F32;
+
+        var wfx = Marshal.PtrToStructure<WAVEFORMATEX>(pFormat);
+
+        if (wfx.wFormatTag == WasapiInterop.WAVE_FORMAT_IEEE_FLOAT)
+            return SampleFormat.F32;
+
+        if (wfx.wFormatTag == WasapiInterop.WAVE_FORMAT_PCM)
+        {
+            return wfx.wBitsPerSample switch
+            {
+                16 => SampleFormat.S16,
+                32 => SampleFormat.S32,
+                _ => SampleFormat.F32
+            };
+        }
+
+        if (wfx.wFormatTag == WasapiInterop.WAVE_FORMAT_EXTENSIBLE && wfx.cbSize >= 22)
+        {
+            // 读取 WAVEFORMATEXTENSIBLE 的 SubFormat GUID
+            var wfex = Marshal.PtrToStructure<WAVEFORMATEXTENSIBLE>(pFormat);
+            if (wfex.SubFormat == WasapiInterop.KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
+                return SampleFormat.F32;
+            if (wfex.SubFormat == WasapiInterop.KSDATAFORMAT_SUBTYPE_PCM)
+            {
+                return wfx.wBitsPerSample switch
+                {
+                    16 => SampleFormat.S16,
+                    32 => SampleFormat.S32,
+                    _ => SampleFormat.F32
+                };
+            }
+        }
+
+        // 未知格式，默认 F32
+        return SampleFormat.F32;
+    }
+
+    // ── V2 PCM 拷贝/转换方法（O9 多格式直出）──
+
+    /// <summary>
+    /// 将源 PCM 数据拷贝或转换到 WASAPI 缓冲区。
+    /// 当源格式与目标格式相同时，零转换直接拷贝。
+    /// </summary>
+    /// <param name="src">源数据 Span（已对齐到 expectedDataSize）。</param>
+    /// <param name="dstPtr">WASAPI 缓冲区指针。</param>
+    /// <param name="sampleCount">样本总数（frameCount * channels）。</param>
+    /// <param name="srcFormat">源采样格式。</param>
+    /// <param name="dstFormat">目标（设备）采样格式。</param>
+    internal static unsafe void CopyOrConvert(
+        ReadOnlySpan<byte> src, IntPtr dstPtr, int sampleCount,
+        SampleFormat srcFormat, SampleFormat dstFormat)
+    {
+        // 快速路径：格式匹配，零转换直接拷贝
+        if (srcFormat == dstFormat)
+        {
+            var dst = new Span<byte>((void*)dstPtr, sampleCount * GetBytesPerSample(dstFormat));
+            src.CopyTo(dst);
+            return;
+        }
+
+        // 转换路径：按目标格式分类
+        if (dstFormat == SampleFormat.F32)
+        {
+            var dst = new Span<float>((void*)dstPtr, sampleCount);
+            if (srcFormat == SampleFormat.S16)
+            {
+                // S16 → F32
+                var srcTyped = MemoryMarshal.Cast<byte, short>(src);
+                for (int i = 0; i < sampleCount; i++)
+                    dst[i] = srcTyped[i] / 32768.0f;
+            }
+            else // S32 → F32
+            {
+                var srcTyped = MemoryMarshal.Cast<byte, int>(src);
+                for (int i = 0; i < sampleCount; i++)
+                    dst[i] = srcTyped[i] / 2147483648.0f;
+            }
+        }
+        else if (dstFormat == SampleFormat.S16)
+        {
+            var dst = new Span<short>((void*)dstPtr, sampleCount);
+            if (srcFormat == SampleFormat.F32)
+            {
+                // F32 → S16（审计修复：缩放因子从 32767 改为 32768，与 S16→F32 的 1/32768 对称，确保往返无损）
+                var srcTyped = MemoryMarshal.Cast<byte, float>(src);
+                for (int i = 0; i < sampleCount; i++)
+                    dst[i] = (short)Math.Clamp(srcTyped[i] * 32768f, -32768f, 32767f);
+            }
+            else // S32 → S16
+            {
+                var srcTyped = MemoryMarshal.Cast<byte, int>(src);
+                for (int i = 0; i < sampleCount; i++)
+                    dst[i] = (short)(srcTyped[i] >> 16);
+            }
+        }
+        else // dstFormat == S32
+        {
+            var dst = new Span<int>((void*)dstPtr, sampleCount);
+            if (srcFormat == SampleFormat.F32)
+            {
+                // F32 → S32（审计修复：使用 double 字面量避免 float 精度问题——2147483647f 实际为 2^31 导致溢出）
+                var srcTyped = MemoryMarshal.Cast<byte, float>(src);
+                for (int i = 0; i < sampleCount; i++)
+                    dst[i] = (int)Math.Clamp(srcTyped[i] * 2147483648.0, -2147483648.0, 2147483647.0);
+            }
+            else // S16 → S32
+            {
+                var srcTyped = MemoryMarshal.Cast<byte, short>(src);
+                for (int i = 0; i < sampleCount; i++)
+                    dst[i] = srcTyped[i] << 16;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 获取采样格式的每样本字节数。
+    /// </summary>
+    internal static int GetBytesPerSample(SampleFormat format) => format switch
+    {
+        SampleFormat.S16 => 2,
+        SampleFormat.S32 => 4,
+        SampleFormat.F32 => 4,
+        _ => 4
+    };
+
     /// <summary>
     /// 等待 WASAPI 缓冲区有足够空间（COM 背压）。
+    /// V2 O8：事件驱动模式下使用 EventWaitHandle.WaitOne 替代 Thread.Sleep 轮询。
     /// </summary>
     /// <param name="requiredFrames">需要的帧数。</param>
     private void WaitForBufferSpace(uint requiredFrames)
     {
         if (_audioClientPtr == IntPtr.Zero) return;
 
-        // 快速失败：请求帧数超过缓冲区总大小，永远无法满足，避免空转2秒超时
+        // 快速失败：请求帧数超过缓冲区总大小，永远无法满足
         if (requiredFrames > (uint)_bufferSize)
         {
             throw new ArgumentException(
@@ -560,7 +922,30 @@ internal sealed class WasapiOutput : IAudioOutput
                     $"需要 {requiredFrames} 帧，可用 {available} 帧。");
             }
 
-            Thread.Sleep(1);
+            if (_bufferEvent != null)
+            {
+                // V2 O8 事件驱动：等待 WASAPI 内核事件通知缓冲区可写
+                // 比 Thread.Sleep(1) 轮询更高效——事件触发即唤醒，无空转轮询
+                int remainingMs = (int)(timeoutMs - sw.ElapsedMilliseconds);
+                if (remainingMs <= 0)
+                    break;
+                _bufferEvent.WaitOne(remainingMs);
+            }
+            else
+            {
+                // V1 轮询模式
+                Thread.Sleep(1);
+            }
+        }
+
+        // 超时后最终检查
+        int hrFinal = _audioClientGetCurrentPadding!(_audioClientPtr, out uint finalPadding);
+        Marshal.ThrowExceptionForHR(hrFinal);
+        if ((uint)_bufferSize - finalPadding < requiredFrames)
+        {
+            throw new TimeoutException(
+                $"WASAPI 缓冲区等待超时（{timeoutMs}ms），音频设备可能已停止或卡死。" +
+                $"需要 {requiredFrames} 帧，可用 {(uint)_bufferSize - finalPadding} 帧。");
         }
     }
 
@@ -592,9 +977,12 @@ internal sealed class WasapiOutput : IAudioOutput
         _audioClientInitialize = null;
         _audioClientGetBufferSize = null;
         _audioClientGetCurrentPadding = null;
+        _audioClientIsFormatSupported = null;
+        _audioClientGetMixFormat = null;
         _audioClientStart = null;
         _audioClientStop = null;
         _audioClientReset = null;
+        _audioClientSetEventHandle = null;
         _audioClientGetService = null;
 
         ReleaseComPtr(ref _devicePtr);
@@ -630,9 +1018,12 @@ internal sealed class WasapiOutput : IAudioOutput
         _audioClientInitialize = null;
         _audioClientGetBufferSize = null;
         _audioClientGetCurrentPadding = null;
+        _audioClientIsFormatSupported = null;
+        _audioClientGetMixFormat = null;
         _audioClientStart = null;
         _audioClientStop = null;
         _audioClientReset = null;
+        _audioClientSetEventHandle = null;
         _audioClientGetService = null;
     }
 

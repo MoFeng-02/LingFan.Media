@@ -45,6 +45,9 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// <summary>宽高比模式。</summary>
     public AspectRatioMode AspectRatioMode { get; set; } = AspectRatioMode.Uniform;
 
+    /// <summary>测试可见：当前 WriteableBitmap（无帧时为 null）。</summary>
+    internal WriteableBitmap? DebugBitmap => _bitmap;
+
     /// <inheritdoc/>
     public void Initialize(IRenderTarget target)
     {
@@ -87,48 +90,55 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
                 // 双重检查锁定：防止 Dispose 在锁外检查和锁内执行之间运行
                 if (_disposed)
                     return;
-
-                // 尺寸或格式变化时重建位图
-                if (_bitmap == null || _bitmapWidth != sw.Width || _bitmapHeight != sw.Height || _bitmapFormat != avFormat)
+                unsafe
                 {
-                    _bitmap?.Dispose();
-                    _bitmapWidth = sw.Width;
-                    _bitmapHeight = sw.Height;
-                    _bitmapFormat = avFormat;
-                    _bitmap = new WriteableBitmap(
-                        new PixelSize(sw.Width, sw.Height),
-                        new Vector(96.0 * _scale, 96.0 * _scale),
-                        avFormat);
-                }
+                    // 尺寸或格式变化时重建位图
+                    EnsureBitmap(sw.Width, sw.Height, avFormat);
 
-                // 写入像素数据（unsafe: IntPtr → Span<byte> 零拷贝）
-                using (var locked = _bitmap.Lock())
-                {
-                    var src = sw.Data.Span;
-                    IntPtr dest = locked.Address;
-                    int destStride = locked.RowBytes;
-
-                    switch (sw.Format)
+                    // 写入像素数据（unsafe: IntPtr → Span<byte> 零拷贝）
+                    using (var locked = _bitmap!.Lock())
                     {
-                        case LingFan.Media.Abstractions.PixelFormat.BGRA32:
-                        case LingFan.Media.Abstractions.PixelFormat.RGBA32:
-                            WritePacked(src, sw, dest, destStride);
-                            break;
-                        case LingFan.Media.Abstractions.PixelFormat.RGB24:
-                            WriteRgb24ToBgra(src, sw, dest, destStride);
-                            break;
-                        default:
-                            // YUV420P / YUV422P / YUV444P / NV12 / NV21 → BGRA
-                            WriteYuvToBgra(src, sw, dest, destStride);
-                            break;
+                        var src = sw.Data.Span;
+                        IntPtr dest = locked.Address;
+                        int destStride = locked.RowBytes;
+
+                        switch (sw.Format)
+                        {
+                            case LingFan.Media.Abstractions.PixelFormat.BGRA32:
+                            case LingFan.Media.Abstractions.PixelFormat.RGBA32:
+                                WriteBgra(src, sw.Width, sw.Height, sw.Stride, dest, destStride);
+                                break;
+                            case LingFan.Media.Abstractions.PixelFormat.RGB24:
+                                WriteRgb24ToBgra(src, sw, dest, destStride);
+                                break;
+                            default:
+                                // YUV420P / YUV422P / YUV444P / NV12 / NV21 → BGRA
+                                WriteYuvToBgra(src, sw, dest, destStride);
+                                break;
+                        }
                     }
+                }
+            }
+        }
+        else if (frame.Resource is IGpuTextureResource gpu)
+        {
+            // GPU 纹理回退：经中立 IGpuTextureResource 桥回读为 BGRA32，写入 WriteableBitmap。
+            // 全程零 Renderers 具体类型进入 Avalonia（依赖倒置严守）。
+            using var rb = gpu.ReadbackToCpu();
+            lock (_frameLock)
+            {
+                if (_disposed) return;
+                EnsureBitmap(rb.Width, rb.Height, global::Avalonia.Platform.PixelFormat.Bgra8888);
+                using (var locked = _bitmap!.Lock())
+                {
+                    WriteBgra(rb.Data.Span, rb.Width, rb.Height, rb.Stride, locked.Address, locked.RowBytes);
                 }
             }
         }
         else
         {
             throw new NotSupportedException(
-                $"帧资源类型 {frame.Resource?.GetType().Name ?? "null"} 在 Skia UI 模式下暂不支持。V1/V2 仅支持 SoftwareFrameResource（GPU 纹理回退 U6 属独立 PR）。");
+                $"帧资源类型 {frame.Resource?.GetType().Name ?? "null"} 在 Skia UI 模式下暂不支持。V1/V2 仅支持 SoftwareFrameResource 与 GPU 纹理（经 IGpuTextureResource 回退）。");
         }
         // V2: Present 不再 Dispose 帧——调用方（VideoPipeline）负责 Return 到 FramePool
     }
@@ -136,31 +146,49 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// <summary>
     /// 写入打包 4 字节像素（BGRA32/RGBA32），按行拷贝并处理源 stride 对齐填充。
     /// </summary>
-    private static unsafe void WritePacked(ReadOnlySpan<byte> src, SoftwareFrameResource sw, IntPtr dest, int destStride)
+    private static unsafe void WriteBgra(ReadOnlySpan<byte> src, int width, int height, int srcStride, IntPtr dest, int destStride)
     {
         // V2-05: 零拷贝帧携带原生 stride（可能含对齐填充）；Stride==0 为历史紧凑布局，
         // 视为与目标一致（保持 V1 行为）。
-        int srcStride = sw.Stride > 0 ? sw.Stride : destStride;
+        int srcStride2 = srcStride > 0 ? srcStride : destStride;
         byte* d = (byte*)dest;
 
-        if (srcStride == destStride)
+        if (srcStride2 == destStride)
         {
             // 快路径：源/目标 stride 一致，整块拷贝
-            var copyLength = Math.Min(src.Length, destStride * sw.Height);
+            var copyLength = Math.Min(src.Length, destStride * height);
             src.Slice(0, copyLength).CopyTo(new Span<byte>(d, copyLength));
         }
         else
         {
             // 慢路径：stride 不一致，逐行拷贝有效载荷
-            var rowBytes = Math.Min(srcStride, destStride);
-            for (int y = 0; y < sw.Height; y++)
+            var rowBytes = Math.Min(srcStride2, destStride);
+            for (int y = 0; y < height; y++)
             {
-                int srcOffset = y * srcStride;
+                int srcOffset = y * srcStride2;
                 int available = src.Length - srcOffset;
                 if (available <= 0) break;
                 int n = Math.Min(rowBytes, available);
                 src.Slice(srcOffset, n).CopyTo(new Span<byte>(d + (nuint)(y * destStride), n));
             }
+        }
+    }
+
+    /// <summary>
+    /// 确保 WriteableBitmap 存在且尺寸/格式匹配（不匹配则重建）。
+    /// </summary>
+    private void EnsureBitmap(int width, int height, global::Avalonia.Platform.PixelFormat format)
+    {
+        if (_bitmap == null || _bitmapWidth != width || _bitmapHeight != height || _bitmapFormat != format)
+        {
+            _bitmap?.Dispose();
+            _bitmapWidth = width;
+            _bitmapHeight = height;
+            _bitmapFormat = format;
+            _bitmap = new WriteableBitmap(
+                new PixelSize(width, height),
+                new Vector(96.0 * (_scale > 0 ? _scale : 1.0f), 96.0 * (_scale > 0 ? _scale : 1.0f)),
+                format);
         }
     }
 

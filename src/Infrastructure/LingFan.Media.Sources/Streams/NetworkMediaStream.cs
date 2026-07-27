@@ -2,6 +2,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Security;
+using LingFan.Media.Sources.Security;
 
 namespace LingFan.Media.Sources;
 
@@ -28,6 +29,12 @@ public sealed class NetworkMediaStream : IMediaStream
     private readonly NetworkMediaSource _source;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
+
+    /// <summary>从 URL 解析出的主机名（用于 DNS 解析与 SSRF 校验）。</summary>
+    private readonly string _host;
+
+    /// <summary>由 <see cref="MediaStreamFactory.CreateAsync"/> 预解析并校验的 IP（避免建连时二次 DNS）。</summary>
+    private readonly IPAddress[]? _resolvedIps;
 
     private HttpResponseMessage? _response;
     private Stream? _responseStream;
@@ -70,34 +77,23 @@ public sealed class NetworkMediaStream : IMediaStream
     /// </summary>
     /// <param name="source">网络媒体源。</param>
     /// <param name="httpClientFactory">HttpClient 工厂（用于池化连接，防止套接字耗尽）。</param>
-    public NetworkMediaStream(NetworkMediaSource source, IHttpClientFactory httpClientFactory)
+    public NetworkMediaStream(NetworkMediaSource source, IHttpClientFactory httpClientFactory, IPAddress[]? resolvedIps = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(httpClientFactory);
 
         _source = source;
+        _host = new Uri(source.Url).Host;
+        _resolvedIps = resolvedIps;
 
         if (source.AllowInsecureHttps)
         {
-            // SSL 证书绕过需要自定义 handler — IHttpClientFactory 的池化 handler 不支持每请求 SSL 配置。
-            // 创建专用 HttpClient + SocketsHttpHandler（设 PooledConnectionLifetime 缓解套接字耗尽）。
-            // 这是罕见场景（默认 HTTPS 验证开启），每 Session 一个专用 client 可接受。
-            var handler = new SocketsHttpHandler
-            {
-                AllowAutoRedirect = true,
-                AutomaticDecompression = DecompressionMethods.All,
-                SslOptions = new SslClientAuthenticationOptions
-                {
-                    RemoteCertificateValidationCallback = (_, _, _, _) => true
-                },
-                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-            };
-
-            _httpClient = new HttpClient(handler, disposeHandler: true)
-            {
-                Timeout = Timeout.InfiniteTimeSpan,
-            };
-            _ownsClient = true;
+            // SSL 证书绕过：统一经 IHttpClientFactory 命名 client（"LingFanMedia_Insecure"），
+            // 其自定义 SocketsHttpHandler（RemoteCertificateValidationCallback = true）在 AddLingFanMedia 中注册。
+            // 工厂管理 HttpMessageHandler 生命周期，避免套接字耗尽；Close 时不 Dispose（_ownsClient = false）。
+            _httpClient = httpClientFactory.CreateClient("LingFanMedia_Insecure");
+            _httpClient.Timeout = Timeout.InfiniteTimeSpan;
+            _ownsClient = false;
         }
         else
         {
@@ -188,6 +184,12 @@ public sealed class NetworkMediaStream : IMediaStream
     {
         if (_responseStream is not null)
             return;
+
+        // SSRF 防护（L20-L22）：DNS 解析后对真实目标 IP 做私有/回环/保留/CGNAT 校验。
+        // 此路径由 ConnectAsync（Demuxer.OpenAsync 异步前置）触发，属真实异步 I/O，可安全 await。
+        // _resolvedIps 已由 CreateAsync 预解析校验则复用（避免二次 DNS），否则在此解析。
+        var ips = _resolvedIps ?? await Dns.GetHostAddressesAsync(_host, ct).ConfigureAwait(false);
+        SsrfGuard.Validate(_host, ips, _source.AllowPrivateAddresses);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, _source.Url);
 

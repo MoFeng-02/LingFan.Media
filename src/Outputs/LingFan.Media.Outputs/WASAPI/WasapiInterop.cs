@@ -49,6 +49,28 @@ internal static class WasapiInterop
     /// <summary>WAVE_FORMAT_EXTENSIBLE：扩展格式标签。</summary>
     public const ushort WAVE_FORMAT_EXTENSIBLE = 0xFFFE;
 
+    /// <summary>S_OK：操作成功。</summary>
+    public const int S_OK = 0;
+
+    /// <summary>S_FALSE：操作成功但返回额外信息（如 IsFormatSupported 返回最接近格式）。</summary>
+    public const int S_FALSE = 1;
+
+    /// <summary>AUDCLNT_STREAMFLAGS_EVENTCALLBACK：事件驱动模式标志。
+    /// 设置后 WASAPI 通过事件通知缓冲区可写，替代轮询。</summary>
+    public const int AUDCLNT_STREAMFLAGS_EVENTCALLBACK = 0x00040000;
+
+    /// <summary>AUDCLNT_E_DEVICE_IN_USE：独占模式下设备已被其他应用占用。</summary>
+    public const int AUDCLNT_E_DEVICE_IN_USE = unchecked((int)0x8889000A);
+
+    /// <summary>AUDCLNT_E_UNSUPPORTED_FORMAT：设备不支持请求的格式。</summary>
+    public const int AUDCLNT_E_UNSUPPORTED_FORMAT = unchecked((int)0x88890008);
+
+    /// <summary>AUDCLNT_E_NOT_INITIALIZED：IAudioClient 尚未初始化。</summary>
+    public const int AUDCLNT_E_NOT_INITIALIZED = unchecked((int)0x88890001);
+
+    /// <summary>AUDCLNT_E_DEVICE_INVALIDATED：音频设备已被移除或失效。</summary>
+    public const int AUDCLNT_E_DEVICE_INVALIDATED = unchecked((int)0x88890004);
+
     /// <summary>100ns 单位（WASAPI 时间戳基准）。</summary>
     public const long ReftimesPerSec = 10_000_000;
 
@@ -75,6 +97,10 @@ internal static class WasapiInterop
     /// <summary>KSDATAFORMAT_SUBTYPE_IEEE_FLOAT</summary>
     public static readonly Guid KSDATAFORMAT_SUBTYPE_IEEE_FLOAT =
         new("00000003-0000-0010-8000-00aa00389b71");
+
+    /// <summary>KSDATAFORMAT_SUBTYPE_PCM：PCM 整数子格式（S16/S32）。</summary>
+    public static readonly Guid KSDATAFORMAT_SUBTYPE_PCM =
+        new("00000001-0000-0010-8000-00aa00389b71");
 
     // ── P/Invoke ──
 
@@ -149,6 +175,32 @@ internal delegate int IAudioClient_GetBufferSize(IntPtr self, out uint pNumBuffe
 [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
 internal delegate int IAudioClient_GetCurrentPadding(IntPtr self, out uint pNumPaddingFrames);
 
+/// <summary>
+/// IAudioClient::IsFormatSupported — 查询设备是否支持指定格式。
+/// </summary>
+/// <param name="self">COM 对象指针。</param>
+/// <param name="shareMode">共享/独占模式。</param>
+/// <param name="pFormat">请求的格式（WAVEFORMATEX*）。</param>
+/// <param name="ppClosestMatch">最接近格式输出指针（共享模式可传非 NULL 接收最接近格式，传 NULL 则不分配；
+/// 独占模式必须传 IntPtr.Zero/NULL）。</param>
+/// <returns>S_OK=完全支持；S_FALSE=不完全支持但返回最接近格式；AUDCLNT_E_UNSUPPORTED_FORMAT=不支持。</returns>
+/// <remarks>
+/// V2 审计修复：参数从 <c>out IntPtr</c> 改为 <c>IntPtr</c>（按值传递）。
+/// 原因：1) <c>out</c> 总是传递非 NULL 指针，违反独占模式 ppClosestMatch 必须为 NULL 的 API 约定；
+/// 2) 共享模式返回 S_FALSE 时 WASAPI 通过 ppClosestMatch 分配 CoTaskMem 内存，
+/// 用 <c>out _</c> 丢弃后无法释放→内存泄漏。改为按值传 IntPtr.Zero 后 WASAPI 不分配内存。
+/// </remarks>
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_IsFormatSupported(IntPtr self, int shareMode, IntPtr pFormat, IntPtr ppClosestMatch);
+
+/// <summary>
+/// IAudioClient::GetMixFormat — 获取音频引擎的混音格式（共享模式设备原生格式）。
+/// </summary>
+/// <param name="self">COM 对象指针。</param>
+/// <param name="pDeviceFormat">返回的 WAVEFORMATEX*（由 CoTaskMemAlloc 分配，调用方负责 CoTaskMemFree）。</param>
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_GetMixFormat(IntPtr self, out IntPtr pDeviceFormat);
+
 [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
 internal delegate int IAudioClient_Start(IntPtr self);
 
@@ -157,6 +209,15 @@ internal delegate int IAudioClient_Stop(IntPtr self);
 
 [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
 internal delegate int IAudioClient_Reset(IntPtr self);
+
+/// <summary>
+/// IAudioClient::SetEventHandle — 注册事件句柄（事件驱动模式）。
+/// Initialize 时设置 AUDCLNT_STREAMFLAGS_EVENTCALLBACK 后必须调用此方法注册事件。
+/// </summary>
+/// <param name="self">COM 对象指针。</param>
+/// <param name="eventHandle">事件句柄（由 CreateEvent 创建，AutoReset）。</param>
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IAudioClient_SetEventHandle(IntPtr self, IntPtr eventHandle);
 
 [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
 internal delegate int IAudioClient_GetService(IntPtr self, ref Guid riid, out IntPtr ppv);

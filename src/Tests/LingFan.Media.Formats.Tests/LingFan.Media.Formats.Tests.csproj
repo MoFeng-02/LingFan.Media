@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Formats\LingFan.Media.Formats.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
   </ItemGroup>
 
 </Project>

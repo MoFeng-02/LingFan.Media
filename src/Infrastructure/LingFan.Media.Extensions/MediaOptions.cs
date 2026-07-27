@@ -24,6 +24,9 @@ public sealed class MediaOptions
     /// <summary>是否启用硬件解码（默认 true）。</summary>
     public bool EnableHardwareDecode { get; set; } = true;
 
+    /// <summary>是否启用后端自动选择（默认 false）。启用时按已注册后端与平台自动匹配默认视频/音频后端。</summary>
+    public bool EnableAutoBackendSelection { get; set; }
+
     /// <summary>目标缓冲时长（默认 5 秒）。</summary>
     public TimeSpan BufferTargetDuration { get; set; } = TimeSpan.FromSeconds(5);
 
@@ -47,6 +50,7 @@ public sealed class MediaOptions
         target.DefaultAudioOutput = DefaultAudioOutput;
         target.PreferredBackend = PreferredBackend;
         target.EnableHardwareDecode = EnableHardwareDecode;
+        target.EnableAutoBackendSelection = EnableAutoBackendSelection;
         target.BufferTargetDuration = BufferTargetDuration;
         target.EnableLogging = EnableLogging;
         target.LogLevel = LogLevel;

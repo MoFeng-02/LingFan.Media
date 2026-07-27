@@ -23,6 +23,7 @@ public sealed class MediaPlayer : IMediaPlayer
     private readonly IAudioOutputFactory _audioOutputFactory;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<MediaPlayer> _logger;
+    private readonly MediaPlayerOptions _options;
 
     // Session 级对象（OpenAsync 中延迟创建）
     private IMediaStream? _stream;
@@ -90,7 +91,8 @@ public sealed class MediaPlayer : IMediaPlayer
         IReadOnlyList<Func<VideoFrame, VideoFrame?>>? videoTransforms = null,
         IReadOnlyList<Func<AudioFrame, AudioFrame>>? audioTransforms = null,
         Action? videoTransformsReset = null,
-        Action? audioTransformsReset = null)
+        Action? audioTransformsReset = null,
+        MediaPlayerOptions? options = null)
     {
         _streamFactory = streamFactory;
         _demuxerFactory = demuxerFactory;
@@ -105,6 +107,7 @@ public sealed class MediaPlayer : IMediaPlayer
         _audioTransforms = audioTransforms;
         _videoTransformsReset = videoTransformsReset;
         _audioTransformsReset = audioTransformsReset;
+        _options = options ?? new MediaPlayerOptions();
     }
 
     /// <inheritdoc />
@@ -196,8 +199,8 @@ public sealed class MediaPlayer : IMediaPlayer
 
         try
         {
-            // 1. 创建流
-            _stream = _streamFactory.Create(source);
+            // 1. 创建流（异步优先：CreateAsync 为双版本接口首选，内部做 DNS 解析 + SSRF 校验，真实 I/O 必须 await）
+            _stream = await _streamFactory.CreateAsync(source, ct);
 
             // 2. 创建并打开 Demuxer
             _demuxer = _demuxerFactory.Create(_stream);
@@ -227,7 +230,15 @@ public sealed class MediaPlayer : IMediaPlayer
 
             if (audioTrack != null && audioTrack.AudioCodec.HasValue)
             {
-                _audioDecoder = _audioDecoderFactory.Create(audioTrack.AudioCodec.Value, new AudioSettings());
+                // 从 MediaPlayerOptions 透传音频目标配置（V2-10 P1）：任一字段为 null 时
+                // FFmpegAudioDecoder 回退到源媒体参数，B11 重采样仅在显式配置目标时触发。
+                var audioSettings = new AudioSettings
+                {
+                    OutputSampleRate = _options.AudioOutputSampleRate,
+                    OutputChannels = _options.AudioOutputChannels,
+                    OutputSampleFormat = _options.AudioOutputSampleFormat,
+                };
+                _audioDecoder = _audioDecoderFactory.Create(audioTrack.AudioCodec.Value, audioSettings);
             }
 
             // V2: 创建帧对象池并注入解码器（Session 级）
@@ -250,6 +261,14 @@ public sealed class MediaPlayer : IMediaPlayer
             // 6. 创建渲染器和输出
             _videoRenderer = _videoRendererFactory.Create();
             _audioOutput = _audioOutputFactory.Create();
+
+            // P0 修复：音频输出设备必须显式初始化。WASAPI 以固定采样率打开设备，
+            // Submit 不校验采样率——设备率必须与解码器实际输出率一致，否则节奏/音高错乱。
+            // Initialize 为同步 COM 原生边界，保持 sync void（非伪异步），不引入 await。
+            if (_audioDecoder != null)
+            {
+                _audioOutput.Initialize(_audioDecoder.OutputSampleRate, _audioDecoder.OutputChannels);
+            }
 
             // 7. 设置轨道索引
             _bufferManager.SetTrackIndices(videoTrack?.Index ?? -1, audioTrack?.Index ?? -1);

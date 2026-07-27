@@ -11,8 +11,9 @@ namespace LingFan.Media.Backends.FFmpeg.Demuxer;
 /// <para><b>异步策略</b>：</para>
 /// <list type="bullet">
 /// <item><c>OpenAsync</c> / <c>ReadPacketAsync</c> / <c>SeekAsync</c>：使用 <c>await Task.Run(...)</c>
-/// 将同步 FFmpeg 调用卸载到线程池——FFmpeg C API 本质同步，<c>Task.Run</c> 含 <c>await</c> 满足真异步要求，
-/// 避免阻塞调用线程（可能为 UI 线程）。</item>
+/// 将同步 FFmpeg 调用卸载到线程池——FFmpeg C API 本质同步，<c>Task.Run</c> 仅将阻塞从调用线程移到线程池，
+/// 是<b>伪异步</b>而非真异步。但这是 FFmpeg C API 的圆有局限（无原生异步 I/O API），
+/// 未来若 FFmpeg 提供异步读取接口应替换。网络建连部分由 <c>stream.ConnectAsync</c> 提供真异步。</item>
 /// <item><c>InitializeAsync</c>：接口契约，返回 <c>Task.CompletedTask</c>（无 I/O）。</item>
 /// <item>AVIO <c>ReadPacketCallback</c>：同步边界（C 函数指针），调用 <see cref="IMediaStream.Read(Span{byte})"/>；
 /// 网络建连已由 <see cref="OpenAsync"/> 在 <c>Task.Run</c> 前经 <see cref="IMediaStream.ConnectAsync"/> 异步完成。</item>
@@ -76,8 +77,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 真异步：先 <c>await stream.ConnectAsync</c> 在异步路径完成网络建连（消除同步 Read 内的硬阻塞），
-    /// 再用 <c>await Task.Run</c> 卸载 avformat_open_input + avformat_find_stream_info 到线程池。
+    /// 混合：<c>await stream.ConnectAsync</c>（真异步 I/O）+ <c>await Task.Run(OpenCore)</c>（伪异步：avformat_open_input + avformat_find_stream_info 为同步 C 调用）。
     /// FFmpeg AVIO 回调内部调用的 <see cref="IMediaStream.Read(Span{byte})"/> 此时已连接，仅做逐块同步读取。
     /// </remarks>
     public async Task OpenAsync(IMediaStream stream, CancellationToken ct = default)
@@ -91,6 +91,8 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         // 异步预建连（网络流在此完成 DNS/TLS 握手，不硬阻塞；文件/透传流为无操作）
         await stream.ConnectAsync(ct).ConfigureAwait(false);
 
+        // 伪异步：avformat_open_input + avformat_find_stream_info 为同步 C 调用，Task.Run 仅卸载到线程池。
+        // 未来改进：FFmpeg 无原生异步 API，除非更换为异步 I/O 层（如 libavformat async protocol）。
         await Task.Run(() => OpenCore(stream, ct), ct).ConfigureAwait(false);
         _opened = true;
     }
@@ -182,7 +184,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 真异步：使用 <c>await Task.Run</c> 卸载 av_read_frame 到线程池。
+    /// 伪异步：<c>await Task.Run</c> 卸载 av_read_frame（同步 C 调用）到线程池。
     /// av_read_frame 通过 AVIO 回调调用 <see cref="IMediaStream.Read(Span{byte})"/>（同步边界）。
     /// </remarks>
     public async ValueTask<MediaPacket?> ReadPacketAsync(CancellationToken ct = default)
@@ -193,6 +195,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
         ct.ThrowIfCancellationRequested();
 
+        // 伪异步：av_read_frame 为同步 C 调用，Task.Run 仅卸载到线程池。
         return await Task.Run(() => ReadPacketCore(ct), ct).ConfigureAwait(false);
     }
 
@@ -257,7 +260,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 真异步：使用 <c>await Task.Run</c> 卸载 av_seek_frame 到线程池。
+    /// 伪异步：<c>await Task.Run</c> 卸载 av_seek_frame（同步 C 调用）到线程池。
     /// </remarks>
     public async Task<bool> SeekAsync(TimeSpan position, CancellationToken ct = default)
     {
@@ -267,6 +270,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
         ct.ThrowIfCancellationRequested();
 
+        // 伪异步：av_seek_frame 为同步 C 调用，Task.Run 仅卸载到线程池。
         return await Task.Run(() => SeekCore(position, ct), ct).ConfigureAwait(false);
     }
 

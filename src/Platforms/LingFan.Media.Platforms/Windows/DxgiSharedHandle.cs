@@ -1,51 +1,68 @@
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+using Vortice.Direct3D11;
+using Vortice.DXGI;
+
 namespace LingFan.Media.Platforms.Windows;
 
 /// <summary>
-/// DXGI 共享句柄管理。V1 桩实现。
+/// DXGI 共享句柄生命周期封装（<see cref="SafeHandle"/>）。
 /// </summary>
 /// <remarks>
-/// <para>职责：管理 D3D11 资源的 DXGI 共享句柄，用于跨进程 / 跨 API 资源共享。
-/// 通过 <c>IDXGIResource::GetSharedHandle</c> 和 <c>ID3D11Device1::OpenSharedResource1</c> 实现。</para>
-/// <para>V1 桩——所有方法抛出 <see cref="NotSupportedException"/>。
-/// V1 D3D11Renderer 直接持有 ID3D11Device，无需跨进程共享。
-/// 未来 DirectComposition 集成或多进程渲染场景需要共享句柄。</para>
-/// <para><b>异步策略</b>：全部同步（sync 分类）——COM 调用是同步边界，无 I/O。
-/// 若改为 <c>async</c> 方法体内无 <c>await</c> 则为伪异步。</para>
-/// <para>AOT 兼容：sealed 类，无反射。</para>
+/// <para>管理 <c>IDXGIResource::GetSharedHandle</c> 返回的 HANDLE，Dispose / GC 终结时 <c>CloseHandle</c> 释放，防止句柄泄漏。</para>
+/// <para><b>分工</b>：创建共享纹理与 KeyedMutex 同步由 <see cref="D3D11Interop"/> 负责（R12），
+/// 本类只封装共享句柄的生命周期（R14 核心目标：<b>正确管理共享句柄生命周期</b>）。</para>
+/// <para><b>异步策略</b>：全部同步（sync 分类）——原生句柄释放是 COM/Win32 同步边界，无 I/O await。</para>
+/// <para>AOT 兼容：<c>CloseHandle</c> 用 <see langword="LibraryImport"/> 源生成 P/Invoke（零反射、NativeAOT 友好）。</para>
 /// </remarks>
-public sealed class DxgiSharedHandle
+public sealed partial class DxgiSharedHandle : SafeHandleZeroOrMinusOneIsInvalid
 {
-    /// <summary>
-    /// 从 D3D11 资源创建 DXGI 共享句柄。
-    /// </summary>
-    /// <param name="resource">ID3D11Resource（Texture2D / Buffer）COM 句柄。</param>
-    /// <returns>DXGI 共享句柄（HANDLE）。</returns>
-    public nint CreateSharedHandle(nint resource)
-        => throw new NotSupportedException("DXGI 共享句柄管理尚未实现。");
+    private DxgiSharedHandle(IntPtr handle) : base(ownsHandle: true) => SetHandle(handle);
 
-    /// <summary>
-    /// 从 DXGI 共享句柄打开 D3D11 资源。
-    /// </summary>
-    /// <param name="handle">DXGI 共享句柄。</param>
-    /// <returns>ID3D11Texture2D COM 句柄。</returns>
-    public nint OpenSharedResource(nint handle)
-        => throw new NotSupportedException("DXGI 共享句柄管理尚未实现。");
+    /// <summary>从 D3D11 纹理创建并封装 DXGI 共享 NT 句柄（纹理须带 <see cref="ResourceOptionFlags.SharedNTHandle"/>）。</summary>
+    /// <remarks>用 <c>IDXGIResource1.CreateSharedHandle</c> 创建真 NT 句柄——只有 NT 句柄可被
+    /// <c>CloseHandle</c> 正确释放（legacy GetSharedHandle 伪句柄不可 Close）。</remarks>
+    /// <param name="texture">源纹理。</param>
+    /// <returns>封装的共享句柄（调用方负责 Dispose）。</returns>
+    public static DxgiSharedHandle FromTexture(ID3D11Texture2D texture)
+    {
+        ArgumentNullException.ThrowIfNull(texture);
+        using var dxgiResource1 = texture.QueryInterface<IDXGIResource1>();
+        IntPtr handle = dxgiResource1.CreateSharedHandle(null, Vortice.DXGI.SharedResourceFlags.Read | Vortice.DXGI.SharedResourceFlags.Write, null);
+        return new DxgiSharedHandle(handle);
+    }
 
-    /// <summary>
-    /// 使用 Keyed Mutex 同步跨 API 资源访问。
-    /// </summary>
-    /// <param name="handle">DXGI 共享句柄。</param>
-    /// <param name="key">同步键值。</param>
-    /// <param name="timeoutMs">超时（毫秒）。</param>
-    /// <returns>是否成功获取同步锁。</returns>
-    public bool AcquireSync(nint handle, ulong key, int timeoutMs)
-        => throw new NotSupportedException("DXGI KeyedMutex 同步尚未实现。");
+    /// <summary>从共享句柄打开 D3D11 纹理（跨进程共享）。</summary>
+    /// <param name="device">目标 D3D11 设备。</param>
+    /// <returns>打开的共享纹理（调用方负责释放）。</returns>
+    public ID3D11Texture2D OpenSharedTexture(ID3D11Device device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        if (IsInvalid) throw new InvalidOperationException("共享句柄无效。");
 
-    /// <summary>
-    /// 释放 Keyed Mutex 同步锁。
-    /// </summary>
-    /// <param name="handle">DXGI 共享句柄。</param>
-    /// <param name="key">同步键值。</param>
-    public void ReleaseSync(nint handle, ulong key)
-        => throw new NotSupportedException("DXGI KeyedMutex 同步尚未实现。");
+        var device1 = device.QueryInterface<ID3D11Device1>();
+        try
+        {
+            device1.OpenSharedResource1<ID3D11Texture2D>(handle, out var texture);
+            return texture ?? throw new InvalidOperationException("打开共享纹理失败。");
+        }
+        finally
+        {
+            device1.Dispose();
+        }
+    }
+
+    /// <inheritdoc/>
+    protected override bool ReleaseHandle()
+    {
+        if (handle == IntPtr.Zero) return true;
+        return CloseHandle(handle);
+    }
+
+    /// <summary>Win32 CloseHandle（源生成 P/Invoke，AOT 友好）。</summary>
+    [LibraryImport("kernel32", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(IntPtr hObject);
 }

@@ -63,9 +63,6 @@ public sealed class AudioPipeline
     {
         return new AudioPipelineConfig
         {
-            OutputSampleRate = _settings.OutputSampleRate,
-            OutputChannels = _settings.OutputChannels,
-            OutputSampleFormat = _settings.OutputSampleFormat,
             Effects = _effects.AsReadOnly(),
             MixerSettings = MixerSettings,
         };

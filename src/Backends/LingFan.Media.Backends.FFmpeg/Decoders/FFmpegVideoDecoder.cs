@@ -25,7 +25,9 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoFrame>
 {
     private readonly ILogger<FFmpegVideoDecoder> _logger;
+    private readonly IGpuDeviceContext? _gpuContext;
     private SafeAVCodecContextHandle? _codecContextHandle;
+    private SafeAVBufferRefHandle? _hwDeviceCtx;
     private IFramePool<VideoFrame>? _framePool;
     private bool _disposed;
     private bool _initialized;
@@ -38,9 +40,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// 初始化 <see cref="FFmpegVideoDecoder"/> 的新实例。
     /// </summary>
     /// <param name="logger">日志器。</param>
-    public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger)
+    /// <param name="gpuContext">可选 GPU 设备上下文（D3D11VA 硬解需要，null=软件解码）。</param>
+    public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _gpuContext = gpuContext;
     }
 
     /// <inheritdoc/>
@@ -81,10 +85,24 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
 
         // 配置多线程
-        if (settings.EnableHardwareAcceleration)
+        if (settings.EnableHardwareAcceleration && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
         {
-            // V1: 硬件解码标记——实际硬解设备初始化在 Phase 8 (Renderers) 配合
-            // 当前标记为 false，待 GPU 设备上下文接入后启用
+            // V2-15 B6: D3D11VA 硬件解码——使用渲染器共享的 D3D11 设备
+            // 零拷贝链路：硬解输出 ID3D11Texture2D → D3D11HardwareFrameResource → D3D11Renderer
+            try
+            {
+                InitializeD3D11VA(ctx);
+                IsHardwareAccelerated = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "D3D11VA 硬件解码初始化失败，回退到软件解码");
+                IsHardwareAccelerated = false;
+            }
+        }
+        else if (settings.EnableHardwareAcceleration)
+        {
+            // 硬解启用但无 GPU 设备上下文——保持软件解码
             IsHardwareAccelerated = false;
         }
 
@@ -170,6 +188,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                     return null;
                 }
 
+                // V2-15 B6: 检查 D3D11VA 硬解输出格式
+                if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+                {
+                    return CreateHardwareFrameFromAVFrame(avFrame);
+                }
+
                 return CreateVideoFrameFromAVFrame(avFrame);
             }
             finally
@@ -217,6 +241,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             ret = ffmpeg.avcodec_receive_frame(ctx, avFrame);
             if (ret < 0)
                 return null;
+
+            // V2-15: Flush 时同样需检查 D3D11VA 硬解输出格式（与 DecodeCore 一致）
+            if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+            {
+                return CreateHardwareFrameFromAVFrame(avFrame);
+            }
+
             return CreateVideoFrameFromAVFrame(avFrame);
         }
         finally
@@ -246,6 +277,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     {
         if (_disposed) return;
         _disposed = true;
+        _hwDeviceCtx?.Dispose();
+        _hwDeviceCtx = null;
         _codecContextHandle?.Dispose();
         _codecContextHandle = null;
         _initialized = false;
@@ -368,6 +401,100 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             pixFmt, width, height, 1);
 
         return resource;
+    }
+
+    // ── V2-15 B6: D3D11VA 硬件解码 ──
+
+    /// <summary>
+    /// 初始化 D3D11VA 硬件解码设备上下文（使用渲染器共享的 D3D11 设备，实现零拷贝）。
+    /// </summary>
+    /// <remarks>
+    /// <para>同步操作（sync 分类）：FFmpeg hwdevice_ctx API 和 COM 操作均为同步原生调用，无 I/O await。</para>
+    /// <para>共享设备零拷贝链路：渲染器 ID3D11Device → FFmpeg D3D11VA → 硬解纹理 → D3D11Renderer CopySubresourceRegion。</para>
+    /// </remarks>
+    /// <param name="ctx">FFmpeg 编解码上下文（设置其 hw_device_ctx 字段）。</param>
+    private unsafe void InitializeD3D11VA(AVCodecContext* ctx)
+    {
+        var gpuCtx = _gpuContext!;
+        if (gpuCtx.DeviceHandle == IntPtr.Zero)
+            throw new InvalidOperationException("GPU 设备句柄无效");
+        if (gpuCtx.ContextHandle == IntPtr.Zero)
+            throw new InvalidOperationException("GPU 设备上下文句柄无效");
+
+        // 1. 分配 D3D11VA 硬件设备上下文
+        AVBufferRef* hwRef = ffmpeg.av_hwdevice_ctx_alloc(AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA);
+        if (hwRef == null)
+            throw new InvalidOperationException("av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA) 返回 null");
+
+        try
+        {
+            // 2. 设置共享 D3D11 设备（通过原始指针操作 AVD3D11VADeviceContext）
+            // AVBufferRef.data → AVHWDeviceContext → hwctx → AVD3D11VADeviceContext
+            // AVD3D11VADeviceContext 布局：device(void*), device_context(void*), lock_ctx(uint), lock(fn*), unlock(fn*)
+            AVHWDeviceContext* hwCtx = (AVHWDeviceContext*)hwRef->data;
+            IntPtr* hwctxPtrs = (IntPtr*)hwCtx->hwctx;
+            hwctxPtrs[0] = gpuCtx.DeviceHandle;    // device (ID3D11Device*)
+            hwctxPtrs[1] = gpuCtx.ContextHandle;    // device_context (ID3D11DeviceContext*)
+
+            // 3. 初始化设备上下文（FFmpeg 检测 device 已设 → 使用共享设备，创建默认 lock/unlock）
+            int ret = ffmpeg.av_hwdevice_ctx_init(hwRef);
+            if (ret < 0)
+                throw new InvalidOperationException($"av_hwdevice_ctx_init 失败: {GetErrorString(ret)} (code={ret})");
+
+            // 4. 设置到编解码上下文（av_buffer_ref 增加引用计数）
+            AVBufferRef* ctxRef = ffmpeg.av_buffer_ref(hwRef);
+            if (ctxRef == null)
+                throw new InvalidOperationException("av_buffer_ref 返回 null（内存不足）");
+            ctx->hw_device_ctx = ctxRef;
+
+            // 5. 创建 SafeHandle 管理 hwRef 生命周期（在 try 内——OOM 时 catch 可释放）
+            _hwDeviceCtx = new SafeAVBufferRefHandle((IntPtr)hwRef);
+        }
+        catch
+        {
+            // 失败时释放 hwRef（av_buffer_unref 通过 SafeHandle 在 Dispose 中处理）
+            AVBufferRef* p = hwRef;
+            ffmpeg.av_buffer_unref(&p);
+            throw;
+        }
+
+        _logger.LogInformation("D3D11VA 硬件解码已初始化（共享 D3D11 设备）");
+    }
+
+    /// <summary>
+    /// 从 D3D11VA 硬解输出的 AVFrame 创建 VideoFrame（零拷贝 GPU 纹理路径）。
+    /// </summary>
+    /// <remarks>
+    /// <para>D3D11VA 帧布局：data[0] = ID3D11Texture2D*（纹理数组），data[1] = 纹理数组索引。</para>
+    /// <para>输出 PixelFormat.NV12（D3D11VA 标准输出格式）。</para>
+    /// <para>同步操作（hot 路径）：COM AddRef + 对象构造，无 I/O。</para>
+    /// </remarks>
+    private unsafe VideoFrame CreateHardwareFrameFromAVFrame(AVFrame* avFrame)
+    {
+        int width = avFrame->width;
+        int height = avFrame->height;
+
+        // D3D11VA 帧：data[0] = ID3D11Texture2D*，data[1] = 纹理数组索引
+        IntPtr texturePtr = (IntPtr)avFrame->data[0];
+        int subresourceIndex = (int)(IntPtr)avFrame->data[1];
+
+        if (texturePtr == IntPtr.Zero)
+            throw new InvalidOperationException("D3D11VA 帧纹理指针为空");
+
+        // D3D11VA 标准输出 NV12 格式
+        var resource = new D3D11HardwareFrameResource(texturePtr, width, height, PixelFormat.NV12, subresourceIndex);
+
+        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        TimeSpan duration = avFrame->duration > 0
+            ? TimeSpan.FromTicks((long)(avFrame->duration * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
+
+        var frame = _framePool?.Rent() ?? new VideoFrame();
+        frame.Reset(width, height, PixelFormat.NV12, resource, timestamp, duration, keyFrame);
+        return frame;
     }
 
     private static AVCodecID MapVideoCodecToFFmpeg(VideoCodec codec) => codec switch

@@ -5,6 +5,7 @@ using LingFan.Media.Presenters.D3D11;
 using LingFan.Media.Renderers.D3D11;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Runtime.Versioning;
 
 namespace LingFan.Media.Presenters;
 
@@ -25,6 +26,7 @@ namespace LingFan.Media.Presenters;
 /// 避免跨程序集类型在 trimming 分析时触发 IL2066。</para>
 /// <para><b>异步策略</b>：config 分类——纯 DI 注册，无 I/O。</para>
 /// </remarks>
+[SupportedOSPlatform("windows")]
 public static class GpuPresenterExtensions
 {
     /// <summary>
@@ -40,6 +42,15 @@ public static class GpuPresenterExtensions
 
         services.AddSingleton<IVideoRendererFactory>(sp =>
             new D3D11RendererFactory(sp.GetRequiredService<ILoggerFactory>()));
+
+        // V2-15 第二轮审计修复：必须注册 IGpuDeviceContext，否则 FFmpegVideoDecoderFactory
+        // 获取 null → D3D11VA 硬件解码静默禁用（与 AddD3D11Renderer 行为一致）
+        services.AddSingleton<IGpuDeviceContext>(sp =>
+        {
+            var factory = (D3D11RendererFactory)sp.GetRequiredService<IVideoRendererFactory>();
+            return factory.Context;
+        });
+
         services.AddSingleton<IGpuPresenterFactory>(sp =>
             new D3D11GpuPresenterFactory(
                 sp.GetRequiredService<IVideoRendererFactory>(),
@@ -59,6 +70,14 @@ public static class GpuPresenterExtensions
 
         services.AddSingleton<IVideoRendererFactory>(sp =>
             new D3D11RendererFactory(sp.GetRequiredService<ILoggerFactory>()));
+
+        // V2-15 第二轮审计修复：同步注册 IGpuDeviceContext（与 AddD3D11Presenter 一致）
+        services.AddSingleton<IGpuDeviceContext>(sp =>
+        {
+            var factory = (D3D11RendererFactory)sp.GetRequiredService<IVideoRendererFactory>();
+            return factory.Context;
+        });
+
         services.AddSingleton<IGpuPresenterFactory>(sp =>
             new D3D11GpuPresenterFactory(
                 sp.GetRequiredService<IVideoRendererFactory>(),

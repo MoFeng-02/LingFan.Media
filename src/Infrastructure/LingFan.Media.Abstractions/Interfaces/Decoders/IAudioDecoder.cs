@@ -20,4 +20,11 @@ public interface IAudioDecoder : IMediaComponent
 
     /// <summary>当前编解码器。</summary>
     AudioCodec Codec { get; }
+
+    /// <summary>解码器实际输出采样率（源采样率，或重采样目标采样率）。</summary>
+    /// <remarks>Initialize 后可用。MediaPlayer 据此初始化音频输出设备（WASAPI 以固定率开设备）。</remarks>
+    int OutputSampleRate { get; }
+
+    /// <summary>解码器实际输出声道数（源声道数，或重采样目标声道数）。</summary>
+    int OutputChannels { get; }
 }

@@ -1,0 +1,116 @@
+namespace LingFan.Media.Backends.VLC.Decoders;
+
+/// <summary>
+/// <see cref="IAudioDecoder"/> 的 VLC 直通实现。
+/// </summary>
+/// <remarks>
+/// <para><b>直通解码器</b>：VLC 后端由 VLCDemuxer 通过 VLC 内部管线完成解封装+解码，
+/// MediaPacket 携带的已是解码后的 PCM 采样数据（S16 格式）。
+/// 本解码器仅将 packet 数据包装为 <see cref="AudioFrame"/>，不做实际解码。</para>
+/// <para><b>异步策略</b>（与 VLCVideoDecoder 对称）：</para>
+/// <list type="bullet">
+/// <item><see cref="InitializeAsync"/>：接口契约，返回 <see cref="Task.CompletedTask"/>。</item>
+/// <item><see cref="DecodeAsync"/>：热路径，同步完成。</item>
+/// <item><see cref="FlushAsync"/>：热路径，返回 null。</item>
+/// <item><see cref="Reset"/>：同步，无操作。</item>
+/// </list>
+/// <para><b>AOT 兼容</b>：sealed 类，无反射。</para>
+/// </remarks>
+internal sealed class VLCAudioDecoder : IAudioDecoder
+{
+    private readonly ILogger<VLCAudioDecoder> _logger;
+    private bool _disposed;
+
+    /// <summary>
+    /// 初始化 <see cref="VLCAudioDecoder"/> 的新实例。
+    /// </summary>
+    /// <param name="logger">日志器。</param>
+    public VLCAudioDecoder(ILogger<VLCAudioDecoder> logger)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    /// <inheritdoc/>
+    public AudioCodec Codec { get; private set; }
+
+    /// <inheritdoc/>
+    /// <remarks>VLC 默认输出 S16 格式，44100Hz，2 声道。实际值由 VLCDemuxer 回调设置。</remarks>
+    public int OutputSampleRate { get; private set; } = 44100;
+
+    /// <inheritdoc/>
+    public int OutputChannels { get; private set; } = 2;
+
+    /// <inheritdoc/>
+    public void Initialize(AudioCodec codec, AudioSettings settings)
+    {
+        Codec = codec;
+        _logger.LogDebug("VLC 音频直通解码器初始化: {Codec}", codec);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>接口契约：无 I/O，返回 <see cref="Task.CompletedTask"/>。</remarks>
+    public Task InitializeAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 热路径：将 packet 数据（S16 PCM 采样）包装为 <see cref="AudioFrame"/>。
+    /// </remarks>
+    public ValueTask<AudioFrame?> DecodeAsync(MediaPacket packet)
+    {
+        ArgumentNullException.ThrowIfNull(packet);
+
+        if (packet.Data.Length == 0)
+            return new ValueTask<AudioFrame?>((AudioFrame?)null);
+
+        // VLCDemuxer 交付 S16 PCM 数据（2 字节/采样 × 声道数）
+        int bytesPerSample = 2 * OutputChannels;
+        int frameCount = packet.Data.Length / bytesPerSample;
+
+        if (frameCount <= 0)
+            return new ValueTask<AudioFrame?>((AudioFrame?)null);
+
+        var frame = new AudioFrame(
+            packet.Data.ToArray().AsMemory(),
+            OutputSampleRate,
+            OutputChannels,
+            SampleFormat.S16,
+            packet.Timestamp,
+            packet.Duration,
+            frameCount);
+
+        return new ValueTask<AudioFrame?>(frame);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>热路径：直通解码器无缓冲帧，返回 null。</remarks>
+    public ValueTask<AudioFrame?> FlushAsync()
+    {
+        return new ValueTask<AudioFrame?>((AudioFrame?)null);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>直通解码器无状态需重置。</remarks>
+    public void Reset()
+    {
+        // 无操作
+    }
+
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>接口契约：无异步资源，委托 Dispose + CompletedTask。</remarks>
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

@@ -1,4 +1,7 @@
 using System;
+using System.Net;
+using System.Net.Http;
+using System.Net.Security;
 using LingFan.Media.Audio;
 using LingFan.Media.Core;
 using LingFan.Media.Formats;
@@ -59,6 +62,22 @@ public static class ServiceCollectionExtensions
         // IHttpClientFactory：供 MediaStreamFactory 网络流连接池管理（防套接字耗尽）
         services.AddHttpClient();
 
+        // SSL 证书绕过专用命名 client：仅 AllowInsecureHttps 的网络源经
+        // IHttpClientFactory.CreateClient("LingFanMedia_Insecure") 获取（S2 统一入口）。
+        // 自定义 SocketsHttpHandler 由工厂管理生命周期，避免套接字耗尽。
+        services.AddHttpClient("LingFanMedia_Insecure")
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = true,
+                AutomaticDecompression = DecompressionMethods.All,
+                SslOptions = new SslClientAuthenticationOptions
+                {
+                    // 绕过证书校验（仅用于显式 AllowInsecureHttps 场景）
+                    RemoteCertificateValidationCallback = (_, _, _, _) => true
+                },
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            });
+
         // 媒体流工厂（Singleton，持有 IHttpClientFactory 引用）
         services.AddSingleton<IMediaStreamFactory, MediaStreamFactory>();
 
@@ -67,8 +86,10 @@ public static class ServiceCollectionExtensions
 
         // 播放器工厂注册见下方（在构建器创建后，透传宿主配置的后处理链与重置钩子）。
 
-        // 未来：services.AddSingleton<ICodecRegistry, CodecRegistry>();
-        // 未来：services.AddSingleton<IGpuDeviceContext, GpuDeviceContext>();
+        // 编解码器注册表（E1）：静态映射表，纯内存，Singleton。
+        services.AddSingleton<ICodecRegistry, CodecRegistry>();
+        // IGpuDeviceContext 的注册位于 Renderers.D3D11 的 AddD3D11Renderer
+        // （具体工厂依赖 Vortice，Extensions 层不引用渲染器模块，严守分层）。
 
         // ── 配置 ──
 

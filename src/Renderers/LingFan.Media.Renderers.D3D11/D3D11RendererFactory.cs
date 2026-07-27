@@ -1,3 +1,5 @@
+using LingFan.Media.Renderers.Shared;
+
 namespace LingFan.Media.Renderers.D3D11;
 
 /// <summary>
@@ -28,6 +30,7 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
     private ID3D11DeviceContext? _context;
     // 方案 A：缓存单例渲染器——同一工厂的多次 Create 返回同一实例（R1==R2）。
     private D3D11Renderer? _singleton;
+    private RenderContext? _renderContext;
     private bool _disposed;
 
     /// <summary>
@@ -76,8 +79,72 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
                 DeviceCreationFlags.BgraSupport);            // BGRA 支持（SwapChain 需要）
             _context = _device.ImmediateContext;
 
+            // 创建设备上下文（RenderContext 实现 IGpuDeviceContext）并注入 GPU 能力（V2 R6/E2）。
+            // 能力查询失败不应阻断设备创建——降级为默认能力快照。
+            try
+            {
+                _renderContext = new RenderContext(
+                    GPUApiType.D3D11,
+                    BuildCapabilities(),
+                    _device.NativePointer,
+                    _device,
+                    _context!.NativePointer);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "D3D11 设备能力查询失败，使用默认能力快照。");
+                _renderContext = new RenderContext(
+                    GPUApiType.D3D11,
+                    new GpuDeviceCapabilities("Unknown", 0, 0, 16384, false, false, -1),
+                    _device.NativePointer,
+                    _device,
+                    _context!.NativePointer);
+            }
+
             _logger.LogDebug("D3D11 设备已创建（共享 Singleton）");
         }
+    }
+
+    /// <summary>
+    /// 获取 D3D11 设备上下文（<see cref="RenderContext"/> 实现 <see cref="IGpuDeviceContext"/>）。
+    /// 首次访问会确保共享设备已创建（延迟初始化）。
+    /// </summary>
+    /// <remarks>同步配置（config 分类）：设备创建为同步 native 调用，无 I/O await。</remarks>
+    public RenderContext Context
+    {
+        get
+        {
+            EnsureDeviceCreated();
+            return _renderContext!;
+        }
+    }
+
+    /// <summary>
+    /// 查询 D3D11 设备能力（FeatureLevel / 显存 / 名称等）。
+    /// </summary>
+    /// <remarks>同步 native 查询（DXGI 适配器枚举），无 I/O await → 同步（sync 分类）。</remarks>
+    private GpuDeviceCapabilities BuildCapabilities()
+    {
+        var device = _device!;
+        int featureLevel = (int)device.FeatureLevel;
+
+        string name = "Unknown";
+        ulong dedicated = 0;
+        ulong shared = 0;
+        using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
+        using var adapter = dxgiDevice.GetParent<IDXGIAdapter>();
+        var desc = adapter.Description;
+        name = desc.Description;
+        dedicated = (ulong)desc.DedicatedVideoMemory;
+        shared = (ulong)desc.SharedSystemMemory;
+
+        // D3D11 通用最大纹理尺寸（FeatureLevel 11_0+ 为 16384）。
+        const int maxTexture = 16384;
+        bool supportsCompute = featureLevel >= (int)FeatureLevel.Level_10_0;
+        // DXVA2 在 FeatureLevel 11_0+ 普遍可用（启发式，避免引入视频接口依赖）。
+        bool supportsHardwareDecode = featureLevel >= (int)FeatureLevel.Level_11_0;
+
+        return new GpuDeviceCapabilities(name, dedicated, shared, maxTexture, supportsCompute, supportsHardwareDecode, featureLevel);
     }
 
     /// <summary>

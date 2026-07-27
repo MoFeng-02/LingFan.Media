@@ -1,0 +1,44 @@
+namespace LingFan.Media.Backends.VLC.Decoders;
+
+/// <summary>
+/// <see cref="IVideoDecoderFactory"/> 的 VLC 实现。
+/// </summary>
+/// <remarks>
+/// <para>DI 生命周期：Singleton 工厂，无状态。每次 <see cref="Create"/> 返回新实例。</para>
+/// <para><b>异步策略</b>（与 FFmpegVideoDecoderFactory 对称）：</para>
+/// <list type="bullet">
+/// <item><see cref="Create"/>：同步，手动 new + <see cref="IVideoDecoder.Initialize"/>。</item>
+/// <item><see cref="CreateAsync"/>：接口契约，返回 <see cref="Task.FromResult"/>。</item>
+/// </list>
+/// </remarks>
+public sealed class VLCVideoDecoderFactory : IVideoDecoderFactory
+{
+    private readonly ILoggerFactory _loggerFactory;
+
+    /// <summary>
+    /// 初始化 <see cref="VLCVideoDecoderFactory"/> 的新实例。
+    /// </summary>
+    public VLCVideoDecoderFactory(ILoggerFactory loggerFactory)
+    {
+        _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+    }
+
+    /// <inheritdoc/>
+    public IVideoDecoder Create(VideoCodec codec, VideoSettings settings)
+    {
+        var decoder = new VLCVideoDecoder(_loggerFactory.CreateLogger<VLCVideoDecoder>());
+        decoder.Initialize(codec, settings);
+        return decoder;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 接口契约：无 I/O（手动 new + 同步 Initialize），返回 <see cref="Task.FromResult"/>。
+    /// 优先使用此方法（支持 CT）。
+    /// </remarks>
+    public Task<IVideoDecoder> CreateAsync(VideoCodec codec, VideoSettings settings, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IVideoDecoder>(Create(codec, settings));
+    }
+}

@@ -98,7 +98,8 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
             _videoTransforms,
             _audioTransforms,
             _videoTransformsReset,
-            _audioTransformsReset);
+            _audioTransformsReset,
+            _options);
 
         // 配置默认值（从 MediaPlayerOptions）
         player.Volume = _options.DefaultVolume;

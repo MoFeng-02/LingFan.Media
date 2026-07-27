@@ -15,19 +15,23 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 public sealed class FFmpegVideoDecoderFactory : IVideoDecoderFactory
 {
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IGpuDeviceContext? _gpuContext;
 
     /// <summary>
     /// 初始化 <see cref="FFmpegVideoDecoderFactory"/> 的新实例。
     /// </summary>
-    public FFmpegVideoDecoderFactory(ILoggerFactory loggerFactory)
+    /// <param name="loggerFactory">日志工厂。</param>
+    /// <param name="gpuContext">可选 GPU 设备上下文（注册了 D3D11 渲染器时由 DI 注入，启用 D3D11VA 硬解）。</param>
+    public FFmpegVideoDecoderFactory(ILoggerFactory loggerFactory, IGpuDeviceContext? gpuContext = null)
     {
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _gpuContext = gpuContext;
     }
 
     /// <inheritdoc/>
     public IVideoDecoder Create(VideoCodec codec, VideoSettings settings)
     {
-        var decoder = new FFmpegVideoDecoder(_loggerFactory.CreateLogger<FFmpegVideoDecoder>());
+        var decoder = new FFmpegVideoDecoder(_loggerFactory.CreateLogger<FFmpegVideoDecoder>(), _gpuContext);
         decoder.Initialize(codec, settings);
         return decoder;
     }
