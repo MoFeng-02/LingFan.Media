@@ -1,21 +1,18 @@
 namespace LingFan.Media.Audio.Effects;
 
+using System;
+using System.Buffers;
+using System.Collections.Generic;
+using LingFan.Media.Abstractions;
+
 /// <summary>
-/// 动态范围压缩器效果。
+/// 动态范围压缩器。前馈式：峰值包络跟随（attack/release 时间常数）→ 软膝增益计算 → 增益平滑。
 /// </summary>
 /// <remarks>
-/// <para>参数：</para>
-/// <list type="bullet">
-/// <item>Threshold: 阈值（-60dB~0dB，超过此电平开始压缩）</item>
-/// <item>Ratio: 压缩比（1:1~20:1）</item>
-/// <item>Attack: 启动时间（0.1ms~100ms，信号超过阈值后达到完全压缩的时间）</item>
-/// <item>Release: 释放时间（10ms~1000ms，信号低于阈值后恢复到不压缩的时间）</item>
-/// </list>
-/// <para>V1 简化实现：透传效果器（不做实际处理，直接返回输入帧）。</para>
-/// <para>V2 路径：实现动态范围压缩算法（RMS/peak detection + gain reduction），
-/// 使用 <c>Span&lt;float&gt;</c> 直接操作 PCM 采样。</para>
-/// <para><b>所有权转移</b>：<see cref="IsEnabled"/> 为 true 且执行实际处理时，
-/// 输入帧被 Dispose，返回新帧。V1 透传模式下不 Dispose、不创建新帧。</para>
+/// <para>参数：Threshold（阈值 dB）、Ratio（压缩比 1:1~20:1）、Attack（启动 ms）、Release（释放 ms）、KneeWidth（软膝宽 dB）。</para>
+/// <para><b>所有权转移</b>：<see cref="IAudioEffect.IsEnabled"/> 为 true 时输入帧被 Dispose，返回新帧；禁用时透传。</para>
+/// <para>单包络/单增益状态（跨声道共享，避免立体声泵浦），热路径同步、无分配。</para>
+/// <para>Ratio=1 时为恒等变换（无增益衰减）。</para>
 /// </remarks>
 public sealed class CompressorEffect : IAudioEffect
 {
@@ -53,18 +50,24 @@ public sealed class CompressorEffect : IAudioEffect
         set => Parameters[3].Value = Math.Clamp(value, 10f, 1000f);
     }
 
+    /// <summary>软膝宽度（dB，0 表示硬膝）。</summary>
+    public float KneeWidth
+    {
+        get => Parameters[4].Value;
+        set => Parameters[4].Value = Math.Clamp(value, 0f, 40f);
+    }
+
     /// <inheritdoc/>
     public IReadOnlyList<AudioEffectParameter> Parameters { get; }
+
+    private float _envelope;
+    private float _gain = 1f;
 
     /// <summary>
     /// 初始化 <see cref="CompressorEffect"/> 的新实例。
     /// </summary>
-    /// <param name="threshold">阈值（默认 -20dB）。</param>
-    /// <param name="ratio">压缩比（默认 4:1）。</param>
-    /// <param name="attack">启动时间（默认 10ms）。</param>
-    /// <param name="release">释放时间（默认 100ms）。</param>
     public CompressorEffect(float threshold = -20f, float ratio = 4f,
-        float attack = 10f, float release = 100f)
+        float attack = 10f, float release = 100f, float kneeWidth = 6f)
     {
         Parameters =
         [
@@ -72,21 +75,97 @@ public sealed class CompressorEffect : IAudioEffect
             new AudioEffectParameter("Ratio", Math.Clamp(ratio, 1f, 20f), 1f, 20f),
             new AudioEffectParameter("Attack", Math.Clamp(attack, 0.1f, 100f), 0.1f, 100f),
             new AudioEffectParameter("Release", Math.Clamp(release, 10f, 1000f), 10f, 1000f),
+            new AudioEffectParameter("KneeWidth", Math.Clamp(kneeWidth, 0f, 40f), 0f, 40f),
         ];
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// V1 透传：直接返回输入帧，不做实际压缩处理。
-    /// V2 将实现动态范围压缩算法 → Span<float> DSP → 创建新 AudioFrame → Dispose 输入 frame → 返回新帧。
-    /// </remarks>
     public AudioFrame Process(AudioFrame frame)
     {
         if (!IsEnabled)
             return frame;
 
-        // V1: 透传——不做实际压缩处理，直接返回输入帧
-        // V2: 实现压缩算法 → Span<float> DSP → 创建新 AudioFrame → Dispose 输入 frame → 返回新帧
-        return frame;
+        var fmt = frame.SampleFormat;
+        var channels = frame.Channels;
+        var sampleRate = frame.SampleRate;
+        int bps = PcmConversions.BytesPerSample(fmt);
+        int sampleCount = frame.Data.Length / bps;
+
+        var floats = ArrayPool<float>.Shared.Rent(sampleCount);
+        try
+        {
+            PcmConversions.DecodeToFloat(frame.Data.Span[..(sampleCount * bps)], fmt, floats.AsSpan(0, sampleCount));
+            ProcessFloats(floats.AsSpan(0, sampleCount), sampleRate);
+            var outBytes = new byte[sampleCount * bps];
+            PcmConversions.EncodeFromFloat(floats.AsSpan(0, sampleCount), fmt, outBytes);
+            var ts = frame.Timestamp;
+            var dur = frame.Duration;
+            frame.Dispose();
+            return new AudioFrame(outBytes, sampleRate, channels, fmt, ts, dur, sampleCount / channels);
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(floats);
+        }
+    }
+
+    /// <inheritdoc/>
+    public void Reset()
+    {
+        // 复位峰值包络与平滑增益至静默初始态（无分配，AOT 友好）。
+        _envelope = 0f;
+        _gain = 1f;
+    }
+
+    private void ProcessFloats(Span<float> samples, float sampleRate)
+    {
+        int sr = Math.Max(1, (int)sampleRate);
+        float aCoef = MathF.Exp(-1f / (Math.Max(0.0001f, Attack / 1000f) * sr));
+        float rCoef = MathF.Exp(-1f / (Math.Max(0.0001f, Release / 1000f) * sr));
+        float threshold = Threshold;
+        float ratio = Math.Max(1f, Ratio);
+        float knee = KneeWidth;
+        float oneMinusInvRatio = 1f - 1f / ratio;
+
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float x = samples[i];
+            float level = Math.Abs(x);
+
+            // 峰值包络跟随：上升用 attack（更快），下降用 release（更慢）
+            float coef = level > _envelope ? aCoef : rCoef;
+            _envelope = _envelope + coef * (level - _envelope);
+
+            // 计算目标增益衰减（dB）
+            float envDb = 20f * MathF.Log10(_envelope + 1e-6f);
+            float targetDb = 0f;
+            if (envDb > threshold)
+            {
+                if (knee > 0f)
+                {
+                    float lower = threshold - knee / 2f;
+                    if (envDb < lower) targetDb = 0f;
+                    else if (envDb > threshold + knee / 2f)
+                        targetDb = (envDb - (threshold + knee / 2f)) * oneMinusInvRatio;
+                    else
+                    {
+                        float k = (envDb - lower) / knee;
+                        targetDb = k * k * knee / 2f * oneMinusInvRatio;
+                    }
+                }
+                else
+                {
+                    targetDb = (envDb - threshold) * oneMinusInvRatio;
+                }
+            }
+
+            float targetGain = MathF.Pow(10f, -targetDb / 20f);
+
+            // 增益平滑：压缩（targetGain < _gain，快速 attack）；恢复（慢速 release）
+            float gCoef = targetGain < _gain ? aCoef : rCoef;
+            _gain = _gain + gCoef * (targetGain - _gain);
+
+            samples[i] = x * _gain;
+        }
     }
 }

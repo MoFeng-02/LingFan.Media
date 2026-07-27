@@ -25,6 +25,14 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly MediaPlayerOptions _options;
 
+    // V2-06 C5/C6: 后处理变换链（中立 BCL 委托）。
+    // 由 Extensions/DI 从 Video/Audio 模块的具体处理器/音量/混音转换而来；
+    // Core 不直接依赖 Video/Audio 模块，保持分层倒置避免。
+    private readonly IReadOnlyList<Func<VideoFrame, VideoFrame?>>? _videoTransforms;
+    private readonly IReadOnlyList<Func<AudioFrame, AudioFrame>>? _audioTransforms;
+    private readonly Action? _videoTransformsReset;
+    private readonly Action? _audioTransformsReset;
+
     /// <summary>
     /// 初始化 <see cref="MediaPlayerFactory"/> 的新实例。
     /// </summary>
@@ -37,6 +45,10 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
     /// <param name="audioOutputFactory">音频输出工厂（Singleton）。</param>
     /// <param name="loggerFactory">日志工厂（Singleton）。</param>
     /// <param name="options">播放器配置选项。</param>
+    /// <param name="videoTransforms">视频后处理变换链（中立委托，可为 null）。</param>
+    /// <param name="audioTransforms">音频后处理变换链（中立委托，可为 null）。</param>
+    /// <param name="videoTransformsReset">视频后处理状态重置委托（中立委托，可为 null）。</param>
+    /// <param name="audioTransformsReset">音频效果状态重置委托（V2-08.1，中立委托，可为 null）。由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。</param>
     public MediaPlayerFactory(
         IMediaStreamFactory streamFactory,
         IMediaDemuxerFactory demuxerFactory,
@@ -46,7 +58,11 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
         IVideoRendererFactory videoRendererFactory,
         IAudioOutputFactory audioOutputFactory,
         ILoggerFactory loggerFactory,
-        IOptions<MediaPlayerOptions>? options = null)
+        IOptions<MediaPlayerOptions>? options = null,
+        IReadOnlyList<Func<VideoFrame, VideoFrame?>>? videoTransforms = null,
+        IReadOnlyList<Func<AudioFrame, AudioFrame>>? audioTransforms = null,
+        Action? videoTransformsReset = null,
+        Action? audioTransformsReset = null)
     {
         _streamFactory = streamFactory;
         _demuxerFactory = demuxerFactory;
@@ -57,6 +73,10 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
         _audioOutputFactory = audioOutputFactory;
         _loggerFactory = loggerFactory;
         _options = options?.Value ?? new MediaPlayerOptions();
+        _videoTransforms = videoTransforms;
+        _audioTransforms = audioTransforms;
+        _videoTransformsReset = videoTransformsReset;
+        _audioTransformsReset = audioTransformsReset;
     }
 
     /// <inheritdoc />
@@ -74,7 +94,11 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
             _videoRendererFactory,
             _audioOutputFactory,
             _loggerFactory,
-            logger);
+            logger,
+            _videoTransforms,
+            _audioTransforms,
+            _videoTransformsReset,
+            _audioTransformsReset);
 
         // 配置默认值（从 MediaPlayerOptions）
         player.Volume = _options.DefaultVolume;

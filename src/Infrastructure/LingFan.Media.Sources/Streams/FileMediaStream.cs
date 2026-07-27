@@ -86,6 +86,10 @@ public sealed class FileMediaStream : IMediaStream
     }
 
     /// <inheritdoc/>
+    /// <remarks>本地文件流无需建连，为无操作。</remarks>
+    public Task ConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <inheritdoc/>
     public long Seek(long offset, SeekOrigin origin)
     {
         ObjectDisposedException.ThrowIf(_closed, this);

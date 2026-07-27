@@ -278,22 +278,22 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
                 // 1. 解码新的字幕包（加锁防止与 Clear/Reset 竞态）
                 if (_packetQueue.TryDequeue(out var packet) && packet != null)
                 {
-                await _decodeLock.WaitAsync(_cts.Token);
-                try
-                {
-                    // 隐患B修复：解码锁获取超时期间 Clear 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
-                    if (_pendingDecoderReset)
+                    await _decodeLock.WaitAsync(_cts.Token);
+                    try
                     {
-                        _decoder.Reset();
-                        _pendingDecoderReset = false;
-                    }
+                        // 隐患B修复：解码锁获取超时期间 Clear 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
+                        if (_pendingDecoderReset)
+                        {
+                            _decoder.Reset();
+                            _pendingDecoderReset = false;
+                        }
 
-                    // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Clear 暂停）
-                    if (_isPaused)
-                    {
-                        packet.Dispose();
-                        continue; // finally 会释放锁，跳回循环顶部进入暂停分支
-                    }
+                        // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Clear 暂停）
+                        if (_isPaused)
+                        {
+                            packet.Dispose();
+                            continue; // finally 会释放锁，跳回循环顶部进入暂停分支
+                        }
 
                         SubtitleFrame? subtitleFrame;
                         try

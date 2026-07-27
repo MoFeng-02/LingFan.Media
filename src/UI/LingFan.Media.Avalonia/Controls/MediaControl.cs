@@ -374,17 +374,29 @@ public sealed class MediaControl : TemplatedControl
 
     /// <summary>
     /// 播放按钮点击事件处理器。void 事件处理器（EventHandler 委托签名要求），
-    /// 内部 fire-and-forget 调用 async Task 方法（**async void 绝对禁止**）。
+    /// 内部 fire-and-forget 调用 async Task 方法（**async void 绝对禁止**），
+    /// 通过 SafeFireAndForget 捕获异常防止不可观测的 Task 异常。
     /// </summary>
     private void OnPlayButtonClick(object? sender, RoutedEventArgs e)
-        => _ = TogglePlayPauseAsync();
+        => SafeFireAndForget(TogglePlayPauseAsync());
 
     /// <summary>
     /// 进度条拖拽 Seek 事件处理器。void 事件处理器（EventHandler&lt;SeekEventArgs&gt; 委托签名要求），
-    /// 内部 fire-and-forget 调用 async Task 方法（**async void 绝对禁止**）。
+    /// 内部 fire-and-forget 调用 async Task 方法（**async void 绝对禁止**），
+    /// 通过 SafeFireAndForget 捕获异常防止不可观测的 Task 异常。
     /// </summary>
     private void OnProgressBarSeek(object? sender, SeekEventArgs e)
-        => _ = SeekToAsync(e.Position);
+        => SafeFireAndForget(SeekToAsync(e.Position));
+
+    /// <summary>
+    /// 安全 fire-and-forget：捕获异常防止不可观测的 Task 异常（UnobservedTaskException）。
+    /// </summary>
+    private static void SafeFireAndForget(Task task)
+    {
+        _ = task.ContinueWith(
+            static t => { _ = t.Exception; },
+            TaskContinuationOptions.OnlyOnFaulted);
+    }
 
     /// <summary>
     /// 全屏按钮点击事件处理器。触发 FullscreenRequested 事件供消费方处理。

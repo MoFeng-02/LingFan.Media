@@ -79,7 +79,7 @@ public sealed class VideoFrame : IDisposableFrame
     /// <param name="timestamp">显示时间戳。</param>
     /// <param name="duration">帧持续时间。</param>
     /// <param name="keyFrame">是否关键帧。</param>
-    public void Reset(int width, int height, PixelFormat format, IFrameResource resource,
+    public void Reset(int width, int height, PixelFormat format, IFrameResource? resource,
         TimeSpan timestamp, TimeSpan duration, bool keyFrame)
     {
         // 释放旧 Resource（安全：SoftwareFrameResource.Dispose 检查 _disposed）

@@ -84,6 +84,10 @@ public sealed class PassThroughMediaStream : IMediaStream
     }
 
     /// <inheritdoc/>
+    /// <remarks>透传流底层已就绪，无需建连，为无操作。</remarks>
+    public Task ConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <inheritdoc/>
     public long Seek(long offset, SeekOrigin origin)
     {
         ObjectDisposedException.ThrowIf(_closed, this);

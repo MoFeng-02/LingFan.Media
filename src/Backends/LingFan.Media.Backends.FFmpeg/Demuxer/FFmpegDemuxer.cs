@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using LingFan.Media.Backends.FFmpeg.Interop;
 using LingFan.Media.Backends.FFmpeg.SafeHandles;
 
 namespace LingFan.Media.Backends.FFmpeg.Demuxer;
@@ -13,7 +14,8 @@ namespace LingFan.Media.Backends.FFmpeg.Demuxer;
 /// 将同步 FFmpeg 调用卸载到线程池——FFmpeg C API 本质同步，<c>Task.Run</c> 含 <c>await</c> 满足真异步要求，
 /// 避免阻塞调用线程（可能为 UI 线程）。</item>
 /// <item><c>InitializeAsync</c>：接口契约，返回 <c>Task.CompletedTask</c>（无 I/O）。</item>
-/// <item>AVIO <c>ReadPacketCallback</c>：同步边界（C 函数指针），调用 <see cref="IMediaStream.Read(Span{byte})"/>。</item>
+/// <item>AVIO <c>ReadPacketCallback</c>：同步边界（C 函数指针），调用 <see cref="IMediaStream.Read(Span{byte})"/>；
+/// 网络建连已由 <see cref="OpenAsync"/> 在 <c>Task.Run</c> 前经 <see cref="IMediaStream.ConnectAsync"/> 异步完成。</item>
 /// <item><c>Close</c> / <c>Dispose</c> / <c>DisposeAsync</c>：同步原生释放。</item>
 /// </list>
 /// <para><b>线程安全</b>：单线程使用（BufferManager 读取线程），非线程安全。</para>
@@ -74,9 +76,9 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 真异步：使用 <c>await Task.Run</c> 卸载 avformat_open_input + avformat_find_stream_info
-    /// 到线程池（可能阻塞 UI 线程）。FFmpeg AVIO 回调内部调用
-    /// <see cref="IMediaStream.Read(Span{byte})"/> 同步读取。
+    /// 真异步：先 <c>await stream.ConnectAsync</c> 在异步路径完成网络建连（消除同步 Read 内的硬阻塞），
+    /// 再用 <c>await Task.Run</c> 卸载 avformat_open_input + avformat_find_stream_info 到线程池。
+    /// FFmpeg AVIO 回调内部调用的 <see cref="IMediaStream.Read(Span{byte})"/> 此时已连接，仅做逐块同步读取。
     /// </remarks>
     public async Task OpenAsync(IMediaStream stream, CancellationToken ct = default)
     {
@@ -85,6 +87,9 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
         ct.ThrowIfCancellationRequested();
         _stream = stream;
+
+        // 异步预建连（网络流在此完成 DNS/TLS 握手，不硬阻塞；文件/透传流为无操作）
+        await stream.ConnectAsync(ct).ConfigureAwait(false);
 
         await Task.Run(() => OpenCore(stream, ct), ct).ConfigureAwait(false);
         _opened = true;
@@ -217,14 +222,18 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 return null;
             }
 
-            // 拷贝数据到独立 buffer（FFmpeg 内部 buffer 会被下一次 av_read_frame 复用）
-            // V1 简化：使用 new byte[]，GC 管理内存（与 SoftwareFrameResource 一致）
-            int size = pkt->size;
-            byte[] buffer = new byte[size];
-            if (size > 0)
-            {
-                Marshal.Copy((IntPtr)pkt->data, buffer, 0, size);
-            }
+            // V2-05 B5 引用计数零拷贝：av_packet_clone = av_packet_alloc + av_packet_ref，
+            // 共享 FFmpeg 内部 buffer（引用计数 +1，非引用计数包内部自动降级为拷贝），
+            // 消除 V1 的 new byte[] + Marshal.Copy 托管拷贝。
+            // 克隆包生命周期由 SafeAVPacketHandle 控制（MediaPacket.Dispose → av_packet_free → 引用计数 -1）。
+            AVPacket* clone = ffmpeg.av_packet_clone(pkt);
+            if (clone == null)
+                throw new InvalidOperationException("av_packet_clone 失败（内存不足）");
+            var owner = new SafeAVPacketHandle((IntPtr)clone);
+
+            ReadOnlyMemory<byte> data = clone->size > 0 && clone->data != null
+                ? new NativeBufferMemoryManager((IntPtr)clone->data, clone->size).Memory
+                : ReadOnlyMemory<byte>.Empty;
 
             // 提取时间戳和元数据
             double timeBase = GetTimeBase(fmtCtx, pkt->stream_index);
@@ -236,7 +245,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 : TimeSpan.Zero;
             bool keyFrame = (pkt->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
 
-            return new MediaPacket(pkt->stream_index, buffer, timestamp, duration, keyFrame);
+            return new MediaPacket(pkt->stream_index, data, timestamp, duration, keyFrame, owner);
         }
         finally
         {
@@ -321,8 +330,8 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     /// 调用 <see cref="IMediaStream.Read(Span{byte})"/> 同步读取。
     /// </summary>
     /// <remarks>
-    /// 此方法运行在 FFmpeg 工作线程（非 UI 线程）上。
-    /// 网络流会阻塞调用线程直到数据到达——这是 FFmpeg C API 的固有约束，非伪异步。
+    /// 运行在 FFmpeg 工作线程（非 UI 线程）。建连已在 <see cref="OpenAsync"/> 的异步路径完成，
+    /// 此处仅做已连接流的逐块同步读取——这是 FFmpeg C API 的固有同步边界，非伪异步。
     /// </remarks>
     private unsafe int ReadPacketCallback(void* opaque, byte* buf, int bufSize)
     {

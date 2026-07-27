@@ -42,16 +42,22 @@ public sealed class MediaPlayer : IMediaPlayer
     private AudioPipeline? _audioPipeline;
     private SubtitleProcessor? _subtitleProcessor;
     private MediaPipelineHost? _pipelineHost;
-    private PlaybackController? _controller;
+    private readonly PlaybackController _controller = new();
 
     // V2 帧对象池（Session 级）
     private FramePool<VideoFrame>? _videoFramePool;
     private FramePool<AudioFrame>? _audioFramePool;
 
-    // 播放控制
-    private readonly object _stateLock = new();
-    private MediaState _state = MediaState.Idle;
+    // 播放控制（音量/静音/速率为本地字段；状态机交由 PlaybackController，V2-06 C1）
     private float _volume = 1.0f;
+
+    // V2-06 C5/C6: 后处理变换链（中立 BCL 委托）。由 DI/Extensions 从 Video/Audio 模块的具体
+    // 处理器/音量/混音转换而来；Core 不依赖 Video/Audio 模块，保持分层倒置避免。
+    private readonly IReadOnlyList<Func<VideoFrame, VideoFrame?>>? _videoTransforms;
+    private readonly IReadOnlyList<Func<AudioFrame, AudioFrame>>? _audioTransforms;
+    private readonly Action? _videoTransformsReset;
+    private readonly Action? _audioTransformsReset;
+    private Action<AudioFrame>? _audioDataSink;
     private bool _isMuted;
     private float _playbackRate = 1.0f;
     private Timer? _positionTimer;
@@ -69,6 +75,7 @@ public sealed class MediaPlayer : IMediaPlayer
     /// <param name="audioOutputFactory">音频输出工厂。</param>
     /// <param name="loggerFactory">日志工厂（用于创建子组件 logger）。</param>
     /// <param name="logger">播放器日志器。</param>
+    /// <param name="audioTransformsReset">音频效果状态重置委托（V2-08.1，中立委托，可为 null）。由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。</param>
     public MediaPlayer(
         IMediaStreamFactory streamFactory,
         IMediaDemuxerFactory demuxerFactory,
@@ -78,7 +85,11 @@ public sealed class MediaPlayer : IMediaPlayer
         IVideoRendererFactory videoRendererFactory,
         IAudioOutputFactory audioOutputFactory,
         ILoggerFactory loggerFactory,
-        ILogger<MediaPlayer> logger)
+        ILogger<MediaPlayer> logger,
+        IReadOnlyList<Func<VideoFrame, VideoFrame?>>? videoTransforms = null,
+        IReadOnlyList<Func<AudioFrame, AudioFrame>>? audioTransforms = null,
+        Action? videoTransformsReset = null,
+        Action? audioTransformsReset = null)
     {
         _streamFactory = streamFactory;
         _demuxerFactory = demuxerFactory;
@@ -89,13 +100,14 @@ public sealed class MediaPlayer : IMediaPlayer
         _audioOutputFactory = audioOutputFactory;
         _loggerFactory = loggerFactory;
         _logger = logger;
+        _videoTransforms = videoTransforms;
+        _audioTransforms = audioTransforms;
+        _videoTransformsReset = videoTransformsReset;
+        _audioTransformsReset = audioTransformsReset;
     }
 
     /// <inheritdoc />
-    public MediaState State
-    {
-        get { lock (_stateLock) return _state; }
-    }
+    public MediaState State => _controller.CurrentState;
 
     /// <inheritdoc />
     public TimeSpan Position => _clock?.Position ?? TimeSpan.Zero;
@@ -155,8 +167,23 @@ public sealed class MediaPlayer : IMediaPlayer
     public event EventHandler<SubtitleFrame?>? SubtitleReceived;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 采用 <see cref="Action{AudioFrame}"/> 而非 <see cref="EventHandler{T}"/>，因为音频采样数据是
+    /// 高频、纯内存、需订阅方同步借用的事件（见 AudioPipeline 的 _audioDataSink 触发点）。
+    /// 订阅/退订直接转发到内部字段 <c>_audioDataSink</c>，由音频管线线程在 Submit 之前同步触发。
+    /// 该事件不引入任何异步或 I/O，订阅方须只读借用并在返回前拷贝所需数据，绝对不构成伪异步。
+    /// </remarks>
+    public event Action<AudioFrame>? AudioDataAvailable
+    {
+        add => _audioDataSink += value;
+        remove => _audioDataSink -= value;
+    }
+
+    /// <inheritdoc />
     public async Task OpenAsync(IMediaSource source, CancellationToken ct = default)
     {
+        // V2-06 C1: 重置状态机（从 Error/Stopped 恢复到 Idle）后再进入 Opening
+        _controller.Reset();
         TransitionState(MediaState.Opening);
 
         try
@@ -179,7 +206,6 @@ public sealed class MediaPlayer : IMediaPlayer
             _sampleQueue = new SampleQueue();
             _synchronizer = new Synchronizer(_clock);
             _bufferManager = new BufferManager(_demuxer, _loggerFactory.CreateLogger<BufferManager>());
-            _controller = new PlaybackController();
 
             // 5. 创建解码器（延迟创建，需要 codec 信息）
             var videoTrack = _session.SelectedVideoTrack;
@@ -199,11 +225,13 @@ public sealed class MediaPlayer : IMediaPlayer
             // V2: 创建帧对象池并注入解码器（Session 级）
             _videoFramePool = new FramePool<VideoFrame>(
                 factory: static () => new VideoFrame(),
-                reset: static frame => frame.Reset(0, 0, default, null!, default, default, false),
+                reset: static frame => frame.Reset(0, 0, default, null, default, default, false),
                 maxSize: 16);
             _audioFramePool = new FramePool<AudioFrame>(
                 factory: static () => new AudioFrame(),
-                reset: null, // AudioFrame.Dispose 是 no-op，无需 reset
+                // V2-05: 零拷贝 AudioFrame 持有原生引用计数所有者，Return 时必须经
+                // Reset 释放旧所有者（原生引用计数减一），否则池内滞留帧会泄漏原生内存。
+                reset: static frame => frame.Reset(default, 0, 0, SampleFormat.S16, default, default, 0),
                 maxSize: 16);
 
             if (_videoDecoder is IFramePoolAware<VideoFrame> videoPoolAware)
@@ -225,7 +253,9 @@ public sealed class MediaPlayer : IMediaPlayer
                     _bufferManager.VideoPacketQueue, _videoDecoder, _videoRenderer,
                     _frameQueue, _synchronizer, _clock,
                     _loggerFactory.CreateLogger<VideoPipeline>(),
-                    _videoFramePool);
+                _videoFramePool,
+                _videoTransforms,
+                _videoTransformsReset);
             }
 
             if (_audioDecoder != null && _audioOutput != null && audioTrack != null)
@@ -234,7 +264,10 @@ public sealed class MediaPlayer : IMediaPlayer
                     _bufferManager.AudioPacketQueue, _audioDecoder, _audioOutput,
                     _sampleQueue, _synchronizer, _clock,
                     _loggerFactory.CreateLogger<AudioPipeline>(),
-                    _audioFramePool);
+                    _audioFramePool,
+                    _audioTransforms,
+                    _audioTransformsReset,
+                    audioDataSink: frame => _audioDataSink?.Invoke(frame));
             }
 
             // 9. 字幕轨道（条件创建，仅有字幕轨道时）
@@ -276,9 +309,11 @@ public sealed class MediaPlayer : IMediaPlayer
         {
             _logger.LogError(ex, "打开媒体源失败");
             await CleanupAsync();
+            var errorArgs = new MediaErrorEventArgs(
+                MediaErrorCode.SourceOpenFailed, "打开媒体源失败", ex, isFatal: true);
+            _controller.OnError(errorArgs); // V2-06 C1
             TransitionState(MediaState.Error);
-            ErrorOccurred?.Invoke(this, new MediaErrorEventArgs(
-                MediaErrorCode.SourceOpenFailed, "打开媒体源失败", ex, isFatal: true));
+            ErrorOccurred?.Invoke(this, errorArgs);
             throw;
         }
     }
@@ -495,16 +530,18 @@ public sealed class MediaPlayer : IMediaPlayer
 
     private void TransitionState(MediaState newState)
     {
-        MediaState oldState;
-        lock (_stateLock)
+        // V2-06 C1: 委托给 PlaybackController 管理状态转换的合法性与原子性
+        var oldState = _controller.CurrentState;
+        if (_controller.TransitionTo(newState))
         {
-            oldState = _state;
-            _state = newState;
+            if (oldState != newState)
+            {
+                StateChanged?.Invoke(this, new MediaStateChangedEventArgs(oldState, newState));
+            }
         }
-
-        if (oldState != newState)
+        else
         {
-            StateChanged?.Invoke(this, new MediaStateChangedEventArgs(oldState, newState));
+            _logger.LogWarning("忽略非法播放状态转换：{From} -> {To}", oldState, newState);
         }
     }
 

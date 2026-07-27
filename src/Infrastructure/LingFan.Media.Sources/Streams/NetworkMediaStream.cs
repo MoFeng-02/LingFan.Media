@@ -11,7 +11,8 @@ namespace LingFan.Media.Sources;
 /// <remarks>
 /// <para>非线程安全（IMediaStream 契约：ReadAsync/Seek 不可并发调用）。</para>
 /// <para>使用 HttpClient 以 ResponseHeadersRead 模式下载，支持 CancellationToken。</para>
-/// <para>HTTP 连接在首次 ReadAsync 时惰性建立，Close 后所有操作抛 ObjectDisposedException。</para>
+/// <para>HTTP 连接在 <see cref="ConnectAsync"/>（由 Demuxer.OpenAsync 等异步路径前置调用）时惰性建立，
+/// 之后同步 <see cref="Read"/> 仅做已连接流的逐块读取。Close 后所有操作抛 ObjectDisposedException。</para>
 /// <para>
 /// 套接字耗尽防护：常见场景（无 SSL 绕过）使用 <see cref="IHttpClientFactory"/> 获取池化 HttpClient，
 /// 由工厂管理 HttpMessageHandler 生命周期（定期回收连接池），避免频繁创建/释放 HttpClient 导致
@@ -118,15 +119,22 @@ public sealed class NetworkMediaStream : IMediaStream
         if (buffer.Length == 0)
             return 0;
 
-        // 首次读取时同步建立 HTTP 连接。
-        // EnsureConnectedAsync 返回 Task（非 ValueTask），
-        // Task.GetAwaiter().GetResult() 保证阻塞到完成。
+        // 同步边界（FFmpeg AVIO 回调）无法 await。建连必须前置到异步路径（ConnectAsync）。
+        // 此处不再硬阻塞（无 .GetAwaiter().GetResult()），未预建连即视为调用契约违例。
         if (_responseStream is null)
-            EnsureConnectedAsync(CancellationToken.None).GetAwaiter().GetResult();
+            throw new InvalidOperationException(
+                "网络流必须先调用 ConnectAsync 建立连接，再经同步 Read 读取（FFmpeg AVIO 原生回调为同步边界，无法 await）。");
 
-        int read = _responseStream!.Read(buffer);
+        int read = _responseStream.Read(buffer);
         _position += read;
         return read;
+    }
+
+    /// <inheritdoc/>
+    public Task ConnectAsync(CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_closed, this);
+        return EnsureConnectedAsync(ct);
     }
 
     /// <inheritdoc/>
@@ -174,7 +182,7 @@ public sealed class NetworkMediaStream : IMediaStream
     }
 
     /// <summary>
-    /// 惰性建立 HTTP 连接（首次 Read/ReadAsync 时调用）。
+    /// 惰性建立 HTTP 连接（由 <see cref="ConnectAsync"/> 在异步路径中调用，先于同步 Read）。
     /// </summary>
     private async Task EnsureConnectedAsync(CancellationToken ct)
     {

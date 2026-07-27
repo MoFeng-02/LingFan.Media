@@ -197,7 +197,9 @@ internal sealed class WasapiOutput : IAudioOutput
             if (hr >= 0)
             {
                 _audioClockPtr = pClock;
-                _audioClockGetPosition = ComVTable.Get<IAudioClock_GetPosition>(pClock, 2);
+                // IAudioClock vtable: IUnknown(0-2) + GetFrequency(slot0) + GetPosition(slot1) + GetCharacteristics(slot2)
+                // GetPosition 在 slot 1，索引必须为 1（此前误用 2 会调用 GetCharacteristics 返回垃圾值）
+                _audioClockGetPosition = ComVTable.Get<IAudioClock_GetPosition>(pClock, 1);
             }
             else
             {
@@ -240,95 +242,95 @@ internal sealed class WasapiOutput : IAudioOutput
 
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-            if (!_initialized || _audioClientPtr == IntPtr.Zero || _renderClientPtr == IntPtr.Zero)
-                throw new InvalidOperationException("WASAPI 输出尚未初始化，无法 Submit。");
+        if (!_initialized || _audioClientPtr == IntPtr.Zero || _renderClientPtr == IntPtr.Zero)
+            throw new InvalidOperationException("WASAPI 输出尚未初始化，无法 Submit。");
 
-            // 验证声道数匹配（管线应保证一致，不匹配是管线bug）
-            if (frame.Channels != _channels)
+        // 验证声道数匹配（管线应保证一致，不匹配是管线bug）
+        if (frame.Channels != _channels)
+        {
+            throw new ArgumentException(
+                $"音频帧声道数 {frame.Channels} 与输出配置 {_channels} 不匹配。", nameof(frame));
+        }
+
+        // 计算每样本字节数
+        int bytesPerSample = frame.SampleFormat switch
+        {
+            SampleFormat.S16 => 2,
+            SampleFormat.S32 => 4,
+            SampleFormat.F32 => 4,
+            _ => throw new NotSupportedException($"不支持的采样格式：{frame.SampleFormat}")
+        };
+
+        int sampleCount = frame.FrameCount * frame.Channels;
+        int expectedDataSize = sampleCount * bytesPerSample;
+
+        // 验证数据大小
+        if (frame.Data.Length < expectedDataSize)
+        {
+            throw new ArgumentException(
+                $"音频帧数据不足：期望 {expectedDataSize} 字节，实际 {frame.Data.Length} 字节。", nameof(frame));
+        }
+
+        // 等待缓冲区有足够空间（COM 背压）
+        WaitForBufferSpace((uint)frame.FrameCount);
+
+        // 获取 WASAPI 缓冲区指针
+        int hr = _renderClientGetBuffer!(_renderClientPtr, (uint)frame.FrameCount, out IntPtr pData);
+        Marshal.ThrowExceptionForHR(hr);
+
+        // GetBuffer 成功后必须调用 ReleaseBuffer，否则缓冲区永久锁定
+        // 即使拷贝失败也要释放（用0帧+SILENT标记）
+        bool releaseBufferCalled = false;
+        try
+        {
+            // 拷贝/转换 PCM 数据到 WASAPI 缓冲区
+            // 使用 Slice 确保对齐——frame.Data.Length 可能大于 expectedDataSize 且非 sizeof(T) 的倍数，
+            // MemoryMarshal.Cast 对非对齐长度会抛 ArgumentException
+            var validSrc = frame.Data.Span[..expectedDataSize];
+
+            unsafe
             {
-                throw new ArgumentException(
-                    $"音频帧声道数 {frame.Channels} 与输出配置 {_channels} 不匹配。", nameof(frame));
+                var dstPtr = (float*)pData;
+
+                if (frame.SampleFormat == SampleFormat.F32)
+                {
+                    // F32 → F32 直接拷贝
+                    var src = MemoryMarshal.Cast<byte, float>(validSrc);
+                    var dst = new Span<float>(dstPtr, sampleCount);
+                    src.CopyTo(dst);
+                }
+                else if (frame.SampleFormat == SampleFormat.S16)
+                {
+                    // S16 → F32 转换
+                    var src = MemoryMarshal.Cast<byte, short>(validSrc);
+                    var dst = new Span<float>(dstPtr, sampleCount);
+                    for (int i = 0; i < sampleCount; i++)
+                        dst[i] = src[i] / 32768.0f;
+                }
+                else if (frame.SampleFormat == SampleFormat.S32)
+                {
+                    // S32 → F32 转换
+                    var src = MemoryMarshal.Cast<byte, int>(validSrc);
+                    var dst = new Span<float>(dstPtr, sampleCount);
+                    for (int i = 0; i < sampleCount; i++)
+                        dst[i] = src[i] / 2147483648.0f;
+                }
             }
 
-            // 计算每样本字节数
-            int bytesPerSample = frame.SampleFormat switch
-            {
-                SampleFormat.S16 => 2,
-                SampleFormat.S32 => 4,
-                SampleFormat.F32 => 4,
-                _ => throw new NotSupportedException($"不支持的采样格式：{frame.SampleFormat}")
-            };
-
-            int sampleCount = frame.FrameCount * frame.Channels;
-            int expectedDataSize = sampleCount * bytesPerSample;
-
-            // 验证数据大小
-            if (frame.Data.Length < expectedDataSize)
-            {
-                throw new ArgumentException(
-                    $"音频帧数据不足：期望 {expectedDataSize} 字节，实际 {frame.Data.Length} 字节。", nameof(frame));
-            }
-
-            // 等待缓冲区有足够空间（COM 背压）
-            WaitForBufferSpace((uint)frame.FrameCount);
-
-            // 获取 WASAPI 缓冲区指针
-            int hr = _renderClientGetBuffer!(_renderClientPtr, (uint)frame.FrameCount, out IntPtr pData);
+            // 释放 WASAPI 缓冲区（写入完成）
+            hr = _renderClientReleaseBuffer!(_renderClientPtr, (uint)frame.FrameCount, 0);
+            releaseBufferCalled = true;
             Marshal.ThrowExceptionForHR(hr);
-
-            // GetBuffer 成功后必须调用 ReleaseBuffer，否则缓冲区永久锁定
-            // 即使拷贝失败也要释放（用0帧+SILENT标记）
-            bool releaseBufferCalled = false;
-            try
+        }
+        finally
+        {
+            // 如果拷贝或ReleaseBuffer抛异常，必须用0帧+SILENT释放缓冲区
+            if (!releaseBufferCalled)
             {
-                // 拷贝/转换 PCM 数据到 WASAPI 缓冲区
-                // 使用 Slice 确保对齐——frame.Data.Length 可能大于 expectedDataSize 且非 sizeof(T) 的倍数，
-                // MemoryMarshal.Cast 对非对齐长度会抛 ArgumentException
-                var validSrc = frame.Data.Span[..expectedDataSize];
-
-                unsafe
-                {
-                    var dstPtr = (float*)pData;
-
-                    if (frame.SampleFormat == SampleFormat.F32)
-                    {
-                        // F32 → F32 直接拷贝
-                        var src = MemoryMarshal.Cast<byte, float>(validSrc);
-                        var dst = new Span<float>(dstPtr, sampleCount);
-                        src.CopyTo(dst);
-                    }
-                    else if (frame.SampleFormat == SampleFormat.S16)
-                    {
-                        // S16 → F32 转换
-                        var src = MemoryMarshal.Cast<byte, short>(validSrc);
-                        var dst = new Span<float>(dstPtr, sampleCount);
-                        for (int i = 0; i < sampleCount; i++)
-                            dst[i] = src[i] / 32768.0f;
-                    }
-                    else if (frame.SampleFormat == SampleFormat.S32)
-                    {
-                        // S32 → F32 转换
-                        var src = MemoryMarshal.Cast<byte, int>(validSrc);
-                        var dst = new Span<float>(dstPtr, sampleCount);
-                        for (int i = 0; i < sampleCount; i++)
-                            dst[i] = src[i] / 2147483648.0f;
-                    }
-                }
-
-                // 释放 WASAPI 缓冲区（写入完成）
-                hr = _renderClientReleaseBuffer!(_renderClientPtr, (uint)frame.FrameCount, 0);
-                releaseBufferCalled = true;
-                Marshal.ThrowExceptionForHR(hr);
+                try { _renderClientReleaseBuffer!(_renderClientPtr, 0, WasapiInterop.AUDCLNT_BUFFERFLAGS_SILENT); }
+                catch { /* 尽力释放，忽略二次异常 */ }
             }
-            finally
-            {
-                // 如果拷贝或ReleaseBuffer抛异常，必须用0帧+SILENT释放缓冲区
-                if (!releaseBufferCalled)
-                {
-                    try { _renderClientReleaseBuffer!(_renderClientPtr, 0, WasapiInterop.AUDCLNT_BUFFERFLAGS_SILENT); }
-                    catch { /* 尽力释放，忽略二次异常 */ }
-                }
-            }
+        }
     }
 
     /// <inheritdoc/>

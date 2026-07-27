@@ -19,6 +19,16 @@ public interface IVideoProcessor
     bool IsEnabled { get; set; }
 
     /// <summary>
+    /// 重置处理器内部状态（Seek/Flush 后调用，V2-06 二次审计修复）。
+    /// </summary>
+    /// <remarks>
+    /// <para>所有权：有状态处理器（如 <see cref="FrameRateConverter"/> 持有的上一帧副本 _held）
+    /// 须在此释放，避免 Seek 后返回陈旧帧或跨播放会话滞留。</para>
+    /// <para>幂等、线程安全（由调用方在管线解码锁内调用）。</para>
+    /// </remarks>
+    void Reset();
+
+    /// <summary>
     /// 处理一帧视频。
     /// </summary>
     /// <param name="frame">输入帧（所有权转移：处理后输入帧被 Dispose）。</param>
@@ -27,5 +37,5 @@ public interface IVideoProcessor
     /// 所有权转移：输入 frame 被 Dispose，返回新 frame 传入下一个处理器。
     /// 当 <see cref="IsEnabled"/> 为 false 时直接返回输入帧（不 Dispose，不创建新帧）。
     /// </remarks>
-    VideoFrame Process(VideoFrame frame);
+    VideoFrame? Process(VideoFrame frame);
 }

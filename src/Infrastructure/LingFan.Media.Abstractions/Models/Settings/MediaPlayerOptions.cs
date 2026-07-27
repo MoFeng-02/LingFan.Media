@@ -1,11 +1,13 @@
-namespace LingFan.Media.Core;
+namespace LingFan.Media.Abstractions;
 
 /// <summary>
-/// 播放器默认配置选项。
+/// 播放器默认配置选项（契约层共享配置模型）。
 /// </summary>
 /// <remarks>
-/// <para>由 <see cref="MediaPlayerFactory"/> 读取，用于设置新创建播放器的默认值。</para>
-/// <para>在 Extensions 层可通过 <c>IOptions&lt;MediaPlayerOptions&gt;</c> 绑定配置。</para>
+/// <para>由 <see cref="LingFan.Media.Core.MediaPlayerFactory"/>（Core）读取，用于设置新创建播放器的默认值；
+/// 由宿主 DI 经 <c>IOptions&lt;MediaPlayerOptions&gt;</c> 绑定（Extensions 层 <c>AddLingFanMedia</c> 中注册）。</para>
+/// <para>置于 Abstractions 契约层：该配置同时被 Extensions（配置侧）与 Core（消费侧）使用，属多层共享的中立数据模型，
+/// 符合契约层“纯数据模型、零外部引用”准则（与 <see cref="AudioSettings"/> / <see cref="VideoSettings"/> 同列）。</para>
 /// </remarks>
 public sealed class MediaPlayerOptions
 {

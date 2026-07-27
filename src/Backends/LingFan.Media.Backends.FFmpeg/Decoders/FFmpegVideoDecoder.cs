@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using LingFan.Media.Backends.FFmpeg.Interop;
 using LingFan.Media.Backends.FFmpeg.SafeHandles;
 
 namespace LingFan.Media.Backends.FFmpeg.Decoders;
@@ -260,10 +261,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
     // ── 辅助方法 ──
 
-    /// <summary>从 AVFrame 创建 VideoFrame（软件解码路径：拷贝数据到独立 buffer）。</summary>
+    /// <summary>从 AVFrame 创建 VideoFrame。</summary>
     /// <remarks>
-    /// V2 池化：若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 VideoFrame 实例减少 GC。
-    /// SoftwareFrameResource 仍每次新建（ArrayPool 已优化底层 buffer），V2-05 考虑池化 Resource。
+    /// <para>V2 池化：若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 VideoFrame 实例减少 GC。</para>
+    /// <para>V2-05 安全零拷贝（A2）：packed BGRA/RGBA 帧走 av_frame_clone 引用计数路径——
+    /// 克隆帧共享原生 buffer（内部对所有 buf 做 av_buffer_ref），SoftwareFrameResource
+    /// 直接映射 data[0] 并携带实际 stride，Dispose 时经 SafeAVFrameHandle 释放引用。
+    /// YUV/planar 格式渲染层无法直接消费（Skia 仅支持 BGRA/RGBA），保持既有拷贝路径。</para>
     /// </remarks>
     private unsafe VideoFrame CreateVideoFrameFromAVFrame(AVFrame* avFrame)
     {
@@ -272,6 +276,66 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         AVPixelFormat pixFmt = (AVPixelFormat)avFrame->format;
         PixelFormat format = MapPixelFormatFromFFmpeg(pixFmt);
 
+        // V2-05: packed 4 字节格式优先零拷贝；失败（非引用计数帧/OOM）回退拷贝
+        SoftwareFrameResource? resource = null;
+        if (pixFmt is AVPixelFormat.AV_PIX_FMT_BGRA or AVPixelFormat.AV_PIX_FMT_RGBA)
+        {
+            resource = TryCreateZeroCopyResource(avFrame, width, height, format);
+        }
+        resource ??= CreateCopyResource(avFrame, width, height, pixFmt, format);
+
+        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        TimeSpan duration = avFrame->duration > 0
+            ? TimeSpan.FromTicks((long)(avFrame->duration * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
+
+        // V2 池化：从池中 Rent 帧壳并 Reset 填充数据，复用 VideoFrame 实例
+        var frame = _framePool?.Rent() ?? new VideoFrame();
+        frame.Reset(width, height, format, resource, timestamp, duration, keyFrame);
+        return frame;
+    }
+
+    /// <summary>
+    /// V2-05 零拷贝路径：av_frame_clone 引用计数共享原生 buffer，避免整帧拷贝。
+    /// </summary>
+    /// <returns>零拷贝资源；克隆失败（非引用计数帧/内存不足/异常布局）返回 null 由调用方回退拷贝。</returns>
+    private static unsafe SoftwareFrameResource? TryCreateZeroCopyResource(
+        AVFrame* avFrame, int width, int height, PixelFormat format)
+    {
+        if (width <= 0 || height <= 0)
+            return null; // 异常尺寸交由拷贝路径统一报错
+
+        // av_frame_clone = av_frame_alloc + av_frame_ref：共享所有 buf（引用计数 +1），不拷贝像素
+        AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
+        if (clone == null)
+            return null;
+
+        var owner = new SafeAVFrameHandle((IntPtr)clone);
+
+        int stride = clone->linesize[0];
+        if (stride <= 0 || clone->data[0] == null)
+        {
+            // 负 stride（自底向上布局）或空数据：不支持零拷贝，释放克隆回退
+            owner.Dispose();
+            return null;
+        }
+
+        // packed 4 字节格式：精确长度 = stride*(height-1) + 行有效载荷，绝不越界读取
+        int rowPayload = width * 4;
+        int length = stride * (height - 1) + rowPayload;
+        var memory = new NativeBufferMemoryManager((IntPtr)clone->data[0], length).Memory;
+        return new SoftwareFrameResource(width, height, format, memory, stride, owner);
+    }
+
+    /// <summary>
+    /// 拷贝路径（YUV/planar 及零拷贝回退）：av_image_copy_to_buffer 到 ArrayPool buffer。
+    /// </summary>
+    private static unsafe SoftwareFrameResource CreateCopyResource(
+        AVFrame* avFrame, int width, int height, AVPixelFormat pixFmt, PixelFormat format)
+    {
         // 使用 FFmpeg av_image_get_buffer_size 计算所需缓冲区大小
         int bufSize = ffmpeg.av_image_get_buffer_size(pixFmt, width, height, 1);
         if (bufSize <= 0)
@@ -303,18 +367,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             srcData, srcLinesize,
             pixFmt, width, height, 1);
 
-        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
-            : TimeSpan.Zero;
-        TimeSpan duration = avFrame->duration > 0
-            ? TimeSpan.FromTicks((long)(avFrame->duration * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
-            : TimeSpan.Zero;
-        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
-
-        // V2 池化：从池中 Rent 帧壳并 Reset 填充数据，复用 VideoFrame 实例
-        var frame = _framePool?.Rent() ?? new VideoFrame();
-        frame.Reset(width, height, format, resource, timestamp, duration, keyFrame);
-        return frame;
+        return resource;
     }
 
     private static AVCodecID MapVideoCodecToFFmpeg(VideoCodec codec) => codec switch

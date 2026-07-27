@@ -33,4 +33,46 @@ public sealed class VideoPipelineConfig
 
     /// <summary>后处理链（可能为空列表，不会为 null）。</summary>
     public IReadOnlyList<IVideoProcessor> Processors { get; init; } = Array.Empty<IVideoProcessor>();
+
+    /// <summary>
+    /// 将后处理链转换为 Core 管线可用的中立委托序列（V2-06 C5）。
+    /// </summary>
+    /// <remarks>
+    /// <para>每个 <see cref="IVideoProcessor"/> 包装为一个 <c>Func&lt;VideoFrame, VideoFrame?&gt;</c> 闭包（null = 丢弃帧）。</para>
+    /// <para>Core.VideoPipeline 仅消费中立 BCL 委托，不直接依赖 <c>LingFan.Media.Video</c>，保持分层倒置避免。</para>
+    /// <para>所有权转移：<see cref="IVideoProcessor.Process"/> 内部 Dispose 输入帧并返回新帧；
+    /// 禁用的处理器透传（闭包直接返回输入帧）。</para>
+    /// </remarks>
+    public IReadOnlyList<Func<VideoFrame, VideoFrame?>> ToTransforms()
+    {
+        if (Processors.Count == 0)
+            return Array.Empty<Func<VideoFrame, VideoFrame?>>();
+
+        var list = new List<Func<VideoFrame, VideoFrame?>>(Processors.Count);
+        foreach (var processor in Processors)
+        {
+            if (processor is null)
+                continue;
+            // 闭包捕获具体处理器，Core 看不到 IVideoProcessor 类型
+            list.Add(frame => processor.Process(frame));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// 重置后处理链（Seek/Flush 后调用，V2-06 二次审计修复）。
+    /// </summary>
+    /// <remarks>
+    /// <para>依次调用每个 <see cref="IVideoProcessor.Reset"/>，释放有状态处理器
+    /// （如 <see cref="FrameRateConverter"/> 的上一帧副本 _held），
+    /// 避免 Seek 后返回陈旧帧或跨会话滞留。</para>
+    /// <para>宿主/Extensions（V2-07/08 端到端接入）可将本方法作为
+    /// <c>Action</c>（BCL 中立类型）注入 Core <c>VideoPipeline</c> 的重置钩子，
+    /// 保持分层倒置（Core 不依赖 Video 模块）。</para>
+    /// </remarks>
+    public void ResetProcessors()
+    {
+        foreach (var processor in Processors)
+            processor?.Reset();
+    }
 }

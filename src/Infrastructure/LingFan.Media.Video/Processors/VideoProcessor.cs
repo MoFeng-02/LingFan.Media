@@ -47,12 +47,24 @@ public sealed class VideoProcessor
     /// 输入帧被 Dispose，返回新帧传入下一个处理器。
     /// 禁用的处理器透传输入帧。
     /// </remarks>
-    public VideoFrame Process(VideoFrame frame)
+    public VideoFrame? Process(VideoFrame frame)
     {
+        VideoFrame? current = frame;
         foreach (var processor in _processors)
         {
-            frame = processor.Process(frame);
+            current = processor.Process(current);
+            if (current is null) return null; // 处理器丢弃帧（已 Dispose 输入帧）
         }
-        return frame;
+        return current;
+    }
+
+    /// <summary>
+    /// 重置整条处理器链（Seek/Flush 后调用，V2-06 二次审计修复）。
+    /// </summary>
+    /// <remarks>依次调用每个处理器的 <see cref="IVideoProcessor.Reset"/>。</remarks>
+    public void Reset()
+    {
+        foreach (var processor in _processors)
+            processor?.Reset();
     }
 }

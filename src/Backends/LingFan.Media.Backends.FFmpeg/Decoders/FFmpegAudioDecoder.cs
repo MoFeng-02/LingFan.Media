@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using LingFan.Media.Backends.FFmpeg.Interop;
 using LingFan.Media.Backends.FFmpeg.SafeHandles;
 
 namespace LingFan.Media.Backends.FFmpeg.Decoders;
@@ -230,9 +231,13 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
 
     // ── 辅助方法 ──
 
-    /// <summary>从 AVFrame 创建 AudioFrame（V1 无重采样，直接拷贝 PCM 数据）。</summary>
+    /// <summary>从 AVFrame 创建 AudioFrame（V1 无重采样）。</summary>
     /// <remarks>
-    /// V2 池化：若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 AudioFrame 实例减少 GC。
+    /// <para>V2 池化：若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 AudioFrame 实例减少 GC。</para>
+    /// <para>V2-05 安全零拷贝（A2）：交错格式（S16/FLT 等）data[0] 即完整 PCM——
+    /// av_frame_clone 引用计数共享原生 buffer，AudioFrame 直接映射 data[0]（长度语义与拷贝路径
+    /// 一致：linesize[0]，消费方 WasapiOutput 已按 expectedDataSize 截取）。
+    /// 平面格式（FLTP 等）需拼接多平面为交错内存布局，保持既有拷贝路径。</para>
     /// </remarks>
     private unsafe AudioFrame CreateAudioFrameFromAVFrame(AVFrame* avFrame, AVCodecContext* ctx)
     {
@@ -246,45 +251,64 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         AVSampleFormat sampleFmt = ctx->sample_fmt;
         SampleFormat outFormat = MapSampleFormatFromFFmpeg(sampleFmt);
 
-        // 计算数据大小并拷贝
         bool isPlanar = ffmpeg.av_sample_fmt_is_planar(sampleFmt) != 0;
         int bytesPerSample = ffmpeg.av_get_bytes_per_sample(sampleFmt);
         if (bytesPerSample <= 0)
             throw new InvalidOperationException($"无效的音频采样格式: {sampleFmt}");
         int planeSize = frameCount * bytesPerSample; // 每个平面的数据大小
-        int dataSize;
-        byte[] buffer;
+
+        ReadOnlyMemory<byte> data;
+        IDisposable? dataOwner = null;
 
         if (!isPlanar)
         {
             // 交错格式（如 S16, FLT）：data[0] 包含所有数据
-            dataSize = avFrame->linesize[0];
+            int dataSize = avFrame->linesize[0];
             if (dataSize < 0)
                 throw new InvalidOperationException($"无效的音频行大小: {dataSize}");
-            buffer = new byte[dataSize];
-            Marshal.Copy((IntPtr)avFrame->data[0], buffer, 0, dataSize);
+
+            // V2-05 零拷贝：引用计数共享原生 buffer；克隆失败（非引用计数帧/OOM）回退拷贝
+            AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
+            if (clone != null && clone->data[0] != null)
+            {
+                var owner = new SafeAVFrameHandle((IntPtr)clone);
+                data = new NativeBufferMemoryManager((IntPtr)clone->data[0], dataSize).Memory;
+                dataOwner = owner;
+            }
+            else
+            {
+                if (clone != null)
+                {
+                    AVFrame* p = clone;
+                    ffmpeg.av_frame_free(&p);
+                }
+                var buffer = new byte[dataSize];
+                Marshal.Copy((IntPtr)avFrame->data[0], buffer, 0, dataSize);
+                data = buffer;
+            }
         }
         else
         {
-            // 平面格式（如 FLTP）：拼接各平面数据
-            dataSize = planeSize * channels;
+            // 平面格式（如 FLTP）：拼接各平面数据（原生为多段非连续内存，无法零拷贝映射为单段）
+            int dataSize = planeSize * channels;
             if (dataSize < 0)
                 throw new InvalidOperationException($"无效的音频数据大小: {dataSize}（frameCount={frameCount}, channels={channels}）");
-            buffer = new byte[dataSize];
+            var buffer = new byte[dataSize];
             for (int ch = 0; ch < channels; ch++)
             {
                 if (avFrame->extended_data[ch] == null) continue;
                 Marshal.Copy((IntPtr)avFrame->extended_data[ch], buffer, ch * planeSize, planeSize);
             }
+            data = buffer;
         }
 
         TimeSpan duration = sampleRate > 0
             ? TimeSpan.FromTicks((long)frameCount * TimeSpan.TicksPerSecond / sampleRate)
             : TimeSpan.Zero;
 
-        // V2 池化：从池中 Rent 帧壳并 Reset 填充数据
+        // V2 池化：从池中 Rent 帧壳并 Reset 填充数据（Reset 会释放旧的零拷贝所有者）
         var frame = _framePool?.Rent() ?? new AudioFrame();
-        frame.Reset(buffer, sampleRate, channels, outFormat, timestamp, duration, frameCount);
+        frame.Reset(data, sampleRate, channels, outFormat, timestamp, duration, frameCount, dataOwner);
         return frame;
     }
 

@@ -4,6 +4,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LingFan.Media.Avalonia;
 
@@ -51,6 +52,7 @@ public sealed class VideoView : Control, IRenderTarget
     private IVideoPresenter? _presenter;
     private IMediaPlayer? _player;
     private SubtitleFrame? _currentSubtitle;
+    private IServiceProvider? _services;
 
     #region StyledProperties
 
@@ -102,6 +104,17 @@ public sealed class VideoView : Control, IRenderTarget
     {
         get => GetValue(RendererTypeProperty);
         set => SetValue(RendererTypeProperty, value);
+    }
+
+    /// <summary>
+    /// 宿主注入的 DI 服务容器。供 VideoView 按 <see cref="RendererType"/> 解析已注册的
+    /// <see cref="IVideoPresenterFactory"/>（如 D3D11 GPU Presenter 桥接项目）。未注入时回退到内置
+    /// <see cref="SkiaVideoPresenter"/>。VideoView 不引用桥接项目，仅用 Type 对象比较，符合依赖倒置（D1 方案 B）。
+    /// </summary>
+    public IServiceProvider? Services
+    {
+        get => _services;
+        set => _services = value;
     }
 
     /// <summary>宽高比模式。</summary>
@@ -284,23 +297,36 @@ public sealed class VideoView : Control, IRenderTarget
             return;
 
         var rendererType = RendererType ?? typeof(SkiaVideoPresenter);
-        _presenter = CreatePresenter(rendererType);
+
+        IVideoPresenter? created = null;
+
+        // 优先通过 DI 注册的 IVideoPresenterFactory 按 RendererType 匹配（D1 方案 B）。
+        // VideoView 不引用桥接项目（如 Avalonia.D3D11），仅用 Type 对象比较，符合依赖倒置。
+        if (_services is not null)
+        {
+            foreach (var factory in _services.GetServices<IVideoPresenterFactory>())
+            {
+                if (factory.PresenterType == rendererType)
+                {
+                    created = factory.Create();
+                    break;
+                }
+            }
+        }
+
+        created ??= (rendererType == typeof(SkiaVideoPresenter))
+            ? new SkiaVideoPresenter()
+            : throw new NotSupportedException(
+                $"渲染器类型 {rendererType.Name} 未注册对应的 IVideoPresenterFactory，且非 SkiaVideoPresenter。" +
+                "请调用 AddD3D11Presenter()（或对应后端注册方法）以注册匹配的 IVideoPresenterFactory。");
+
+        _presenter = created;
         _presenter.Initialize(this);
 
         if (_presenter is SkiaVideoPresenter skia)
         {
             skia.AspectRatioMode = AspectRatioMode;
         }
-    }
-
-    private static IVideoPresenter CreatePresenter(Type rendererType)
-    {
-        if (rendererType == typeof(SkiaVideoPresenter))
-            return new SkiaVideoPresenter();
-
-        // 未来：D3D11/Vulkan/Metal/OpenGL 的 Presenter 适配器
-        throw new NotSupportedException(
-            $"渲染器类型 {rendererType.Name} 的 Presenter 尚未实现。V1 仅支持 SkiaVideoPresenter。");
     }
 
     private void OnRendererTypeChanged()

@@ -11,7 +11,7 @@ namespace LingFan.Media.Core;
 /// <para>所有方法均为同步 void（无 Task 返回，无 Resume）。</para>
 /// <para>Start() 同时处理首次启动和恢复暂停。Stop() 只调 cts.Cancel（fire-and-forget）。</para>
 /// <para>线程 join（5s 超时）在 MediaPlayer.DisposeAsync 第1步中处理，不在 Stop() 中。</para>
-/// <para>丢帧必须 Dispose（释放 GPU 资源）。Present 后 Dispose 帧（同步消费约定）。</para>
+/// <para>丢帧和 Present 后的帧通过 ReturnFrame 归还到 FramePool（V2）或 Dispose（V1 兼容）。</para>
 /// </remarks>
 public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 {
@@ -23,6 +23,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private readonly IMediaClock _clock;
     private readonly ILogger<VideoPipeline> _logger;
     private readonly IFramePool<VideoFrame>? _framePool;
+    private readonly IReadOnlyList<Func<VideoFrame, VideoFrame?>>? _processors;
+    private readonly Action? _processorReset;
+    private volatile bool _pendingProcessorReset;
 
     private CancellationTokenSource _cts = new();
     private Task? _pipelineTask;
@@ -52,6 +55,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// <param name="clock">媒体时钟。</param>
     /// <param name="logger">日志器。</param>
     /// <param name="framePool">帧对象池（V2，可为 null = 无池化回退 V1 行为）。</param>
+    /// <param name="processors">视频后处理链（V2-06 C5，可为 null = 透传）。
+    /// 中立 BCL 委托，由 Video 模块把 <c>IVideoProcessor</c> 链转换而来，Core 不依赖 Video 模块。</param>
     public VideoPipeline(
         Channel<MediaPacket> packetQueue,
         IVideoDecoder decoder,
@@ -60,7 +65,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         Synchronizer synchronizer,
         IMediaClock clock,
         ILogger<VideoPipeline> logger,
-        IFramePool<VideoFrame>? framePool = null)
+        IFramePool<VideoFrame>? framePool = null,
+        IReadOnlyList<Func<VideoFrame, VideoFrame?>>? processors = null,
+        Action? processorReset = null)
     {
         _packetQueue = packetQueue;
         _decoder = decoder;
@@ -70,6 +77,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _clock = clock;
         _logger = logger;
         _framePool = framePool;
+        _processors = processors;
+        _processorReset = processorReset;
     }
 
     /// <summary>
@@ -177,6 +186,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 {
                     _frameQueue.Clear(_framePool);
                     _decoder.Reset();
+                    _processorReset?.Invoke(); // V2-06 二次审计修复：重置有状态处理器（释放 _held 等）
                 }
                 finally
                 {
@@ -188,6 +198,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 _logger.LogError("视频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
                 _frameQueue.Clear(_framePool); // Channel 线程安全，仍然清空
                 _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
+                _pendingProcessorReset = true;   // 同上：有状态处理器延迟重置，避免与 Process 并发
             }
         }
         else
@@ -242,6 +253,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 {
                     _frameQueue.Clear(_framePool);
                     _decoder.Reset();
+                    _processorReset?.Invoke(); // V2-06 二次审计修复：重置有状态处理器（释放 _held 等）
                 }
                 finally
                 {
@@ -253,6 +265,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 _logger.LogError("视频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
                 _frameQueue.Clear(_framePool); // Channel 线程安全，仍然清空
                 _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
+                _pendingProcessorReset = true;   // 同上：有状态处理器延迟重置，避免与 Process 并发
             }
         }
         else
@@ -313,6 +326,14 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                         _pendingDecoderReset = false;
                     }
 
+                    // V2-06 二次审计修复延伸：解码锁超时期间 Flush 可能跳过处理器重置，
+                    // 此处补做，确保有状态处理器（如 FrameRateConverter 的 _held）必然复位
+                    if (_pendingProcessorReset)
+                    {
+                        _processorReset?.Invoke();
+                        _pendingProcessorReset = false;
+                    }
+
                     // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Flush 暂停）
                     if (_isPaused)
                     {
@@ -332,7 +353,18 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
                     if (decodedFrame != null)
                     {
-                        if (!_frameQueue.TryEnqueue(decodedFrame))
+                        // V2-06 C5: 经过视频后处理链（所有权转移：处理器 Dispose 输入帧并返回新帧）
+                        if (_processors != null)
+                        {
+                            foreach (var processor in _processors)
+                            {
+                                decodedFrame = processor(decodedFrame);
+                                if (decodedFrame == null)
+                                    break; // 处理器丢弃帧（已 Dispose 输入帧）
+                            }
+                        }
+
+                        if (decodedFrame != null && !_frameQueue.TryEnqueue(decodedFrame))
                             ReturnFrame(decodedFrame); // V2: 队列满，归还帧到池
                     }
                 }

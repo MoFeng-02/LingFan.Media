@@ -11,15 +11,18 @@ namespace LingFan.Media.Abstractions;
 /// 如果放在 Renderers 模块，Backends 无法访问。</para>
 /// <para>内存所有权：<see cref="Data"/> 表示资源拥有该内存。</para>
 /// <list type="bullet">
-/// <item>FFmpeg 软解路径: av_frame_get_buffer 分配 → 拷贝到 Memory&lt;byte&gt; → av_frame_free 释放原生帧</item>
+/// <item>FFmpeg 软解拷贝路径: av_frame_get_buffer 分配 → 拷贝到 Memory&lt;byte&gt; → av_frame_free 释放原生帧</item>
 /// <item>V2（L12）: ArrayPool 租借/归还，减少 GC 压力（60fps 每秒 60 个帧）</item>
-/// <item>Dispose 时: 归还 ArrayPool 租借的 buffer（若通过 ArrayPool 构造函数创建）</item>
+/// <item>V2-05 零拷贝路径: <see cref="Data"/> 直接映射原生引用计数 buffer，
+/// 生命周期由中立 <see cref="IDisposable"/> 所有者控制（本层不依赖任何后端类型）</item>
+/// <item>Dispose 时: 归还 ArrayPool buffer 或释放零拷贝所有者（原生引用计数减一）</item>
 /// </list>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，ArrayPool 为运行时内置 API。</para>
 /// </remarks>
 public sealed class SoftwareFrameResource : IFrameResource
 {
     private byte[]? _rentedBuffer;
+    private IDisposable? _dataOwner;
     private bool _disposed;
 
     /// <inheritdoc/>
@@ -31,8 +34,15 @@ public sealed class SoftwareFrameResource : IFrameResource
     /// <inheritdoc/>
     public PixelFormat Format { get; }
 
-    /// <summary>CPU 内存数据（拥有所有权，底层由 ArrayPool 或外部提供）。</summary>
+    /// <summary>CPU 内存数据（拥有所有权，底层由 ArrayPool、外部或原生引用计数 buffer 提供）。</summary>
     public Memory<byte> Data { get; }
+
+    /// <summary>
+    /// 平面 0 的行字节数（stride）。<c>0</c> 表示未指定——数据为紧凑布局（宽度 × 每像素字节数），
+    /// 兼容历史构造函数。零拷贝路径（V2-05）传入原生 buffer 的实际 stride，
+    /// 可能因对齐填充大于紧凑行宽，渲染方须按行拷贝。
+    /// </summary>
+    public int Stride { get; }
 
     /// <inheritdoc/>
     public bool IsDisposed => _disposed;
@@ -74,7 +84,32 @@ public sealed class SoftwareFrameResource : IFrameResource
         // _rentedBuffer = null，Dispose 时不归还 ArrayPool
     }
 
-    /// <summary>释放内存资源（归还 ArrayPool 租借的 buffer）。</summary>
+    /// <summary>
+    /// 零拷贝构造（V2-05）：<paramref name="data"/> 直接映射原生引用计数 buffer，
+    /// 生命周期由 <paramref name="dataOwner"/> 控制。
+    /// </summary>
+    /// <param name="width">帧宽度（像素）。</param>
+    /// <param name="height">帧高度（像素）。</param>
+    /// <param name="format">像素格式。</param>
+    /// <param name="data">映射原生内存的数据视图（不经拷贝）。</param>
+    /// <param name="stride">平面 0 的行字节数（原生 buffer 实际 stride，可能含对齐填充）。</param>
+    /// <param name="dataOwner">
+    /// 原生内存所有者（中立 <see cref="IDisposable"/>，后端传入引用计数句柄）。
+    /// Dispose 时释放该所有者，原生引用计数减一。所有者释放后不得再访问 <see cref="Data"/>。
+    /// </param>
+    public SoftwareFrameResource(int width, int height, PixelFormat format,
+        Memory<byte> data, int stride, IDisposable dataOwner)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(stride);
+        Width = width;
+        Height = height;
+        Format = format;
+        Data = data;
+        Stride = stride;
+        _dataOwner = dataOwner ?? throw new ArgumentNullException(nameof(dataOwner));
+    }
+
+    /// <summary>释放内存资源（归还 ArrayPool buffer 或释放零拷贝所有者）。</summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -85,6 +120,13 @@ public sealed class SoftwareFrameResource : IFrameResource
         {
             ArrayPool<byte>.Shared.Return(_rentedBuffer);
             _rentedBuffer = null;
+        }
+
+        // 释放零拷贝所有者（原生引用计数减一；仅零拷贝构造函数创建的实例）
+        if (_dataOwner != null)
+        {
+            _dataOwner.Dispose();
+            _dataOwner = null;
         }
     }
 }

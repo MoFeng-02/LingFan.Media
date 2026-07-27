@@ -61,6 +61,16 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <summary>字幕帧到达事件（null = 无活动字幕，UI 清除显示）。</summary>
     event EventHandler<SubtitleFrame?> SubtitleReceived;
 
+    /// <summary>
+    /// 音频采样数据到达事件（供 AudioVisualizer 等可视化器消费）。
+    /// 由音频管线在每帧提交给输出前<b>同步触发</b>（音频管线线程），
+    /// 订阅方<b>仅可只读借用</b>传入的 <see cref="AudioFrame"/>：须在其回调内同步拷贝所需数据
+    /// （PCM 字节 / 采样格式 / 采样率 / 声道数），<b>不得 Dispose、不得跨线程持有该帧引用</b>。
+    /// 未订阅时不触发，保持 V1 兼容（零额外开销）。
+    /// </summary>
+    /// <remarks>事件参数为契约层类型 <see cref="AudioFrame"/>，零外部引用合规。</remarks>
+    event Action<AudioFrame>? AudioDataAvailable;
+
     // IDisposable.Dispose() — 同步快速释放兜底
     // IAsyncDisposable.DisposeAsync() — 异步完整释放（推荐）
 }

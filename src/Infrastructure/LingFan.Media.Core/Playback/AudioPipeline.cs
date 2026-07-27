@@ -22,6 +22,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private readonly IMediaClock _clock;
     private readonly ILogger<AudioPipeline> _logger;
     private readonly IFramePool<AudioFrame>? _framePool;
+    private readonly IReadOnlyList<Func<AudioFrame, AudioFrame>>? _transforms;
+    private readonly Action? _effectReset;
+    private readonly Action<AudioFrame>? _audioDataSink;
+    private volatile bool _pendingEffectReset;
 
     private CancellationTokenSource _cts = new();
     private Task? _pipelineTask;
@@ -50,6 +54,11 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     /// <param name="clock">媒体时钟。</param>
     /// <param name="logger">日志器。</param>
     /// <param name="framePool">帧对象池（V2，可为 null = 无池化回退 V1 行为）。</param>
+    /// <param name="transforms">音频变换链（V2-06 C4/C6，可为 null = 透传）。
+    /// 中立 BCL 委托，由 Audio 模块把 <c>VolumeControl</c>/<c>IAudioEffect</c>/<c>AudioMixer</c> 转换而来，Core 不依赖 Audio 模块。</param>
+    /// <param name="effectReset">音频效果状态重置委托（V2-08.1，可为 null = 无）。
+    /// 中立 BCL 委托（<see cref="Action"/>），由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。
+    /// 在 Seek/Flush 的解码锁内调用，清除有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）的跨位置残留。</param>
     public AudioPipeline(
         Channel<MediaPacket> packetQueue,
         IAudioDecoder decoder,
@@ -58,7 +67,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         Synchronizer synchronizer,
         IMediaClock clock,
         ILogger<AudioPipeline> logger,
-        IFramePool<AudioFrame>? framePool = null)
+        IFramePool<AudioFrame>? framePool = null,
+        IReadOnlyList<Func<AudioFrame, AudioFrame>>? transforms = null,
+        Action? effectReset = null,
+        Action<AudioFrame>? audioDataSink = null)
     {
         _packetQueue = packetQueue;
         _decoder = decoder;
@@ -68,6 +80,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         _clock = clock;
         _logger = logger;
         _framePool = framePool;
+        _transforms = transforms;
+        _effectReset = effectReset;
+        _audioDataSink = audioDataSink;
     }
 
     /// <summary>
@@ -75,6 +90,8 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     private void ReturnFrame(AudioFrame frame)
     {
+        if (frame is null)
+            return; // 变换链丢弃帧时（已 Dispose 输入帧）
         if (_framePool != null)
             _framePool.Return(frame);
         else
@@ -176,6 +193,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 {
                     _sampleQueue.Clear(_framePool);
                     _decoder.Reset();
+                    _effectReset?.Invoke(); // V2-08.1: 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
                     _output.Flush();
                 }
                 finally
@@ -189,6 +207,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 _sampleQueue.Clear(_framePool);
                 _output.Flush();
                 _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
+                _pendingEffectReset = true;    // 同上：有状态效果延迟重置，避免与 Process 并发
             }
         }
         else
@@ -244,6 +263,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 {
                     _sampleQueue.Clear(_framePool);
                     _decoder.Reset();
+                    _effectReset?.Invoke(); // V2-08.1: 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
                     _output.Flush();
                 }
                 finally
@@ -257,6 +277,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 _sampleQueue.Clear(_framePool);
                 _output.Flush();
                 _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
+                _pendingEffectReset = true;    // 同上：有状态效果延迟重置，避免与 Process 并发
             }
         }
         else
@@ -318,6 +339,14 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                         _pendingDecoderReset = false;
                     }
 
+                    // V2-08.1: 解码锁超时期间 Flush 可能跳过效果重置，此处补做，
+                    // 确保有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）必然复位
+                    if (_pendingEffectReset)
+                    {
+                        _effectReset?.Invoke();
+                        _pendingEffectReset = false;
+                    }
+
                     // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Flush 暂停）
                     if (_isPaused)
                     {
@@ -365,8 +394,28 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     {
         try
         {
+            // V2-06 C4/C6: 经过音频变换链（音量/效果/混音，所有权转移）
+            if (_transforms != null)
+            {
+                foreach (var transform in _transforms)
+                {
+                    frame = transform(frame);
+                    if (frame == null)
+                    {
+                        _logger.LogWarning("音频变换链丢弃帧（返回 null），跳过提交");
+                        return; // 变换已 Dispose 输入帧
+                    }
+                }
+            }
+
             // 更新主时钟
             _synchronizer.OnAudioFrameSubmitted(frame);
+
+            // V2-09 U2: 在提交给输出前同步触发音频数据事件（供可视化器消费）。
+            // 同步调用且位于 Submit 之前，frame 仍存活（ReturnFrame 在 finally 之后），
+            // 订阅方（音频管线线程）须只读借用并同步拷贝所需数据。无 I/O、无 await，
+            // 纯内存操作，绝对不构成伪异步。
+            _audioDataSink?.Invoke(frame);
 
             // 提交给输出（V2: Output 不再 Dispose 帧，由管线归还到池）
             _output.Submit(frame);

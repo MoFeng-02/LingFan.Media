@@ -12,7 +12,7 @@ namespace LingFan.Media.Core;
 /// </remarks>
 public sealed class SampleQueue
 {
-    private readonly Channel<AudioFrame> _channel;
+    private Channel<AudioFrame> _channel;
     private readonly int _capacity;
     private readonly TimeSpan _maxDuration;
     private readonly long _maxBytes;
@@ -145,6 +145,29 @@ public sealed class SampleQueue
     public void Complete()
     {
         _channel.Writer.TryComplete();
+    }
+
+    /// <summary>
+    /// 重置队列（V2-06 C3）。将已 Complete 的队列恢复为可写入状态。
+    /// 用于 Seek after stream end 场景。
+    /// </summary>
+    /// <remarks>清空并释放所有残留帧（不持有帧对象池引用，直接 Dispose）。纯内存同步操作。</remarks>
+    public void Reset()
+    {
+        while (_channel.Reader.TryRead(out var frame))
+            frame.Dispose();
+
+        _channel = Channel.CreateBounded<AudioFrame>(new BoundedChannelOptions(_capacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _totalBytes = 0;
+        _firstTimestamp = TimeSpan.Zero;
+        _lastTimestamp = TimeSpan.Zero;
+        _hasTimestamps = false;
     }
 
     private bool IsFull()

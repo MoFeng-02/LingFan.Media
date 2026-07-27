@@ -12,7 +12,7 @@ namespace LingFan.Media.Core;
 /// </remarks>
 public sealed class SubtitlePacketQueue
 {
-    private readonly Channel<MediaPacket> _channel;
+    private Channel<MediaPacket> _channel;
 
     /// <summary>
     /// 初始化 <see cref="SubtitlePacketQueue"/> 的新实例。
@@ -64,5 +64,22 @@ public sealed class SubtitlePacketQueue
     public void Complete()
     {
         _channel.Writer.TryComplete();
+    }
+
+    /// <summary>
+    /// 重置队列（V2-06 C3）。将已 Complete 的队列恢复为可写入状态。
+    /// 用于 Seek after stream end 场景。
+    /// </summary>
+    public void Reset()
+    {
+        while (_channel.Reader.TryRead(out var packet))
+            packet.Dispose();
+
+        _channel = Channel.CreateBounded<MediaPacket>(new BoundedChannelOptions(100)
+        {
+            FullMode = BoundedChannelFullMode.DropWrite,
+            SingleReader = true,
+            SingleWriter = false
+        });
     }
 }

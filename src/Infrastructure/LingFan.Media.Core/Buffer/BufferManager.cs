@@ -16,8 +16,8 @@ public sealed class BufferManager : IBufferManager
 {
     private readonly IMediaDemuxer _demuxer;
     private readonly ILogger<BufferManager> _logger;
-    private readonly Channel<MediaPacket> _videoPacketQueue;
-    private readonly Channel<MediaPacket> _audioPacketQueue;
+    private Channel<MediaPacket> _videoPacketQueue;
+    private Channel<MediaPacket> _audioPacketQueue;
     private readonly SubtitlePacketQueue _subtitlePacketQueue;
 
     private readonly object _stateLock = new();
@@ -32,6 +32,9 @@ public sealed class BufferManager : IBufferManager
     private Task? _readerTask;
     private int _videoTrackIndex = -1;
     private int _audioTrackIndex = -1;
+
+    // V2-06 C3: 流结束后包队列已 Complete，标记以便 StartAsync 重建
+    private bool _completed;
 
     /// <summary>
     /// 初始化 <see cref="BufferManager"/> 的新实例。
@@ -147,6 +150,14 @@ public sealed class BufferManager : IBufferManager
 
         // 重建 CTS
         _cts = new CancellationTokenSource();
+
+        // V2-06 C3: Seek after stream end 场景——包队列已 Complete，
+        // 重建通道以恢复可写状态（同时重置字幕队列与缓冲状态）
+        if (_completed)
+        {
+            ResetQueues();
+            _completed = false;
+        }
 
         lock (_stateLock)
         {
@@ -267,9 +278,64 @@ public sealed class BufferManager : IBufferManager
     /// <summary>标记队列完成（流结束）。</summary>
     public void Complete()
     {
+        _completed = true;
         _videoPacketQueue.Writer.TryComplete();
         _audioPacketQueue.Writer.TryComplete();
         _subtitlePacketQueue.Complete();
+    }
+
+    /// <summary>
+    /// 重置所有包队列（V2-06 C3）。用于 Seek after stream end 场景：
+    /// 流结束后包队列已 Complete，重建通道以恢复可写状态。
+    /// </summary>
+    /// <remarks>
+    /// <para>纯内存同步操作（无 I/O）。重建视频/音频有界通道，并重置字幕队列与缓冲状态统计。</para>
+    /// <para>帧队列（FrameQueue/SampleQueue）不由本管理器持有，由 MediaPlayer 在 Seek 时
+    /// 经管线 Flush 清空重置，故此处不处理。</para>
+    /// </remarks>
+    public void ResetQueues()
+    {
+        // 终止旧通道写入（幂等）
+        _videoPacketQueue.Writer.TryComplete();
+        _audioPacketQueue.Writer.TryComplete();
+
+        // 排空并释放旧通道中残留的包（MediaPacket 可能持有原生 _dataOwner，
+        // 不释放会泄漏原生引用计数；读取线程已停止，无并发写入，TryRead 非阻塞安全）
+        while (_videoPacketQueue.Reader.TryRead(out var vPacket))
+            vPacket.Dispose();
+        while (_audioPacketQueue.Reader.TryRead(out var aPacket))
+            aPacket.Dispose();
+
+        // 重建有界通道（恢复可写，参数与原构造一致）
+        _videoPacketQueue = Channel.CreateBounded<MediaPacket>(
+            new BoundedChannelOptions(256)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = true
+            });
+
+        _audioPacketQueue = Channel.CreateBounded<MediaPacket>(
+            new BoundedChannelOptions(512)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = true
+            });
+
+        // 字幕队列重置（重建通道）
+        _subtitlePacketQueue.Reset();
+
+        // 重置缓冲状态
+        lock (_stateLock)
+        {
+            _state = BufferState.Empty;
+            _bufferedDuration = TimeSpan.Zero;
+            _bufferedBytes = 0;
+            _isReady = false;
+        }
+
+        OnBufferProgressChanged();
     }
 
     private void UpdateBufferStats(MediaPacket packet)

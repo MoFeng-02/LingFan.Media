@@ -8,6 +8,8 @@ namespace LingFan.Media.Abstractions;
 /// buffer 大小为 0 时返回 0。</para>
 /// <para>优先使用 <see cref="ReadAsync"/>（支持 CancellationToken，不阻塞线程）。
 /// 同步 <see cref="Read"/> 仅用于同步边界（如 FormatDetector 探测、FFmpeg AVIO 回调）。</para>
+/// <para>网络流必须在 <see cref="Read"/> 之前调用 <see cref="ConnectAsync"/> 建立底层连接——
+/// 同步边界（C 函数指针/同步探测）无法 await，故建连必须前置到异步路径。</para>
 /// </remarks>
 public interface IMediaStream
 {
@@ -18,7 +20,12 @@ public interface IMediaStream
     /// <param name="buffer">目标 buffer（Span 切片）。长度为 0 时返回 0。</param>
     /// <returns>实际读取的字节数，0 表示流结束。</returns>
     /// <exception cref="IOException">读取发生 I/O 错误。</exception>
-    /// <remarks>网络流会阻塞调用线程直到数据到达。仅在同步上下文使用。</remarks>
+    /// <exception cref="InvalidOperationException">网络流未先调用 <see cref="ConnectAsync"/> 建立连接。</exception>
+    /// <remarks>
+    /// 同步边界（C 函数指针 / 同步探测），无法 await。
+    /// 网络流必须在 <see cref="ConnectAsync"/> 之后调用，否则抛 <see cref="InvalidOperationException"/>。
+    /// 已连接后每帧同步读取会阻塞调用线程直到数据到达（FFmpeg 工作线程，非 UI）。仅在同步上下文使用。
+    /// </remarks>
     int Read(Span<byte> buffer);
 
     /// <summary>异步读取数据到指定 buffer。</summary>
@@ -26,6 +33,18 @@ public interface IMediaStream
     /// <param name="ct">取消令牌（网络流必须支持，本地文件可忽略）。</param>
     /// <returns>实际读取的字节数，0 表示流结束。</returns>
     ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default);
+
+    /// <summary>
+    /// 异步预建立底层连接（网络流建立 HTTP 连接；文件/透传流为无操作）。
+    /// </summary>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>连接建立完成的 Task。</returns>
+    /// <remarks>
+    /// <b>必须在同步 <see cref="Read"/> 之前调用</b>：FFmpeg AVIO 原生回调与 FormatDetector 同步探测
+    /// 均为同步边界，无法 await 建连。网络流若不预建连，<see cref="Read"/> 会抛
+    /// <see cref="InvalidOperationException"/>。
+    /// </remarks>
+    Task ConnectAsync(CancellationToken ct = default);
 
     /// <summary>流长度（不可求时为 -1）。</summary>
     long Length { get; }
