@@ -400,9 +400,12 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             case SyncAction.Present:
                 try
                 {
-                    // V2-12: 若 UI 订阅了视频帧 sink（Skia 软渲染模式），将帧投递给 sink
-                    // （UI Presenter 同步拷贝到 WriteableBitmap）。否则（D3D11 原生 GPU 模式）
-                    // 直接 Present 到已 Attach 的共享 SwapChain。二者互斥，由 VideoView 按 RendererType 决定订阅与否。
+                    // V2-12: _videoFrameSink 在生产路径中恒为非空 lambda（MediaPlayer 注入的转发+路由器），
+                    // lambda 内部按"UI 是否订阅 VideoFrameAvailable"路由——订阅（Skia 软渲染）→ 投递 sink；
+                    // 未订阅（D3D11 原生 GPU）→ 直接 Present 到已 Attach 的共享 SwapChain。二者互斥。
+                    // 此处 else 仅为 null-sink 调用方（测试/无 UI）兜底：直接 Present 到渲染器。
+                    // 注意：路由决策在 lambda 内完成，不可在此直接判 _videoFrameSink == null 来决定 D3D11——
+                    // 那样会让 D3D11 模式（无订阅方，但 lambda 非空）永不调用渲染器，导致视频不显示。
                     if (_videoFrameSink != null)
                         _videoFrameSink(frame);
                     else

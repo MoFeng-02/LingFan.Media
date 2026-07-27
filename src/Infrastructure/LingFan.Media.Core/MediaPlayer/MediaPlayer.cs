@@ -264,7 +264,17 @@ public sealed class MediaPlayer : IMediaPlayer
                 _videoFramePool,
                 _videoTransforms,
                 _videoTransformsReset,
-                videoFrameSink: frame => _videoFrameSink?.Invoke(frame));
+                videoFrameSink: frame =>
+                {
+                    // 视频帧路由（订阅时机无关）：lambda 在管线触发时读取当前 _videoFrameSink 字段——
+                    // UI 已订阅（Skia 软渲染）→ 投递 sink；未订阅（D3D11 原生 GPU）→ 直接 Present 到共享 SwapChain。
+                    // 注意：必须显式路由，不能仅转发——否则 D3D11 模式（无订阅方）会因 lambda 非空而
+                    // 永不调用渲染器，导致视频不显示（T19 回归修复）。
+                    if (_videoFrameSink != null)
+                        _videoFrameSink(frame);              // Skia 软渲染（UI 已订阅 VideoFrameAvailable）
+                    else
+                        _videoRenderer?.Present(frame);     // D3D11 原生 GPU（管线线程直接呈现到共享 SwapChain）
+                });
             }
 
             if (_audioDecoder != null && _audioOutput != null && audioTrack != null)
