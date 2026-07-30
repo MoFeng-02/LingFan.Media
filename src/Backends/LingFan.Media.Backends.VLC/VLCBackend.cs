@@ -15,6 +15,7 @@ public sealed class VLCBackend : IDisposable
 {
     private readonly ILogger<VLCBackend> _logger;
     private readonly LibVLC _libVLC;
+    private readonly VLCOptions _options;
     private bool _disposed;
 
     /// <summary>
@@ -26,11 +27,14 @@ public sealed class VLCBackend : IDisposable
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         ArgumentNullException.ThrowIfNull(options);
+        _options = options;
 
 
         // 构造 LibVLC 参数
         var args = new List<string>();
-        // TODO: 无头高并发场景需追加 --no-video --vout=dummy 等参数（对应 VLCDemuxer.StartPlayback 的 TODO）
+        // 无头兜底：禁止 VLC 打开原生视频窗口（不影响 SetVideoCallbacks 内存捕获路径）。
+        if (options.Headless)
+            args.Add("--vout=dummy");
 
         if (options.EnableHardwareDecoding)
         {
@@ -53,6 +57,11 @@ public sealed class VLCBackend : IDisposable
     /// 获取 LibVLC 引擎实例（供 VLCDemuxer 创建 Media/MediaPlayer 使用）。
     /// </summary>
     internal LibVLC LibVLC => _libVLC;
+
+    /// <summary>
+    /// 获取 VLC 配置选项（供 VLCDemuxer 读取是否启用硬件解码等开关）。
+    /// </summary>
+    internal VLCOptions Options => _options;
 
     /// <summary>
     /// 释放 LibVLC 引擎资源。

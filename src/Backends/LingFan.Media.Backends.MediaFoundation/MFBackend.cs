@@ -10,7 +10,7 @@ namespace LingFan.Media.Backends.MediaFoundation;
 /// 不持有任何媒体流/解码上下文，多播放器共享安全。</para>
 /// <para>构造函数和 Dispose 均为同步——<c>MFStartup</c>/<c>MFShutdown</c> 是快速 COM 调用，无 I/O 阻塞。</para>
 /// <para><b>仅 Windows 可用</b>：非 Windows 平台构造时抛 <see cref="PlatformNotSupportedException"/>。</para>
-/// <para>AOT 兼容：sealed 类，COM 互操作 [ComImport]，无反射。</para>
+/// <para>AOT 兼容：sealed 类，COM 互操作（MFStartup/MFShutdown 为纯 P/Invoke），无反射。</para>
 /// </remarks>
 public sealed class MFBackend : IDisposable
 {

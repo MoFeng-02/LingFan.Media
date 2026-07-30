@@ -3,6 +3,8 @@
   <PropertyGroup>
     <!-- MediaFoundation 仅 Windows 可用，程序集级标注使所有代码默认 Windows-only -->
     <SupportedOSPlatform>windows</SupportedOSPlatform>
+    <!-- MFVideoDecoder：Lock 指针拷贝 + MFT_OUTPUT_DATA_BUFFER 栈上取址需要 unsafe -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

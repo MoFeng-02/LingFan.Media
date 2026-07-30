@@ -27,5 +27,5 @@ public sealed class MediaMetadata
     public ContainerFormat ContainerFormat { get; init; }
 
     /// <summary>自定义字段。</summary>
-    public IReadOnlyDictionary<string, string> ExtraFields { get; init; } = new Dictionary<string, string>();
+    public IReadOnlyDictionary<string, string> ExtraFields { get; init; } = System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty;
 }

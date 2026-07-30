@@ -1,143 +1,177 @@
 namespace LingFan.Media.Backends.MediaFoundation.Interop;
 
 /// <summary>
-/// MediaFoundation COM 互操作接口定义（最小子集）。
+/// MediaFoundation 原始 vtable P/Invoke 委托与槽位辅助（AOT 兼容，零 [ComImport]/RCW）。
 /// </summary>
 /// <remarks>
-/// <para>仅定义 Demuxer（IMFSourceReader）和 Decoder（IMFTransform）所需的接口。</para>
-/// <para>所有接口使用 [ComImport] 属性，AOT 兼容（无反射）。</para>
-/// <para>仅 Windows 可用。非 Windows 平台不加载此模块。</para>
+/// <para>参照 WASAPI 的 <c>ComVTable</c> 模式：COM 对象以 <see cref="IntPtr"/> 持有，
+/// 通过 <see cref="MfVTable.Get{T}"/> 按绝对 vtable 槽位取函数指针；IUnknown 槽 0=QueryInterface、1=AddRef、2=Release，
+/// 接口方法从槽 3 起。释放用 <see cref="Marshal.Release"/>（与 WASAPI 一致，非 RCW 的 ReleaseComObject）。</para>
+/// <para>仅声明实际被调用的 vtable 方法，槽位按 Windows SDK 真实顺序排列；未调用的方法（如 IMF2DBuffer、
+/// IMFTransform 全量）无需声明——原始 vtable 委托模式按需按槽取函数指针，不要求声明所有槽。</para>
+/// <para>仅 Windows 可用。</para>
 /// </remarks>
 
-/// <summary>MF 属性存储接口（IMFAttributes 的子集）。</summary>
-[ComImport, Guid("2CD2D921-C447-44A7-A13C-4ADABFCFC726"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMFAttributes
-{
-    int GetItem(ref Guid key, ref PROPVARIANT value);
-    int SetItem(ref Guid key, ref PROPVARIANT value);
-    int DeleteItem(ref Guid key);
-    int GetUINT32(ref Guid key, out uint value);
-    int SetUINT32(ref Guid key, uint value);
-    int GetUINT64(ref Guid key, out ulong value);
-    int SetUINT64(ref Guid key, ulong value);
-    int GetDouble(ref Guid key, out double value);
-    int GetGuid(ref Guid key, out Guid value);
-    int SetGuid(ref Guid key, ref Guid value);
-    // ... 其他方法省略（仅使用上述子集）
-}
+// ── IMFSourceReader（IUnknown 之后：GetStreamSelection=3, SetStreamSelection=4, GetNativeMediaType=5, … ReadSample=10）──
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSourceReader_SetStreamSelection(IntPtr self, uint dwStreamIndex, [MarshalAs(UnmanagedType.Bool)] bool fSelected);
 
-/// <summary>MF 媒体类型接口（继承 IMFAttributes）。</summary>
-[ComImport, Guid("44AE0FA8-EA31-4109-8D2E-4CA465D11FC8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMFMediaType : IMFAttributes
-{
-    int GetMajorType(out Guid pguidMajorType);
-    int IsCompressedFormat([MarshalAs(UnmanagedType.Bool)] out bool pfCompressed);
-    int IsEqual(IMFMediaType pIMediaType, out uint pdwFlags);
-}
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSourceReader_GetNativeMediaType(IntPtr self, uint dwStreamIndex, int dwMediaTypeIndex, out IntPtr ppMediaType);
 
-/// <summary>MF 媒体缓冲区接口。</summary>
-[ComImport, Guid("045FA593-8799-42b8-BC8D-4442D00E59A5"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMFMediaBuffer
-{
-    int Lock(out IntPtr ppbBuffer, out uint pcbMaxLength, out uint pcbCurrentLength);
-    int Unlock();
-    int GetCurrentLength(out uint pcbCurrentLength);
-    int SetCurrentLength(uint cbCurrentLength);
-    int GetMaxLength(out uint pcbMaxLength);
-}
+internal delegate int IMFSourceReader_GetCurrentMediaType(IntPtr self, uint dwStreamIndex, out IntPtr ppMediaType);
 
-/// <summary>MF 2D 媒体缓冲区接口（视频帧用）。</summary>
-[ComImport, Guid("7F4275A7-D9C4-4d3c-9D48-4C0B6A4F6DD3"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMF2DBuffer
-{
-    int Lock2D(out IntPtr ppbScanline0, out int plPitch);
-    int Unlock2D();
-    int GetScanline0AndPitch(out IntPtr pbScanline0, out int lPitch);
-    int SetScanline0AndPitch(IntPtr pbScanline0, int lPitch);
-    int IsContiguousFormat([MarshalAs(UnmanagedType.Bool)] out bool pfIsContiguous);
-    int ContiguousLengthFromIMF2DBuffer(out uint pcbLength);
-    int ContiguousCopyTo(IMF2DBuffer pDestBuffer, uint destStride, out uint pcbWritten);
-    int ContiguousCopyFrom(IntPtr pSrcBuffer, uint srcStride, uint srcSize);
-}
+/// <summary>IMFSourceReader::SetCurrentPosition（绝对槽 8 → slotIndex 5，槽位表已审计核验）。
+/// guidTimeFormat 传 GUID_NULL 表示 100ns 单位；varPosition 为 PROPVARIANT(VT_I8)。</summary>
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSourceReader_SetCurrentPosition(IntPtr self, ref Guid guidTimeFormat, ref MfPropVariant varPosition);
 
-/// <summary>MF 采样接口（包含一个或多个缓冲区和时间戳）。</summary>
-[ComImport, Guid("C40F0045-2D8C-46f6-BC3C-48A80D5B4F6C"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMFSample
-{
-    int GetSampleFlags(out uint pdwSampleFlags);
-    int SetSampleFlags(uint dwSampleFlags);
-    int GetSampleTime(out long pllSampleTime);
-    int SetSampleTime(long llSampleTime);
-    int GetSampleDuration(out long pllSampleDuration);
-    int SetSampleDuration(long llSampleDuration);
-    int GetBufferCount(out uint pdwBufferCount);
-    int GetBufferByIndex(uint dwIndex, out IMFMediaBuffer ppBuffer);
-    int ConvertToContiguousBuffer(out IMFMediaBuffer ppBuffer);
-    int AddBuffer(IMFMediaBuffer pBuffer);
-    int RemoveBufferByIndex(uint dwIndex);
-    int RemoveAllBuffers();
-}
-
-/// <summary>MF 源读取器接口（用于解封装）。</summary>
-[ComImport, Guid("70AE66F2-C809-4E4F-8915-BDCB406B7993"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMFSourceReader
-{
-    int GetStreamSelection(uint dwStreamIndex, [MarshalAs(UnmanagedType.Bool)] out bool pfSelected);
-    int SetStreamSelection(uint dwStreamIndex, [MarshalAs(UnmanagedType.Bool)] bool fSelected);
-    int GetNativeMediaType(uint dwStreamIndex, int dwMediaTypeIndex, out IMFMediaType ppMediaType);
-    int GetCurrentMediaType(uint dwStreamIndex, out IMFMediaType ppMediaType);
-    int SetCurrentMediaType(uint dwStreamIndex, IntPtr pdwReserved, IMFMediaType pMediaType);
-    int ReadSample(uint dwStreamIndex, int dwControlFlags, uint dwStreamIndex2,
-        out int pdwActualStreamIndex, out int pdwStreamFlags, out long pllTimestamp, out IMFSample ppSample);
-    int SetStreamSelection2(uint dwStreamIndex, [MarshalAs(UnmanagedType.Bool)] bool fSelected);
-    int Flush(uint dwStreamIndex);
-    int GetServiceForStream(uint dwStreamIndex, ref Guid guidService, ref Guid riid, out IntPtr ppv);
-    int GetPresentationAttribute(uint dwStreamIndex, ref Guid guidAttribute, out PROPVARIANT pvarAttribute);
-}
-
-/// <summary>MF 转换接口（用于解码）。</summary>
-[ComImport, Guid("BF94C121-0B6E-4a71-BBA6-7D9A9B2C5C2E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IMFTransform
-{
-    int GetStreamLimits(out uint pdwInputMinimum, out uint pdwInputMaximum, out uint pdwOutputMinimum, out uint pdwOutputMaximum);
-    int GetStreamCount(out uint pdwInputStreams, out uint pdwOutputStreams);
-    int GetStreamIDs(uint dwInputIDArraySize, [Out] uint[] pInputIDs, uint dwOutputIDArraySize, [Out] uint[] pOutputIDs);
-    int GetInputStreamInfo(uint dwInputStreamID, out uint pdwFlags);
-    int GetOutputStreamInfo(uint dwOutputStreamID, out uint pdwFlags);
-    int GetInputAvailableType(uint dwInputStreamID, int dwTypeIndex, out IMFMediaType ppType);
-    int GetOutputAvailableType(uint dwOutputStreamID, int dwTypeIndex, out IMFMediaType ppType);
-    int SetInputType(uint dwInputStreamID, IMFMediaType pType, int dwFlags);
-    int SetOutputType(uint dwOutputStreamID, IMFMediaType pType, int dwFlags);
-    int GetInputCurrentType(uint dwInputStreamID, out IMFMediaType ppType);
-    int GetOutputCurrentType(uint dwOutputStreamID, out IMFMediaType ppType);
-    int GetInputStatus(uint dwInputStreamID, out uint pdwFlags);
-    int GetOutputStatus(uint dwOutputStreamID, out uint pdwFlags);
-    int SetInputBounds(long llLowerBound, long llUpperBound);
-    int ProcessEvent(uint dwInputStreamID, IntPtr pEvent);
-    int ProcessMessage(int eMessage, IntPtr ulParam);
-    int ProcessInput(uint dwInputStreamID, IMFSample pSample, int dwFlags);
-    int ProcessOutput(int dwFlags, uint cOutputBufferCount,
-        [In, Out] MFT_OUTPUT_DATA_BUFFER[] pOutputSamples, out int pdwStatus);
-}
-
-/// <summary>MFT 输出数据缓冲区结构。</summary>
+/// <summary>
+/// 最小化 PROPVARIANT（16 字节头 + 8 字节联合，x64 实际 24 字节）。仅用于 VT_I8（hVal）场景，
+/// 无指针成员时无需 PropVariantClear。布局与 Windows PROPVARIANT 二进制兼容（AOT 友好，blittable）。
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
-internal struct MFT_OUTPUT_DATA_BUFFER
+internal struct MfPropVariant
 {
-    public uint dwStreamID;
-    public IMFSample? pSample;
-    public int dwStatus;
-    public IntPtr pEvents;
+    internal ushort vt;        // VARENUM；VT_I8 = 20
+    internal ushort wReserved1;
+    internal ushort wReserved2;
+    internal ushort wReserved3;
+    internal long hVal;        // VT_I8 值（100ns 单位时间戳）
+
+    internal const ushort VT_I8 = 20;
 }
 
-/// <summary>PROPVARIANT 简化结构（用于 IMFAttributes）。</summary>
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSourceReader_ReadSample(IntPtr self, uint dwStreamIndex, int dwControlFlags,
+    out int pdwActualStreamIndex, out int pdwStreamFlags, out long pllTimestamp, out IntPtr ppSample);
+
+// ── IMFMediaType（继承 IMFAttributes 30 方法（slotIndex 0~29，其中 GetUINT32=4, GetUINT64=5, GetGUID=7）；
+//     自有方法：GetMajorType=30, IsCompressedFormat=31, IsEqual=32, GetRepresentation=33, FreeRepresentation=34）──
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFMediaType_GetMajorType(IntPtr self, out Guid pguidMajorType);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFMediaType_GetUINT32(IntPtr self, ref Guid guidKey, out uint punValue);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFMediaType_GetUINT64(IntPtr self, ref Guid guidKey, out ulong punValue);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFMediaType_GetGuid(IntPtr self, ref Guid guidKey, out Guid pguidValue);
+
+// ── IMFSample.ConvertToContiguousBuffer（slotIndex=38，运行时已验证；见下方 IMFSample 槽位说明）──
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSample_ConvertToContiguousBuffer(IntPtr self, out IntPtr ppBuffer);
+
+// ── IMFMediaBuffer（IUnknown 之后：Lock=3, Unlock=4, GetCurrentLength=5）──
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFMediaBuffer_Lock(IntPtr self, out IntPtr ppbBuffer, out uint pcbMaxLength, out uint pcbCurrentLength);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFMediaBuffer_Unlock(IntPtr self);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFMediaBuffer_GetCurrentLength(IntPtr self, out uint pcbCurrentLength);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFMediaBuffer_SetCurrentLength(IntPtr self, uint cbCurrentLength);
+
+// ── IMFAttributes（继承 IUnknown；slotIndex 按 mfobjects.idl 声明顺序：GetItem=0, GetItemType=1, CompareItem=2, Compare=3,
+//     GetUINT32=4, GetUINT64=5, GetDouble=6, GetGUID=7, GetStringLength=8, GetString=9, GetAllocatedString=10,
+//     GetBlobSize=11, GetBlob=12, GetAllocatedBlob=13, GetUnknown=14, SetItem=15, DeleteItem=16, DeleteAllItems=17,
+//     SetUINT32=18, SetUINT64=19, SetDouble=20, SetGUID=21, SetString=22, SetBlob=23, SetUnknown=24,
+//     LockStore=25, UnlockStore=26, GetCount=27, GetItemByIndex=28, CopyAllItems=29（共 30 方法）。
+//     锚点：GetUINT64=5、SetGUID=21 已本机运行时验证（2026-07-29）。⚠️ 早期注释误写 SetUINT64=13/SetGUID=14，勿回退。──
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFAttributes_SetUINT64(IntPtr self, ref Guid guidKey, ulong unValue);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFAttributes_SetGUID(IntPtr self, ref Guid guidKey, ref Guid guidValue);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFAttributes_SetBlob(IntPtr self, ref Guid guidKey, IntPtr pbBuf, uint cbBufSize);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFAttributes_GetBlobSize(IntPtr self, ref Guid guidKey, out uint pcbBlobSize);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFAttributes_GetBlob(IntPtr self, ref Guid guidKey, IntPtr pBuf, uint cbBufSize);
+
+// ── IMFTransform（IUnknown 之后，vtable 顺序见 Windows SDK mftransform.h；下列数字为 MfVTable.Get 的 slotIndex）：
+//     GetOutputStreamInfo=4, SetInputType=11, SetOutputType=12, GetOutputCurrentType=14, GetInputStatus=15,
+//     ProcessMessage=19, ProcessInput=20, ProcessOutput=21 ──
 [StructLayout(LayoutKind.Sequential)]
-internal struct PROPVARIANT
+internal struct MftOutputStreamInfo
 {
-    public ushort vt;
-    public ushort wReserved1;
-    public ushort wReserved2;
-    public ushort wReserved3;
-    public IntPtr data1;
-    public IntPtr data2;
+    public uint dwFlags;     // MFT_OUTPUT_STREAM_* 标志（0x100 = PROVIDES_SAMPLES）
+    public uint cbSize;      // 输出 sample 所需最小字节数
+    public uint cbAlignment; // 内存对齐要求
+}
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_GetOutputStreamInfo(IntPtr self, uint dwOutputStreamID, out MftOutputStreamInfo pStreamInfo);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_GetOutputAvailableType(IntPtr self, uint dwOutputStreamID, uint dwTypeIndex, out IntPtr ppType);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_SetInputType(IntPtr self, uint dwInputStreamID, IntPtr pInputType, uint dwFlags);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_SetOutputType(IntPtr self, uint dwOutputStreamID, IntPtr pOutputType, uint dwFlags);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_GetInputStatus(IntPtr self, uint dwInputStreamID, out uint pdwFlags);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_ProcessMessage(IntPtr self, int eMessage, nuint ulParam);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_ProcessInput(IntPtr self, uint dwInputStreamID, IntPtr pSample, uint dwFlags);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_ProcessOutput(IntPtr self, uint dwFlags, uint cOutputBufferCount,
+    IntPtr pOutputBuffers, out uint pdwStatus);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFTransform_GetOutputCurrentType(IntPtr self, uint dwOutputStreamID, out IntPtr ppType);
+
+// ── IMFSample（继承 IMFAttributes，其 30 个方法占 slotIndex 0~29；IMFSample 自有方法按 mfobjects.idl 声明顺序：
+//     GetSampleFlags=30, SetSampleFlags=31, GetSampleTime=32, SetSampleTime=33, GetSampleDuration=34, SetSampleDuration=35,
+//     GetBufferCount=36, GetBufferByIndex=37, ConvertToContiguousBuffer=38, AddBuffer=39, RemoveBufferByIndex=40,
+//     RemoveAllBuffers=41, GetTotalLength=42, CopyToBuffer=43。
+//     锚点：ConvertToContiguousBuffer=38、AddBuffer=39、GetBufferCount=36、Get/SetSampleTime=32/33、Get/SetSampleDuration=34/35
+//     均已本机运行时验证（2026-07-29）。⚠️ 早期注释按"GetDuration/GetAttributes/GetStreamID"等臆测顺序推出 AddBuffer=44/
+//     ConvertToContiguousBuffer=48，全错——IMFSample 没有那些方法，勿回退。──
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSample_GetSampleTime(IntPtr self, out long pllTimeStamp);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSample_SetSampleTime(IntPtr self, long llTimeStamp);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSample_GetSampleDuration(IntPtr self, out long pllDuration);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSample_SetSampleDuration(IntPtr self, long llDuration);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSample_GetBufferByIndex(IntPtr self, uint dwBufferIndex, out IntPtr ppBuffer);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate int IMFSample_AddBuffer(IntPtr self, IntPtr pBuffer);
+
+/// <summary>
+/// 从 COM 接口指针读取第 (3 + slotIndex) 个 vtable 槽位的函数指针并转为强类型委托。
+/// 接口方法槽位从 3（IUnknown 之后）起；IUnknown 的 Release 在槽 2（slotIndex=-1）。
+/// </summary>
+internal static class MfVTable
+{
+    public static TDelegate Get<TDelegate>(IntPtr comPtr, int slotIndex) where TDelegate : Delegate
+    {
+        IntPtr vtable = Marshal.ReadIntPtr(comPtr);
+        IntPtr methodPtr = Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
+        return Marshal.GetDelegateForFunctionPointer<TDelegate>(methodPtr);
+    }
 }

@@ -112,10 +112,45 @@ public sealed class AudioVisualizer : Control
         if (change.Property == PlayerProperty)
         {
             if (change.OldValue is IMediaPlayer oldPlayer)
-                oldPlayer.AudioDataAvailable -= OnAudioFrame;
+                UnsubscribeAudio(oldPlayer);
             if (change.NewValue is IMediaPlayer newPlayer)
-                newPlayer.AudioDataAvailable += OnAudioFrame;
+                SubscribeAudio(newPlayer);
         }
+    }
+
+    /// <inheritdoc/>
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        // UI-2：控件挂回视觉树时若已绑定播放器，重新订阅音频事件（Detach 时会退订）
+        if (Player is IMediaPlayer player)
+            SubscribeAudio(player);
+    }
+
+    /// <inheritdoc/>
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        // UI-2：控件脱离视觉树时退订音频事件，避免播放器通过事件处理器持有本控件导致强引用泄露
+        if (Player is IMediaPlayer player)
+            UnsubscribeAudio(player);
+    }
+
+    /// <summary>
+    /// 订阅音频数据事件（先退订再订阅，幂等，防止重复订阅导致一帧触发多次）。
+    /// </summary>
+    private void SubscribeAudio(IMediaPlayer player)
+    {
+        player.AudioDataAvailable -= OnAudioFrame;
+        player.AudioDataAvailable += OnAudioFrame;
+    }
+
+    /// <summary>
+    /// 退订音频数据事件。
+    /// </summary>
+    private void UnsubscribeAudio(IMediaPlayer player)
+    {
+        player.AudioDataAvailable -= OnAudioFrame;
     }
 
     /// <summary>

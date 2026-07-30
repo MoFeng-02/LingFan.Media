@@ -23,6 +23,8 @@ file sealed class MemoryMediaStream : IMediaStream
     }
     public bool CanSeek => true;
 
+    public string? Location => null;
+
     public int Read(Span<byte> buffer)
     {
         if (_position >= _data.Length)

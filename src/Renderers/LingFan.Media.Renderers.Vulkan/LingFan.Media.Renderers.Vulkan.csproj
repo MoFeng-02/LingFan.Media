@@ -1,13 +1,26 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
   <ItemGroup>
+    <!-- A-L1: ILogger/ILoggerFactory 为本项目直接使用的类型，必须显式声明，
+         不能依赖 Extensions 的传递依赖（重构 Extensions 时会编译断裂） -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
     <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
     <ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
+  </ItemGroup>
+
+  <!-- VK-ZERO 单元测试：暴露 internal 成员给 Vulkan 测试工程驱动零拷贝 blit 路径 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="LingFan.Media.Renderers.Vulkan.Tests" />
   </ItemGroup>
 
 </Project>

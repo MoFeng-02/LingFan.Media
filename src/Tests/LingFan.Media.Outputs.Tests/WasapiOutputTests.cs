@@ -3,6 +3,10 @@ using System.Runtime.Versioning;
 using FluentAssertions;
 using LingFan.Media.Abstractions;
 using LingFan.Media.Outputs.Wasapi;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+using Xunit.Sdk;
 
 namespace LingFan.Media.Outputs.Tests;
 
@@ -518,6 +522,49 @@ public class WasapiOutputTests
                 Marshal.DestroyStructure<WAVEFORMATEX>(Pointer);
                 Marshal.FreeHGlobal(Pointer);
             }
+        }
+    }
+
+    // ── 无头冒烟测试（V2-13 W1 待开发）──
+
+    /// <summary>
+    /// 无 UI 环境下 WASAPI 生命周期冒烟：InitializeAsync → Initialize → Submit(静音帧) → Dispose。
+    /// WASAPI 使用默认音频端点（无需窗口句柄），故无头环境可初始化；
+    /// 当无音频端点、或设备不支持请求格式（CI 容器/无声卡/受限声卡）时跳过，而非失败。
+    /// </summary>
+    [Fact]
+    public async Task Headless_InitializeSubmitDispose_DefaultEndpoint()
+    {
+        var output = new WasapiOutput(new WasapiOptions(), NullLogger<WasapiOutput>.Instance);
+
+        try
+        {
+            await output.InitializeAsync(TestContext.Current.CancellationToken);
+            output.Initialize(44100, 2);
+        }
+        catch (Exception ex) when (
+            ex is COMException
+            or InvalidOperationException
+            or PlatformNotSupportedException
+            or NotSupportedException)
+        {
+            // 无音频端点 / 设备不支持请求格式（无头/CI/受限声卡环境）→ 跳过，
+            // 不在 CI 中制造虚假失败
+            Assert.Skip(
+                $"无音频端点或设备不支持请求格式（无头/CI 环境），跳过 WASAPI 无头冒烟测试：{ex.Message}");
+        }
+
+        try
+        {
+            // 1 帧静音 F32（2 声道 × 4 字节）
+            var silent = new byte[2 * 4];
+            var frame = new AudioFrame(
+                silent, 44100, 2, SampleFormat.F32, TimeSpan.Zero, TimeSpan.Zero, 1);
+            output.Submit(frame);
+        }
+        finally
+        {
+            output.Dispose();
         }
     }
 }

@@ -157,27 +157,39 @@ internal sealed class D3D11TextureResource : IGpuTextureResource
                 int rowPitch = (int)mapped.RowPitch;
                 int uvStart = h * rowPitch;
                 int total = (h + h / 2) * rowPitch;
-                var outData = new byte[h * destStride];
-
-                ReadOnlySpan<byte> src = new ReadOnlySpan<byte>(mapped.DataPointer.ToPointer(), total);
-
-                switch (Format)
+                // B-CTR2: ArrayPool 租借替代每帧 new byte[]（1080p BGRA ≈ 8MB/帧，
+                // 30fps 下每秒 240MB LOH 分配）。GpuTextureReadback 池化构造接管归还责任，
+                // 消费方 using Dispose 时自动 Return。
+                int dataLen = h * destStride;
+                var outData = System.Buffers.ArrayPool<byte>.Shared.Rent(dataLen);
+                try
                 {
-                    case PixelFormat.BGRA32:
-                        CopyBgraRows(src, outData, w, h, rowPitch, destStride, swapRB: false);
-                        break;
-                    case PixelFormat.RGBA32:
-                        CopyBgraRows(src, outData, w, h, rowPitch, destStride, swapRB: true);
-                        break;
-                    case PixelFormat.NV12:
-                        Nv12ToBgra(src, outData, w, h, rowPitch, uvStart, destStride);
-                        break;
-                    default:
-                        throw new NotSupportedException(
-                            $"GPU 纹理回退暂不支持像素格式 {Format}（仅 BGRA32/RGBA32/NV12）。");
-                }
+                    ReadOnlySpan<byte> src = new ReadOnlySpan<byte>(mapped.DataPointer.ToPointer(), total);
 
-                return new GpuTextureReadback(w, h, PixelFormat.BGRA32, outData, destStride);
+                    switch (Format)
+                    {
+                        case PixelFormat.BGRA32:
+                            CopyBgraRows(src, outData, w, h, rowPitch, destStride, swapRB: false);
+                            break;
+                        case PixelFormat.RGBA32:
+                            CopyBgraRows(src, outData, w, h, rowPitch, destStride, swapRB: true);
+                            break;
+                        case PixelFormat.NV12:
+                            Nv12ToBgra(src, outData, w, h, rowPitch, uvStart, destStride);
+                            break;
+                        default:
+                            throw new NotSupportedException(
+                                $"GPU 纹理回退暂不支持像素格式 {Format}（仅 BGRA32/RGBA32/NV12）。");
+                    }
+
+                    return new GpuTextureReadback(w, h, PixelFormat.BGRA32, outData, destStride, dataLen);
+                }
+                catch
+                {
+                    // 转换失败时归还租借数组（成功路径的归还责任已移交 GpuTextureReadback）
+                    System.Buffers.ArrayPool<byte>.Shared.Return(outData);
+                    throw;
+                }
             }
             finally
             {

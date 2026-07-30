@@ -48,5 +48,6 @@
     <Project Path="src/Tests/LingFan.Media.IntegrationTests/LingFan.Media.IntegrationTests.csproj" />
     <Project Path="src/Tests/LingFan.Media.Renderers.D3D11.Tests/LingFan.Media.Renderers.D3D11.Tests.csproj" />
     <Project Path="src/Tests/LingFan.Media.GpuPresenter.Tests/LingFan.Media.GpuPresenter.Tests.csproj" />
+    <Project Path="src/Tests/LingFan.Media.Backends.MediaFoundation.Tests/LingFan.Media.Backends.MediaFoundation.Tests.csproj" />
   </Folder>
 </Solution>

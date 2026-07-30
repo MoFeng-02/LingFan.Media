@@ -1,5 +1,3 @@
-using LingFan.Media.Backends.MediaFoundation.Interop;
-
 namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 
 /// <summary>
@@ -19,7 +17,6 @@ namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 internal sealed class MFAudioDecoder : IAudioDecoder
 {
     private readonly ILogger<MFAudioDecoder> _logger;
-    private IMFTransform? _transform;
     private bool _disposed;
 
     public MFAudioDecoder(ILogger<MFAudioDecoder> logger)
@@ -95,17 +92,7 @@ internal sealed class MFAudioDecoder : IAudioDecoder
     /// <inheritdoc/>
     public void Reset()
     {
-        if (_transform != null)
-        {
-            try
-            {
-                _transform.ProcessMessage(MFInterop.MFTMessageType.MFT_COMMAND_FLUSH, IntPtr.Zero);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                _logger.LogWarning(ex, "MF 音频解码器 Reset 异常");
-            }
-        }
+        // MF 解码由 SourceReader 内部完成，无独立 MFT 句柄需要 flush；Reset 为无操作。
     }
 
     /// <inheritdoc/>
@@ -113,19 +100,6 @@ internal sealed class MFAudioDecoder : IAudioDecoder
     {
         if (_disposed) return;
         _disposed = true;
-
-        if (_transform != null)
-        {
-            try
-            {
-                Marshal.ReleaseComObject(_transform);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                _logger.LogWarning(ex, "IMFTransform 释放异常");
-            }
-            _transform = null;
-        }
     }
 
     /// <inheritdoc/>

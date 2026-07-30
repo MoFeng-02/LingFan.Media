@@ -12,6 +12,7 @@ namespace LingFan.Media.Sources;
 public sealed class FileMediaStream : IMediaStream
 {
     private readonly FileStream _stream;
+    private readonly string _path;
     private bool _closed;
 
     /// <inheritdoc/>
@@ -44,6 +45,9 @@ public sealed class FileMediaStream : IMediaStream
         }
     }
 
+    /// <inheritdoc/>
+    public string Location => _path;
+
     /// <summary>
     /// 初始化 <see cref="FileMediaStream"/> 的新实例并打开文件流。
     /// </summary>
@@ -58,7 +62,8 @@ public sealed class FileMediaStream : IMediaStream
             FileAccess.Read,
             FileShare.Read,
             bufferSize: 81920,
-            useAsync: true);
+            useAsync: false); // 同步 Read（IMediaStream 主路径为 demuxer 同步读取）；false 避免 overlapped I/O 开销（同步为主时更优）
+        _path = source.Path;
     }
 
     /// <inheritdoc/>

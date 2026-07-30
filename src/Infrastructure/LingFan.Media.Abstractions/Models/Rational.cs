@@ -18,6 +18,8 @@ public readonly struct Rational : IEquatable<Rational>
     /// <param name="denominator">分母。</param>
     public Rational(int numerator, int denominator)
     {
+        if (denominator == 0)
+            throw new ArgumentOutOfRangeException(nameof(denominator), "分母不能为零（Rational 表示帧率/宽高比，分母为零无数学意义）。");
         Numerator = numerator;
         Denominator = denominator;
     }

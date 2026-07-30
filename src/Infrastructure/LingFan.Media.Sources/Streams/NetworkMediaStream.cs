@@ -72,6 +72,9 @@ public sealed class NetworkMediaStream : IMediaStream
         }
     }
 
+    /// <inheritdoc/>
+    public string Location => _source.Url;
+
     /// <summary>
     /// 初始化 <see cref="NetworkMediaStream"/> 的新实例。
     /// </summary>
@@ -97,10 +100,11 @@ public sealed class NetworkMediaStream : IMediaStream
         }
         else
         {
-            // 常见场景：使用 IHttpClientFactory 获取池化 HttpClient。
-            // 工厂管理 HttpMessageHandler 生命周期，避免套接字耗尽。
-            // Close 时不 Dispose（由工厂管理）。
-            _httpClient = httpClientFactory.CreateClient();
+            // 常见场景：使用 IHttpClientFactory 获取池化命名 HttpClient（"LingFanMedia"）。
+            // B-DNS: 命名 client 的 SocketsHttpHandler 挂载 SsrfConnectGuard.ConnectCallback
+            //（DNS pinning，闭合「校验后重解析」TOCTOU 缺口），在 AddLingFanMedia 中注册。
+            // 工厂管理 HttpMessageHandler 生命周期，避免套接字耗尽。Close 时不 Dispose（由工厂管理）。
+            _httpClient = httpClientFactory.CreateClient("LingFanMedia");
             _httpClient.Timeout = Timeout.InfiniteTimeSpan;
             _ownsClient = false;
         }
@@ -192,6 +196,12 @@ public sealed class NetworkMediaStream : IMediaStream
         SsrfGuard.Validate(_host, ips, _source.AllowPrivateAddresses);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, _source.Url);
+
+        // B-DNS: DNS pinning——把已校验 IP 经请求选项传给 SsrfConnectGuard.ConnectCallback，
+        // 强制套接字只连校验过的 IP，闭合「Validate 后 SendAsync 二次解析」的重绑定窗口。
+        request.Options.Set(SsrfConnectGuard.ValidatedIpsKey, ips);
+        request.Options.Set(SsrfConnectGuard.ValidatedHostKey, _host);
+        request.Options.Set(SsrfConnectGuard.AllowPrivateAddressesKey, _source.AllowPrivateAddresses);
 
         // 自定义 HTTP 头
         foreach (var header in _source.Headers)

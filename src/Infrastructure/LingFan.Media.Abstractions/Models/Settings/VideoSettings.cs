@@ -19,4 +19,11 @@ public sealed class VideoSettings
 
     /// <summary>输出像素格式（null 表示使用源格式）。</summary>
     public PixelFormat? OutputPixelFormat { get; init; }
+
+    /// <summary>
+    /// 编解码器私有配置（如 H264/H265 的 SPS+PPS / avcC / hvcC），由解封装器在轨道信息中提供，
+    /// 透传给解码器设置输入媒体类型（MF 后端经 <c>MF_MT_MPEG_SEQUENCE_HEADER</c>，FFmpeg 等后端通常忽略）。
+    /// 零外部引用（BCL <see cref="ReadOnlyMemory{T}"/>），符合契约层“只增不改”演进准则。
+    /// </summary>
+    public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
 }

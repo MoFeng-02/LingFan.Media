@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace LingFan.Media.Backends.VLC.Decoders;
 
 /// <summary>
@@ -65,43 +67,44 @@ internal sealed class VLCVideoDecoder : IVideoDecoder
         if (packet.Data.Length == 0)
             return new ValueTask<VideoFrame?>((VideoFrame?)null);
 
-        // VLCDemuxer 交付 BGRA32 数据，stride = width * 4
-        // 从数据长度推算帧尺寸（假设 stride = width * 4, height = dataLen / stride）
-        int stride = 0;
-        int width = 0;
-        int height = 0;
+        // 修复 H3：优先使用 VLCDemuxer 在 OnVideoUnlock 写入的真实帧尺寸，
+        // 不再按数据长度猜测且只支持 4 种固定分辨率（会导致任意分辨率错位/跳过）。
+        int width = packet.Width;
+        int height = packet.Height;
+        int stride = packet.Stride;
 
-        // 尝试从数据长度推算尺寸：BGRA32 每像素 4 字节
-        // dataLen = width * height * 4
-        int dataLen = packet.Data.Length;
-        if (dataLen > 0 && dataLen % 4 == 0)
+        if (width <= 0 || height <= 0)
         {
-            int pixels = dataLen / 4;
-            // 常见分辨率推算
-            if (pixels == 1920 * 1080) { width = 1920; height = 1080; }
-            else if (pixels == 1280 * 720) { width = 1280; height = 720; }
-            else if (pixels == 3840 * 2160) { width = 3840; height = 2160; }
-            else if (pixels == 640 * 480) { width = 640; height = 480; }
-            else
+            // 兜底：仅当 packet 未携带尺寸时按数据长度推算（极少触发）
+            int dataLen = packet.Data.Length;
+            if (dataLen > 0 && dataLen % 4 == 0)
             {
-                // 无法确定尺寸，使用平方根近似
-                int side = (int)Math.Sqrt(pixels);
-                width = side;
-                height = pixels / side;
-                if (width * height != pixels)
+                int pixels = dataLen / 4;
+                if (pixels == 1920 * 1080) { width = 1920; height = 1080; }
+                else if (pixels == 1280 * 720) { width = 1280; height = 720; }
+                else if (pixels == 3840 * 2160) { width = 3840; height = 2160; }
+                else if (pixels == 640 * 480) { width = 640; height = 480; }
+                else
                 {
-                    // 无法确定，跳过此帧
-                    return new ValueTask<VideoFrame?>((VideoFrame?)null);
+                    int side = (int)Math.Sqrt(pixels);
+                    width = side;
+                    height = pixels / side;
+                    if (width * height != pixels)
+                        return new ValueTask<VideoFrame?>((VideoFrame?)null);
                 }
             }
-            stride = width * 4;
         }
 
         if (width <= 0 || height <= 0)
             return new ValueTask<VideoFrame?>((VideoFrame?)null);
 
-        // 创建 SoftwareFrameResource（拷贝数据，因为 packet 会被 Dispose）
-        var resource = new SoftwareFrameResource(width, height, PixelFormat.BGRA32, packet.Data.ToArray().AsMemory());
+        if (stride <= 0)
+            stride = width * 4; // BGRA32 默认行跨度
+
+        // 直接引用 packet.Data（ReadOnlyMemory<byte> 共享底层数组）：MediaPacket.Dispose 仅释放原生 _dataOwner，
+        // 不动托管 Data，故资源持有期间数组安全；免去一次 ToArray 分配+拷贝（修复 #8 热路径性能）。
+        // ReadOnlyMemory<byte> 经 MemoryMarshal.AsMemory 零拷贝转为 Memory<byte> 以匹配 SoftwareFrameResource 构造。
+        var resource = new SoftwareFrameResource(width, height, PixelFormat.BGRA32, MemoryMarshal.AsMemory(packet.Data));
 
         var frame = new VideoFrame(
             width, height, PixelFormat.BGRA32,

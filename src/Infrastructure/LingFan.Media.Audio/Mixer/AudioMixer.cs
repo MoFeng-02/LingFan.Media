@@ -70,55 +70,67 @@ public sealed class AudioMixer : IDisposable
 
         int outCh = _settings.Channels;
         int totalSamples = sampleCount * outCh;
-        Span<float> mixBuffer = (totalSamples <= 256
-            ? stackalloc float[256]
-            : new float[totalSamples])[..totalSamples];
-        mixBuffer.Clear();
 
-        // 预计算最大输入声道数，循环外分配复用缓冲，避免循环内 stackalloc（CA2014）
-        int maxInCh = 1;
-        foreach (var ch in _channels)
-            if (ch.IsActive && !ch.IsMuted && ch.Volume > 0f)
-                maxInCh = Math.Max(maxInCh, Math.Max(1, ch.InputChannels));
-
-        int chCapacity = sampleCount * maxInCh;
-        float[]? rented = null;
-        Span<float> chBuf = chCapacity <= 256
+        // A2: mixBuffer 大尺寸时改用 ArrayPool 租借（与下方 chBuf 一致），避免每帧 new float[] 的 LOH/GC 压力
+        float[]? mixRented = null;
+        Span<float> mixBuffer = totalSamples <= 256
             ? stackalloc float[256]
-            : (rented = ArrayPool<float>.Shared.Rent(chCapacity));
+            : (mixRented = ArrayPool<float>.Shared.Rent(totalSamples));
+        mixBuffer = mixBuffer[..totalSamples];
+
         try
         {
-            foreach (var channel in _channels)
+            mixBuffer.Clear();
+
+            // 预计算最大输入声道数，循环外分配复用缓冲，避免循环内 stackalloc（CA2014）
+            int maxInCh = 1;
+            foreach (var ch in _channels)
+                if (ch.IsActive && !ch.IsMuted && ch.Volume > 0f)
+                    maxInCh = Math.Max(maxInCh, Math.Max(1, ch.InputChannels));
+
+            int chCapacity = sampleCount * maxInCh;
+            float[]? rented = null;
+            Span<float> chBuf = chCapacity <= 256
+                ? stackalloc float[256]
+                : (rented = ArrayPool<float>.Shared.Rent(chCapacity));
+            try
             {
-                if (!channel.IsActive || channel.IsMuted || channel.Volume <= 0f)
-                    continue;
+                foreach (var channel in _channels)
+                {
+                    if (!channel.IsActive || channel.IsMuted || channel.Volume <= 0f)
+                        continue;
 
-                int inCh = Math.Max(1, channel.InputChannels);
-                int needed = sampleCount * inCh;
-                int read = channel.Read(chBuf[..needed]);
-                if (read <= 0) continue;
+                    int inCh = Math.Max(1, channel.InputChannels);
+                    int needed = sampleCount * inCh;
+                    int read = channel.Read(chBuf[..needed]);
+                    if (read <= 0) continue;
 
-                float volume = channel.Volume;
-                AddConverted(chBuf[..read], inCh, outCh, sampleCount, volume, mixBuffer);
+                    float volume = channel.Volume;
+                    AddConverted(chBuf[..read], inCh, outCh, sampleCount, volume, mixBuffer);
+                }
             }
+            finally
+            {
+                if (rented != null) ArrayPool<float>.Shared.Return(rented);
+            }
+
+            for (int i = 0; i < totalSamples; i++)
+                mixBuffer[i] = Math.Clamp(mixBuffer[i] * _masterVolume, -1f, 1f);
+
+            var data = ConvertFromFloat(mixBuffer, _settings.SampleFormat);
+            return new AudioFrame(
+                data,
+                _settings.SampleRate,
+                outCh,
+                _settings.SampleFormat,
+                TimeSpan.Zero,
+                TimeSpan.Zero,
+                sampleCount);
         }
         finally
         {
-            if (rented != null) ArrayPool<float>.Shared.Return(rented);
+            if (mixRented != null) ArrayPool<float>.Shared.Return(mixRented);
         }
-
-        for (int i = 0; i < totalSamples; i++)
-            mixBuffer[i] = Math.Clamp(mixBuffer[i] * _masterVolume, -1f, 1f);
-
-        var data = ConvertFromFloat(mixBuffer, _settings.SampleFormat);
-        return new AudioFrame(
-            data,
-            _settings.SampleRate,
-            outCh,
-            _settings.SampleFormat,
-            TimeSpan.Zero,
-            TimeSpan.Zero,
-            sampleCount);
     }
 
     /// <summary>清空所有通道的缓冲区。</summary>

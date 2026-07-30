@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -15,79 +14,46 @@ namespace LingFan.Media.Platforms.Windows;
 /// <para><b>异步策略</b>：全部同步（sync/native 分类）——DirectComposition COM 调用为快速同步操作，无 I/O await。
 /// 包 <c>async</c> 方法体内无 <c>await</c> 即伪异步，禁止。</para>
 /// <para><b>线程安全</b>：所有方法须在 UI 线程调用（COM apartment 要求）。</para>
-/// <para><b>AOT 兼容</b>：sealed 类，<c>[ComImport]</c> 零反射，<c>[LibraryImport]</c> 源生成 P/Invoke。
+/// <para><b>AOT 兼容</b>：sealed 类，采用原始 vtable P/Invoke（ComVTable 委托封送），不使用 <c>[ComImport]</c>/RCW，
+/// <c>NativeAOT</c> 兼容；<c>[LibraryImport]</c> 源生成 P/Invoke。
 /// <c>[SupportedOSPlatform("windows")]</c> 标注平台限制。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 public sealed partial class DirectCompositionInterop : IDisposable
 {
-    // ── COM 接口定义（vtable 严格按 Windows SDK dcomp.h 声明顺序，不可省略方法）──
+    // ── COM vtable 委托（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）──
+    // DirectComposition 接口 vtable 布局：IUnknown(0=QueryInterface, 1=AddRef, 2=Release) + 接口方法(3+)。
+    // 委托首个参数为 COM 对象指针（this）；DCompVTable.Get 从绝对 vtable 槽位（3 + slotIndex）取函数指针。
+    // 仅声明实际被调用的方法；槽位按 Windows SDK dcomp.h 真实顺序排列。
 
-    /// <summary>IDCompositionDevice COM 接口。</summary>
-    /// <remarks>
-    /// vtable: 0-2 IUnknown(隐式), 3 Commit, 4 WaitForCommitCompletion, 5 GetFrameStatistics,
-    /// 6 CreateTargetForHwnd, 7 CreateVisual。
-    /// </remarks>
-    [ComImport]
-    [Guid("C37EA93A-E7AA-450D-B16F-9746CB0406F3")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IDCompositionDevice
-    {
-        /// <summary>slot 3</summary>
-        void Commit();
-        /// <summary>slot 4</summary>
-        void WaitForCommitCompletion();
-        /// <summary>slot 5 — GetFrameStatistics(out DCOMPOSITION_FRAME_STATISTICS)，用 IntPtr 占位</summary>
-        void GetFrameStatistics(IntPtr statistics);
-        /// <summary>slot 6 — CreateTargetForHwnd(HWND, BOOL, out IDCompositionTarget)</summary>
-        void CreateTargetForHwnd(IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool topmost, out IntPtr target);
-        /// <summary>slot 7 — CreateVisual(out IDCompositionVisual)</summary>
-        void CreateVisual(out IntPtr visual);
-    }
+    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    private delegate int IDCompositionDevice_Commit(IntPtr self);
 
-    /// <summary>IDCompositionVisual COM 接口。</summary>
-    /// <remarks>
-    /// vtable: 0-2 IUnknown(隐式), 3 SetOffsetX(float), 4 SetOffsetX(animation),
-    /// 5 SetOffsetY(float), 6 SetOffsetY(animation), 7 SetTransform(transform),
-    /// 8 SetTransform(matrix), 9 SetTransformParent, 10 SetClip(clip),
-    /// 11 SetClip(rect), 12 SetContent。
-    /// </remarks>
-    [ComImport]
-    [Guid("4D93059D-097B-4651-9B60-DF5B5F9B6FF5")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IDCompositionVisual
-    {
-        /// <summary>slot 3</summary>
-        void SetOffsetX(float offsetX);
-        /// <summary>slot 4</summary>
-        void SetOffsetX2(IntPtr animation);
-        /// <summary>slot 5</summary>
-        void SetOffsetY(float offsetY);
-        /// <summary>slot 6</summary>
-        void SetOffsetY2(IntPtr animation);
-        /// <summary>slot 7</summary>
-        void SetTransform(IntPtr transform);
-        /// <summary>slot 8 — const D2D_MATRIX_3X2_F&amp;</summary>
-        void SetTransform2(IntPtr matrix);
-        /// <summary>slot 9</summary>
-        void SetTransformParent(IntPtr visual);
-        /// <summary>slot 10</summary>
-        void SetClip(IntPtr clip);
-        /// <summary>slot 11 — const D2D_RECT_F&amp;</summary>
-        void SetClip2(IntPtr rect);
-        /// <summary>slot 12 — SetContent(IUnknown*)</summary>
-        void SetContent(IntPtr content);
-    }
+    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    private delegate int IDCompositionDevice_CreateTargetForHwnd(
+        IntPtr self, IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool topmost, out IntPtr target);
 
-    /// <summary>IDCompositionTarget COM 接口。</summary>
-    /// <remarks>vtable: 0-2 IUnknown(隐式), 3 SetRoot。</remarks>
-    [ComImport]
-    [Guid("EACDD04C-117E-4E17-88F4-D1B12B0E3D89")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IDCompositionTarget
+    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    private delegate int IDCompositionDevice_CreateVisual(IntPtr self, out IntPtr visual);
+
+    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    private delegate int IDCompositionVisual_SetContent(IntPtr self, IntPtr content);
+
+    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    private delegate int IDCompositionTarget_SetRoot(IntPtr self, IntPtr visual);
+
+    /// <summary>
+    /// 从 COM 接口指针读取第 (3 + slotIndex) 个 vtable 槽位的函数指针并转为强类型委托。
+    /// IUnknown 的 Release 在槽 2（调用方用 <see cref="Marshal.Release"/> 释放，与 WASAPI/MF 一致，非 RCW）。
+    /// </summary>
+    private static class DCompVTable
     {
-        /// <summary>slot 3 — SetRoot(IDCompositionVisual*)，null 清除根</summary>
-        void SetRoot(IntPtr visual);
+        public static TDelegate Get<TDelegate>(IntPtr comPtr, int slotIndex) where TDelegate : Delegate
+        {
+            IntPtr vtable = Marshal.ReadIntPtr(comPtr);
+            IntPtr methodPtr = Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
+            return Marshal.GetDelegateForFunctionPointer<TDelegate>(methodPtr);
+        }
     }
 
     // ── P/Invoke ──
@@ -100,11 +66,11 @@ public sealed partial class DirectCompositionInterop : IDisposable
         in Guid iid,
         out IntPtr dcompositionDevice);
 
-    // ── 状态 ──
+    // ── 状态（COM 对象以原始指针持有，释放用 Marshal.Release）──
 
-    private IDCompositionDevice? _device;
-    private IDCompositionVisual? _visual;
-    private IDCompositionTarget? _target;
+    private IntPtr _device;   // IDCompositionDevice*
+    private IntPtr _visual;   // IDCompositionVisual*
+    private IntPtr _target;   // IDCompositionTarget*
     private bool _disposed;
 
     /// <summary>
@@ -129,47 +95,36 @@ public sealed partial class DirectCompositionInterop : IDisposable
         if (hr < 0 || devicePtr == IntPtr.Zero)
             throw new InvalidOperationException($"DCompositionCreateDevice 失败: HRESULT 0x{hr:X8}");
 
+        // 取得原始 COM 指针所有权（refcount=1，由本类在 Dispose 时 Marshal.Release）
+        _device = devicePtr;
+
         try
         {
-            _device = (IDCompositionDevice)Marshal.GetObjectForIUnknown(devicePtr);
-            // GetObjectForIUnknown 会 AddRef，释放原始指针
-            Marshal.Release(devicePtr);
-            devicePtr = IntPtr.Zero; // 已释放，标记防止 finally 重复释放
-
             // 2. 创建 Visual 并绑定 SwapChain
-            _device.CreateVisual(out IntPtr visualPtr);
-            _visual = (IDCompositionVisual)Marshal.GetObjectForIUnknown(visualPtr);
-            Marshal.Release(visualPtr);
-            _visual.SetContent(swapChainPtr);
+            DCompVTable.Get<IDCompositionDevice_CreateVisual>(_device, 4)(_device, out IntPtr visualPtr);
+            _visual = visualPtr;
+            // DComp-1：SetContent 相对槽应为 12（绝对槽 15）。原 slotIndex 9 命中 SetBorderMode，
+            // 导致无空域合成静默失效。增加 HR 检查，失败则抛异常（catch 块清理并向上传播）。
+            int setContentHr = DCompVTable.Get<IDCompositionVisual_SetContent>(_visual, 12)(_visual, swapChainPtr);
+            if (setContentHr < 0)
+                throw new InvalidOperationException($"IDCompositionVisual.SetContent 失败: HRESULT 0x{setContentHr:X8}");
 
             // 3. 创建 Target 并绑定到窗口
-            _device.CreateTargetForHwnd(hwnd, true, out IntPtr targetPtr);
+            DCompVTable.Get<IDCompositionDevice_CreateTargetForHwnd>(_device, 3)(_device, hwnd, true, out IntPtr targetPtr);
             if (targetPtr == IntPtr.Zero)
                 throw new InvalidOperationException("CreateTargetForHwnd 失败——窗口可能已被其他 DComp Target 绑定。");
-            _target = (IDCompositionTarget)Marshal.GetObjectForIUnknown(targetPtr);
-            Marshal.Release(targetPtr);
+            _target = targetPtr;
 
-            // SetRoot 内部会对 visual AddRef，GetIUnknownForObject 返回的引用须由调用方释放
-            IntPtr visualUnk = Marshal.GetIUnknownForObject(_visual);
-            try
-            {
-                _target.SetRoot(visualUnk);
-            }
-            finally
-            {
-                Marshal.Release(visualUnk);
-            }
+            // SetRoot 内部会对 visual AddRef；传入原始 visual 指针即可（无需 GetIUnknownForObject/RCW）
+            DCompVTable.Get<IDCompositionTarget_SetRoot>(_target, 0)(_target, _visual);
 
             // 4. 提交
-            _device.Commit();
+            DCompVTable.Get<IDCompositionDevice_Commit>(_device, 0)(_device);
         }
         catch
         {
             // 任何步骤失败时清理已创建的 COM 对象，防止泄漏
             Dispose();
-            // 释放尚未交给 RCW 的原始指针（GetObjectForIUnknown 之前抛异常的情况）
-            if (devicePtr != IntPtr.Zero)
-                Marshal.Release(devicePtr);
             throw;
         }
     }
@@ -183,26 +138,26 @@ public sealed partial class DirectCompositionInterop : IDisposable
         _disposed = true;
 
         // 清除 Target 的根 Visual（断开与窗口的关联）
-        if (_target is not null)
+        if (_target != IntPtr.Zero)
         {
-            try { _target.SetRoot(IntPtr.Zero); }
+            try { DCompVTable.Get<IDCompositionTarget_SetRoot>(_target, 0)(_target, IntPtr.Zero); }
             catch { /* 忽略释放异常 */ }
-            Marshal.ReleaseComObject(_target);
-            _target = null;
+            Marshal.Release(_target);
+            _target = IntPtr.Zero;
         }
 
-        if (_visual is not null)
+        if (_visual != IntPtr.Zero)
         {
-            Marshal.ReleaseComObject(_visual);
-            _visual = null;
+            Marshal.Release(_visual);
+            _visual = IntPtr.Zero;
         }
 
-        if (_device is not null)
+        if (_device != IntPtr.Zero)
         {
-            try { _device.Commit(); }
+            try { DCompVTable.Get<IDCompositionDevice_Commit>(_device, 0)(_device); }
             catch { /* 忽略提交异常 */ }
-            Marshal.ReleaseComObject(_device);
-            _device = null;
+            Marshal.Release(_device);
+            _device = IntPtr.Zero;
         }
     }
 }

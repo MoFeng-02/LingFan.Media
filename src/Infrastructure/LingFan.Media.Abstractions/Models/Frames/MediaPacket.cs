@@ -29,6 +29,27 @@ public sealed class MediaPacket : IDisposable
     /// <summary>是否关键帧。</summary>
     public bool KeyFrame { get; }
 
+    // ── 已解码（直通）packet 的真实帧参数 ──
+    // 仅 VLC 等"解封装+解码一体"的直通后端会把已解码数据放入 MediaPacket，
+    // 此时这些字段携带真实帧格式/尺寸；压缩 packet（FFmpeg/MF）保持默认 0/default，不参与解包。
+    /// <summary>解码帧宽度（仅直通 packet 有意义，压缩 packet 为 0）。</summary>
+    public int Width { get; }
+
+    /// <summary>解码帧高度（压缩 packet 为 0）。</summary>
+    public int Height { get; }
+
+    /// <summary>解码帧行跨度字节数（压缩 packet 为 0）。</summary>
+    public int Stride { get; }
+
+    /// <summary>音频采样率（压缩 packet 为 0）。</summary>
+    public int SampleRate { get; }
+
+    /// <summary>音频声道数（压缩 packet 为 0）。</summary>
+    public int Channels { get; }
+
+    /// <summary>音频采样格式（压缩 packet 为 default）。</summary>
+    public SampleFormat Format { get; }
+
     private IDisposable? _dataOwner;
     private bool _disposed;
 
@@ -47,9 +68,17 @@ public sealed class MediaPacket : IDisposable
     /// V2-05 零拷贝所有者（可选）。非 null 时 <paramref name="data"/> 映射原生引用计数 buffer，
     /// <see cref="Dispose"/> 释放该所有者使原生引用计数减一。
     /// </param>
+    /// <param name="width">解码帧宽度（直通 packet 用，默认 0）。</param>
+    /// <param name="height">解码帧高度（直通 packet 用，默认 0）。</param>
+    /// <param name="stride">解码帧行跨度字节数（直通 packet 用，默认 0）。</param>
+    /// <param name="sampleRate">音频采样率（直通 packet 用，默认 0）。</param>
+    /// <param name="channels">音频声道数（直通 packet 用，默认 0）。</param>
+    /// <param name="format">音频采样格式（直通 packet 用，默认 default）。</param>
     public MediaPacket(int trackIndex, ReadOnlyMemory<byte> data,
         TimeSpan timestamp, TimeSpan duration, bool keyFrame,
-        IDisposable? dataOwner = null)
+        IDisposable? dataOwner = null,
+        int width = 0, int height = 0, int stride = 0,
+        int sampleRate = 0, int channels = 0, SampleFormat format = default)
     {
         TrackIndex = trackIndex;
         Data = data;
@@ -57,6 +86,12 @@ public sealed class MediaPacket : IDisposable
         Duration = duration;
         KeyFrame = keyFrame;
         _dataOwner = dataOwner;
+        Width = width;
+        Height = height;
+        Stride = stride;
+        SampleRate = sampleRate;
+        Channels = channels;
+        Format = format;
     }
 
     /// <summary>释放底层 buffer（零拷贝路径：原生引用计数减一）。</summary>

@@ -66,18 +66,34 @@ internal sealed class VLCAudioDecoder : IAudioDecoder
         if (packet.Data.Length == 0)
             return new ValueTask<AudioFrame?>((AudioFrame?)null);
 
-        // VLCDemuxer 交付 S16 PCM 数据（2 字节/采样 × 声道数）
-        int bytesPerSample = 2 * OutputChannels;
-        int frameCount = packet.Data.Length / bytesPerSample;
+        // 修复 H5/H6：使用 VLCDemuxer 在 OnAudioPlay 写入的真实采样率/声道数/采样格式，
+        // 不再硬编码 44100/2/S16（会导致非标准格式帧计数错误或格式标注错误）。
+        if (packet.Channels <= 0)
+            return new ValueTask<AudioFrame?>((AudioFrame?)null);
+
+        int bytesPerSamplePerChannel = packet.Format switch
+        {
+            SampleFormat.S16 => 2,
+            SampleFormat.S32 => 4,
+            SampleFormat.F32 => 4,
+            _ => 2
+        };
+        int frameCount = packet.Data.Length / (bytesPerSamplePerChannel * packet.Channels);
 
         if (frameCount <= 0)
             return new ValueTask<AudioFrame?>((AudioFrame?)null);
 
+        // 同步公开属性，反映最近一帧真实格式
+        OutputSampleRate = packet.SampleRate;
+        OutputChannels = packet.Channels;
+
+        // 直接引用 packet.Data（ReadOnlyMemory<byte> 共享底层数组）：MediaPacket.Dispose 仅释放原生 _dataOwner，
+        // 不动托管 Data，故帧持有期间数组安全；免去一次 ToArray 分配+拷贝（修复 #8 热路径性能）。
         var frame = new AudioFrame(
-            packet.Data.ToArray().AsMemory(),
-            OutputSampleRate,
-            OutputChannels,
-            SampleFormat.S16,
+            packet.Data,
+            packet.SampleRate,
+            packet.Channels,
+            packet.Format,
             packet.Timestamp,
             packet.Duration,
             frameCount);

@@ -24,13 +24,14 @@ namespace LingFan.Media.Backends.MediaFoundation.Demuxer;
 /// </remarks>
 [SupportedOSPlatform("windows")]
 [UnconditionalSuppressMessage("Trimming", "IL2050",
-    Justification = "COM 接口使用 [ComImport] 显式定义，不会被裁剪器移除。仅 Windows 运行时使用。")]
+    Justification = "无 [ComImport]，使用原始 vtable P/Invoke，不会被裁剪器移除。仅 Windows 运行时使用。")]
 internal sealed class MFDemuxer : IMediaDemuxer
 {
     private readonly MFBackend _backend;
     private readonly ILogger<MFDemuxer> _logger;
 
-    private IMFSourceReader? _sourceReader;
+    private IntPtr _sourceReader; // IMFSourceReader*（原始 vtable P/Invoke，非 [ComImport]）
+    private IMFSourceReader_ReadSample? _readSample; // 热路径缓存的 vtable 委托
     private string? _url;
     private IMediaStream? _stream;
 
@@ -38,6 +39,12 @@ internal sealed class MFDemuxer : IMediaDemuxer
     private bool _disposed;
     private IReadOnlyList<MediaTrack> _tracks = Array.Empty<MediaTrack>();
     private MediaMetadata _metadata = new();
+
+    // 多流交织状态：IMFSourceReader.ReadSample 不接受 ALL_STREAMS（运行时返回 MF_E_INVALID_STREAM），
+    // 须逐流调用 ReadSample 后按时间戳挑选最早者，模拟 FFmpeg 的交织输出。
+    private int[] _selectedStreamIndices = Array.Empty<int>();
+    private readonly Dictionary<int, MediaPacket> _pendingPackets = new();
+    private readonly HashSet<int> _exhaustedStreams = new();
 
     /// <summary>
     /// 初始化 <see cref="MFDemuxer"/> 的新实例。
@@ -112,19 +119,30 @@ internal sealed class MFDemuxer : IMediaDemuxer
     {
         ct.ThrowIfCancellationRequested();
 
-        int hr = MFInterop.MFCreateSourceReaderFromURL(url, IntPtr.Zero, out _sourceReader);
-        if (hr < 0 || _sourceReader == null)
+        int hr = MFInterop.MFCreateSourceReaderFromURL(url, IntPtr.Zero, out IntPtr readerPtr);
+        if (hr < 0 || readerPtr == IntPtr.Zero)
         {
             throw new InvalidOperationException($"MFCreateSourceReaderFromURL 失败: HRESULT=0x{hr:X8}");
         }
+        _sourceReader = readerPtr;
+        // 热路径缓存 ReadSample vtable 委托（绝对槽 9 → index 6；mfreadwrite.idl 顺序：
+        // GetStreamSelection=3, SetStreamSelection=4, GetNativeMediaType=5, GetCurrentMediaType=6,
+        // SetCurrentMediaType=7, SetCurrentPosition=8, ReadSample=9, Flush=10, GetServiceForStream=11, GetPresentationAttribute=12）
+        // ⚠️ 审计核验（2026-07-28）：原 index 5 命中 SetCurrentPosition、误改 index 7 命中 Flush（签名不符→栈破坏崩溃），
+        // 正确值恒为 index 6（绝对槽 9）。以 Wine/ReactOS 镜像的 Windows SDK idl 为权威。
+        _readSample = MfVTable.Get<IMFSourceReader_ReadSample>(_sourceReader, 6);
 
         // 解析轨道
         _tracks = ParseTracks(_sourceReader);
 
-        // 选择所有流（让 SourceReader 输出所有轨道的采样）
+        // 选择所有流（让 SourceReader 输出所有轨道的采样）；SetStreamSelection = 槽 4 → index 1
         foreach (var track in _tracks)
         {
-            _sourceReader.SetStreamSelection((uint)track.Index, true);
+            hr = MfVTable.Get<IMFSourceReader_SetStreamSelection>(_sourceReader, 1)(_sourceReader, (uint)track.Index, true);
+            if (hr < 0)
+            {
+                _logger.LogWarning("SetStreamSelection 失败: 流 {Index}, HRESULT=0x{HR:X8}", track.Index, hr);
+            }
         }
 
         // 解析元数据（MF 不直接提供标题/艺术家等，从轨道推算时长）
@@ -133,6 +151,11 @@ internal sealed class MFDemuxer : IMediaDemuxer
             Duration = TimeSpan.Zero,
             ContainerFormat = ContainerFormat.Unknown
         };
+
+        // 记录已选流索引，供 ReadPacketCore 逐流交织读取（track.Index == MF 流索引）
+        _selectedStreamIndices = _tracks.Select(t => t.Index).ToArray();
+        _pendingPackets.Clear();
+        _exhaustedStreams.Clear();
     }
 
     /// <inheritdoc/>
@@ -143,7 +166,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
     public async ValueTask<MediaPacket?> ReadPacketAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_opened || _sourceReader == null)
+        if (!_opened || _sourceReader == IntPtr.Zero)
             throw new InvalidOperationException("解封装器尚未打开");
 
         ct.ThrowIfCancellationRequested();
@@ -154,47 +177,144 @@ internal sealed class MFDemuxer : IMediaDemuxer
     }
 
     /// <summary>
-    /// ReadPacketAsync 的同步核心逻辑。
+    /// ReadPacketAsync 的同步核心逻辑。多流交织：逐流读取并维护每流 1 个 lookahead 包，按时间戳返回最早的。
     /// </summary>
+    /// <remarks>
+    /// <para>IMFSourceReader.ReadSample 不接受 MF_SOURCE_READER_ALL_STREAMS（运行时返回 MF_E_INVALID_STREAM），
+    /// 故改为逐流调用 ReadSample，再按 sample 时间戳挑选最早者，模拟 FFmpeg 的交织输出，
+    /// 供 BufferManager 按 TrackIndex 路由到视频/音频队列。</para>
+    /// </remarks>
     private MediaPacket? ReadPacketCore(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
-        int hr = _sourceReader!.ReadSample(
-            MFConstants.MF_SOURCE_READER_ALL_STREAMS,
-            0, // dwControlFlags
-            0, // dwStreamIndex (unused with ALL_STREAMS)
-            out int actualStreamIndex,
-            out int streamFlags,
-            out long timestamp,
-            out IMFSample? sample);
+        const int maxEmptyRounds = 256; // 限制流 tick 空转轮数，避免无数据时空转卡死
+        int emptyRounds = 0;
 
+        while (true)
+        {
+            // 1. 返回已缓存中时间戳最早的包
+            MediaPacket? earliest = null;
+            int earliestStream = -1;
+            foreach (var kvp in _pendingPackets)
+            {
+                if (earliest == null || kvp.Value.Timestamp < earliest.Timestamp)
+                {
+                    earliest = kvp.Value;
+                    earliestStream = kvp.Key;
+                }
+            }
+            if (earliest != null)
+            {
+                _pendingPackets.Remove(earliestStream);
+                return earliest;
+            }
+
+            // 2. 无缓存：为尚未结束的流各读一个样本填充 lookahead
+            bool progressed = false;
+            foreach (int s in _selectedStreamIndices)
+            {
+                if (_exhaustedStreams.Contains(s))
+                    continue;
+
+                var pkt = ExtractPacket(s, out bool eos);
+                if (eos)
+                {
+                    _exhaustedStreams.Add(s);
+                    continue;
+                }
+                if (pkt != null)
+                {
+                    _pendingPackets[s] = pkt;
+                    progressed = true;
+                }
+            }
+
+            if (_pendingPackets.Count > 0)
+                continue; // 下一轮返回最早
+
+            // 全部流结束且无缓存 → EOS
+            if (_exhaustedStreams.Count >= _selectedStreamIndices.Length)
+                return null;
+
+            // 仍有活跃流但本轮未取到（流 tick）：限次重试，避免空转
+            if (!progressed)
+            {
+                if (++emptyRounds > maxEmptyRounds)
+                    return null; // 防御性退出，交由上层在下个包请求时重试
+                Thread.Sleep(1);
+            }
+            else
+            {
+                emptyRounds = 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 从指定流读取单个样本并提取为 <see cref="MediaPacket"/>。
+    /// </summary>
+    /// <param name="streamIndex">MF 流索引（= MediaTrack.Index）。</param>
+    /// <param name="eos">该流是否已达结束（出错或流结束）。</param>
+    /// <returns>提取出的包；流 tick（暂无可读样本）时返回 null 且 eos=false。</returns>
+    private MediaPacket? ExtractPacket(int streamIndex, out bool eos)
+    {
+        eos = false;
+
+        // ReadSample = 绝对槽 9 → index 6（mfreadwrite.idl 顺序；运行时已验证 slot1/2 自洽布局）
+        int hr = _readSample!(_sourceReader, (uint)streamIndex, 0,
+            out int actualStreamIndex, out int streamFlags, out long timestamp, out IntPtr samplePtr);
         if (hr < 0)
         {
-            _logger.LogWarning("IMFSourceReader.ReadSample 失败: HRESULT=0x{HR:X8}", hr);
+            _logger.LogWarning("IMFSourceReader.ReadSample(流{Stream}) 失败: HRESULT=0x{HR:X8}", streamIndex, hr);
+            eos = true; // 出错视为该流结束，避免无限重试
             return null;
         }
-
-        // 流结束
         if ((streamFlags & MFConstants.MF_SOURCE_READERF_ENDOFSTREAM) != 0)
         {
+            eos = true;
+            if (samplePtr != IntPtr.Zero) Marshal.Release(samplePtr);
             return null;
         }
+        if (samplePtr == IntPtr.Zero)
+            return null; // 流 tick，无数据，下次再试
 
-        if (sample == null)
+        // 提取采样数据：ConvertToContiguousBuffer = 绝对槽 41 → index 38
+        // （IMFAttributes 恰 30 方法，IMFSample 第 9 方法；运行时已验证 slot38 返回有效 buffer）
+        hr = MfVTable.Get<IMFSample_ConvertToContiguousBuffer>(samplePtr, 38)(samplePtr, out IntPtr bufferPtr);
+        if (hr < 0 || bufferPtr == IntPtr.Zero)
         {
-            // 流 tick（无数据），返回 null 让调用方重试
+            Marshal.Release(samplePtr);
+            _logger.LogWarning("ConvertToContiguousBuffer 失败: HRESULT=0x{HR:X8}", hr);
             return null;
         }
 
-        // 提取采样数据
-        sample.ConvertToContiguousBuffer(out IMFMediaBuffer buffer);
-        buffer.Lock(out IntPtr dataPtr, out uint maxLen, out uint curLen);
+        // Lock = 槽 3 → index 0；Unlock = 槽 4 → index 1（运行时已验证）
+        var lockDel = MfVTable.Get<IMFMediaBuffer_Lock>(bufferPtr, 0);
+        var unlockDel = MfVTable.Get<IMFMediaBuffer_Unlock>(bufferPtr, 1);
+        hr = lockDel(bufferPtr, out IntPtr dataPtr, out uint maxLen, out uint curLen);
+        if (hr < 0 || curLen == 0)
+        {
+            unlockDel(bufferPtr);
+            Marshal.Release(bufferPtr);
+            Marshal.Release(samplePtr);
+            _logger.LogWarning("IMFMediaBuffer.Lock 失败: HRESULT=0x{HR:X8}", hr);
+            return null;
+        }
 
         byte[] data = new byte[curLen];
         Marshal.Copy(dataPtr, data, 0, (int)curLen);
 
-        buffer.Unlock();
+        unlockDel(bufferPtr);
+        Marshal.Release(bufferPtr);
+
+        // 关键帧标记：MFSampleExtension_CleanPoint（IMFSample 继承 IMFAttributes，GetUINT32 = slotIndex 4）。
+        // 属性缺失时按非关键帧处理（音频等无该属性的流不受影响——调用方仅对视频用 KeyFrame）。
+        Guid cleanPointKey = MFConstants.MFSampleExtension_CleanPoint;
+        bool keyFrame = MfVTable.Get<IMFMediaType_GetUINT32>(samplePtr, 4)(samplePtr, ref cleanPointKey, out uint cleanPoint) >= 0
+                        && cleanPoint != 0;
+
+        Marshal.Release(samplePtr);
 
         // 提取时间戳（100ns 单位 → TimeSpan）
         TimeSpan ts = timestamp > 0
@@ -206,7 +326,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
             data,
             ts,
             TimeSpan.Zero,
-            keyFrame: true);
+            keyFrame);
     }
 
     /// <inheritdoc/>
@@ -216,7 +336,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
     public async Task<bool> SeekAsync(TimeSpan position, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_opened || _sourceReader == null)
+        if (!_opened || _sourceReader == IntPtr.Zero)
             throw new InvalidOperationException("解封装器尚未打开");
 
         ct.ThrowIfCancellationRequested();
@@ -224,8 +344,25 @@ internal sealed class MFDemuxer : IMediaDemuxer
         // 伪异步：MF SourceReader seek 为同步 COM 调用，Task.Run 仅卸载到线程池。
         return await Task.Run(() =>
         {
-            // MF SourceReader 的 seek 通过属性设置
-            // 这里简化为返回 true（实际需要通过 IMFPresentationDescriptor 设置位置）
+            // IMFSourceReader::SetCurrentPosition（绝对槽 8 → slotIndex 5，槽位表已审计核验）。
+            // guidTimeFormat = GUID_NULL → varPosition 为 100ns 单位（VT_I8）；
+            // SourceReader 会定位到 ≤ 目标位置的最近关键帧起读。
+            Guid timeFormat = Guid.Empty;
+            var pos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = position.Ticks };
+            var setPosition = MfVTable.Get<IMFSourceReader_SetCurrentPosition>(_sourceReader, 5);
+            int hr = setPosition(_sourceReader, ref timeFormat, ref pos);
+            if (hr < 0)
+            {
+                _logger.LogWarning("MF Seek 失败: {Position}, HRESULT=0x{HR:X8}", position, hr);
+                return false;
+            }
+
+            // seek 后 lookahead 缓存全部失效：释放未投递的数据包并重置 EOS 标记
+            foreach (var pkt in _pendingPackets.Values)
+                pkt.Dispose();
+            _pendingPackets.Clear();
+            _exhaustedStreams.Clear();
+
             _logger.LogDebug("MF Seek 到 {Position}", position);
             return true;
         }, ct).ConfigureAwait(false);
@@ -237,17 +374,24 @@ internal sealed class MFDemuxer : IMediaDemuxer
         if (!_opened) return;
         _opened = false;
 
-        if (_sourceReader != null)
+        // 释放尚未投递的 lookahead 数据包（MediaPacket 独立拥有托管副本，Dispose 兜底，防泄漏）
+        foreach (var pkt in _pendingPackets.Values)
+            pkt.Dispose();
+        _pendingPackets.Clear();
+        _exhaustedStreams.Clear();
+
+        if (_sourceReader != IntPtr.Zero)
         {
             try
             {
-                Marshal.ReleaseComObject(_sourceReader);
+                Marshal.Release(_sourceReader);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _logger.LogWarning(ex, "IMFSourceReader 释放异常");
             }
-            _sourceReader = null;
+            _sourceReader = IntPtr.Zero;
+            _readSample = null;
         }
     }
 
@@ -275,40 +419,51 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// </summary>
     private static string? ExtractUrl(IMediaStream stream)
     {
-        // FileMediaStream 的 Name 属性包含文件路径
-        // NetworkMediaStream 的 URL 可以从流标识获取
-        // 这里简化处理：检查流是否为 FileStream
-        if (stream is FileStream fs)
-        {
-            return fs.Name;
-        }
-
-        // 对于其他流类型，无法直接获取 URL
-        return null;
+        // 修复 C4：原实现误判 stream is FileStream（实际为 FileMediaStream，永不命中）导致所有文件均返回 null 而 OpenAsync 抛异常。
+        // 改为读取 IMediaStream 中性 Location（文件流返回路径、网络流返回 URL；无地址返回 null）。
+        return stream.Location;
     }
 
     /// <summary>
     /// 解析 MF SourceReader 的轨道信息。
     /// </summary>
-    private static IReadOnlyList<MediaTrack> ParseTracks(IMFSourceReader reader)
+    private static IReadOnlyList<MediaTrack> ParseTracks(IntPtr readerPtr)
     {
         var tracks = new List<MediaTrack>();
         int index = 0;
 
+        // GetNativeMediaType = 槽 5 → index 2
+        var getNativeMediaType = MfVTable.Get<IMFSourceReader_GetNativeMediaType>(readerPtr, 2);
+
+        // IMFMediaType vtable 委托（继承 IMFAttributes）：GetMajorType=槽33→30、GetUINT32=槽7→4、GetUINT64=槽8→5、GetGuid=槽10→7。
+        // 在拿到首个 mediaType 指针后解析一次（所有 IMFMediaType 实例 vtable 相同），循环内复用。
+        IMFMediaType_GetMajorType? getMajorType = null;
+        IMFMediaType_GetUINT32? getUINT32 = null;
+        IMFMediaType_GetUINT64? getUINT64 = null;
+        IMFMediaType_GetGuid? getGuid = null;
+
         // 遍历所有流
         while (true)
         {
-            int hr = reader.GetNativeMediaType((uint)index, 0, out IMFMediaType? mediaType);
+            int hr = getNativeMediaType(readerPtr, (uint)index, 0, out IntPtr mediaTypePtr);
             if (hr == MFConstants.MF_E_NO_MORE_TYPES || hr < 0)
                 break;
 
-            if (mediaType == null)
+            if (mediaTypePtr == IntPtr.Zero)
             {
                 index++;
                 continue;
             }
 
-            mediaType.GetMajorType(out Guid majorType);
+            if (getMajorType == null)
+            {
+                getMajorType = MfVTable.Get<IMFMediaType_GetMajorType>(mediaTypePtr, 30);
+                getUINT32 = MfVTable.Get<IMFMediaType_GetUINT32>(mediaTypePtr, 4);
+                getUINT64 = MfVTable.Get<IMFMediaType_GetUINT64>(mediaTypePtr, 5);
+                getGuid = MfVTable.Get<IMFMediaType_GetGuid>(mediaTypePtr, 7);
+            }
+
+            getMajorType(mediaTypePtr, out Guid majorType);
 
             MediaTrack? track = null;
 
@@ -316,8 +471,8 @@ internal sealed class MFDemuxer : IMediaDemuxer
             {
                 Guid subtypeKey = MFConstants.MF_MT_SUBTYPE;
                 Guid frameSizeKey = MFConstants.MF_MT_FRAME_SIZE;
-                mediaType.GetGuid(ref subtypeKey, out Guid subtype);
-                mediaType.GetUINT64(ref frameSizeKey, out ulong frameSize);
+                getGuid!(mediaTypePtr, ref subtypeKey, out Guid subtype);
+                getUINT64!(mediaTypePtr, ref frameSizeKey, out ulong frameSize);
                 int width = (int)(frameSize >> 32);
                 int height = (int)(frameSize & 0xFFFFFFFF);
 
@@ -333,6 +488,23 @@ internal sealed class MFDemuxer : IMediaDemuxer
                         Duration = TimeSpan.Zero
                     }
                 };
+
+                // 提取 H264/H265 解码必需的 out-of-band SPS+PPS（Annex-B 序列头）。
+                // MP4(AVCC) 容器内 SPS/PPS 在 avcC 盒、不在每个 sample 内联；不透传给解码器则
+                // IMFTransform::ProcessOutput 永久返回 MF_E_TRANSFORM_NEED_MORE_INPUT。
+                // 本机验证：MF 媒体源不会在媒体类型上填 MF_MT_MPEG_SEQUENCE_HEADER（native/current/prime 后均
+                // MF_E_ATTRIBUTENOTFOUND），但会把整个 stsd 盒透传到 MF_MT_MPEG4_SAMPLE_DESCRIPTION——从中解析 avcC。
+                if (track.VideoCodec is VideoCodec.H264 or VideoCodec.H265)
+                {
+                    var seqHeader = TryGetBlob(mediaTypePtr, MFConstants.MF_MT_MPEG_SEQUENCE_HEADER);
+                    if (seqHeader.Length == 0)
+                    {
+                        var stsd = TryGetBlob(mediaTypePtr, MFConstants.MF_MT_MPEG4_SAMPLE_DESCRIPTION);
+                        if (stsd.Length > 0)
+                            seqHeader = ParseAvcCToAnnexB(stsd);
+                    }
+                    track.VideoInfo!.CodecConfiguration = seqHeader;
+                }
             }
             else if (majorType == MFConstants.MFMediaType_Audio)
             {
@@ -340,10 +512,10 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 Guid sampleRateKey = MFConstants.MF_MT_AUDIO_SAMPLES_PER_SECOND;
                 Guid channelsKey = MFConstants.MF_MT_AUDIO_NUM_CHANNELS;
                 Guid bitsPerSampleKey = MFConstants.MF_MT_AUDIO_BITS_PER_SAMPLE;
-                mediaType.GetGuid(ref subtypeKey, out Guid audioSubtype);
-                mediaType.GetUINT32(ref sampleRateKey, out uint sampleRate);
-                mediaType.GetUINT32(ref channelsKey, out uint channels);
-                mediaType.GetUINT32(ref bitsPerSampleKey, out uint bitsPerSample);
+                getGuid!(mediaTypePtr, ref subtypeKey, out Guid audioSubtype);
+                getUINT32!(mediaTypePtr, ref sampleRateKey, out uint sampleRate);
+                getUINT32!(mediaTypePtr, ref channelsKey, out uint channels);
+                getUINT32!(mediaTypePtr, ref bitsPerSampleKey, out uint bitsPerSample);
 
                 track = new MediaTrack
                 {
@@ -365,10 +537,108 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 tracks.Add(track);
             }
 
+            Marshal.Release(mediaTypePtr);
             index++;
         }
 
         return tracks;
+    }
+
+    /// <summary>读取 IMFAttributes Blob 属性（GetBlobSize=slot11 / GetBlob=slot12）。属性不存在返回空数组。</summary>
+    private static byte[] TryGetBlob(IntPtr attributesPtr, Guid key)
+    {
+        var getBlobSize = MfVTable.Get<IMFAttributes_GetBlobSize>(attributesPtr, 11);
+        if (getBlobSize(attributesPtr, ref key, out uint size) < 0 || size == 0)
+            return Array.Empty<byte>();
+
+        IntPtr buffer = Marshal.AllocHGlobal((int)size);
+        try
+        {
+            var getBlob = MfVTable.Get<IMFAttributes_GetBlob>(attributesPtr, 12);
+            if (getBlob(attributesPtr, ref key, buffer, size) < 0)
+                return Array.Empty<byte>();
+
+            var result = new byte[size];
+            Marshal.Copy(buffer, result, 0, (int)size);
+            return result;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    /// <summary>
+    /// 从 stsd 盒数据（MF_MT_MPEG4_SAMPLE_DESCRIPTION 透传）中定位 avcC / hvcC 盒，
+    /// 把参数集（SPS/PPS/VPS）转换为 Annex-B 序列头（00 00 00 01 起始码拼接）。
+    /// 解析失败返回空数组（解码器侧兜底：无序列头时不设置 MF_MT_MPEG_SEQUENCE_HEADER）。
+    /// </summary>
+    private static byte[] ParseAvcCToAnnexB(byte[] stsd)
+    {
+        // avcC 盒（ISO/IEC 14496-15 5.3.3.1）：configurationVersion(1) profile(1) compat(1) level(1)
+        //   lengthSizeMinusOne(1, 低2位) numOfSPS(1, 低5位) { spsLen(2BE) sps } numOfPPS(1) { ppsLen(2BE) pps }
+        int avcc = IndexOfFourCC(stsd, (byte)'a', (byte)'v', (byte)'c', (byte)'C');
+        if (avcc >= 0)
+        {
+            var output = new List<byte>(64);
+            int p = avcc + 4; // 跳过 fourcc，指向 configurationVersion
+            if (p + 6 > stsd.Length) return Array.Empty<byte>();
+            int numSps = stsd[p + 5] & 0x1F;
+            p += 6;
+            for (int i = 0; i < numSps; i++)
+                if (!AppendLengthPrefixedNal(stsd, ref p, output)) return Array.Empty<byte>();
+            if (p >= stsd.Length) return Array.Empty<byte>();
+            int numPps = stsd[p];
+            p += 1;
+            for (int i = 0; i < numPps; i++)
+                if (!AppendLengthPrefixedNal(stsd, ref p, output)) return Array.Empty<byte>();
+            return output.ToArray();
+        }
+
+        // hvcC 盒（ISO/IEC 14496-15 8.3.3.1）：22 字节固定头 + numOfArrays(1) +
+        //   每数组 { arrayHeader(1) numNalus(2BE) { naluLen(2BE) nalu } }（含 VPS/SPS/PPS 数组）
+        int hvcc = IndexOfFourCC(stsd, (byte)'h', (byte)'v', (byte)'c', (byte)'C');
+        if (hvcc >= 0)
+        {
+            var output = new List<byte>(128);
+            int p = hvcc + 4 + 22;
+            if (p >= stsd.Length) return Array.Empty<byte>();
+            int numArrays = stsd[p];
+            p += 1;
+            for (int a = 0; a < numArrays; a++)
+            {
+                if (p + 3 > stsd.Length) return Array.Empty<byte>();
+                int numNalus = (stsd[p + 1] << 8) | stsd[p + 2];
+                p += 3;
+                for (int n = 0; n < numNalus; n++)
+                    if (!AppendLengthPrefixedNal(stsd, ref p, output)) return Array.Empty<byte>();
+            }
+            return output.ToArray();
+        }
+
+        return Array.Empty<byte>();
+    }
+
+    /// <summary>读取「2 字节大端长度 + NAL 数据」并以 00 00 00 01 起始码追加到 output。越界返回 false。</summary>
+    private static bool AppendLengthPrefixedNal(byte[] data, ref int p, List<byte> output)
+    {
+        if (p + 2 > data.Length) return false;
+        int len = (data[p] << 8) | data[p + 1];
+        p += 2;
+        if (len <= 0 || p + len > data.Length) return false;
+        output.Add(0); output.Add(0); output.Add(0); output.Add(1);
+        for (int i = 0; i < len; i++) output.Add(data[p + i]);
+        p += len;
+        return true;
+    }
+
+    /// <summary>在字节数组中查找 4 字节 fourcc，返回起始索引；未找到返回 -1。</summary>
+    private static int IndexOfFourCC(byte[] data, byte c0, byte c1, byte c2, byte c3)
+    {
+        for (int i = 0; i + 4 <= data.Length; i++)
+            if (data[i] == c0 && data[i + 1] == c1 && data[i + 2] == c2 && data[i + 3] == c3)
+                return i;
+        return -1;
     }
 
     private static AudioCodec MapAudioCodec(Guid subtype) => subtype switch

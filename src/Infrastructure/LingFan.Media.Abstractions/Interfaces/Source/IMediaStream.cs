@@ -55,6 +55,16 @@ public interface IMediaStream
     /// <summary>是否可定位。</summary>
     bool CanSeek { get; }
 
+    /// <summary>
+    /// 流的可定位地址（文件路径或网络 URL）；无法以地址方式打开时为 null。
+    /// </summary>
+    /// <remarks>
+    /// <para>供需要按地址打开的 backend（如 MediaFoundation 的 <c>MFCreateSourceReaderFromURL</c>）使用。
+    /// 文件流返回文件路径，网络流返回 URL；内存/透传流无地址返回 null。</para>
+    /// <para>中性契约成员（BCL string），不引用任何具体后端/源类型，遵循依赖倒置。</para>
+    /// </remarks>
+    string? Location { get; }
+
     /// <summary>定位到指定偏移。</summary>
     long Seek(long offset, SeekOrigin origin);
 

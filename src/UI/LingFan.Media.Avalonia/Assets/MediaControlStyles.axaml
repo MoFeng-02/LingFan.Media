@@ -1,6 +1,7 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:lc="using:LingFan.Media.Avalonia">
+                    xmlns:lc="using:LingFan.Media.Avalonia"
+                    x:CompileBindings="True">
 
     <!-- ProgressBar 默认 ControlTheme -->
     <!-- 使用 ScaleTransform 缩放 Border 来表示进度（ScaleX 绑定 Progress/BufferedProgress） -->

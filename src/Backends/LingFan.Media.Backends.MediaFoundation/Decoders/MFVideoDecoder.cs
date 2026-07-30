@@ -1,31 +1,87 @@
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using LingFan.Media.Backends.MediaFoundation.Interop;
 
 namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 
 /// <summary>
-/// <see cref="IVideoDecoder"/> 的 MediaFoundation 实现（基于 <c>IMFTransform</c>）。
+/// <see cref="IVideoDecoder"/> 的 MediaFoundation 实现（基于 <c>IMFTransform</c> 真实 MFT 解码）。
 /// </summary>
 /// <remarks>
-/// <para><b>异步策略</b>（与 FFmpegVideoDecoder 对称）：</para>
+/// <para><b>C 组 MF-4 真实落地</b>：消除原 <c>sqrt</c> 尺寸猜测空壳，改为经 <c>CoCreateInstance</c> 实例化
+/// H264/H265 解码 MFT（CLSID_CMSH264DecoderMFT / CLSID_CMSH265DecoderMFT），通过 <c>IMFTransform</c> vtable
+/// 调用 <c>SetInputType</c>/<c>SetOutputType</c>/<c>ProcessInput</c>/<c>ProcessOutput</c> 完成真实解码。</para>
+/// <para><b>异步策略</b>（与 FFmpegVideoDecoder 对称，遵守总记忆第七章）：</para>
 /// <list type="bullet">
-/// <item><see cref="InitializeAsync"/>：接口契约，返回 <see cref="Task.CompletedTask"/>。</item>
-/// <item><see cref="DecodeAsync"/>：热路径，IMFTransform.ProcessInput/ProcessOutput 为同步 COM 调用，
-/// 返回 <see cref="ValueTask{TResult}"/>（同步完成，减少分配）。</item>
-/// <item><see cref="FlushAsync"/>：热路径，取剩余输出帧。</item>
-/// <item><see cref="Reset"/>：同步，IMFTransform.ProcessMessage(COMMAND_FLUSH)。</item>
+/// <item><see cref="InitializeAsync"/>：接口契约，返回 <see cref="Task.CompletedTask"/>（无 I/O await，非伪异步）。</item>
+/// <item><see cref="Initialize"/>：同步（sync 分类）—— MFStartup + CoCreateInstance + 建输入/输出媒体类型（<c>IMFAttributes::SetGUID</c> vtable）+ SetInputType/SetOutputType + BEGIN_STREAMING。</item>
+/// <item><see cref="DecodeAsync"/>：热路径，<c>IMFTransform.ProcessInput/ProcessOutput</c> 为同步 COM 调用，返回 <see cref="ValueTask{TResult}"/>（同步完成，减少分配）。</item>
+/// <item><see cref="FlushAsync"/>：热路径，发送 DRAIN 取剩余输出帧。</item>
+/// <item><see cref="Reset"/>：同步，<c>ProcessMessage(COMMAND_FLUSH)</c>。</item>
 /// </list>
 /// <para><b>仅 Windows 可用</b>：非 Windows 平台 Initialize 抛 <see cref="PlatformNotSupportedException"/>。</para>
-/// <para><b>AOT 兼容</b>：sealed 类，COM 互操作，无反射。</para>
+/// <para><b>AOT 兼容</b>：sealed 类；COM 互操作走原始 vtable P/Invoke（<see cref="MfVTable"/> 委托封送）+ 真实导出的 MF 扁平 API，
+/// 不使用 <c>[ComImport]</c>/RCW，NativeAOT 兼容。</para>
+/// <para><b>vtable 槽位</b>：公式 <c>slotIndex = SDK 绝对槽 − 3</c>；全部关键槽位已本机运行时验证（2026-07-29，MFTDiag 全 S_OK）——
+/// IMFTransform：GetOutputStreamInfo=4, GetOutputAvailableType=11, SetInputType=12, SetOutputType=13,
+/// GetOutputCurrentType=15, ProcessMessage=20, ProcessInput=21, ProcessOutput=22（注意 GetAttributes=5 不可漏数）；
+/// IMFSample：GetBufferCount=36, ConvertToContiguousBuffer=38, AddBuffer=39；IMFAttributes：GetUINT64=5, SetGUID=21。</para>
+/// <para><b>媒体类型属性</b>：建/读属性走 <c>IMFAttributes</c> vtable（<c>SetGUID=21</c>/<c>GetUINT64=5</c>）——
+/// mfplat.dll 没有 <c>MFSetAttributeGUID</c>/<c>MFGetAttributeUINT64</c> 导出（mfapi.h inline helper），P/Invoke 必炸。</para>
+/// <para><b>输出 sample 分配</b>：系统 H264/H265 同步解码 MFT 不设置 <c>MFT_OUTPUT_STREAM_PROVIDES_SAMPLES</c>，
+/// 输出 sample 由调用方按 <c>GetOutputStreamInfo().cbSize</c> 预分配（本类实现），STREAM_CHANGE 后重查大小。</para>
+/// <para><b>输出尺寸</b>：输入类型不写 FRAME_SIZE（MFT 从 SPS 推断）；输出 NV12 尺寸经 <c>IMFAttributes::GetUINT64(MF_MT_FRAME_SIZE)</c>
+/// 从输出媒体类型读取，STREAM_CHANGE 时经 <c>GetOutputCurrentType</c> 重新协商。</para>
+/// <para><b>时间戳</b>：输出帧 PTS/时长从输出 sample 读取（<c>GetSampleTime</c>），而非直接沿用输入 packet——
+/// H264/H265 含 B 帧时解码输出顺序与输入顺序不同。读取失败时回退输入 packet 时间戳。</para>
 /// </remarks>
-internal sealed class MFVideoDecoder : IVideoDecoder
+[SupportedOSPlatform("windows")]
+internal sealed unsafe class MFVideoDecoder : IVideoDecoder
 {
-    private readonly ILogger<MFVideoDecoder> _logger;
-    private IMFTransform? _transform;
-    private bool _disposed;
+    // MFT_MESSAGE_TYPE（mftransform.h 权威值）
+    private const int MFT_MESSAGE_COMMAND_FLUSH = 0x00000000;
+    private const int MFT_MESSAGE_COMMAND_DRAIN = 0x00000001;
+    private const int MFT_MESSAGE_NOTIFY_BEGIN_STREAMING = 0x10000000;
+    private const int MFT_MESSAGE_NOTIFY_START_OF_STREAM = 0x10000003;
 
-    /// <summary>
-    /// 初始化 <see cref="MFVideoDecoder"/> 的新实例。
-    /// </summary>
+    // MFT_OUTPUT_STREAM_INFO.dwFlags：MFT 自行分配输出 sample
+    private const uint MFT_OUTPUT_STREAM_PROVIDES_SAMPLES = 0x00000100;
+
+    /// <summary>MFT_OUTPUT_DATA_BUFFER（x64 布局：4+pad、8、4+pad、8 = 32 字节，Sequential 默认对齐一致）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MftOutputBuffer
+    {
+        public int dwStreamID;
+        public IntPtr pSample;
+        public int dwStatus;
+        public IntPtr pEvents;
+    }
+
+    private readonly ILogger<MFVideoDecoder> _logger;
+    private bool _disposed;
+    private bool _initialized;
+
+    private Guid _inputSubtype;
+    private IntPtr _transform;
+    private IntPtr _inputTypePtr;
+    private IntPtr _outputTypePtr;
+    private int _width;         // 显示宽（display aperture；无 aperture 时 = 编码宽）
+    private int _height;        // 显示高
+    private int _codedWidth;    // 编码宽（宏块对齐，如 1920）——NV12 平面 stride 依据
+    private int _codedHeight;   // 编码高（宏块对齐，如 1088）——chroma 平面偏移依据
+
+    // 输出 sample 分配策略（GetOutputStreamInfo）
+    private bool _mftProvidesSamples;
+    private uint _outputBufferSize;
+
+    // 缓存的 IMFTransform vtable 委托（AOT 兼容；slotIndex = 绝对槽 − 3）
+    private IMFTransform_GetOutputStreamInfo? _getOutputStreamInfo;
+    private IMFTransform_SetInputType? _setInputType;
+    private IMFTransform_SetOutputType? _setOutputType;
+    private IMFTransform_ProcessMessage? _processMessage;
+    private IMFTransform_ProcessInput? _processInput;
+    private IMFTransform_ProcessOutput? _processOutput;
+
     public MFVideoDecoder(ILogger<MFVideoDecoder> logger)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -38,95 +94,538 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     public bool IsHardwareAccelerated { get; private set; }
 
     /// <inheritdoc/>
-    /// <remarks>参数化配置：创建 MF 解码器 MFT。</remarks>
     public void Initialize(VideoCodec codec, VideoSettings settings)
     {
         if (!OperatingSystem.IsWindows())
-        {
-            throw new PlatformNotSupportedException(
-                "MediaFoundation 后端仅支持 Windows。");
-        }
+            throw new PlatformNotSupportedException("MediaFoundation 后端仅支持 Windows。");
+        if (_initialized)
+            throw new InvalidOperationException("MF 视频解码器已初始化，请先 Dispose 再重新初始化。");
 
         Codec = codec;
         IsHardwareAccelerated = settings.EnableHardwareAcceleration;
 
-        // MF MFT 创建通过 CoCreateInstance + IMFTransform 接口
-        // 实际实现需要 CLSID 映射和 IMFTransform 设置
-        // 当前为结构化实现框架，MFT 在 OpenAsync 时由 SourceReader 内部处理
-        _logger.LogDebug("MF 视频解码器初始化: {Codec}, 硬解={Hw}", codec, IsHardwareAccelerated);
+        // 输入 subtype（H265 系统 MFT 注册的输入 subtype 为 "HEVC"）
+        if (codec == VideoCodec.H264) _inputSubtype = MFConstants.MFVideoFormat_H264;
+        else if (codec == VideoCodec.H265) _inputSubtype = MFConstants.MFVideoFormat_HEVC;
+        else
+            throw new NotSupportedException($"MF 视频解码器不支持 {codec}（仅 H264/H265 经系统 MFT）。");
+
+        // MFStartup（进程级引用计数，幂等）
+        int hr = MFInterop.MFStartup(MFConstants.MF_VERSION, MFConstants.MFSTARTUP_FULL);
+        Marshal.ThrowExceptionForHR(hr);
+
+        try
+        {
+            // 经 MFTEnum 动态发现注册的解码 MFT（避免硬编码 CLSID 在部分 Windows 上未注册 / HEVC 可选）
+            Guid clsid = FindDecoderClsid(_inputSubtype);
+            if (clsid == Guid.Empty)
+                throw new PlatformNotSupportedException(
+                    $"未找到 {codec} 解码 MFT（系统可能未注册对应解码器；HEVC 需安装“HEVC 视频扩展”）。");
+
+            // CoCreateInstance 实例化解码 MFT
+            Guid iid = MFConstants.IID_IMFTransform;
+            hr = MFInterop.CoCreateInstance(ref clsid, IntPtr.Zero, MFInterop.CLSCTX_ALL, ref iid, out _transform);
+            Marshal.ThrowExceptionForHR(hr);
+
+            // 缓存 vtable 委托（slotIndex = 绝对槽 − 3；经 Windows SDK mftransform.h 声明顺序推得，
+            // 并已于本机 MFTDiag 运行时逐槽验证（2026-07-29，CLSID_MSH264DecoderMFT 62ce7e72 全 S_OK））。
+            // IMFTransform 顺序（注意 GetAttributes=5，早期注释曾漏它导致全体差 1）：
+            //   GetStreamLimits=0/GetStreamCount=1/GetStreamIDs=2/GetInputStreamInfo=3/GetOutputStreamInfo=4/GetAttributes=5/
+            //   GetInputStreamAttributes=6/GetOutputStreamAttributes=7/DeleteInputStream=8/AddInputStreams=9/GetInputAvailableType=10/
+            //   GetOutputAvailableType=11/SetInputType=12/SetOutputType=13/GetInputCurrentType=14/GetOutputCurrentType=15/
+            //   GetInputStatus=16/GetOutputStatus=17/SetOutputBounds=18/ProcessEvent=19/ProcessMessage=20/ProcessInput=21/ProcessOutput=22
+            _getOutputStreamInfo = MfVTable.Get<IMFTransform_GetOutputStreamInfo>(_transform, 4);   // 绝对 7
+            _setInputType = MfVTable.Get<IMFTransform_SetInputType>(_transform, 12);                // 绝对 15
+            _setOutputType = MfVTable.Get<IMFTransform_SetOutputType>(_transform, 13);              // 绝对 16
+            _processMessage = MfVTable.Get<IMFTransform_ProcessMessage>(_transform, 20);            // 绝对 23
+            _processInput = MfVTable.Get<IMFTransform_ProcessInput>(_transform, 21);                // 绝对 24
+            _processOutput = MfVTable.Get<IMFTransform_ProcessOutput>(_transform, 22);             // 绝对 25
+
+            // GUID 局部副本（static readonly 字段不可直接作 ref 实参，CS0199）
+            Guid mtMajorType = MFConstants.MF_MT_MAJOR_TYPE;
+            Guid mtSubtype = MFConstants.MF_MT_SUBTYPE;
+            Guid mediaTypeVideo = MFConstants.MFMediaType_Video;
+            Guid formatNv12 = MFConstants.MFVideoFormat_NV12;
+
+            // 建输入媒体类型（MajorType=Video, Subtype=H264/HEVC；不写 FRAME_SIZE，MFT 从 SPS 推断）。
+            // 属性写入走 IMFAttributes::SetGUID vtable（slotIndex=21，运行时已验证）——
+            // mfplat.dll **没有** MFSetAttributeGUID 导出（mfapi.h inline helper），P/Invoke 会 EntryPointNotFound。
+            hr = MFInterop.MFCreateMediaType(out _inputTypePtr);
+            Marshal.ThrowExceptionForHR(hr);
+            var setGuidIn = MfVTable.Get<IMFAttributes_SetGUID>(_inputTypePtr, 21);
+            ThrowIfFailed(setGuidIn(_inputTypePtr, ref mtMajorType, ref mediaTypeVideo));
+            ThrowIfFailed(setGuidIn(_inputTypePtr, ref mtSubtype, ref _inputSubtype));
+
+            // 应用 out-of-band 编解码器私有配置（H264/H265 的 SPS+PPS / avcC / hvcC）→ MF_MT_MPEG_SEQUENCE_HEADER。
+            // MP4 容器内 SPS/PPS 在 avcC 盒，不在每个 sample 内联；缺它解码器永久 NEED_MORE_INPUT。
+            // 走 IMFAttributes::SetBlob vtable（slotIndex=23，运行时已验证）；须在 SetInputType 之前写入。
+            if (settings.CodecConfiguration.Length > 0)
+            {
+                Guid seqKey = MFConstants.MF_MT_MPEG_SEQUENCE_HEADER;
+                var setBlob = MfVTable.Get<IMFAttributes_SetBlob>(_inputTypePtr, 23);
+                var cfg = settings.CodecConfiguration;
+                IntPtr h = Marshal.AllocHGlobal(cfg.Length);
+                try
+                {
+                    Marshal.Copy(cfg.Span.ToArray(), 0, h, cfg.Length);
+                    ThrowIfFailed(setBlob(_inputTypePtr, ref seqKey, h, (uint)cfg.Length));
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(h);
+                }
+            }
+
+            hr = _setInputType!(_transform, 0, _inputTypePtr, 0);
+            Marshal.ThrowExceptionForHR(hr);
+
+            // 输出类型协商（MSDN 规范路径）：枚举 MFT 自报的可用输出类型，优先选 NV12；
+            // 枚举失败（输入类型未定尺寸时部分 MFT 返回 MF_E_TRANSFORM_TYPE_NOT_SET）则回退手工建最小 NV12 类型。
+            IntPtr chosenOutType = SelectOutputType(ref formatNv12);
+            if (chosenOutType == IntPtr.Zero)
+            {
+                hr = MFInterop.MFCreateMediaType(out chosenOutType);
+                Marshal.ThrowExceptionForHR(hr);
+                var setGuidOut = MfVTable.Get<IMFAttributes_SetGUID>(chosenOutType, 21);
+                ThrowIfFailed(setGuidOut(chosenOutType, ref mtMajorType, ref mediaTypeVideo));
+                ThrowIfFailed(setGuidOut(chosenOutType, ref mtSubtype, ref formatNv12));
+            }
+            _outputTypePtr = chosenOutType;
+
+            hr = _setOutputType!(_transform, 0, _outputTypePtr, 0);
+            Marshal.ThrowExceptionForHR(hr);
+
+            // 查询输出 sample 分配策略与所需大小
+            QueryOutputStreamInfo();
+
+            // 通知开始流式处理
+            _processMessage!(_transform, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+            _processMessage!(_transform, MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+
+            // 读取输出尺寸（若 MFT 已填充）
+            TryReadOutputDimensions();
+
+            _initialized = true;
+            _logger.LogDebug("MF 视频解码器初始化: {Codec}, 硬解={Hw}, MFT提供输出sample={Provides}, cbSize={Size}",
+                codec, IsHardwareAccelerated, _mftProvidesSamples, _outputBufferSize);
+        }
+        catch
+        {
+            ReleaseComObjects();
+            throw;
+        }
     }
 
     /// <inheritdoc/>
-    /// <remarks>接口契约：无 I/O，返回 <see cref="Task.CompletedTask"/>。</remarks>
     public Task InitializeAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        return Task.CompletedTask;
+        return Task.CompletedTask; // 契约方法：无 I/O await，非伪异步
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// 热路径：MF SourceReader 可配置为直接输出解码帧（SetCurrentMediaType 输出格式），
-    /// 此时 MFDemuxer 交付的已是解码帧数据。若使用独立 MFT，此处为 ProcessInput/ProcessOutput。
-    /// </remarks>
     public ValueTask<VideoFrame?> DecodeAsync(MediaPacket packet)
     {
         ArgumentNullException.ThrowIfNull(packet);
 
+        if (!_initialized || _transform == IntPtr.Zero)
+            return new ValueTask<VideoFrame?>((VideoFrame?)null);
         if (packet.Data.Length == 0)
             return new ValueTask<VideoFrame?>((VideoFrame?)null);
 
-        // MF SourceReader 配置为输出 NV12 解码帧时的直通处理
-        // 假设数据为 NV12 格式：Y plane + UV plane
-        // NV12 数据大小 = width * height * 3 / 2
-        int dataLen = packet.Data.Length;
-        int pixels = (int)(dataLen * 2L / 3);
-
-        if (pixels <= 0)
-            return new ValueTask<VideoFrame?>((VideoFrame?)null);
-
-        int width = (int)Math.Sqrt(pixels);
-        int height = pixels / width;
-
-        if (width <= 0 || height <= 0 || width * height != pixels)
+        // 1. 创建 sample + 内存 buffer，拷贝压缩数据
+        IntPtr sample = IntPtr.Zero;
+        try
         {
-            // 无法确定尺寸，尝试常见分辨率
-            if (dataLen == 1920 * 1080 * 3 / 2) { width = 1920; height = 1080; }
-            else if (dataLen == 1280 * 720 * 3 / 2) { width = 1280; height = 720; }
-            else if (dataLen == 640 * 480 * 3 / 2) { width = 640; height = 480; }
-            else
-                return new ValueTask<VideoFrame?>((VideoFrame?)null);
+            sample = CreateSampleWithData(packet);
+
+            // 2. ProcessInput（MFT 内部 AddRef 持有 sample；MF_E_NOTACCEPTING 表示须先取输出，非致命）
+            int hr = _processInput!(_transform, 0, sample, 0);
+            if (hr < 0 && hr != MFConstants.MF_E_NOTACCEPTING)
+                Marshal.ThrowExceptionForHR(hr);
+        }
+        finally
+        {
+            if (sample != IntPtr.Zero)
+                Marshal.Release(sample);
         }
 
-        var resource = new SoftwareFrameResource(width, height, PixelFormat.NV12, packet.Data.ToArray().AsMemory());
+        // 3. 取出解码帧
+        return new ValueTask<VideoFrame?>(DrainOneOutput(packet));
+    }
 
-        var frame = new VideoFrame(
-            width, height, PixelFormat.NV12,
-            resource, packet.Timestamp, packet.Duration, packet.KeyFrame);
+    /// <summary>创建携带 packet 压缩数据的 IMFSample（buffer 所有权移交 sample）。</summary>
+    private IntPtr CreateSampleWithData(MediaPacket packet)
+    {
+        int hr = MFInterop.MFCreateSample(out IntPtr sample);
+        Marshal.ThrowExceptionForHR(hr);
 
-        return new ValueTask<VideoFrame?>(frame);
+        IntPtr buffer = IntPtr.Zero;
+        try
+        {
+            hr = MFInterop.MFCreateMemoryBuffer(packet.Data.Length, out buffer);
+            Marshal.ThrowExceptionForHR(hr);
+
+            // Lock → 拷贝 → Unlock → 标记有效长度（IMFMediaBuffer：Lock=0, Unlock=1, GetCurrentLength=2, SetCurrentLength=3）
+            var lockDel = MfVTable.Get<IMFMediaBuffer_Lock>(buffer, 0);
+            var unlockDel = MfVTable.Get<IMFMediaBuffer_Unlock>(buffer, 1);
+            var setLenDel = MfVTable.Get<IMFMediaBuffer_SetCurrentLength>(buffer, 3);
+
+            hr = lockDel(buffer, out IntPtr pBuf, out _, out _);
+            Marshal.ThrowExceptionForHR(hr);
+            try
+            {
+                packet.Data.Span.CopyTo(new Span<byte>((void*)pBuf, packet.Data.Length));
+            }
+            finally
+            {
+                unlockDel(buffer);
+            }
+            setLenDel(buffer, (uint)packet.Data.Length);
+
+            // buffer 挂到 sample（AddBuffer 内部 AddRef；本地引用在 finally 释放）
+            // IMFSample 槽位（mfobjects.idl 顺序，ConvertToContiguousBuffer=38 已真机锚定）：AddBuffer = slotIndex 39（运行时已验证）
+            var addBuf = MfVTable.Get<IMFSample_AddBuffer>(sample, 39);
+            hr = addBuf(sample, buffer);
+            Marshal.ThrowExceptionForHR(hr);
+
+            // 设置样本时间/时长（100ns 单位）
+            var setTime = MfVTable.Get<IMFSample_SetSampleTime>(sample, 33);     // IMFAttributes(30) + 3
+            var setDur = MfVTable.Get<IMFSample_SetSampleDuration>(sample, 35);  // IMFAttributes(30) + 5
+            setTime(sample, packet.Timestamp.Ticks);   // TimeSpan.Ticks 即 100ns 单位
+            setDur(sample, packet.Duration.Ticks);
+
+            return sample;
+        }
+        catch
+        {
+            Marshal.Release(sample);
+            throw;
+        }
+        finally
+        {
+            if (buffer != IntPtr.Zero)
+                Marshal.Release(buffer);
+        }
+    }
+
+    /// <summary>创建空输出 sample（调用方分配模式，按 GetOutputStreamInfo.cbSize）。</summary>
+    private IntPtr CreateOutputSample()
+    {
+        int size = (int)Math.Max(_outputBufferSize, 1);
+        int hr = MFInterop.MFCreateSample(out IntPtr sample);
+        Marshal.ThrowExceptionForHR(hr);
+
+        IntPtr buffer = IntPtr.Zero;
+        try
+        {
+            hr = MFInterop.MFCreateMemoryBuffer(size, out buffer);
+            Marshal.ThrowExceptionForHR(hr);
+
+            var addBuf = MfVTable.Get<IMFSample_AddBuffer>(sample, 39); // AddBuffer = slotIndex 39（运行时已验证）
+            hr = addBuf(sample, buffer);
+            Marshal.ThrowExceptionForHR(hr);
+            return sample;
+        }
+        catch
+        {
+            Marshal.Release(sample);
+            throw;
+        }
+        finally
+        {
+            if (buffer != IntPtr.Zero)
+                Marshal.Release(buffer);
+        }
+    }
+
+    /// <summary>
+    /// 从 MFT 取出一帧解码输出（处理 NEED_MORE_INPUT / STREAM_CHANGE 重协商；
+    /// 系统解码 MFT 不提供输出 sample，由本方法按 cbSize 预分配）。
+    /// </summary>
+    private VideoFrame? DrainOneOutput(MediaPacket sourcePacket)
+    {
+        const int maxRetries = 8;
+        for (int i = 0; i < maxRetries; i++)
+        {
+            IntPtr outputSample = _mftProvidesSamples ? IntPtr.Zero : CreateOutputSample();
+            bool sampleConsumed = false;
+            try
+            {
+                MftOutputBuffer ob = default;
+                ob.pSample = outputSample;
+
+                int hr = _processOutput!(_transform, 0, 1, (IntPtr)(&ob), out _);
+
+                // MFT 可能在 ob 中放事件集合，须释放
+                if (ob.pEvents != IntPtr.Zero)
+                    Marshal.Release(ob.pEvents);
+
+                if (hr == MFConstants.MF_E_TRANSFORM_NEED_MORE_INPUT)
+                    return null;
+                if (hr == MFConstants.MF_E_TRANSFORM_STREAM_CHANGE)
+                {
+                    // 重新协商输出类型/尺寸/输出 buffer 大小后重试
+                    if (!RenegotiateOutput())
+                        return null;
+                    continue;
+                }
+                if (hr < 0)
+                    Marshal.ThrowExceptionForHR(hr);
+
+                IntPtr resultSample = ob.pSample;
+                if (resultSample == IntPtr.Zero)
+                    return null;
+
+                sampleConsumed = resultSample == outputSample; // ExtractFrame 负责释放
+                return ExtractFrame(resultSample, sourcePacket);
+            }
+            finally
+            {
+                // 调用方分配模式下，未被 ExtractFrame 接管的 sample 在此释放（NEED_MORE_INPUT / STREAM_CHANGE / 异常路径）
+                if (outputSample != IntPtr.Zero && !sampleConsumed)
+                    Marshal.Release(outputSample);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>从输出 sample 提取 NV12 数据并构建 <see cref="VideoFrame"/>（接管并释放 sample 引用）。</summary>
+    private VideoFrame? ExtractFrame(IntPtr sample, MediaPacket sourcePacket)
+    {
+        try
+        {
+            // 时间戳优先从输出 sample 读（B 帧重排后输出顺序 ≠ 输入顺序）；失败回退输入 packet
+            var ts = sourcePacket.Timestamp;
+            var dur = sourcePacket.Duration;
+            var getTime = MfVTable.Get<IMFSample_GetSampleTime>(sample, 32);     // IMFAttributes(30) + 2
+            var getDur = MfVTable.Get<IMFSample_GetSampleDuration>(sample, 34);  // IMFAttributes(30) + 4
+            if (getTime(sample, out long sampleTime) >= 0)
+                ts = TimeSpan.FromTicks(sampleTime);
+            if (getDur(sample, out long sampleDur) >= 0 && sampleDur > 0)
+                dur = TimeSpan.FromTicks(sampleDur);
+
+            // 输出数据可能分散在多个 buffer，ConvertToContiguousBuffer 合并
+            // IMFSample 槽位：ConvertToContiguousBuffer = 绝对 41 → slotIndex 38
+            // （IMFAttributes 恰 30 方法，IMFSample 第 9 方法；运行时已验证 slot38 返回有效 buffer）
+            var toContig = MfVTable.Get<IMFSample_ConvertToContiguousBuffer>(sample, 38);
+            int hr = toContig(sample, out IntPtr outBuffer);
+            if (hr < 0 || outBuffer == IntPtr.Zero)
+                return null;
+
+            try
+            {
+                var lockDel = MfVTable.Get<IMFMediaBuffer_Lock>(outBuffer, 0);
+                var unlockDel = MfVTable.Get<IMFMediaBuffer_Unlock>(outBuffer, 1);
+                var getLen = MfVTable.Get<IMFMediaBuffer_GetCurrentLength>(outBuffer, 2);
+
+                getLen(outBuffer, out uint currentLength);
+                if (currentLength == 0)
+                    return null;
+
+                // 确保尺寸已知（首帧 STREAM_CHANGE 后刚协商出）
+                if (_width <= 0 || _height <= 0)
+                    TryReadOutputDimensions();
+                if (_width <= 0 || _height <= 0)
+                {
+                    _logger.LogWarning("MF 解码输出尺寸未知，跳过该帧。");
+                    return null;
+                }
+
+                hr = lockDel(outBuffer, out IntPtr pData, out _, out _);
+                if (hr < 0)
+                    return null;
+
+                SoftwareFrameResource resource;
+                try
+                {
+                    var src = new ReadOnlySpan<byte>((void*)pData, (int)currentLength);
+                    if (_codedWidth <= 0 || (_codedWidth == _width && _codedHeight == _height))
+                    {
+                        // 编码尺寸即显示尺寸（或编码尺寸未知）：整块拷贝
+                        resource = new SoftwareFrameResource(_width, _height, PixelFormat.NV12, (int)currentLength);
+                        src.CopyTo(resource.Data.Span);
+                    }
+                    else
+                    {
+                        // 显示孔径裁剪：NV12 编码布局 = Y[codedW×codedH] + UV[codedW×codedH/2]，
+                        // 逐行拷贝到紧凑的 display 布局（stride 假定 = codedWidth，MFT 输出 NV12 无额外行距；
+                        // aperture 偏移为 0——H264 裁剪只发生在右/下边）
+                        int dstLen = _width * _height * 3 / 2;
+                        resource = new SoftwareFrameResource(_width, _height, PixelFormat.NV12, dstLen);
+                        var dst = resource.Data.Span;
+                        for (int y = 0; y < _height; y++)
+                            src.Slice(y * _codedWidth, _width).CopyTo(dst.Slice(y * _width, _width));
+                        int srcUv = _codedWidth * _codedHeight;
+                        int dstUv = _width * _height;
+                        for (int y = 0; y < _height / 2; y++)
+                            src.Slice(srcUv + y * _codedWidth, _width).CopyTo(dst.Slice(dstUv + y * _width, _width));
+                    }
+                }
+                finally
+                {
+                    unlockDel(outBuffer);
+                }
+
+                return new VideoFrame(_width, _height, PixelFormat.NV12, resource, ts, dur, sourcePacket.KeyFrame);
+            }
+            finally
+            {
+                Marshal.Release(outBuffer);
+            }
+        }
+        finally
+        {
+            Marshal.Release(sample);
+        }
+    }
+
+    /// <summary>
+    /// STREAM_CHANGE 后重新协商输出媒体类型，更新尺寸与输出 buffer 大小。
+    /// MS 推荐流程：从 <c>GetOutputAvailableType</c> 枚举<b>新的</b>可用类型（优先 NV12）→ <c>SetOutputType</c>；
+    /// 不能把 <c>GetOutputCurrentType</c> 的旧类型原样设回（本机验证会返回 MF_E_INVALIDMEDIATYPE 0xC00D36B4）。
+    /// </summary>
+    private bool RenegotiateOutput()
+    {
+        Guid nv12 = MFConstants.MFVideoFormat_NV12;
+        IntPtr newType = SelectOutputType(ref nv12);
+        if (newType == IntPtr.Zero)
+        {
+            _logger.LogWarning("MF 输出流变更后无可用输出类型");
+            return false;
+        }
+
+        int hr = _setOutputType!(_transform, 0, newType, 0);
+        if (hr < 0)
+        {
+            Marshal.Release(newType);
+            _logger.LogWarning("MF 输出流变更后 SetOutputType 失败: 0x{Hr:X8}", hr);
+            return false;
+        }
+
+        // 应用成功后替换缓存的输出类型引用
+        if (_outputTypePtr != IntPtr.Zero)
+            Marshal.Release(_outputTypePtr);
+        _outputTypePtr = newType;
+
+        TryReadOutputDimensions();
+        QueryOutputStreamInfo();
+        _logger.LogDebug("MF 输出流重协商完成: {W}x{H}, cbSize={Size}", _width, _height, _outputBufferSize);
+        return true;
+    }
+
+    /// <summary>
+    /// 枚举 MFT 可用输出类型（GetOutputAvailableType，slotIndex=11），返回 subtype 匹配 <paramref name="wantedSubtype"/> 的类型
+    /// （调用方接管引用）；未匹配则返回首个可用类型；枚举不到返回 <see cref="IntPtr.Zero"/>。
+    /// </summary>
+    private IntPtr SelectOutputType(ref Guid wantedSubtype)
+    {
+        var getAvail = MfVTable.Get<IMFTransform_GetOutputAvailableType>(_transform, 11); // 绝对 14
+        Guid mtSubtype = MFConstants.MF_MT_SUBTYPE;
+        IntPtr first = IntPtr.Zero;
+        for (uint i = 0; ; i++)
+        {
+            int hr = getAvail(_transform, 0, i, out IntPtr type);
+            if (hr < 0 || type == IntPtr.Zero)
+                break;
+
+            // IMFMediaType.GetGUID = slotIndex 7（IMFAttributes 第 8 方法；MFDemuxer.ParseTracks 同槽已验证）
+            var getGuid = MfVTable.Get<IMFMediaType_GetGuid>(type, 7);
+            if (getGuid(type, ref mtSubtype, out Guid subtype) >= 0 && subtype == wantedSubtype)
+            {
+                if (first != IntPtr.Zero) Marshal.Release(first);
+                return type; // 命中目标 subtype（NV12）
+            }
+
+            if (first == IntPtr.Zero) first = type; // 记住首个作回退
+            else Marshal.Release(type);
+        }
+        return first;
+    }
+
+    /// <summary>查询输出流信息：MFT 是否自行提供输出 sample 与所需 buffer 大小。</summary>
+    private void QueryOutputStreamInfo()
+    {
+        int hr = _getOutputStreamInfo!(_transform, 0, out MftOutputStreamInfo info);
+        if (hr >= 0)
+        {
+            _mftProvidesSamples = (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
+            _outputBufferSize = info.cbSize;
+        }
+        else
+        {
+            // 查询失败时保守回退：按 NV12 最大预估（重协商后会再查）
+            _mftProvidesSamples = false;
+            if (_outputBufferSize == 0 && _width > 0 && _height > 0)
+                _outputBufferSize = (uint)(_width * _height * 3 / 2);
+        }
+    }
+
+    /// <summary>
+    /// 从输出媒体类型读取尺寸：FRAME_SIZE（uint64 = (w&lt;&lt;32)|h）为宏块对齐<b>编码尺寸</b>（如 1920x1088）；
+    /// <b>显示尺寸</b>（1920x1080）从 MF_MT_MINIMUM_DISPLAY_APERTURE（MFVideoArea blob）取，缺失时回退编码尺寸。
+    /// </summary>
+    private void TryReadOutputDimensions()
+    {
+        if (_outputTypePtr == IntPtr.Zero)
+            return;
+        Guid frameSizeKey = MFConstants.MF_MT_FRAME_SIZE;
+        // IMFAttributes::GetUINT64 = slotIndex 5（运行时已验证）；mfplat 无 MFGetAttributeUINT64 导出（inline helper）
+        int hr = MfVTable.Get<IMFMediaType_GetUINT64>(_outputTypePtr, 5)(_outputTypePtr, ref frameSizeKey, out ulong fs);
+        if (hr >= 0 && fs != 0)
+        {
+            _codedWidth = (int)(fs >> 32);
+            _codedHeight = (int)(fs & 0xFFFFFFFF);
+            _width = _codedWidth;
+            _height = _codedHeight;
+        }
+
+        // 显示孔径：MFVideoArea（16 字节）= MFOffset OffsetX(4: short fract + short value) ×2 + SIZE(cx4, cy4)
+        Guid apertureKey = MFConstants.MF_MT_MINIMUM_DISPLAY_APERTURE;
+        var getBlobSize = MfVTable.Get<IMFAttributes_GetBlobSize>(_outputTypePtr, 11);
+        if (getBlobSize(_outputTypePtr, ref apertureKey, out uint blobSize) >= 0 && blobSize >= 16)
+        {
+            IntPtr buf = Marshal.AllocHGlobal((int)blobSize);
+            try
+            {
+                if (MfVTable.Get<IMFAttributes_GetBlob>(_outputTypePtr, 12)(_outputTypePtr, ref apertureKey, buf, blobSize) >= 0)
+                {
+                    int cx = Marshal.ReadInt32(buf, 8);
+                    int cy = Marshal.ReadInt32(buf, 12);
+                    if (cx > 0 && cy > 0 && cx <= _codedWidth && cy <= _codedHeight)
+                    {
+                        _width = cx;
+                        _height = cy;
+                    }
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buf);
+            }
+        }
     }
 
     /// <inheritdoc/>
     public ValueTask<VideoFrame?> FlushAsync()
     {
-        return new ValueTask<VideoFrame?>((VideoFrame?)null);
+        if (!_initialized || _transform == IntPtr.Zero)
+            return new ValueTask<VideoFrame?>((VideoFrame?)null);
+
+        // 发送 DRAIN 命令，取出剩余解码帧
+        _processMessage!(_transform, MFT_MESSAGE_COMMAND_DRAIN, 0);
+        return new ValueTask<VideoFrame?>(DrainOneOutput(DrainPacket));
     }
+
+    // Flush 用的占位 packet（仅提供回退时间戳，ExtractFrame 优先用输出 sample 自带时间戳）
+    private static readonly MediaPacket DrainPacket = new(0, ReadOnlyMemory<byte>.Empty, TimeSpan.Zero, TimeSpan.Zero, false);
 
     /// <inheritdoc/>
     public void Reset()
     {
-        if (_transform != null)
-        {
-            try
-            {
-                _transform.ProcessMessage(MFInterop.MFTMessageType.MFT_COMMAND_FLUSH, IntPtr.Zero);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                _logger.LogWarning(ex, "MF 视频解码器 Reset 异常");
-            }
-        }
+        if (!_initialized || _transform == IntPtr.Zero)
+            return;
+        _processMessage!(_transform, MFT_MESSAGE_COMMAND_FLUSH, 0);
     }
 
     /// <inheritdoc/>
@@ -134,25 +633,77 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     {
         if (_disposed) return;
         _disposed = true;
-
-        if (_transform != null)
-        {
-            try
-            {
-                Marshal.ReleaseComObject(_transform);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                _logger.LogWarning(ex, "IMFTransform 释放异常");
-            }
-            _transform = null;
-        }
+        ReleaseComObjects();
     }
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync()
     {
         Dispose();
-        return ValueTask.CompletedTask;
+        return ValueTask.CompletedTask; // 契约方法：无 I/O await，非伪异步
+    }
+
+    private void ReleaseComObjects()
+    {
+        if (_transform != IntPtr.Zero)
+        {
+            Marshal.Release(_transform);
+            _transform = IntPtr.Zero;
+        }
+        if (_inputTypePtr != IntPtr.Zero)
+        {
+            Marshal.Release(_inputTypePtr);
+            _inputTypePtr = IntPtr.Zero;
+        }
+        if (_outputTypePtr != IntPtr.Zero)
+        {
+            Marshal.Release(_outputTypePtr);
+            _outputTypePtr = IntPtr.Zero;
+        }
+        _width = 0;
+        _height = 0;
+        _initialized = false;
+        // 不调用 MFShutdown：MF 平台为进程级引用计数，生命周期由 MF 后端统一掌管。
+    }
+
+    private static void ThrowIfFailed(int hr) => Marshal.ThrowExceptionForHR(hr);
+
+    /// <summary>经 <see cref="MFInterop.MFTEnum"/> 找到可实例化为 <c>IMFTransform</c> 的解码 MFT CLSID。</summary>
+    /// <remarks>MFTEnum（旧 API）的 Flags 参数按 MSDN 为 Reserved 必须 0（MFT_ENUM_FLAG_* 系 MFTEnumEx 专用）；
+    /// 本机运行时验证（2026-07-29）：H264 → CLSID_MSH264DecoderMFT (62ce7e72-4c71-4d20-b15d-452831a87d9d)。</remarks>
+    private static Guid FindDecoderClsid(Guid inputSubtype)
+        => EnumDecoderClsid(inputSubtype, 0);
+
+    /// <summary>枚举给定输入 subtype 的解码 MFT，返回首个有效 CLSID（无则 <see cref="Guid.Empty"/>）。</summary>
+    private static Guid EnumDecoderClsid(Guid inputSubtype, uint flags)
+    {
+        MFInterop.MftRegisterTypeInfo input = new()
+        {
+            guidMajorType = MFConstants.MFMediaType_Video,
+            guidSubtype = inputSubtype
+        };
+        Guid category = MFConstants.MFT_CATEGORY_VIDEO_DECODER; // 静态只读字段不可作 ref 实参（CS0199）
+        int found = MFInterop.MFTEnum(
+            ref category, flags, ref input,
+            IntPtr.Zero, IntPtr.Zero, out IntPtr pClsidArray, out uint count);
+        // HRESULT 语义：S_OK=0 即成功——绝不能写 "<= 0"（会把成功误判为失败，制造"无注册 MFT"假象）
+        if (found < 0 || pClsidArray == IntPtr.Zero || count == 0)
+            return Guid.Empty;
+        try
+        {
+            // CLSID 数组元素为 16 字节 GUID（Sequential 布局：guidMajorType/guidSubtype 各 16 字节）
+            for (uint i = 0; i < count; i++)
+            {
+                IntPtr p = IntPtr.Add(pClsidArray, (int)(i * 16));
+                Guid candidate = Marshal.PtrToStructure<Guid>(p);
+                if (candidate != Guid.Empty)
+                    return candidate;
+            }
+            return Guid.Empty;
+        }
+        finally
+        {
+            MFInterop.CoTaskMemFree(pClsidArray);
+        }
     }
 }

@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- MediaFoundation 是 Windows-only API：在 net10.0（非 windows TFM）上调用会触发 CA1416
+         平台兼容性警告，全局 TreatWarningsAsErrors 会将其升级为错误，故显式抑制（与 MFSmoke 一致）。 -->
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="NSubstitute" Version="6.0.0" />
+    <PackageReference Include="FluentAssertions" Version="8.10.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 测试资源文件（真实媒体，端到端验证用） -->
+    <None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

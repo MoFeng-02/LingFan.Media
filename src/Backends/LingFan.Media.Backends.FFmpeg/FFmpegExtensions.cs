@@ -42,6 +42,9 @@ public static class FFmpegExtensions
             ffmpeg.av_log_set_level(options.LogLevel);
         }
 
+        // 注册 FFmpegOptions（Singleton）：宿主可在运行时解析并设置 MediaCodecSurface（V2-17 B9 注入点）
+        builder.Services.AddSingleton(options);
+
         // 注册 FFmpeg 后端入口（Singleton，持有全局初始化状态）
         builder.Services.AddSingleton<FFmpegBackend>();
 

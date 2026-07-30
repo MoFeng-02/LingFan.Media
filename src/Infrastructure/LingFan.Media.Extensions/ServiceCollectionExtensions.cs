@@ -6,6 +6,7 @@ using LingFan.Media.Audio;
 using LingFan.Media.Core;
 using LingFan.Media.Formats;
 using LingFan.Media.Sources;
+using LingFan.Media.Sources.Security;
 using LingFan.Media.Video;
 using Microsoft.Extensions.Options;
 
@@ -62,9 +63,23 @@ public static class ServiceCollectionExtensions
         // IHttpClientFactory：供 MediaStreamFactory 网络流连接池管理（防套接字耗尽）
         services.AddHttpClient();
 
+        // B-DNS: 网络流默认命名 client——SocketsHttpHandler.ConnectCallback 挂载
+        // SsrfConnectGuard（DNS pinning：只连 NetworkMediaStream 校验过的 IP，
+        // 闭合「SsrfGuard.Validate 后 SendAsync 二次 DNS 解析」的重绑定 TOCTOU 窗口；
+        // 重定向到新主机时回调内现场重解析 + 重校验）。
+        services.AddHttpClient("LingFanMedia")
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = true,
+                AutomaticDecompression = DecompressionMethods.All,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                ConnectCallback = SsrfConnectGuard.ConnectAsync,
+            });
+
         // SSL 证书绕过专用命名 client：仅 AllowInsecureHttps 的网络源经
         // IHttpClientFactory.CreateClient("LingFanMedia_Insecure") 获取（S2 统一入口）。
         // 自定义 SocketsHttpHandler 由工厂管理生命周期，避免套接字耗尽。
+        // B-DNS: 同样挂载 SsrfConnectGuard（不安全 SSL 场景同样需要 SSRF 防护）。
         services.AddHttpClient("LingFanMedia_Insecure")
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
@@ -76,6 +91,7 @@ public static class ServiceCollectionExtensions
                     RemoteCertificateValidationCallback = (_, _, _, _) => true
                 },
                 PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                ConnectCallback = SsrfConnectGuard.ConnectAsync,
             });
 
         // 媒体流工厂（Singleton，持有 IHttpClientFactory 引用）

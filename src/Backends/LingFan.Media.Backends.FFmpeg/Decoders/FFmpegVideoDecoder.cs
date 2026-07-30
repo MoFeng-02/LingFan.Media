@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using LingFan.Media.Backends.FFmpeg.Interop;
+using LingFan.Media.Backends.FFmpeg.Models;
 using LingFan.Media.Backends.FFmpeg.SafeHandles;
 
 namespace LingFan.Media.Backends.FFmpeg.Decoders;
@@ -26,6 +27,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 {
     private readonly ILogger<FFmpegVideoDecoder> _logger;
     private readonly IGpuDeviceContext? _gpuContext;
+    private readonly FFmpegOptions? _options;
     private SafeAVCodecContextHandle? _codecContextHandle;
     private SafeAVBufferRefHandle? _hwDeviceCtx;
     private IFramePool<VideoFrame>? _framePool;
@@ -41,10 +43,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// </summary>
     /// <param name="logger">日志器。</param>
     /// <param name="gpuContext">可选 GPU 设备上下文（D3D11VA 硬解需要，null=软件解码）。</param>
-    public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null)
+    /// <param name="options">可选 FFmpeg 配置（含 V2-17 B9 MediaCodec Surface 注入点）。</param>
+    public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _gpuContext = gpuContext;
+        _options = options;
     }
 
     /// <inheritdoc/>
@@ -72,8 +76,25 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         Codec = codec;
         AVCodecID codecId = MapVideoCodecToFFmpeg(codec);
 
-        // 查找解码器
-        AVCodec* avCodec = ffmpeg.avcodec_find_decoder(codecId);
+        // V2-17 B9: Android MediaCodec 硬解必须使用专用解码器（h264_mediacodec 等）——
+        // avcodec_find_decoder 默认返回软件解码器，对其挂 hw_device_ctx 无效
+        AVCodec* avCodec = null;
+        bool useMediaCodec = false;
+        if (settings.EnableHardwareAcceleration && OperatingSystem.IsAndroid())
+        {
+            string? mcName = GetMediaCodecDecoderName(codec);
+            if (mcName is not null)
+            {
+                avCodec = ffmpeg.avcodec_find_decoder_by_name(mcName);
+                useMediaCodec = avCodec != null;
+                if (!useMediaCodec)
+                    _logger.LogWarning("FFmpeg 未编译 MediaCodec 解码器 {Name}，回退到软件解码", mcName);
+            }
+        }
+
+        // 查找解码器（软件路径 / MediaCodec 未命中回退）
+        if (avCodec == null)
+            avCodec = ffmpeg.avcodec_find_decoder(codecId);
         if (avCodec == null)
             throw new NotSupportedException($"FFmpeg 未找到视频解码器: {codec} (codec_id={codecId})");
 
@@ -84,8 +105,23 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
 
-        // 配置多线程
-        if (settings.EnableHardwareAcceleration && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
+        // 配置硬件加速
+        if (useMediaCodec)
+        {
+            // V2-17 B9: MediaCodec 硬解。宿主注入 Surface → 表面直渲染（零拷贝）；
+            // 未注入 → 缓冲模式（ByteBuffer 输出 NV12 软件帧，仍为硬解）
+            try
+            {
+                InitializeMediaCodec(ctx);
+            }
+            catch (Exception ex)
+            {
+                // hwdevice 初始化失败不致命：MediaCodec 解码器无 hw_device_ctx 时自动走缓冲模式
+                _logger.LogWarning(ex, "MediaCodec 硬件设备上下文初始化失败，使用缓冲模式（仍为硬解）");
+            }
+            IsHardwareAccelerated = true;
+        }
+        else if (settings.EnableHardwareAcceleration && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
         {
             // V2-15 B6: D3D11VA 硬件解码——使用渲染器共享的 D3D11 设备
             // 零拷贝链路：硬解输出 ID3D11Texture2D → D3D11HardwareFrameResource → D3D11Renderer
@@ -108,6 +144,26 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         // 打开解码器
         int ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
+        if (ret < 0 && useMediaCodec)
+        {
+            // V2-17 B9: MediaCodec 打开失败（如宿主未调 MediaCodecInterop.SetJavaVM）→ 回退软件解码
+            _logger.LogWarning("MediaCodec 解码器打开失败 ({Error})，回退到软件解码。" +
+                "提示：宿主须先调用 MediaCodecInterop.SetJavaVM 注入 JavaVM", GetErrorString(ret));
+            _hwDeviceCtx?.Dispose();
+            _hwDeviceCtx = null;
+            _codecContextHandle.Dispose();
+            _codecContextHandle = null;
+            IsHardwareAccelerated = false;
+
+            avCodec = ffmpeg.avcodec_find_decoder(codecId);
+            if (avCodec == null)
+                throw new NotSupportedException($"FFmpeg 未找到视频解码器: {codec} (codec_id={codecId})");
+            ctx = ffmpeg.avcodec_alloc_context3(avCodec);
+            if (ctx == null)
+                throw new InvalidOperationException("avcodec_alloc_context3 失败（软件回退）");
+            _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
+            ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
+        }
         if (ret < 0)
         {
             _codecContextHandle.Dispose();
@@ -194,6 +250,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                     return CreateHardwareFrameFromAVFrame(avFrame);
                 }
 
+                // V2-17 B9: 检查 MediaCodec 表面直渲染输出格式
+                if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_MEDIACODEC)
+                {
+                    return CreateMediaCodecSurfaceFrame(avFrame);
+                }
+
                 return CreateVideoFrameFromAVFrame(avFrame);
             }
             finally
@@ -246,6 +308,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
             {
                 return CreateHardwareFrameFromAVFrame(avFrame);
+            }
+
+            // V2-17 B9: Flush 时同样需检查 MediaCodec 表面输出格式（与 DecodeCore 一致）
+            if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_MEDIACODEC)
+            {
+                return CreateMediaCodecSurfaceFrame(avFrame);
             }
 
             return CreateVideoFrameFromAVFrame(avFrame);
@@ -496,6 +564,120 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         frame.Reset(width, height, PixelFormat.NV12, resource, timestamp, duration, keyFrame);
         return frame;
     }
+
+    // ── V2-17 B9: Android MediaCodec 硬件解码 ──
+
+    /// <summary>
+    /// 初始化 MediaCodec 硬件设备上下文（宿主注入 Surface → 表面直渲染；未注入 → 缓冲模式）。
+    /// </summary>
+    /// <remarks>
+    /// <para>同步操作（sync 分类）：FFmpeg hwdevice_ctx API 均为同步原生调用，无 I/O await。</para>
+    /// <para>FFmpeg.AutoGen 8.1.0 无 <c>av_mediacodec_alloc_context</c> 包装（反射探针核验）→
+    /// 走通用 <c>av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_MEDIACODEC)</c> + 原始指针设置
+    /// <c>AVMediaCodecDeviceContext</c>（与 D3D11VA 同款手法）。</para>
+    /// <para>AVMediaCodecDeviceContext 布局（FFmpeg 8 hwcontext_mediacodec.h）：
+    /// <c>surface(void*)</c>, <c>native_window(void*)</c>, <c>create_window(int)</c>。</para>
+    /// <para><b>前置条件</b>：宿主须已调用 <see cref="MediaCodecInterop.SetJavaVM"/> 注入 JavaVM。</para>
+    /// </remarks>
+    /// <param name="ctx">FFmpeg 编解码上下文（设置其 hw_device_ctx 字段）。</param>
+    private unsafe void InitializeMediaCodec(AVCodecContext* ctx)
+    {
+        IntPtr surface = _options?.MediaCodecSurface ?? IntPtr.Zero;
+        IntPtr nativeWindow = _options?.MediaCodecNativeWindow ?? IntPtr.Zero;
+
+        // 1. 分配 MediaCodec 硬件设备上下文
+        AVBufferRef* hwRef = ffmpeg.av_hwdevice_ctx_alloc(AVHWDeviceType.AV_HWDEVICE_TYPE_MEDIACODEC);
+        if (hwRef == null)
+            throw new InvalidOperationException("av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_MEDIACODEC) 返回 null");
+
+        try
+        {
+            // 2. 设置宿主注入的 Surface / ANativeWindow（Surface 优先；均为空 = 缓冲模式）
+            AVHWDeviceContext* hwCtx = (AVHWDeviceContext*)hwRef->data;
+            IntPtr* mcCtx = (IntPtr*)hwCtx->hwctx; // AVMediaCodecDeviceContext
+            if (surface != IntPtr.Zero)
+                mcCtx[0] = surface;        // surface (android/view/Surface jobject 全局引用)
+            else if (nativeWindow != IntPtr.Zero)
+                mcCtx[1] = nativeWindow;   // native_window (ANativeWindow*)
+
+            // 3. 初始化设备上下文
+            int ret = ffmpeg.av_hwdevice_ctx_init(hwRef);
+            if (ret < 0)
+                throw new InvalidOperationException($"av_hwdevice_ctx_init(MEDIACODEC) 失败: {GetErrorString(ret)} (code={ret})");
+
+            // 4. 设置到编解码上下文（av_buffer_ref 增加引用计数）
+            AVBufferRef* ctxRef = ffmpeg.av_buffer_ref(hwRef);
+            if (ctxRef == null)
+                throw new InvalidOperationException("av_buffer_ref 返回 null（内存不足）");
+            ctx->hw_device_ctx = ctxRef;
+
+            // 5. SafeHandle 管理 hwRef 生命周期
+            _hwDeviceCtx = new SafeAVBufferRefHandle((IntPtr)hwRef);
+        }
+        catch
+        {
+            AVBufferRef* p = hwRef;
+            ffmpeg.av_buffer_unref(&p);
+            throw;
+        }
+
+        _logger.LogInformation("MediaCodec 硬件解码已初始化（{Mode}）",
+            surface != IntPtr.Zero || nativeWindow != IntPtr.Zero ? "表面直渲染" : "缓冲模式");
+    }
+
+    /// <summary>
+    /// 从 MediaCodec 表面模式输出的 AVFrame 创建 VideoFrame（零拷贝送显路径）。
+    /// </summary>
+    /// <remarks>
+    /// <para>MediaCodec 表面帧布局：<c>data[3]</c> = <c>AVMediaCodecBuffer*</c>，像素驻留 GPU 不可 CPU 访问。</para>
+    /// <para>经 <c>av_frame_clone</c>（引用计数）保活缓冲——外层 DecodeCore 的 av_frame_free 不影响克隆帧。</para>
+    /// <para>渲染层匹配 <see cref="MediaCodecFrameResource"/> 后调用其 Render() 送显。</para>
+    /// <para>同步操作（hot 路径）：引用计数克隆 + 对象构造，无 I/O。</para>
+    /// </remarks>
+    private unsafe VideoFrame CreateMediaCodecSurfaceFrame(AVFrame* avFrame)
+    {
+        int width = avFrame->width;
+        int height = avFrame->height;
+
+        // 克隆帧（共享引用计数缓冲）保活 AVMediaCodecBuffer
+        AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
+        if (clone == null)
+            throw new InvalidOperationException("av_frame_clone 失败（MediaCodec 表面帧，内存不足）");
+
+        var frameOwner = new SafeAVFrameHandle((IntPtr)clone);
+        IntPtr mcBuffer = (IntPtr)clone->data[3]; // AVMediaCodecBuffer*
+        if (mcBuffer == IntPtr.Zero)
+        {
+            frameOwner.Dispose();
+            throw new InvalidOperationException("MediaCodec 表面帧 data[3] (AVMediaCodecBuffer) 为空");
+        }
+
+        var resource = new MediaCodecFrameResource(mcBuffer, width, height, frameOwner);
+
+        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        TimeSpan duration = avFrame->duration > 0
+            ? TimeSpan.FromTicks((long)(avFrame->duration * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
+
+        var frame = _framePool?.Rent() ?? new VideoFrame();
+        frame.Reset(width, height, PixelFormat.NV12, resource, timestamp, duration, keyFrame);
+        return frame;
+    }
+
+    /// <summary>获取 FFmpeg MediaCodec 专用解码器名（无对应硬解则返回 null）。</summary>
+    private static string? GetMediaCodecDecoderName(VideoCodec codec) => codec switch
+    {
+        VideoCodec.H264 => "h264_mediacodec",
+        VideoCodec.H265 => "hevc_mediacodec",
+        VideoCodec.AV1 => "av1_mediacodec",
+        VideoCodec.VP9 => "vp9_mediacodec",
+        VideoCodec.MPEG2 => "mpeg2_mediacodec",
+        VideoCodec.MPEG4 => "mpeg4_mediacodec",
+        _ => null
+    };
 
     private static AVCodecID MapVideoCodecToFFmpeg(VideoCodec codec) => codec switch
     {

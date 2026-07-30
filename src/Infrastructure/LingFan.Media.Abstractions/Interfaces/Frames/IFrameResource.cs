@@ -8,7 +8,8 @@ namespace LingFan.Media.Abstractions;
 /// <list type="bullet">
 /// <item><see cref="SoftwareFrameResource"/>（CPU 内存，在 Abstractions/Models 中）</item>
 /// <item>D3D11TextureResource / VulkanImageResource / GLTextureResource / MetalTextureResource</item>
-/// <item>CVPixelBufferResource / IOSurfaceResource</item>
+/// <item><see cref="AHardwareBufferResource"/>（Android，跨层契约，在 Abstractions/Models 中）</item>
+/// <item><see cref="CVPixelBufferResource"/> / <see cref="IOSurfaceResource"/>（Apple，跨层契约，在 Abstractions/Models 中）</item>
 /// </list>
 /// Renderer 侧用 pattern matching 匹配类型，AOT 安全。
 /// </remarks>

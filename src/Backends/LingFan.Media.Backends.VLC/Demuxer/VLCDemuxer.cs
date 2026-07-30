@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using LibVLCSharp.Shared;
@@ -67,6 +68,8 @@ internal sealed class VLCDemuxer : IMediaDemuxer
     // 音频格式
     private int _audioSampleRate;
     private int _audioChannels;
+    private int _audioBytesPerSample = 2; // 默认 S16N（每样本 2 字节），OnAudioSetup 按真实格式校正
+    private SampleFormat _audioSampleFormat = SampleFormat.S16; // OnAudioSetup 按真实格式校正
     private int _audioTrackIndex = -1;
 
     // 状态
@@ -162,7 +165,7 @@ internal sealed class VLCDemuxer : IMediaDemuxer
     {
         _mediaPlayer = new MediaPlayer(_backend.LibVLC)
         {
-            EnableHardwareDecoding = true
+            EnableHardwareDecoding = _backend.Options.EnableHardwareDecoding
         };
 
         if (_videoTrackIndex >= 0)
@@ -311,7 +314,8 @@ internal sealed class VLCDemuxer : IMediaDemuxer
         var packet = new MediaPacket(
             _videoTrackIndex, data,
             TimeSpan.FromMilliseconds(_mediaPlayer?.Time ?? 0),
-            TimeSpan.Zero, keyFrame: true);
+            TimeSpan.Zero, keyFrame: true,
+            width: _videoWidth, height: _videoHeight, stride: _videoPitch);
 
         _frameChannel.Writer.TryWrite(packet);
     }
@@ -324,7 +328,49 @@ internal sealed class VLCDemuxer : IMediaDemuxer
     {
         _audioSampleRate = (int)rate;
         _audioChannels = (int)channels;
+        _audioBytesPerSample = BytesPerSampleFromFormat(format);
+        _audioSampleFormat = SampleFormatFromFormat(format);
         return 0;
+    }
+
+    /// <summary>
+    /// 根据 VLC 音频格式 FourCC（如 "S16N"/"FL32"/"S32N"）推导每样本字节数。
+    /// 修复 H6：原 OnAudioPlay 固定按 2 字节（S16）计算帧大小，忽略真实格式导致数据错位/截断。
+    /// </summary>
+    private static int BytesPerSampleFromFormat(IntPtr formatPtr)
+    {
+        if (formatPtr == IntPtr.Zero) return 2; // 默认 S16N
+        var fmt = Marshal.PtrToStringAnsi(formatPtr, 4);
+        return fmt switch
+        {
+            "U8" or "S8" => 1,
+            "S16N" or "S16L" or "S16B" or "S16" => 2,
+            "S24N" or "S24L" or "S24B" => 4, // VLC S24 按 4 字节对齐交付
+            "S32N" or "S32L" or "S32B" or "S32" => 4,
+            "FL32" or "F32L" or "F32B" or "F32" => 4,
+            "FL64" or "F64L" or "F64B" or "F64" => 8,
+            _ => 2
+        };
+    }
+
+    /// <summary>
+    /// 根据 VLC 音频格式 FourCC 映射到 <see cref="SampleFormat"/>（修复 H5/H6：解码器须用真实采样格式而非硬编码 S16）。
+    /// 枚举仅含 S16/S32/F32，对无对应枚举的格式做最佳近似（8 位→S16，24 位→S32，64 位浮点→F32）。
+    /// </summary>
+    private static SampleFormat SampleFormatFromFormat(IntPtr formatPtr)
+    {
+        if (formatPtr == IntPtr.Zero) return SampleFormat.S16; // 默认 S16N
+        var fmt = Marshal.PtrToStringAnsi(formatPtr, 4);
+        return fmt switch
+        {
+            "U8" or "S8" => SampleFormat.S16,
+            "S16N" or "S16L" or "S16B" or "S16" => SampleFormat.S16,
+            "S24N" or "S24L" or "S24B" => SampleFormat.S32,
+            "S32N" or "S32L" or "S32B" or "S32" => SampleFormat.S32,
+            "FL32" or "F32L" or "F32B" or "F32" => SampleFormat.F32,
+            "FL64" or "F64L" or "F64B" or "F64" => SampleFormat.F32,
+            _ => SampleFormat.S16
+        };
     }
 
     private void OnAudioCleanup(IntPtr opaque) { }
@@ -341,8 +387,20 @@ internal sealed class VLCDemuxer : IMediaDemuxer
 
     private void OnAudioFlush(IntPtr data, long pts)
     {
-        // VLC 音频刷新回调——清空 Channel 中的待播数据
-        while (_frameChannel.Reader.TryRead(out _)) { }
+        // VLC 音频刷新回调——仅丢弃缓冲中的<b>音频</b>包，保留视频包。
+        // 修复 H7：原实现清空整个 _frameChannel，会连带丢弃尚未消费的视频帧。
+        // 音视频共用单一 FIFO 通道，无法按轨选择性出队，故读出后分类：
+        // 音频包 Dispose 释放缓冲；视频包暂存后按原顺序写回（已移除总量 >= 保留视频数，写回不会溢出有界通道）。
+        var videoPackets = new List<MediaPacket>(capacity: 4);
+        while (_frameChannel.Reader.TryRead(out var packet))
+        {
+            if (packet.TrackIndex == _audioTrackIndex)
+                packet.Dispose();
+            else
+                videoPackets.Add(packet);
+        }
+        foreach (var f in videoPackets)
+            _frameChannel.Writer.TryWrite(f);
     }
 
     private void OnAudioDrain(IntPtr data)
@@ -354,14 +412,15 @@ internal sealed class VLCDemuxer : IMediaDemuxer
     {
         if (_audioTrackIndex < 0) return;
 
-        int dataSize = (int)count * _audioChannels * 2;
+        int dataSize = (int)count * _audioChannels * _audioBytesPerSample;
         byte[] audioData = new byte[dataSize];
         Marshal.Copy(samples, audioData, 0, dataSize);
 
         var packet = new MediaPacket(
             _audioTrackIndex, audioData,
             TimeSpan.FromMilliseconds(pts),
-            TimeSpan.Zero, keyFrame: true);
+            TimeSpan.Zero, keyFrame: true,
+            sampleRate: _audioSampleRate, channels: _audioChannels, format: _audioSampleFormat);
 
         _frameChannel.Writer.TryWrite(packet);
     }

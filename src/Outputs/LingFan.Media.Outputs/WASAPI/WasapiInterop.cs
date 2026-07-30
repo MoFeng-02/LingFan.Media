@@ -9,7 +9,7 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// 故采用 vtable 委托方式，而非源生成式 COM。）</para>
 /// <para><b>不使用 NAudio</b>：NAudio 内部使用反射，不满足 AOT 友好要求。</para>
 /// </remarks>
-internal static class WasapiInterop
+internal static partial class WasapiInterop
 {
     // ── 常量 ──
 
@@ -107,25 +107,22 @@ internal static class WasapiInterop
     // PreserveSig=true（默认）——必须保留HRESULT返回值，
     // 因为 RPC_E_CHANGED_MODE 是失败HRESULT但需要特殊处理（不抛异常而是跳过CoUninitialize），
     // PreserveSig=false 会让marshaler自动抛COMException，导致RPC_E_CHANGED_MODE分支不可达。
-    [DllImport("ole32.dll")]
-    public static extern int CoInitializeEx(IntPtr pvReserved, uint dwCoInit);
+    [LibraryImport("ole32.dll")]
+    public static partial int CoInitializeEx(IntPtr pvReserved, uint dwCoInit);
 
-    [DllImport("ole32.dll")]
-    public static extern void CoUninitialize();
+    [LibraryImport("ole32.dll")]
+    public static partial void CoUninitialize();
 
-    [DllImport("ole32.dll")]
-    public static extern int CoCreateInstance(
+    [LibraryImport("ole32.dll")]
+    public static partial int CoCreateInstance(
         ref Guid rclsid,
         IntPtr pUnkOuter,
         int dwClsContext,
         ref Guid riid,
         out IntPtr ppv);
 
-    [DllImport("ole32.dll")]
-    public static extern void CoTaskMemFree(IntPtr ptr);
-
-    [DllImport("ole32.dll")]
-    public static extern IntPtr CoTaskMemAlloc(nuint cb);
+    [LibraryImport("ole32.dll")]
+    public static partial void CoTaskMemFree(IntPtr ptr);
 }
 
 /// <summary>

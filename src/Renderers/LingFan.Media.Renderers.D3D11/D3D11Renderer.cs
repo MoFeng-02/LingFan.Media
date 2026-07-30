@@ -210,7 +210,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
 
         lock (_gate)
         {
-            if (_disposed) return; // ���态兜底：Dispose 已在锁外置位，丢弃本帧避免触碰已释放 SwapChain
+            if (_disposed) return; // 竞态兜底：Dispose 已在锁外置位，丢弃本帧避免触碰已释放 SwapChain
             if (!_attached || _backBuffer is null || _swapChain is null)
             {
                 throw new InvalidOperationException("渲染器未附加渲染目标，无法 Present。");
@@ -242,7 +242,8 @@ internal sealed class D3D11Renderer : IVideoRenderer
                 case IGpuTextureResource gpu:
                     // V2-15 R5：GPU 纹理帧（DXVA 硬解输出）
                     // NV12/NV21：无 SRV 绑定，经中间 SRV 纹理 + Shader 缩放/转换
-                    // BGRA32/RGBA32：尺寸一致时 CopySubresourceRegion（支持纹理数组）
+                    // BGRA32/RGBA32：尺寸一致时 CopySubresourceRegion 快路径（支持纹理数组）；
+                    //   尺寸不符窗口（源分辨率 ≠ 渲染目标，属正常缩放场景）时经 Shader 采样缩放（零 CPU 往返）
                     if (D3D11ShaderPipeline.IsYuvFormat(gpu.Format))
                     {
                         _shaderPipeline ??= new D3D11ShaderPipeline(_device, _context);
@@ -254,10 +255,8 @@ internal sealed class D3D11Renderer : IVideoRenderer
                     }
                     else
                     {
-                        throw new NotSupportedException(
-                            $"GPU 纹理帧尺寸 {frame.Width}x{frame.Height} 须与渲染目标尺寸 " +
-                            $"{backBufferDesc.Width}x{backBufferDesc.Height} 一致（BGRA/RGBA CopyResource 路径），" +
-                            $"或使用 NV12 格式经 Shader 缩放。");
+                        _shaderPipeline ??= new D3D11ShaderPipeline(_device, _context);
+                        PresentGpuTextureViaShaderBgra(gpu, (int)backBufferDesc.Width, (int)backBufferDesc.Height);
                     }
                     break;
 
@@ -268,8 +267,32 @@ internal sealed class D3D11Renderer : IVideoRenderer
             }
 
             // 交换 SwapChain（VSync = 1）
-            _swapChain.Present(1u, PresentFlags.None);
+            // B-DEVLOST: 检查 Present 返回值——DEVICE_REMOVED/RESET（TDR/驱动崩溃/GPU 拔出）
+            // 时设备及全部资源永久失效，抛中立 GpuDeviceLostException 供会话层重建。
+            var presentResult = _swapChain.Present(1u, PresentFlags.None);
+            ThrowIfDeviceLost(presentResult, "Present");
         }
+    }
+
+    /// <summary>
+    /// B-DEVLOST: 识别设备丢失类 HRESULT 并抛 <see cref="GpuDeviceLostException"/>。
+    /// 附带 <c>GetDeviceRemovedReason</c> 诊断（DXGI_ERROR_DEVICE_HUNG/DRIVER_INTERNAL_ERROR 等）。
+    /// </summary>
+    private void ThrowIfDeviceLost(SharpGen.Runtime.Result result, string operation)
+    {
+        if (result.Success) return;
+
+        if (result == Vortice.DXGI.ResultCode.DeviceRemoved || result == Vortice.DXGI.ResultCode.DeviceReset)
+        {
+            var reason = _device.DeviceRemovedReason;
+            _logger.LogError("D3D11 设备丢失（{Operation}）：HRESULT=0x{Code:X8}，DeviceRemovedReason=0x{Reason:X8}",
+                operation, result.Code, reason.Code);
+            throw new GpuDeviceLostException(
+                $"D3D11 设备已丢失（{operation} 返回 0x{result.Code:X8}，" +
+                $"DeviceRemovedReason=0x{reason.Code:X8}）。需释放并重建渲染会话。");
+        }
+
+        throw new InvalidOperationException($"D3D11 {operation} 失败：HRESULT=0x{result.Code:X8}。");
     }
 
     /// <inheritdoc/>
@@ -284,7 +307,9 @@ internal sealed class D3D11Renderer : IVideoRenderer
             _context.ClearRenderTargetView(_renderTargetView, new Color4(0, 0, 0, 0));
 
             // 呈现清除后的画面（SyncInterval=0 立即显示，不等 VSync）
-            _swapChain.Present(0u, PresentFlags.None);
+            // B-DEVLOST: 同 Present——设备丢失须以类型化异常上抛
+            var clearResult = _swapChain.Present(0u, PresentFlags.None);
+            ThrowIfDeviceLost(clearResult, "Clear/Present");
         }
     }
 
@@ -432,6 +457,34 @@ internal sealed class D3D11Renderer : IVideoRenderer
             _shaderPipeline!.PresentFromGpuTexture(
                 srcTexture, gpu.SubresourceIndex,
                 gpu.Width, gpu.Height,
+                _renderTargetView!, targetWidth, targetHeight);
+        }
+        finally
+        {
+            GC.SuppressFinalize(srcTexture);
+        }
+    }
+
+    /// <summary>
+    /// GPU 纹理渲染路径（BGRA32/RGBA32 且尺寸 ≠ 渲染目标）：经 Shader 采样缩放（V2 帧尺寸可变修复）。
+    /// </summary>
+    /// <remarks>
+    /// 源 GPU 纹理可绑定 SRV 直接采样（与 NV12 硬解纹理不同），故 GPU→GPU 拷贝到缓存中间纹理后
+    /// 复用 <c>PSRgb</c> Shader 双线性缩放，零 CPU 往返。替代原先抛 <see cref="NotSupportedException"/> 的行为——
+    /// 帧尺寸本应逐帧可变，源分辨率 ≠ 窗口尺寸属正常缩放场景（如 4K 视频缩至窗口）。
+    /// </remarks>
+    private void PresentGpuTextureViaShaderBgra(IGpuTextureResource gpu, int targetWidth, int targetHeight)
+    {
+        IntPtr ptr = gpu.NativeTextureHandle;
+        if (ptr == IntPtr.Zero)
+            throw new InvalidOperationException("GPU 纹理句柄无效。");
+
+        var srcTexture = new ID3D11Texture2D(ptr);
+        try
+        {
+            _shaderPipeline!.PresentFromBgraGpuTexture(
+                srcTexture, gpu.SubresourceIndex,
+                gpu.Width, gpu.Height, gpu.Format,
                 _renderTargetView!, targetWidth, targetHeight);
         }
         finally

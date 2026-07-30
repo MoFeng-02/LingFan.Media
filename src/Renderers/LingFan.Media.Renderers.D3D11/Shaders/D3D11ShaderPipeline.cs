@@ -269,6 +269,52 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         _context.OMSetRenderTargets((ID3D11RenderTargetView)null!, null!);
     }
 
+    /// <summary>
+    /// 用 Shader 路径呈现 BGRA/RGBA GPU 纹理到渲染目标（尺寸不符窗口时 GPU 缩放）。
+    /// </summary>
+    /// <remarks>
+    /// <para>与 NV12 路径不同：BGRA/RGBA 纹理可绑定 SRV 直接采样（NV12 硬解纹理不可绑 SRV，须 CPU 往返）。
+    /// 路径：</para>
+    /// <para>1. <c>CopySubresourceRegion</c> 从源 GPU 纹理拷贝到缓存的中间 BGRA/RGBA 纹理（GPU→GPU，零 CPU 往返）</para>
+    /// <para>2. 复用 <c>PSRgb</c> + 平面0 SRV 采样呈现（双线性缩放 + 任意尺寸）</para>
+    /// <para>用于 D3D11Renderer 在 <c>case IGpuTextureResource</c> 中 BGRA/RGBA 且尺寸 ≠ 渲染目标时，
+    /// 替代原先抛 <see cref="NotSupportedException"/> 的行为——帧尺寸本应逐帧可变（源分辨率 ≠ 窗口尺寸属正常缩放场景）。</para>
+    /// <para>调用方持锁；本方法同步 GPU 提交，无 I/O。</para>
+    /// </remarks>
+    internal void PresentFromBgraGpuTexture(
+        ID3D11Texture2D srcTexture, int subresourceIndex,
+        int srcWidth, int srcHeight, PixelFormat srcFormat,
+        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight)
+    {
+        ArgumentNullException.ThrowIfNull(srcTexture);
+        ArgumentNullException.ThrowIfNull(rtv);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        EnsureShaders();
+        // 缓存与源格式一致的中间纹理 + SRV（尺寸/格式变化才重建），复用软帧 BGRA/RGBA 已验证管线
+        EnsureFrameTextures(srcWidth, srcHeight, srcFormat);
+
+        // GPU→GPU 拷贝（确保格式一致：源 BGRA/RGBA → 缓存同格式纹理，CopySubresourceRegion 要求格式相同）
+        _context.CopySubresourceRegion(
+            _planeTextures[0]!, 0u, 0u, 0u, 0u,
+            srcTexture, (uint)subresourceIndex, null);
+
+        // 复用 PSRgb + 平面0 SRV 采样缩放（与软帧 BGRA/RGBA 路径完全一致）
+        _context.OMSetRenderTargets(rtv, null!);
+        _context.RSSetViewport(0, 0, targetWidth, targetHeight, 0f, 1f);
+        _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+        _context.IASetInputLayout(null!);
+        _context.VSSetShader(_vs!);
+        _context.PSSetShader(_psRgb!);
+        _context.PSSetSampler(0, _sampler!);
+        _context.PSSetShaderResource(0, _planeSrvs[0]!);
+
+        _context.Draw(3, 0);
+
+        _context.PSSetShaderResource(0, null!);
+        _context.OMSetRenderTargets((ID3D11RenderTargetView)null!, null!);
+    }
+
     private void EnsureGpuStagingTexture(int width, int height)
     {
         if (_gpuCachedWidth == width && _gpuCachedHeight == height && _gpuStagingTexture is not null)

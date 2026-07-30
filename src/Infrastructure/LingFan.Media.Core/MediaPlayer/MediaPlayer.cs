@@ -225,7 +225,11 @@ public sealed class MediaPlayer : IMediaPlayer
 
             if (videoTrack != null && videoTrack.VideoCodec.HasValue)
             {
-                _videoDecoder = _videoDecoderFactory.Create(videoTrack.VideoCodec.Value, new VideoSettings());
+                // 透传解封装器提取的编解码器私有配置（H264/H265 的 SPS+PPS）→ 解码器输入类型
+                _videoDecoder = _videoDecoderFactory.Create(videoTrack.VideoCodec.Value, new VideoSettings
+                {
+                    CodecConfiguration = videoTrack.VideoInfo?.CodecConfiguration ?? default
+                });
             }
 
             if (audioTrack != null && audioTrack.AudioCodec.HasValue)

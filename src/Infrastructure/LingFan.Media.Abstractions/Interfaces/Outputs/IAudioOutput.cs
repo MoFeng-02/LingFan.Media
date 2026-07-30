@@ -17,7 +17,7 @@ public interface IAudioOutput : IMediaComponent
     /// <summary>
     /// 提交音频帧。不接管帧所有权（V2）；仅同步拷贝 PCM 数据，
     /// 调用方负责 Submit 后释放帧（Return 到池或 Dispose）。
-    /// 音频线程调用，缓冲满时阻塞（COM 背压，伪异步是允许的）。
+    /// 音频线程调用，缓冲满时阻塞（COM 背压，同步阻塞背压是正常机制，非伪异步）。
     /// </summary>
     void Submit(AudioFrame frame);
 

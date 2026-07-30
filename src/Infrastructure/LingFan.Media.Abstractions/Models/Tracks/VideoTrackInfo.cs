@@ -25,4 +25,11 @@ public sealed class VideoTrackInfo
 
     /// <summary>轨道时长。</summary>
     public TimeSpan Duration { get; init; }
+
+    /// <summary>
+    /// 编解码器私有配置（H264/H265 的 SPS+PPS / avcC / hvcC）。由解封装器从轨道媒体类型提取，
+    /// 透传给解码器（MF 后端经 <c>MF_MT_MPEG_SEQUENCE_HEADER</c>）。契约层“只增不改”演进，零外部引用。
+    /// 用可读写属性（非 init）：解封装器在轨道构建后于 ParseTracks 内回填。
+    /// </summary>
+    public ReadOnlyMemory<byte> CodecConfiguration { get; set; }
 }

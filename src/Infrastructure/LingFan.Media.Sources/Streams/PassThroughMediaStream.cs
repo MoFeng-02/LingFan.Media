@@ -46,6 +46,9 @@ public sealed class PassThroughMediaStream : IMediaStream
         }
     }
 
+    /// <inheritdoc/>
+    public string? Location => null; // 透传流无地址；需以字节流方式打开的 backend 不适用按地址打开
+
     /// <summary>
     /// 初始化 <see cref="PassThroughMediaStream"/> 的新实例。
     /// </summary>
