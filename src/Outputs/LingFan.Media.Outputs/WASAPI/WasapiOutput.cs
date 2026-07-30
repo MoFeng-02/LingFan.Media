@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.Versioning;
 
 namespace LingFan.Media.Outputs.Wasapi;
@@ -17,12 +19,13 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// V2 多格式直出：帧格式与设备格式匹配时零转换直拷。</item>
 /// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），IAudioClient.Stop/Start/Reset。</item>
 /// <item><see cref="GetPlaybackPosition"/>：同步（sync 分类），IAudioClock.GetPosition。</item>
-/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），释放 COM 对象 + 事件句柄 + CoUninitialize。</item>
+/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），封送释放 COM 对象到内部 STA 线程，并停止 STA 队列触发 CoUninitialize，释放事件句柄。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>。
 /// COM 释放为快速同步调用，无 I/O 可 await，非伪异步。</item>
 /// </list>
-/// <para><b>线程安全</b>：非线程安全。Submit 在音频管线线程调用，Pause/Resume/Flush 在控制线程调用，
-/// 不可并发。COM 使用 MTA（COINIT_MULTITHREADED），允许跨线程调用。</para>
+    /// <para><b>线程安全</b>：非线程安全。Submit 在音频管线线程调用，Pause/Resume/Flush 在控制线程调用，
+    /// 不可并发。所有 COM 调用经内部专用 STA 工作线程（COINIT_APARTMENTTHREADED）封送——WASAPI 要求
+    /// IAudioClient 在 STA 公寓创建与使用，MTA 下 GetMixFormat/Initialize 会触发 native AV（0xC0000005）。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，采用原始 vtable P/Invoke（ComVTable 委托封送），不使用 [ComImport]/RCW，NativeAOT 兼容。</para>
 /// <para><b>资源所有权</b>：IMMDeviceEnumerator/IMMDevice/IAudioClient/IAudioRenderClient/ISimpleAudioVolume/IAudioClock
 /// 的原生指针均由本类持有（Session 级），Dispose 时通过 Marshal.Release(IntPtr) 逆序释放。
@@ -71,7 +74,6 @@ internal sealed class WasapiOutput : IAudioOutput
     private IAudioClock_GetPosition? _audioClockGetPosition;
 
     // 状态
-    private bool _comInitialized;
     private bool _initialized;
     private bool _disposed;
     private int _bufferSize;      // WASAPI 缓冲区大小（帧数）
@@ -89,6 +91,12 @@ internal sealed class WasapiOutput : IAudioOutput
     // 共享模式下系统负责重采样到该格式，故初始化 WAVEFORMATEX 必须用它而非解码器输出格式。
     private int _mixSampleRate;
     private int _mixChannels;
+
+    // STA 线程封送（WASAPI 要求 IAudioClient 在 STA 公寓使用；MTA 下 GetMixFormat/Initialize 会触发 native AV）。
+    // 所有 COM 调用经内部 STA 工作线程封送，对外接口签名不变（MediaPlayer 调用方无需感知线程模型）。
+    private Thread? _staThread;
+    private BlockingCollection<StaWorkItem>? _staQueue;
+    private readonly ManualResetEventSlim _staStarted = new(false);
 
     /// <summary>
     /// 初始化 <see cref="WasapiOutput"/> 的新实例。
@@ -111,13 +119,16 @@ internal sealed class WasapiOutput : IAudioOutput
     public Task InitializeAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        InitializeCore();
+        EnsureStaThread();
+        RunOnSta(InitializeCore);
         return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
     public void Initialize(int sampleRate, int channels)
     {
+        RunOnSta(() =>
+        {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (_initialized)
@@ -142,17 +153,26 @@ internal sealed class WasapiOutput : IAudioOutput
             Marshal.ThrowExceptionForHR(hr);
 
             _audioClientPtr = pAudioClient;   // 持有 Activate 返回的引用
+            // ComVTable.Get 的 slotIndex 为「相对 IUnknown 的方法索引」（IUnknown 占用 vtable 绝对槽位 0-2，故绝对槽位 = 3 + slotIndex）。
+            // 标准 IAudioClient vtable（audioclient.h 官方声明顺序，IUnknown 之后相对索引）：
+            //   0 Initialize | 1 GetBufferSize | 2 GetStreamLatency(未使用) | 3 GetCurrentPadding
+            //   | 4 IsFormatSupported | 5 GetMixFormat | 6 GetDevicePeriod(未使用)
+            //   | 7 Start | 8 Stop | 9 Reset | 10 SetEventHandle | 11 GetService
+            // ⚠️ 审计修复（2026-07-30 第二轮，真机 DIAG 探针坐实）：此前基线注释抄漏了相对槽 2 的
+            //    GetStreamLatency，导致 GetCurrentPadding 起整体 -1 错位——GetMixFormat(误取槽4)
+            //    实际调到 IsFormatSupported，x64 下垃圾 pFormat 被解引用 → 原生 AV 0xC0000005。
+            //    探针证据：同一 this 上 GetBufferSize(槽1，映射正确) 正常返回 0x88890001，
+            //    GetMixFormat 一调即崩，锁定为槽位错位而非线程/封送问题。
             _audioClientInitialize = ComVTable.Get<IAudioClient_Initialize>(pAudioClient, 0);
             _audioClientGetBufferSize = ComVTable.Get<IAudioClient_GetBufferSize>(pAudioClient, 1);
+            // 跳过未使用的 GetStreamLatency（相对 slot 2）
             _audioClientGetCurrentPadding = ComVTable.Get<IAudioClient_GetCurrentPadding>(pAudioClient, 3);
-            // V2: IsFormatSupported (vtable slot 4)
             _audioClientIsFormatSupported = ComVTable.Get<IAudioClient_IsFormatSupported>(pAudioClient, 4);
-            // V2: GetMixFormat (vtable slot 5)
             _audioClientGetMixFormat = ComVTable.Get<IAudioClient_GetMixFormat>(pAudioClient, 5);
+            // 跳过未使用的 GetDevicePeriod（相对 slot 6）
             _audioClientStart = ComVTable.Get<IAudioClient_Start>(pAudioClient, 7);
             _audioClientStop = ComVTable.Get<IAudioClient_Stop>(pAudioClient, 8);
             _audioClientReset = ComVTable.Get<IAudioClient_Reset>(pAudioClient, 9);
-            // V2: SetEventHandle (vtable slot 10)
             _audioClientSetEventHandle = ComVTable.Get<IAudioClient_SetEventHandle>(pAudioClient, 10);
             _audioClientGetService = ComVTable.Get<IAudioClient_GetService>(pAudioClient, 11);
 
@@ -314,6 +334,7 @@ internal sealed class WasapiOutput : IAudioOutput
             _eventDrivenMode = _options.EventDrivenMode;
             throw;
         }
+        });
     }
 
     /// <inheritdoc/>
@@ -326,6 +347,8 @@ internal sealed class WasapiOutput : IAudioOutput
     {
         ArgumentNullException.ThrowIfNull(frame);
 
+        RunOnSta(() =>
+        {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (!_initialized || _audioClientPtr == IntPtr.Zero || _renderClientPtr == IntPtr.Zero)
@@ -393,6 +416,7 @@ internal sealed class WasapiOutput : IAudioOutput
                 catch { /* 尽力释放，忽略二次异常 */ }
             }
         }
+        });
     }
 
     /// <inheritdoc/>
@@ -401,15 +425,18 @@ internal sealed class WasapiOutput : IAudioOutput
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _audioClientPtr == IntPtr.Zero) return;
 
-        int hr = _audioClientStop!(_audioClientPtr);
-        // 审计修复：0x88890004 实际是 AUDCLNT_E_DEVICE_INVALIDATED（设备移除），非 AUDCLNT_E_NOT_INITIALIZED（0x88890001）。
-        // 两者在 Stop() 上下文中均可安全忽略：设备已移除时 Stop 无意义，未初始化时 Stop 也无意义。
-        if (hr < 0
-            && hr != WasapiInterop.AUDCLNT_E_DEVICE_INVALIDATED
-            && hr != WasapiInterop.AUDCLNT_E_NOT_INITIALIZED)
+        RunOnSta(() =>
         {
-            _logger.LogWarning("IAudioClient.Stop 失败：HRESULT=0x{HR:X8}", hr);
-        }
+            int hr = _audioClientStop!(_audioClientPtr);
+            // 审计修复：0x88890004 实际是 AUDCLNT_E_DEVICE_INVALIDATED（设备移除），非 AUDCLNT_E_NOT_INITIALIZED（0x88890001）。
+            // 两者在 Stop() 上下文中均可安全忽略：设备已移除时 Stop 无意义，未初始化时 Stop 也无意义。
+            if (hr < 0
+                && hr != WasapiInterop.AUDCLNT_E_DEVICE_INVALIDATED
+                && hr != WasapiInterop.AUDCLNT_E_NOT_INITIALIZED)
+            {
+                _logger.LogWarning("IAudioClient.Stop 失败：HRESULT=0x{HR:X8}", hr);
+            }
+        });
     }
 
     /// <inheritdoc/>
@@ -418,9 +445,12 @@ internal sealed class WasapiOutput : IAudioOutput
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _audioClientPtr == IntPtr.Zero) return;
 
-        int hr = _audioClientStart!(_audioClientPtr);
-        if (hr < 0)
-            _logger.LogWarning("IAudioClient.Start 失败：HRESULT=0x{HR:X8}", hr);
+        RunOnSta(() =>
+        {
+            int hr = _audioClientStart!(_audioClientPtr);
+            if (hr < 0)
+                _logger.LogWarning("IAudioClient.Start 失败：HRESULT=0x{HR:X8}", hr);
+        });
     }
 
     /// <inheritdoc/>
@@ -429,9 +459,12 @@ internal sealed class WasapiOutput : IAudioOutput
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _audioClientPtr == IntPtr.Zero) return;
 
-        int hr = _audioClientReset!(_audioClientPtr);
-        if (hr < 0)
-            _logger.LogWarning("IAudioClient.Reset 失败：HRESULT=0x{HR:X8}", hr);
+        RunOnSta(() =>
+        {
+            int hr = _audioClientReset!(_audioClientPtr);
+            if (hr < 0)
+                _logger.LogWarning("IAudioClient.Reset 失败：HRESULT=0x{HR:X8}", hr);
+        });
     }
 
     /// <inheritdoc/>
@@ -441,15 +474,18 @@ internal sealed class WasapiOutput : IAudioOutput
         if (_audioClockPtr == IntPtr.Zero)
             return TimeSpan.Zero;
 
-        int hr = _audioClockGetPosition!(_audioClockPtr, out ulong devicePosition, out _);
-        if (hr < 0)
-            return TimeSpan.Zero;
+        return RunOnSta(() =>
+        {
+            int hr = _audioClockGetPosition!(_audioClockPtr, out ulong devicePosition, out _);
+            if (hr < 0)
+                return TimeSpan.Zero;
 
-        // devicePosition 是已播放的帧数，转换为 TimeSpan
-        if (_sampleRate <= 0)
-            return TimeSpan.Zero;
+            // devicePosition 是已播放的帧数，转换为 TimeSpan
+            if (_sampleRate <= 0)
+                return TimeSpan.Zero;
 
-        return TimeSpan.FromSeconds((double)devicePosition / _sampleRate);
+            return TimeSpan.FromSeconds((double)devicePosition / _sampleRate);
+        });
     }
 
     /// <inheritdoc/>
@@ -478,10 +514,13 @@ internal sealed class WasapiOutput : IAudioOutput
 
             if (_simpleVolumePtr != IntPtr.Zero)
             {
-                var ec = Guid.Empty;
-                int hr = _simpleVolumeSetMasterVolume!(_simpleVolumePtr, clamped, ref ec);
-                if (hr < 0)
-                    _logger.LogWarning("SetMasterVolume 失败：HRESULT=0x{HR:X8}", hr);
+                RunOnSta(() =>
+                {
+                    var ec = Guid.Empty;
+                    int hr = _simpleVolumeSetMasterVolume!(_simpleVolumePtr, clamped, ref ec);
+                    if (hr < 0)
+                        _logger.LogWarning("SetMasterVolume 失败：HRESULT=0x{HR:X8}", hr);
+                });
             }
         }
     }
@@ -504,7 +543,23 @@ internal sealed class WasapiOutput : IAudioOutput
         if (_disposed) return;
         _disposed = true;
 
-        ReleaseComObjects();
+        // 封送 COM 对象释放到 STA 线程（与创建/使用同一公寓），并停止 STA 队列触发 CoUninitialize。
+        if (_staThread is not null)
+        {
+            try { RunOnSta(ReleaseComObjects); }
+            catch { /* 释放时忽略错误 */ }
+
+            try { _staQueue!.CompleteAdding(); } catch { }
+            try { _staThread.Join(); } catch { }
+            try { _staQueue!.Dispose(); } catch { }
+            _staQueue = null;
+            _staThread = null;
+        }
+        else
+        {
+            // 极端情况：STA 线程从未创建（InitializeAsync 未被调用），直接释放 COM 对象
+            ReleaseComObjects();
+        }
 
         // V2: 释放事件句柄
         if (_bufferEvent != null)
@@ -513,12 +568,9 @@ internal sealed class WasapiOutput : IAudioOutput
             _bufferEvent = null;
         }
 
-        // 不调用 CoUninitialize()：CoInitializeEx(MTA) 初始化的是线程/进程级 COM 单元（由 .NET 运行时管理，
-        // 多线程单元引用计数）。实例级无条件 CoUninitialize 会错误反初始化该单元，破坏同线程/进程内其他
-        // COM 使用者（如 D3D11 渲染、其他音频会话），导致原生访问冲突（0xC0000005，实测全量测试崩溃）。
-        // 本实例创建的 COM 对象已由 ReleaseComObjects 正确释放；线程单元由 OS 在进程退出时清理。
-        // （2026-07-30：修复全量测试原生崩溃——WasapiOutput.Dispose 的 CoUninitialize 跨实例/测试污染 COM 单元）
-        _comInitialized = false;
+        // STA 公寓（CoInitializeEx(COINIT_APARTMENTTHREADED)）由内部 STA 工作线程在 Dispose 时
+        // 经 CompleteAdding → StaThreadProc finally → CoUninitialize 正确反初始化，不再有跨实例/测试
+        // 污染 COM 单元的问题（旧版 MTA + 无条件 CoUninitialize 曾引发全量测试原生崩溃 0xC0000005）。
 
         _initialized = false;
         _logger.LogDebug("WASAPI 输出已释放");
@@ -537,6 +589,79 @@ internal sealed class WasapiOutput : IAudioOutput
 
     // ── 内部方法 ──
 
+    // STA 线程封送基础设施（WASAPI 要求 IAudioClient 在 STA 公寓使用，MTA 下 GetMixFormat/Initialize 会触发 native AV）
+    private sealed class StaWorkItem
+    {
+        private readonly Action? _action;
+        private readonly Func<object?>? _func;
+        public object? Result;
+        public Exception? Exception;
+        public readonly ManualResetEventSlim Done = new(false);
+
+        public StaWorkItem(Action action) => _action = action;
+        public StaWorkItem(Func<object?> func) => _func = func;
+
+        public void Run()
+        {
+            if (_action is not null) _action();
+            else Result = _func!();
+        }
+    }
+
+    private void EnsureStaThread()
+    {
+        if (_staThread is not null) return;
+        _staQueue = new BlockingCollection<StaWorkItem>();
+        _staThread = new Thread(StaThreadProc) { IsBackground = true, Name = "WasapiSta" };
+        _staThread.SetApartmentState(ApartmentState.STA);
+        _staThread.Start();
+        _staStarted.Wait();
+    }
+
+    private void RunOnSta(Action action)
+    {
+        var queue = _staQueue;
+        if (queue is null || queue.IsAddingCompleted)
+            throw new ObjectDisposedException(nameof(WasapiOutput));
+        var item = new StaWorkItem(action);
+        queue.Add(item);
+        item.Done.Wait();
+        if (item.Exception is not null)
+            ExceptionDispatchInfo.Throw(item.Exception);
+    }
+
+    private T RunOnSta<T>(Func<T> func)
+    {
+        var queue = _staQueue;
+        if (queue is null || queue.IsAddingCompleted)
+            throw new ObjectDisposedException(nameof(WasapiOutput));
+        var item = new StaWorkItem(() => func()!);
+        queue.Add(item);
+        item.Done.Wait();
+        if (item.Exception is not null)
+            ExceptionDispatchInfo.Throw(item.Exception);
+        return (T)(item.Result ?? default(T))!;
+    }
+
+    private void StaThreadProc()
+    {
+        WasapiInterop.CoInitializeEx(IntPtr.Zero, WasapiInterop.COINIT_APARTMENTTHREADED);
+        _staStarted.Set();
+        try
+        {
+            foreach (var item in _staQueue!.GetConsumingEnumerable())
+            {
+                try { item.Run(); }
+                catch (Exception ex) { item.Exception = ex; }
+                finally { item.Done.Set(); }
+            }
+        }
+        finally
+        {
+            WasapiInterop.CoUninitialize();
+        }
+    }
+
     /// <summary>
     /// 初始化 COM 单元并获取默认音频渲染设备。
     /// </summary>
@@ -547,33 +672,15 @@ internal sealed class WasapiOutput : IAudioOutput
         if (_devicePtr != IntPtr.Zero)
             throw new InvalidOperationException("InitializeAsync 已调用，请勿重复调用。");
 
-        // 1. CoInitializeEx（MTA）
-        int hr = WasapiInterop.CoInitializeEx(IntPtr.Zero, WasapiInterop.COINIT_MULTITHREADED);
-        if (hr == WasapiInterop.RPC_E_CHANGED_MODE)
-        {
-            // 线程已初始化为不同模式，不调用 CoUninitialize
-            _comInitialized = false;
-            _logger.LogDebug("COM 已初始化为不同模式（RPC_E_CHANGED_MODE），跳过 CoUninitialize。");
-        }
-        else if (hr >= 0) // S_OK(0) 或 S_FALSE(1)
-        {
-            // 成功，需要 CoUninitialize 平衡
-            _comInitialized = true;
-        }
-        else
-        {
-            // 其他失败 HRESULT（如 E_OUTOFMEMORY）——COM 未初始化，不应继续
-            _comInitialized = false;
-            _logger.LogError("CoInitializeEx 失败：HRESULT=0x{HR:X8}", hr);
-            throw new COMException("CoInitializeEx 失败，无法初始化 COM 单元。", hr);
-        }
+        // 注意：COM 单元（STA）的 CoInitializeEx 已在内部 STA 工作线程（StaThreadProc）内完成。
+        // 本方法通过 RunOnSta 在 STA 线程上执行，故此处不再初始化/反初始化 COM 单元。
 
         try
         {
             // 2. 创建 IMMDeviceEnumerator
             var clsid = WasapiInterop.CLSID_MMDeviceEnumerator;
             var iid = WasapiInterop.IID_IMMDeviceEnumerator;
-            hr = WasapiInterop.CoCreateInstance(
+            int hr = WasapiInterop.CoCreateInstance(
                 ref clsid, IntPtr.Zero, WasapiInterop.CLSCTX_ALL,
                 ref iid, out IntPtr pEnumerator);
             Marshal.ThrowExceptionForHR(hr);
@@ -594,13 +701,8 @@ internal sealed class WasapiOutput : IAudioOutput
         }
         catch
         {
-            // 初始化失败，清理已创建的 COM 对象
+            // 初始化失败，清理已创建的 COM 对象（CoUninitialize 由 STA 线程 proc 的 finally 负责）
             ReleaseComObjects();
-            if (_comInitialized)
-            {
-                WasapiInterop.CoUninitialize();
-                _comInitialized = false;
-            }
             throw;
         }
 

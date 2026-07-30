@@ -157,19 +157,19 @@ internal struct WAVEFORMATEXTENSIBLE
 // 每个委托首个参数为 COM 对象指针（this），调用时由 ComVTable.Get 从 vtable 槽位读取函数指针。
 // 所有 HRESULT 均 PreserveSig 返回，由调用方用 Marshal.ThrowExceptionForHR 处理（与原始 [ComImport] 行为一致）。
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMMDeviceEnumerator_GetDefaultAudioEndpoint(IntPtr self, int dataFlow, int role, out IntPtr endpoint);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMMDevice_Activate(IntPtr self, ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IntPtr ppInterface);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_Initialize(IntPtr self, int shareMode, int streamFlags, long hnsBufferDuration, long hnsPeriodicity, IntPtr pWaveFormat, ref Guid pAudioSessionGuid);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_GetBufferSize(IntPtr self, out uint pNumBufferFrames);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_GetCurrentPadding(IntPtr self, out uint pNumPaddingFrames);
 
 /// <summary>
@@ -187,7 +187,7 @@ internal delegate int IAudioClient_GetCurrentPadding(IntPtr self, out uint pNumP
 /// 2) 共享模式返回 S_FALSE 时 WASAPI 通过 ppClosestMatch 分配 CoTaskMem 内存，
 /// 用 <c>out _</c> 丢弃后无法释放→内存泄漏。改为按值传 IntPtr.Zero 后 WASAPI 不分配内存。
 /// </remarks>
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_IsFormatSupported(IntPtr self, int shareMode, IntPtr pFormat, IntPtr ppClosestMatch);
 
 /// <summary>
@@ -195,16 +195,16 @@ internal delegate int IAudioClient_IsFormatSupported(IntPtr self, int shareMode,
 /// </summary>
 /// <param name="self">COM 对象指针。</param>
 /// <param name="pDeviceFormat">返回的 WAVEFORMATEX*（由 CoTaskMemAlloc 分配，调用方负责 CoTaskMemFree）。</param>
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_GetMixFormat(IntPtr self, out IntPtr pDeviceFormat);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_Start(IntPtr self);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_Stop(IntPtr self);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_Reset(IntPtr self);
 
 /// <summary>
@@ -213,22 +213,22 @@ internal delegate int IAudioClient_Reset(IntPtr self);
 /// </summary>
 /// <param name="self">COM 对象指针。</param>
 /// <param name="eventHandle">事件句柄（由 CreateEvent 创建，AutoReset）。</param>
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_SetEventHandle(IntPtr self, IntPtr eventHandle);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_GetService(IntPtr self, ref Guid riid, out IntPtr ppv);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioRenderClient_GetBuffer(IntPtr self, uint numFramesRequested, out IntPtr pData);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioRenderClient_ReleaseBuffer(IntPtr self, uint numFramesWritten, int dwFlags);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int ISimpleAudioVolume_SetMasterVolume(IntPtr self, float fLevel, ref Guid EventContext);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClock_GetPosition(IntPtr self, out ulong pu64DevicePosition, out ulong pu64QPCPosition);
 
 /// <summary>
