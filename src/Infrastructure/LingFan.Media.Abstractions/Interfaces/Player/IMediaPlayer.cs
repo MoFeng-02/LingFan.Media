@@ -46,6 +46,14 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <summary>播放速率 (1.0=正常)。</summary>
     float PlaybackRate { get; set; }
 
+    /// <summary>
+    /// 无头 / 服务端处理模式（默认 <see cref="ProcessingMode.RealTime"/>，可切 <see cref="ProcessingMode.Fastest"/>）。
+    /// 设 <see cref="ProcessingMode.Fastest"/> 时关掉音视频同步、无头音频输出不实时节流，
+    /// 所有视频帧直接放行，适用于转码 / 离线 ML 等越快越好的批量处理场景。
+    /// 可在 <see cref="OpenAsync"/> 前后设置；Open 后设置即时生效（同步内存操作，无 I/O）。
+    /// </summary>
+    ProcessingMode Mode { get; set; }
+
     /// <summary>当前播放会话（未打开时为 null）。</summary>
     IMediaSession? Session { get; }
 

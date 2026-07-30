@@ -13,6 +13,7 @@ public sealed class Synchronizer
 {
     private readonly IMediaClock _clock;
     private readonly TimeSpan _audioLatency;
+    private bool _realTimeSync = true;
 
     /// <summary>
     /// 初始化 <see cref="Synchronizer"/> 的新实例。
@@ -23,6 +24,16 @@ public sealed class Synchronizer
     {
         _clock = clock;
         _audioLatency = audioLatency;
+    }
+
+    /// <summary>
+    /// 是否启用音视频实时同步（默认 true）。设 false（最快模式）时
+    /// <see cref="CheckVideoFrame"/> 直接放行所有视频帧，不做 Wait / Drop 决策。
+    /// </summary>
+    public bool RealTimeSync
+    {
+        get => _realTimeSync;
+        set => _realTimeSync = value;
     }
 
     /// <summary>
@@ -46,6 +57,11 @@ public sealed class Synchronizer
     /// <returns>同步动作决策。</returns>
     public SyncAction CheckVideoFrame(VideoFrame frame)
     {
+        // 最快模式：关掉音视频同步，所有视频帧直接放行（不判 Wait/Drop），
+        // 适用于无头批量处理（转码 / 离线 ML），避免帧被实时时钟卡住。
+        if (!_realTimeSync)
+            return SyncAction.Present;
+
         var videoTime = frame.Timestamp;
         var clockTime = _clock.Position;
         var delta = videoTime - clockTime;

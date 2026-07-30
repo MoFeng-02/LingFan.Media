@@ -31,6 +31,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
+    <ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
   </ItemGroup>
 
   <ItemGroup>

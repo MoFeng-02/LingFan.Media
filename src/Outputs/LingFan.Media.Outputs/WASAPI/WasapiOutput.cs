@@ -85,6 +85,11 @@ internal sealed class WasapiOutput : IAudioOutput
     // V2: 设备原生采样格式（Initialize 时检测，Submit 时用于直出判断）
     private SampleFormat _deviceSampleFormat = SampleFormat.F32;
 
+    // V2: 设备原生 mix format 的采样率/声道数（GetMixFormat 检测，共享模式初始化用）。
+    // 共享模式下系统负责重采样到该格式，故初始化 WAVEFORMATEX 必须用它而非解码器输出格式。
+    private int _mixSampleRate;
+    private int _mixChannels;
+
     /// <summary>
     /// 初始化 <see cref="WasapiOutput"/> 的新实例。
     /// </summary>
@@ -235,7 +240,13 @@ internal sealed class WasapiOutput : IAudioOutput
             // 6. 获取 IAudioRenderClient
             var iidRender = WasapiInterop.IID_IAudioRenderClient;
             hr = _audioClientGetService(_audioClientPtr, ref iidRender, out IntPtr pRenderClient);
-            Marshal.ThrowExceptionForHR(hr);
+            if (hr < 0)
+            {
+                // 显式 COMException 替代 Marshal.ThrowExceptionForHR：后者内部依赖 GetErrorInfo，
+                // 在无头/虚拟音频会话（COM 错误子系统不完备）下会抛 InvalidCastException 等诡异异常。
+                _logger.LogError("IAudioClient.GetService(IAudioRenderClient) 失败：HRESULT=0x{HR:X8}", hr);
+                throw new COMException("IAudioClient.GetService(IAudioRenderClient) 失败。", hr);
+            }
 
             _renderClientPtr = pRenderClient;
             _renderClientGetBuffer = ComVTable.Get<IAudioRenderClient_GetBuffer>(pRenderClient, 0);
@@ -502,11 +513,12 @@ internal sealed class WasapiOutput : IAudioOutput
             _bufferEvent = null;
         }
 
-        if (_comInitialized)
-        {
-            WasapiInterop.CoUninitialize();
-            _comInitialized = false;
-        }
+        // 不调用 CoUninitialize()：CoInitializeEx(MTA) 初始化的是线程/进程级 COM 单元（由 .NET 运行时管理，
+        // 多线程单元引用计数）。实例级无条件 CoUninitialize 会错误反初始化该单元，破坏同线程/进程内其他
+        // COM 使用者（如 D3D11 渲染、其他音频会话），导致原生访问冲突（0xC0000005，实测全量测试崩溃）。
+        // 本实例创建的 COM 对象已由 ReleaseComObjects 正确释放；线程单元由 OS 在进程退出时清理。
+        // （2026-07-30：修复全量测试原生崩溃——WasapiOutput.Dispose 的 CoUninitialize 跨实例/测试污染 COM 单元）
+        _comInitialized = false;
 
         _initialized = false;
         _logger.LogDebug("WASAPI 输出已释放");
@@ -619,7 +631,10 @@ internal sealed class WasapiOutput : IAudioOutput
 
         try
         {
-            // 2. 解析设备原生采样格式
+            // 2. 解析设备原生 mix format（采样率/声道数/格式标签均取自 GetMixFormat）
+            var mix = Marshal.PtrToStructure<WAVEFORMATEX>(pMixFormat);
+            _mixSampleRate = (int)mix.nSamplesPerSec;
+            _mixChannels = mix.nChannels;
             _deviceSampleFormat = ParseSampleFormat(pMixFormat);
 
             // 3. 如果指定了 PreferredSampleFormat 且与设备格式不同，尝试 IsFormatSupported
@@ -627,7 +642,7 @@ internal sealed class WasapiOutput : IAudioOutput
                 _options.PreferredSampleFormat.Value != _deviceSampleFormat)
             {
                 var preferred = _options.PreferredSampleFormat.Value;
-                var preferredFormat = BuildWaveFormat(sampleRate, channels, preferred);
+                var preferredFormat = BuildWaveFormat(_mixSampleRate, _mixChannels, preferred);
 
                 unsafe
                 {
@@ -651,10 +666,10 @@ internal sealed class WasapiOutput : IAudioOutput
                     preferred, hr, _deviceSampleFormat);
             }
 
-            // 4. 使用设备原生采样格式构建 WAVEFORMATEX
-            //    共享模式下 WASAPI 会自动重采样到 mix format 的采样率/声道数，
-            //    但使用相同的采样格式可避免格式转换开销
-            return BuildWaveFormat(sampleRate, channels, _deviceSampleFormat);
+            // 4. 共享模式：系统负责重采样到设备原生 mix format，故初始化格式直接采用
+            //    GetMixFormat 的采样率/声道数/格式标签，而非解码器输出格式（如 44100），
+            //    避免与设备 mix format 不匹配导致 AUDCLNT_E_UNSUPPORTED_FORMAT（部分驱动对采样率严格）。
+            return BuildWaveFormat(_mixSampleRate, _mixChannels, _deviceSampleFormat);
         }
         finally
         {

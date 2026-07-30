@@ -51,6 +51,7 @@ public sealed class MediaPlayer : IMediaPlayer
 
     // 播放控制（音量/静音/速率为本地字段；状态机交由 PlaybackController，V2-06 C1）
     private float _volume = 1.0f;
+    private ProcessingMode _mode = ProcessingMode.RealTime;
 
     // V2-06 C5/C6: 后处理变换链（中立 BCL 委托）。由 DI/Extensions 从 Video/Audio 模块的具体
     // 处理器/音量/混音转换而来；Core 不依赖 Video/Audio 模块，保持分层倒置避免。
@@ -153,6 +154,30 @@ public sealed class MediaPlayer : IMediaPlayer
             if (_clock != null)
                 _clock.Speed = value;
         }
+    }
+
+    /// <inheritdoc />
+    public ProcessingMode Mode
+    {
+        get => _mode;
+        set
+        {
+            _mode = value;
+            ApplyMode();
+        }
+    }
+
+    /// <summary>
+    /// 将当前 <see cref="ProcessingMode"/> 应用到同步器与音频输出。
+    /// 最快模式：同步器放行所有视频帧、无头音频输出不实时节流；实时模式反之。
+    /// <see cref="OpenAsync"/> 中（同步器 / 音频输出已创建后）会再次调用，确保 Open 前设置的 Mode 生效。
+    /// </summary>
+    private void ApplyMode()
+    {
+        if (_synchronizer != null)
+            _synchronizer.RealTimeSync = (_mode == ProcessingMode.RealTime);
+        if (_audioOutput is IRealtimePacedOutput paced)
+            paced.PaceRealTime = (_mode == ProcessingMode.RealTime);
     }
 
     /// <inheritdoc />
@@ -271,6 +296,9 @@ public sealed class MediaPlayer : IMediaPlayer
             // Initialize 为同步 COM 原生边界，保持 sync void（非伪异步），不引入 await。
             if (_audioDecoder != null)
             {
+                // 契约对称（InitializeAsync 必须先于 Initialize，WASAPI 强制——设备枚举/COM 准备前置）。
+                // 无 I/O 的实现返回 Task.CompletedTask（非伪异步）。
+                await _audioOutput.InitializeAsync(ct);
                 _audioOutput.Initialize(_audioDecoder.OutputSampleRate, _audioDecoder.OutputChannels);
             }
 
@@ -336,6 +364,9 @@ public sealed class MediaPlayer : IMediaPlayer
 
             // 13. 就绪
             TransitionState(MediaState.Idle);
+
+            // 13.5 应用处理模式（同步器 / 音频输出已就绪；确保 Open 前设置的 Mode 生效）
+            ApplyMode();
 
             // 14. 启动位置定时器（33ms = ~30fps）
             _positionTimer = new Timer(OnPositionTimer, null,
