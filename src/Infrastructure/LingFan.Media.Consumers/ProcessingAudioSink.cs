@@ -36,7 +36,7 @@ public sealed class ProcessingAudioSink : IHeadlessAudioConsumer
     /// <summary>
     /// 订阅指定播放器的 <see cref="IMediaPlayer.AudioDataAvailable"/> 事件。幂等：重复调用先取消旧订阅。
     /// </summary>
-    /// <param name="player">媒体播放器（无头场景通常为经 <c>AddHeadlessAudioOutput()</c> 构建的实例）。</param>
+    /// <param name="player">媒体播放器（无头场景通常为经 <c>AddSilentAudioOutput()</c> 构建的实例）。</param>
     public void Attach(IMediaPlayer player)
     {
         ArgumentNullException.ThrowIfNull(player);

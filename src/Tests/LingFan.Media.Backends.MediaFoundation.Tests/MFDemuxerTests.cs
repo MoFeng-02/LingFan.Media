@@ -17,7 +17,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Tests;
 [Trait("Category", "RequiresMediaFoundation")]
 public sealed class MFDemuxerTests
 {
-    private static async Task<(IMediaDemuxer Demuxer, MediaTrack VideoTrack)> OpenAsync()
+    private static async Task<(IMediaDemuxer Demuxer, MediaTrack VideoTrack, MFBackend Backend)> OpenAsync()
     {
         var backend = new MFBackend(NullLogger<MFBackend>.Instance);
         var source = new FileMediaSource(TestResources.VideoM1);
@@ -26,13 +26,13 @@ public sealed class MFDemuxerTests
         var demuxer = factory.Create(stream);
         await demuxer.OpenAsync(stream, TestContext.Current.CancellationToken);
         var videoTrack = demuxer.Tracks.First(t => t.Type == TrackType.Video);
-        return (demuxer, videoTrack);
+        return (demuxer, videoTrack, backend);
     }
 
     [Fact]
     public async Task OpenAsync_WithM1Mp4_EnumeratesVideoTrack()
     {
-        var (demuxer, videoTrack) = await OpenAsync();
+        var (demuxer, videoTrack, backend) = await OpenAsync();
 
         try
         {
@@ -48,13 +48,14 @@ public sealed class MFDemuxerTests
         finally
         {
             demuxer.Dispose();
+            backend.Dispose();
         }
     }
 
     [Fact]
     public async Task ReadPacketAsync_WithVideoStream_ReturnsNonEmptyPackets()
     {
-        var (demuxer, videoTrack) = await OpenAsync();
+        var (demuxer, videoTrack, backend) = await OpenAsync();
 
         try
         {
@@ -86,6 +87,7 @@ public sealed class MFDemuxerTests
         finally
         {
             demuxer.Dispose();
+            backend.Dispose();
         }
     }
 }

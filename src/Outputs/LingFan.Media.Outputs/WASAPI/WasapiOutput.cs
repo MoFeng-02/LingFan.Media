@@ -40,7 +40,7 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// </list>
 /// </remarks>
 [SupportedOSPlatform("windows")]
-internal sealed class WasapiOutput : IAudioOutput
+internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit
 {
     private readonly WasapiOptions _options;
     private readonly ILogger<WasapiOutput> _logger;
@@ -72,6 +72,7 @@ internal sealed class WasapiOutput : IAudioOutput
     private IAudioRenderClient_ReleaseBuffer? _renderClientReleaseBuffer;
     private ISimpleAudioVolume_SetMasterVolume? _simpleVolumeSetMasterVolume;
     private IAudioClock_GetPosition? _audioClockGetPosition;
+    private IAudioClock_GetFrequency? _audioClockGetFrequency;
 
     // 状态
     private bool _initialized;
@@ -84,13 +85,26 @@ internal sealed class WasapiOutput : IAudioOutput
     // V2: 事件驱动模式
     private EventWaitHandle? _bufferEvent;
 
+    // 诊断计数器（纯观察，不影响音频逻辑）：定位"听感卡顿/断续"根因。
+    // submittedSamples = 实际成功写入 WASAPI 的累计采样帧数；droppedFrames = WaitForBufferSpace 超时/参数异常丢弃的帧数。
+    private long _submittedSamples;
+    private int _submittedFrames;
+    private long _droppedFrames;
+
     // V2: 设备原生采样格式（Initialize 时检测，Submit 时用于直出判断）
     private SampleFormat _deviceSampleFormat = SampleFormat.F32;
 
-    // V2: 设备原生 mix format 的采样率/声道数（GetMixFormat 检测，共享模式初始化用）。
-    // 共享模式下系统负责重采样到该格式，故初始化 WAVEFORMATEX 必须用它而非解码器输出格式。
+    // V2: 设备原生 mix format 的采样率/声道数（GetMixFormat 检测）。
+    // ⚠️ 审计修正（2026-07-31）：此前注释称"初始化 WAVEFORMATEX 必须用它而非解码器输出格式"，这是错的
+    // ——那样会让 Submit 侧的解码器格式帧被按设备速率播出。现仅用于诊断日志与 AUTOCONVERTPCM 判断，
+    // 实际初始化格式一律用客户端（解码器）采样率/声道数。详见 NegotiateSharedFormat 步骤 4。
     private int _mixSampleRate;
     private int _mixChannels;
+
+    // V2: IAudioClock 的设备频率（units/秒）。GetPosition 的返回值须除以它才是秒数，
+    // 单位由设备定义（共享模式常见为字节/秒 = nSamplesPerSec * nBlockAlign），不等于采样率。
+    // 0 表示不可用（GetFrequency 失败），此时 GetPlaybackPosition 回落到采样率换算并告警。
+    private ulong _audioClockFrequency;
 
     // STA 线程封送（WASAPI 要求 IAudioClient 在 STA 公寓使用；MTA 下 GetMixFormat/Initialize 会触发 native AV）。
     // 所有 COM 调用经内部 STA 工作线程封送，对外接口签名不变（MediaPlayer 调用方无需感知线程模型）。
@@ -200,6 +214,17 @@ internal sealed class WasapiOutput : IAudioOutput
                 ? WasapiInterop.AUDCLNT_STREAMFLAGS_EVENTCALLBACK
                 : 0;
 
+            // ⚠️ 审计修复（2026-07-31，真 bug 配套修复）：共享模式下必须显式要求音频引擎
+            //    插入声道矩阵器 + 采样率转换器，否则客户端格式（解码器 44.1kHz/2ch）与引擎
+            //    mix format（常见 48kHz/2ch，多声道设备可能 6ch）不一致时，引擎【不会】自动转换。
+            //    详见 NegotiateSharedFormat 步骤 4 的注释。
+            //    独占模式不适用该标志（独占直通硬件，格式必须由 IsFormatSupported 精确协商）。
+            if (!_exclusiveMode)
+            {
+                streamFlags |= WasapiInterop.AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                             | WasapiInterop.AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+            }
+
             long bufferDurationHns = (long)(_options.BufferDuration.TotalSeconds * WasapiInterop.ReftimesPerSec);
 
             var sessionGuid = Guid.Empty;
@@ -226,7 +251,19 @@ internal sealed class WasapiOutput : IAudioOutput
             {
                 throw new NotSupportedException(
                     $"音频设备不支持请求的格式：{_deviceSampleFormat} {sampleRate}Hz {channels}ch。" +
-                    "请尝试共享模式（自动使用设备原生格式）或调整 WasapiOptions.PreferredSampleFormat。");
+                    (_exclusiveMode
+                        ? "独占模式直通硬件，请改用共享模式（由音频引擎重采样）或调整 WasapiOptions.PreferredSampleFormat。"
+                        : $"共享模式已启用 AUTOCONVERTPCM，设备 mix 为 {_mixSampleRate}Hz/{_mixChannels}ch；" +
+                          "若仍失败，请调整 WasapiOptions.PreferredSampleFormat。"));
+            }
+            // 审计修复（2026-07-31）：给出可诊断的错误，而不是笼统的 HRESULT。
+            if (hr == WasapiInterop.AUDCLNT_E_INVALID_STREAM_FLAG)
+            {
+                throw new NotSupportedException(
+                    "IAudioClient.Initialize 拒绝了 streamFlags 组合（AUDCLNT_E_INVALID_STREAM_FLAG）。" +
+                    $"当前：共享模式={!_exclusiveMode}, 事件驱动={_eventDrivenMode}, " +
+                    "AUTOCONVERTPCM|SRC_DEFAULT_QUALITY=共享模式下启用。",
+                    new COMException("AUDCLNT_E_INVALID_STREAM_FLAG", hr));
             }
             if (hr < 0)
             {
@@ -292,8 +329,28 @@ internal sealed class WasapiOutput : IAudioOutput
             {
                 _audioClockPtr = pClock;
                 // IAudioClock vtable: IUnknown(0-2) + GetFrequency(slot0) + GetPosition(slot1) + GetCharacteristics(slot2)
+                // （已比对 Windows SDK 10.0.26100.0 audioclient.h:1346 IAudioClockVtbl 声明顺序）
                 // GetPosition 在 slot 1，索引必须为 1（此前误用 2 会调用 GetCharacteristics 返回垃圾值）
+                _audioClockGetFrequency = ComVTable.Get<IAudioClock_GetFrequency>(pClock, 0);
                 _audioClockGetPosition = ComVTable.Get<IAudioClock_GetPosition>(pClock, 1);
+
+                // ⚠️ 审计修复（2026-07-31）：频率在流的生命周期内恒定，初始化时取一次即可。
+                // GetPosition 的单位由设备定义，必须除以该频率才是秒数；此前代码除以 _sampleRate，
+                // 在 frequency = 字节/秒 的常见设备上会把播放位置放大 nBlockAlign 倍（F32 立体声 8 倍）。
+                int freqHr = _audioClockGetFrequency(_audioClockPtr, out ulong clockFrequency);
+                if (freqHr >= 0 && clockFrequency > 0)
+                {
+                    _audioClockFrequency = clockFrequency;
+                    _logger.LogDebug("IAudioClock 设备频率={Frequency} units/s（客户端 {SampleRate}Hz/{Channels}ch）",
+                        clockFrequency, sampleRate, channels);
+                }
+                else
+                {
+                    _audioClockFrequency = 0;
+                    _logger.LogWarning(
+                        "IAudioClock.GetFrequency 失败（HRESULT=0x{HR:X8}，freq={Frequency}），" +
+                        "播放位置将回落到按采样率换算，可能不准确。", freqHr, clockFrequency);
+                }
             }
             else
             {
@@ -346,9 +403,43 @@ internal sealed class WasapiOutput : IAudioOutput
     public void Submit(AudioFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
+        RunOnSta(() => SubmitOneCore(frame));
+    }
 
+    /// <summary>
+    /// 批量提交：把多帧音频在「一次 STA 跨线程往返」内连续写入，消除逐帧 <see cref="RunOnSta"/> 阻塞往返的
+    /// 固定开销（修复听感卡顿/掉速）。单帧提交失败（缓冲区超时/参数异常）仅丢弃该帧并继续后续帧，
+    /// 不会中断整批。不接管帧所有权。
+    /// </summary>
+    public void SubmitBatch(IEnumerable<AudioFrame> frames)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
         RunOnSta(() =>
         {
+            foreach (var frame in frames)
+            {
+                if (frame is null) continue;
+                try
+                {
+                    SubmitOneCore(frame);
+                }
+                catch (TimeoutException ex)
+                {
+                    // 背压超时（缓冲区暂无可写空间）：仅在 SubmitOneCore 已累加 _droppedFrames 后跳过该帧并继续后续帧。
+                    // 注意：声道/尺寸不匹配等帧校验 ArgumentException 不在此吞掉，让其冒泡以暴露真实管线 bug。
+                    _logger.LogWarning("WASAPI 批量提交跳过单帧（背压超时）：{Msg}", ex.Message);
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// 单帧提交核心逻辑（在 STA 线程上下文内执行，不含 RunOnSta 包装）。
+    /// 仅做原生缓冲区写入，不归还帧所有权（归还由调用方负责）。
+    /// 背压超时/参数异常会抛出（调用方据此判定丢帧）。
+    /// </summary>
+    private void SubmitOneCore(AudioFrame frame)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (!_initialized || _audioClientPtr == IntPtr.Zero || _renderClientPtr == IntPtr.Zero)
@@ -380,16 +471,27 @@ internal sealed class WasapiOutput : IAudioOutput
                 $"音频帧数据不足：期望 {expectedDataSize} 字节，实际 {frame.Data.Length} 字节。", nameof(frame));
         }
 
-        // 等待缓冲区有足够空间（COM 背压）
-        WaitForBufferSpace((uint)frame.FrameCount);
+        // gotBuffer 标记 GetBuffer 是否已成功锁定缓冲区；released 标记是否已正常释放。
+        // 仅当 GetBuffer 成功 且 尚未正常释放时，才允许配对 ReleaseBuffer。
+        bool gotBuffer = false;
+        bool released = false;
+
+        // 等待缓冲区有足够空间（COM 背压）；超时/参数异常计为丢帧（被上层吞掉前统计，用于诊断卡顿根因）
+        try
+        {
+            WaitForBufferSpace((uint)frame.FrameCount);
+        }
+        catch (Exception ex) when (ex is TimeoutException or ArgumentException)
+        {
+            _droppedFrames++;
+            throw;
+        }
 
         // 获取 WASAPI 缓冲区指针
         int hr = _renderClientGetBuffer!(_renderClientPtr, (uint)frame.FrameCount, out IntPtr pData);
         Marshal.ThrowExceptionForHR(hr);
+        gotBuffer = true;
 
-        // GetBuffer 成功后必须调用 ReleaseBuffer，否则缓冲区永久锁定
-        // 即使拷贝失败也要释放（用0帧+SILENT标记）
-        bool releaseBufferCalled = false;
         try
         {
             // 拷贝/转换 PCM 数据到 WASAPI 缓冲区
@@ -404,19 +506,24 @@ internal sealed class WasapiOutput : IAudioOutput
 
             // 释放 WASAPI 缓冲区（写入完成）
             hr = _renderClientReleaseBuffer!(_renderClientPtr, (uint)frame.FrameCount, 0);
-            releaseBufferCalled = true;
             Marshal.ThrowExceptionForHR(hr);
+            released = true;
+            _submittedSamples += frame.FrameCount;   // 诊断：累计成功提交的采样帧数
+            _submittedFrames++;
         }
         finally
         {
-            // 如果拷贝或ReleaseBuffer抛异常，必须用0帧+SILENT释放缓冲区
-            if (!releaseBufferCalled)
+            // 配对规则（WASAPI 强制）：ReleaseBuffer 必须紧跟成功的 GetBuffer，且仅一次。
+            // ① GetBuffer 成功但拷贝/ReleaseBuffer 抛异常 → 用 0 帧+SILENT 释放已锁定的缓冲区，避免永久锁定；
+            // ② WaitForBufferSpace 超时 / GetBuffer 失败（gotBuffer=false）→ 未锁定缓冲区，严禁 ReleaseBuffer，
+            //    否则非法配对会污染原生音频客户端堆，表现为延迟的 0x80131506（COR_E_EXECUTIONENGINE）；
+            // ③ 已正常释放（released=true）→ 禁止二次 ReleaseBuffer（同样非法）。
+            if (gotBuffer && !released)
             {
                 try { _renderClientReleaseBuffer!(_renderClientPtr, 0, WasapiInterop.AUDCLNT_BUFFERFLAGS_SILENT); }
                 catch { /* 尽力释放，忽略二次异常 */ }
             }
         }
-        });
     }
 
     /// <inheritdoc/>
@@ -480,7 +587,14 @@ internal sealed class WasapiOutput : IAudioOutput
             if (hr < 0)
                 return TimeSpan.Zero;
 
-            // devicePosition 是已播放的帧数，转换为 TimeSpan
+            // ⚠️ 审计修复（2026-07-31，真 bug）：devicePosition 的单位由设备定义，【不是】帧数。
+            // 官方换算：秒 = position / frequency（IAudioClock::GetFrequency，见 _audioClockFrequency）。
+            // 共享模式下 frequency 常见为 nSamplesPerSec * nBlockAlign（字节/秒），position 即字节数；
+            // 原实现除以 _sampleRate，会把位置放大 nBlockAlign 倍（F32 立体声 8 倍 → 播放位置飞掉）。
+            if (_audioClockFrequency > 0)
+                return TimeSpan.FromSeconds((double)devicePosition / _audioClockFrequency);
+
+            // 回落：GetFrequency 不可用时按采样率换算（不精确，初始化时已告警）。
             if (_sampleRate <= 0)
                 return TimeSpan.Zero;
 
@@ -571,6 +685,16 @@ internal sealed class WasapiOutput : IAudioOutput
         // STA 公寓（CoInitializeEx(COINIT_APARTMENTTHREADED)）由内部 STA 工作线程在 Dispose 时
         // 经 CompleteAdding → StaThreadProc finally → CoUninitialize 正确反初始化，不再有跨实例/测试
         // 污染 COM 单元的问题（旧版 MTA + 无条件 CoUninitialize 曾引发全量测试原生崩溃 0xC0000005）。
+
+        if (_submittedFrames > 0 || _droppedFrames > 0)
+        {
+            double approxSec = _sampleRate > 0 ? (double)_submittedSamples / _sampleRate : 0.0;
+            _logger.LogWarning(
+                "[WASAPI-DIAG] submittedFrames={SubmittedFrames} submittedSamples={SubmittedSamples} approxSeconds={ApproxSeconds:F2} droppedFrames={DroppedFrames} bufferSize={BufferSize} sampleRate={SampleRate}",
+                _submittedFrames, _submittedSamples, approxSec, _droppedFrames, _bufferSize, _sampleRate);
+            // 双输出：xunit detailed 不转发 ILogger，用 Console 确保测试输出可见
+            Console.WriteLine($"[WASAPI-DIAG] submittedFrames={_submittedFrames} submittedSamples={_submittedSamples} approxSeconds={approxSec:F2} droppedFrames={_droppedFrames} bufferSize={_bufferSize} sampleRate={_sampleRate}");
+        }
 
         _initialized = false;
         _logger.LogDebug("WASAPI 输出已释放");
@@ -728,6 +852,10 @@ internal sealed class WasapiOutput : IAudioOutput
                 WasapiInterop.CoTaskMemFree(pMixFormat);
             _logger.LogWarning("GetMixFormat 失败 (HRESULT=0x{HR:X8})，回退到 F32 格式", hr);
             _deviceSampleFormat = SampleFormat.F32;
+            // 审计修复（2026-07-31）：mix 参数未知时记为客户端参数，避免后续日志出现 0Hz/0ch 误导；
+            // AUTOCONVERTPCM 仍会照常启用，由引擎兜底做必要转换。
+            _mixSampleRate = sampleRate;
+            _mixChannels = channels;
             return BuildWaveFormat(sampleRate, channels, SampleFormat.F32);
         }
 
@@ -744,7 +872,9 @@ internal sealed class WasapiOutput : IAudioOutput
                 _options.PreferredSampleFormat.Value != _deviceSampleFormat)
             {
                 var preferred = _options.PreferredSampleFormat.Value;
-                var preferredFormat = BuildWaveFormat(_mixSampleRate, _mixChannels, preferred);
+                // ⚠️ 审计修复（2026-07-31）：采样率/声道数必须用【客户端（解码器）】的，
+                //    而非设备 mix 的——Submit 写入的是解码器格式的帧。
+                var preferredFormat = BuildWaveFormat(sampleRate, channels, preferred);
 
                 unsafe
                 {
@@ -768,10 +898,28 @@ internal sealed class WasapiOutput : IAudioOutput
                     preferred, hr, _deviceSampleFormat);
             }
 
-            // 4. 共享模式：系统负责重采样到设备原生 mix format，故初始化格式直接采用
-            //    GetMixFormat 的采样率/声道数/格式标签，而非解码器输出格式（如 44100），
-            //    避免与设备 mix format 不匹配导致 AUDCLNT_E_UNSUPPORTED_FORMAT（部分驱动对采样率严格）。
-            return BuildWaveFormat(_mixSampleRate, _mixChannels, _deviceSampleFormat);
+            // 4. 共享模式：以【客户端（解码器）采样率 / 声道数】+ 设备 mix 的采样格式打开。
+            //
+            //    ⚠️ 审计修复（2026-07-31，真 bug）：此处原先返回 BuildWaveFormat(_mixSampleRate,
+            //    _mixChannels, ...)，即拿设备 mix format 打开设备，注释还写着"系统负责重采样"——
+            //    这是错的。不带 AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM 时音频引擎【不会】做任何
+            //    采样率 / 声道转换；而 Submit() 一直是按解码器格式逐帧写入的（frame.FrameCount
+            //    帧、frame.Channels 声道），于是：
+            //      · 44.1kHz 解码流 → 48kHz 设备：按 48kHz 播出，音高偏高约 8.8%、时长缩短；
+            //      · 2ch 解码流 → 6ch 设备缓冲：每帧只填了 1/3 的样本，其余是脏数据。
+            //    修法：格式改回客户端参数，并在 InitializeCore 为共享模式加
+            //    AUTOCONVERTPCM | SRC_DEFAULT_QUALITY，由音频引擎插入声道矩阵器 + 重采样器。
+            //    采样【格式】仍沿用 mix 的（通常 F32），由 Submit 的 CopyOrConvert 就地转换，
+            //    避免多走一层引擎转换。
+            if (sampleRate != _mixSampleRate || channels != _mixChannels)
+            {
+                _logger.LogDebug(
+                    "共享模式：客户端格式 {SampleRate}Hz/{Channels}ch 与设备 mix {MixRate}Hz/{MixChannels}ch 不一致，" +
+                    "将启用 AUTOCONVERTPCM 由音频引擎重采样 / 混音。",
+                    sampleRate, channels, _mixSampleRate, _mixChannels);
+            }
+
+            return BuildWaveFormat(sampleRate, channels, _deviceSampleFormat);
         }
         finally
         {
@@ -1082,6 +1230,8 @@ internal sealed class WasapiOutput : IAudioOutput
         // 逆序释放（原生指针 Marshal.Release，清空委托缓存）
         ReleaseComPtr(ref _audioClockPtr);
         _audioClockGetPosition = null;
+        _audioClockGetFrequency = null;
+        _audioClockFrequency = 0;
 
         ReleaseComPtr(ref _simpleVolumePtr);
         _simpleVolumeSetMasterVolume = null;
@@ -1123,6 +1273,8 @@ internal sealed class WasapiOutput : IAudioOutput
 
         ReleaseComPtr(ref _audioClockPtr);
         _audioClockGetPosition = null;
+        _audioClockGetFrequency = null;
+        _audioClockFrequency = 0;
 
         ReleaseComPtr(ref _simpleVolumePtr);
         _simpleVolumeSetMasterVolume = null;

@@ -30,21 +30,22 @@ public static class ConsumersExtensions
     }
 
     /// <summary>
-    /// 注册无头（NoOp）音频输出工厂，使 MediaPlayer 在无 <c>VideoView</c> / 无音频设备 / CI 环境下运行。
-    /// 替代 <c>AddWasapiOutput()</c>（WASAPI 需先 <see cref="IAudioOutput.InitializeAsync"/> 枚举设备，且要求真实音频端点），
-    /// 与 <see cref="AddHeadlessRenderer"/> 对称（C-9.4：无头 = 无 GPU 设备 + 无音频设备）。
+    /// 注册静音（NoOp）音频输出工厂，使 MediaPlayer 在"不想出声"的场景下运行——例如无 <c>VideoView</c> / CI / 转码 / ML 分析。
+    /// 与 <see cref="AddHeadlessRenderer"/> 对称（C-9.4）。注意：本方法只是把音频采样丢弃（NoOp），
+    /// 与"宿主有没有音频设备"无关——无头进程若有真实音频设备、想让声音真的播放出来，应改用 <c>AddWasapiOutput()</c>
+    /// （WASAPI 不依赖窗口，无头服务 / 控制台进程同样可用）。
     /// 配合 <see cref="ProcessingFrameSink"/> 实现无头帧消费（无头 A）。
     /// </summary>
     /// <param name="builder">媒体构建器。</param>
     /// <returns>构建器（链式调用）。</returns>
     /// <remarks>此方法为同步配置（config 分类），无 I/O。</remarks>
-    public static MediaBuilder AddHeadlessAudioOutput(this MediaBuilder builder)
+    public static MediaBuilder AddSilentAudioOutput(this MediaBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.Services.AddSingleton<IAudioOutputFactory, NoOpAudioOutputFactory>();
 
-        // 无头不打开音频设备：不注册 WASAPI。MediaPlayer 经 IMediaComponent 生命周期管理 NoOp 输出。
+        // 静音模式不打开音频设备：不注册 WASAPI。MediaPlayer 经 IMediaComponent 生命周期管理 NoOp 输出。
         // 依赖倒置保持：MediaPlayer 仅通过 IAudioOutputFactory 抽象解耦，NoOp 实现零外部引用。
         return builder;
     }

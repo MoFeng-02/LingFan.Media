@@ -59,11 +59,40 @@ internal static partial class WasapiInterop
     /// 设置后 WASAPI 通过事件通知缓冲区可写，替代轮询。</summary>
     public const int AUDCLNT_STREAMFLAGS_EVENTCALLBACK = 0x00040000;
 
+    /// <summary>
+    /// AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM（AudioSessionTypes.h:138 = 0x80000000）。
+    /// <para>
+    /// 官方语义："A channel matrixer and a sample rate converter are inserted as necessary
+    /// to convert between the uncompressed format supplied to IAudioClient::Initialize
+    /// and the audio engine mix format."
+    /// </para>
+    /// <para>
+    /// ⚠️ 审计修复（2026-07-31）：仅共享模式有效。不设此标志时，传给 Initialize 的格式
+    /// 必须与引擎 mix format 一致，否则要么 AUDCLNT_E_UNSUPPORTED_FORMAT，要么（本项目此前的做法）
+    /// 被迫用 mix format 打开设备 —— 而 Submit 侧仍按解码器采样率/声道数写入，导致
+    /// 44.1kHz 解码流被 48kHz 设备按 48kHz 播放（音高偏高约 8.8%），或 2ch 数据写进 6ch 缓冲区。
+    /// </para>
+    /// </summary>
+    public const int AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM = unchecked((int)0x80000000);
+
+    /// <summary>
+    /// AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY（AudioSessionTypes.h:137 = 0x08000000）。
+    /// 与 AUTOCONVERTPCM 搭配使用时启用更高质量（但性能开销更高）的采样率转换器。
+    /// 官方建议：音频最终给人听时应启用（区别于灌静音 / 电平表等场景）。
+    /// </summary>
+    public const int AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY = 0x08000000;
+
     /// <summary>AUDCLNT_E_DEVICE_IN_USE：独占模式下设备已被其他应用占用。</summary>
     public const int AUDCLNT_E_DEVICE_IN_USE = unchecked((int)0x8889000A);
 
     /// <summary>AUDCLNT_E_UNSUPPORTED_FORMAT：设备不支持请求的格式。</summary>
     public const int AUDCLNT_E_UNSUPPORTED_FORMAT = unchecked((int)0x88890008);
+
+    /// <summary>
+    /// AUDCLNT_E_INVALID_STREAM_FLAG（audioclient.h:2719 = AUDCLNT_ERR(0x021) = 0x88890021）：
+    /// Initialize 的 streamFlags 组合非法（如在独占模式下传 AUTOCONVERTPCM）。
+    /// </summary>
+    public const int AUDCLNT_E_INVALID_STREAM_FLAG = unchecked((int)0x88890021);
 
     /// <summary>AUDCLNT_E_NOT_INITIALIZED：IAudioClient 尚未初始化。</summary>
     public const int AUDCLNT_E_NOT_INITIALIZED = unchecked((int)0x88890001);
@@ -85,8 +114,11 @@ internal static partial class WasapiInterop
     public static readonly Guid IID_IAudioClient =
         new("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
 
+    // Audioclient.h: MIDL_INTERFACE("F294ACFC-3146-4483-A7BF-ADDCA7C260E2") IAudioRenderClient
+    // ⚠️ 此 GUID 曾误写为 ...-ADD077DB4D09，导致 GetService 恒返回 E_NOINTERFACE(0x80004002)，
+    // 被上层误判为「设备不支持格式」而跳过有头音频测试。改动前务必比对 Windows SDK 头文件原文。
     public static readonly Guid IID_IAudioRenderClient =
-        new("F294ACFC-3146-4483-A7BF-ADD077DB4D09");
+        new("F294ACFC-3146-4483-A7BF-ADDCA7C260E2");
 
     public static readonly Guid IID_ISimpleAudioVolume =
         new("87CE5498-68D6-44E5-9215-6DA47EF883D8");
@@ -227,6 +259,19 @@ internal delegate int IAudioRenderClient_ReleaseBuffer(IntPtr self, uint numFram
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int ISimpleAudioVolume_SetMasterVolume(IntPtr self, float fLevel, ref Guid EventContext);
+
+/// <summary>
+/// IAudioClock::GetFrequency（audioclient.h:1366，IUnknown 之后相对槽 0）。
+/// <para>
+/// ⚠️ 审计修复（2026-07-31）：<see cref="IAudioClock_GetPosition"/> 返回的 pu64DevicePosition
+/// 单位由设备定义，<b>不是</b>「已播放帧数」。官方换算是
+/// <c>秒 = position / frequency</c>，两者单位必须成对使用。
+/// 共享模式下 frequency 通常等于 <c>nSamplesPerSec * nBlockAlign</c>（即字节/秒），
+/// 此时 position 是字节数——若误除以采样率，结果会偏大 nBlockAlign 倍（F32 立体声即 8 倍）。
+/// </para>
+/// </summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IAudioClock_GetFrequency(IntPtr self, out ulong pu64Frequency);
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClock_GetPosition(IntPtr self, out ulong pu64DevicePosition, out ulong pu64QPCPosition);

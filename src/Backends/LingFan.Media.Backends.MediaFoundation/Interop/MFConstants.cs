@@ -27,16 +27,22 @@ internal static class MFConstants
     // MF_SOURCE_READER_CONTROL_FLAG
     internal const int MF_SOURCE_READER_CONTROLF_DRAIN = 0x00000001;
 
-    // Stream index
-    internal const int MF_SOURCE_READER_FIRST_VIDEO_STREAM = 0;
-    internal const int MF_SOURCE_READER_FIRST_AUDIO_STREAM = 1;
-    internal const uint MF_SOURCE_READER_ALL_STREAMS = 0xFFFFFFFF;
+    // MF_SOURCE_READER_CONSTANTS（mfreadwrite.h 权威值）——
+    // ⚠️ 早期误写 0 / 1 / 0xFFFFFFFF（把「首个视频/音频流」当成了字面流索引），与 SDK 语义完全不同。
+    // 本 Demuxer 走逐流枚举 + 真实索引，不依赖这些伪流标识；此处仅保留 SDK 正确值以防后续误用。
+    internal const uint MF_SOURCE_READER_FIRST_VIDEO_STREAM = 0xFFFFFFFC;
+    internal const uint MF_SOURCE_READER_FIRST_AUDIO_STREAM = 0xFFFFFFFD;
+    internal const uint MF_SOURCE_READER_ALL_STREAMS = 0xFFFFFFFE;
+    internal const uint MF_SOURCE_READER_MEDIASOURCE = 0xFFFFFFFF;
 
     // MF_MT_* attribute IDs (subset)
     internal static readonly Guid MF_MT_MAJOR_TYPE = new(0x48eba18e, 0xf8c9, 0x4687, 0xbf, 0x11, 0x0a, 0x74, 0xc9, 0xf9, 0x6a, 0x8f); // {48EBA18E-F8C9-4687-BF11-0A74C9F96A8F} 已本机 SetInputType 运行时验证
     internal static readonly Guid MF_MT_SUBTYPE = new(0xf7e34c9a, 0x42e8, 0x4714, 0xb7, 0x4b, 0xcb, 0x29, 0xd7, 0x2c, 0x35, 0xe5);
-    // H264/H265 解码必需：out-of-band SPS+PPS（avcC / hvcC 配置记录），设到输入媒体类型
-    internal static readonly Guid MF_MT_MPEG_SEQUENCE_HEADER = new(0xc8bf26b0, 0x4ad7, 0x4a06, 0xa0, 0xb1, 0x10, 0x09, 0x66, 0xfc, 0xc7, 0xc8);
+    // H264/H265 解码必需：out-of-band SPS+PPS（Annex-B 序列头），设到输入媒体类型。
+    // mfapi.h 权威值 {3C036DE7-3AD0-4C9E-9216-EE6D6AC21CB3}（2026-07-31 比对 Windows SDK 10.0.26100.0 头文件原文）。
+    // ⚠️ 早期误写 C8BF26B0-...（臆测值）：SetBlob 写到了一个 MFT 完全不认识的键 → 序列头形同虚设，
+    //    且 TryGetBlob 恒 MF_E_ATTRIBUTENOTFOUND，由此得出的「MF 媒体源不填此属性」结论无效，勿再引用。
+    internal static readonly Guid MF_MT_MPEG_SEQUENCE_HEADER = new(0x3c036de7, 0x3ad0, 0x4c9e, 0x92, 0x16, 0xee, 0x6d, 0x6a, 0xc2, 0x1c, 0xb3);
 
     /// <summary>MF_MT_MINIMUM_DISPLAY_APERTURE {D7388766-18FE-48C6-A177-EE894867C8C4}（mfapi.h）：
     /// Blob = MFVideoArea（16 字节：MFOffset OffsetX(4) + MFOffset OffsetY(4) + SIZE Area(8)）。
@@ -53,10 +59,12 @@ internal static class MFConstants
     /// 本机验证 MF 不会在媒体类型上填 MF_MT_MPEG_SEQUENCE_HEADER（native/current/prime 后均 MF_E_ATTRIBUTENOTFOUND）。</summary>
     internal static readonly Guid MF_MT_MPEG4_SAMPLE_DESCRIPTION = new(0x261e9d83, 0x9529, 0x4b8f, 0xa1, 0x11, 0x8b, 0x9c, 0x95, 0x0a, 0x81, 0xa9);
     internal static readonly Guid MF_MT_FRAME_SIZE = new(0x1652c33d, 0xd6b2, 0x4012, 0xb8, 0x34, 0x72, 0x03, 0x08, 0x49, 0xa3, 0x7d);
-    internal static readonly Guid MF_MT_FRAME_RATE = new(0xc459a2e8, 0x3d2c, 0x4e44, 0xbc, 0xc8, 0x12, 0x35, 0x7d, 0x11, 0x47, 0x21);
-    internal static readonly Guid MF_MT_AUDIO_SAMPLES_PER_SECOND = new(0x5faeeae7, 0x0290, 0x4c31, 0x9e, 0x9a, 0xc9, 0x69, 0xd5, 0x5d, 0x01, 0x09);
-    internal static readonly Guid MF_MT_AUDIO_NUM_CHANNELS = new(0x37e48bf5, 0x645e, 0x4c5b, 0x89, 0xde, 0xad, 0xa9, 0xe2, 0xb7, 0x2d, 0x77);
-    internal static readonly Guid MF_MT_AUDIO_BITS_PER_SAMPLE = new(0xf2deb4fb, 0x4c2a, 0x4dac, 0xb4, 0xbd, 0x61, 0x6f, 0x61, 0x5e, 0x0a, 0xc2);
+    // ⚠️ 以下四个键 2026-07-31 比对 Windows SDK 10.0.26100.0 mfapi.h 原文修正——早期臆测值全部错误，
+    //    导致 GetUINT32 恒返回 MF_E_ATTRIBUTENOTFOUND、音频轨采样率/声道/位深恒为 0（WASAPI 被以 0Hz/0ch 初始化）。
+    internal static readonly Guid MF_MT_FRAME_RATE = new(0xc459a2e8, 0x3d2c, 0x4e44, 0xb1, 0x32, 0xfe, 0xe5, 0x15, 0x6c, 0x7b, 0xb0);
+    internal static readonly Guid MF_MT_AUDIO_SAMPLES_PER_SECOND = new(0x5faeeae7, 0x0290, 0x4c31, 0x9e, 0x8a, 0xc5, 0x34, 0xf6, 0x8d, 0x9d, 0xba);
+    internal static readonly Guid MF_MT_AUDIO_NUM_CHANNELS = new(0x37e48bf5, 0x645e, 0x4c5b, 0x89, 0xde, 0xad, 0xa9, 0xe2, 0x9b, 0x69, 0x6a);
+    internal static readonly Guid MF_MT_AUDIO_BITS_PER_SAMPLE = new(0xf2deb57f, 0x40fa, 0x4764, 0xaa, 0x33, 0xed, 0x4f, 0x2d, 0x1f, 0xf6, 0x69);
 
     // Major type GUIDs
     internal static readonly Guid MFMediaType_Video = new(0x73646976, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71);

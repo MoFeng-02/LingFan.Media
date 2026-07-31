@@ -60,6 +60,10 @@ internal sealed unsafe class MFVideoDecoder : IVideoDecoder
     private readonly ILogger<MFVideoDecoder> _logger;
     private bool _disposed;
     private bool _initialized;
+    // MFStartup/MFShutdown 配对标志（2026-07-31 审计修复）：Initialize 成功调用 MFStartup 后置 true，
+    // ReleaseComObjects 中配对 MFShutdown 并复位。原实现只 Startup 不 Shutdown → 进程级平台
+    // 引用计数只增不减，MF 平台常驻进程永不释放（内存/句柄泄漏）。
+    private bool _mfStartupAcquired;
 
     private Guid _inputSubtype;
     private IntPtr _transform;
@@ -110,9 +114,10 @@ internal sealed unsafe class MFVideoDecoder : IVideoDecoder
         else
             throw new NotSupportedException($"MF 视频解码器不支持 {codec}（仅 H264/H265 经系统 MFT）。");
 
-        // MFStartup（进程级引用计数，幂等）
+        // MFStartup（进程级引用计数，幂等；成功后须与 ReleaseComObjects 中的 MFShutdown 配对）
         int hr = MFInterop.MFStartup(MFConstants.MF_VERSION, MFConstants.MFSTARTUP_FULL);
         Marshal.ThrowExceptionForHR(hr);
+        _mfStartupAcquired = true;
 
         try
         {
@@ -663,7 +668,19 @@ internal sealed unsafe class MFVideoDecoder : IVideoDecoder
         _width = 0;
         _height = 0;
         _initialized = false;
-        // 不调用 MFShutdown：MF 平台为进程级引用计数，生命周期由 MF 后端统一掌管。
+
+        // MFShutdown 配对（2026-07-31 审计修复）：MFStartup/MFShutdown 为进程级引用计数 API，
+        // 本解码器每次 Initialize 都 +1，必须在释放时 -1，否则计数只增不减、MF 平台常驻泄漏。
+        // 平台真正拆除仅发生在计数归 0 时（通常由最后一个 MFBackend.Dispose 触发），配对本身安全。
+        if (_mfStartupAcquired)
+        {
+            _mfStartupAcquired = false;
+            try { MFInterop.MFShutdown(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "MFShutdown 配对调用异常（忽略，不影响释放流程）");
+            }
+        }
     }
 
     private static void ThrowIfFailed(int hr) => Marshal.ThrowExceptionForHR(hr);

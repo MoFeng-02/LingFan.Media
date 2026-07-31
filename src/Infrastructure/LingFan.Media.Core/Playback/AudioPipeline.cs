@@ -131,6 +131,11 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             _cts = new CancellationTokenSource();
         }
 
+        // 首次启动必须真正启动 WASAPI 客户端（IAudioClient.Start），否则设备永不拉取缓冲区、
+        // 首帧写满缓冲后后续 Submit 全部超时丢帧 → 仅初始缓冲那 ~1 秒出声后静音。
+        // 原实现只在"恢复播放"分支调 _output.Resume()，首次启动漏调，导致首次播放无音频渲染。
+        _output.Resume();
+
         _pipelineTask = Task.Run(PipelineLoop);
     }
 
@@ -294,6 +299,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         }
     }
 
+    // 前瞻窗口（预解码帧数）：让提交阶段能成批提交，折叠逐帧 STA 跨线程往返的固定开销（修复听感卡顿/掉速）。
+    private const int PrerollFrames = 16;
+
     private async Task PipelineLoop()
     {
         try
@@ -308,18 +316,23 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     continue;
                 }
 
-                // 1. 从采样队列非阻塞出队
-                if (_sampleQueue.TryDequeue(out var frame) && frame != null)
+                // 1. 提交阶段：把当前可用解码帧整批提交（一次 STA 往返写多帧，是修复掉速的关键）
+                if (_sampleQueue.Count > 0)
                 {
-                    SubmitFrame(frame);
+                    var batch = new List<AudioFrame>(_sampleQueue.Count);
+                    while (_sampleQueue.TryDequeue(out var f) && f != null)
+                        batch.Add(f);
+                    SubmitBatch(batch);
                     continue;
                 }
 
-                // 2. 队列空，从包队列读取并解码
+                // 2. 解码阶段：队列空，读包解码；并预解码若干包填满前瞻窗口，
+                //    使提交阶段能成批提交（把解码与提交解耦，避免逐帧阻塞）。
                 MediaPacket? packet;
                 try
                 {
-                    packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
+                    if (!_packetQueue.Reader.TryRead(out packet))
+                        packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
                 }
                 catch (ChannelClosedException)
                 {
@@ -328,51 +341,12 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     break;
                 }
 
-                // 3. 解码 + 入队（加锁防止与 Flush/Reset 竞态）
-                await _decodeLock.WaitAsync(_cts.Token);
-                try
+                await DecodeAndEnqueueAsync(packet);
+
+                // 前瞻：采样队列未填满且仍有包立即可用时，连续解码（不 await），把解码与提交解耦
+                while (_sampleQueue.Count < PrerollFrames && _packetQueue.Reader.TryRead(out var next))
                 {
-                    // 隐患B修复：解码锁获取超时期间 Flush 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
-                    if (_pendingDecoderReset)
-                    {
-                        _decoder.Reset();
-                        _pendingDecoderReset = false;
-                    }
-
-                    // V2-08.1: 解码锁超时期间 Flush 可能跳过效果重置，此处补做，
-                    // 确保有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）必然复位
-                    if (_pendingEffectReset)
-                    {
-                        _effectReset?.Invoke();
-                        _pendingEffectReset = false;
-                    }
-
-                    // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Flush 暂停）
-                    if (_isPaused)
-                    {
-                        packet.Dispose();
-                        continue; // finally 会释放锁
-                    }
-
-                    AudioFrame? decodedFrame;
-                    try
-                    {
-                        decodedFrame = await _decoder.DecodeAsync(packet);
-                    }
-                    finally
-                    {
-                        packet.Dispose();
-                    }
-
-                    if (decodedFrame != null)
-                    {
-                        if (!_sampleQueue.TryEnqueue(decodedFrame))
-                            ReturnFrame(decodedFrame); // V2: 队列满，归还帧到池
-                    }
-                }
-                finally
-                {
-                    _decodeLock.Release();
+                    await DecodeAndEnqueueAsync(next);
                 }
             }
         }
@@ -390,44 +364,108 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         }
     }
 
-    private void SubmitFrame(AudioFrame frame)
+    /// <summary>
+    /// 整批提交解码帧。先逐帧做变换链 + 主时钟 + 数据事件（与历史单帧 SubmitFrame 语义完全一致），
+    /// 再一次性交给输出（支持 <see cref="IBatchAudioSubmit"/> 时折叠为单次 STA 往返，否则退回逐帧 Submit）。
+    /// 帧所有权始终在本方法（pipeline 线程）内归还到池，绝不跨线程归还（帧池非线程安全）。
+    /// </summary>
+    private void SubmitBatch(List<AudioFrame> batch)
     {
-        try
+        if (batch.Count == 0) return;
+
+        // 预处理：变换链 + 主时钟 + 数据事件（逐帧，与历史单帧语义一致）
+        var prepared = new List<AudioFrame>(batch.Count);
+        foreach (var frame in batch)
         {
-            // V2-06 C4/C6: 经过音频变换链（音量/效果/混音，所有权转移）
+            var f = frame;
             if (_transforms != null)
             {
                 foreach (var transform in _transforms)
                 {
-                    frame = transform(frame);
-                    if (frame == null)
+                    f = transform(f);
+                    if (f == null)
                     {
                         _logger.LogWarning("音频变换链丢弃帧（返回 null），跳过提交");
-                        return; // 变换已 Dispose 输入帧
+                        goto nextFrame; // 变换已 Dispose 输入帧，不归还（与历史行为一致）
                     }
                 }
             }
 
-            // 更新主时钟
-            _synchronizer.OnAudioFrameSubmitted(frame);
+            _synchronizer.OnAudioFrameSubmitted(f);
+            _audioDataSink?.Invoke(f);
+            prepared.Add(f);
+        nextFrame: ;
+        }
 
-            // V2-09 U2: 在提交给输出前同步触发音频数据事件（供可视化器消费）。
-            // 同步调用且位于 Submit 之前，frame 仍存活（ReturnFrame 在 finally 之后），
-            // 订阅方（音频管线线程）须只读借用并同步拷贝所需数据。无 I/O、无 await，
-            // 纯内存操作，绝对不构成伪异步。
-            _audioDataSink?.Invoke(frame);
-
-            // 提交给输出（V2: Output 不再 Dispose 帧，由管线归还到池）
-            _output.Submit(frame);
+        try
+        {
+            if (_output is IBatchAudioSubmit batched)
+                batched.SubmitBatch(prepared);
+            else
+                foreach (var f in prepared)
+                    _output.Submit(f);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "音频帧提交失败");
+            _logger.LogError(ex, "音频批提交失败");
         }
         finally
         {
-            // V2: Submit 后归还帧到池（无论成功或异常）
-            ReturnFrame(frame);
+            // 帧所有权始终在 pipeline 线程归还（帧池非线程安全，严禁跨线程归还）
+            foreach (var f in prepared)
+                ReturnFrame(f);
+        }
+    }
+
+    /// <summary>
+    /// 解码单个包并入队（与 Flush/Reset 加锁，防止竞态）。供 PipelineLoop 主解码与前瞻预解码共用。
+    /// </summary>
+    private async Task DecodeAndEnqueueAsync(MediaPacket packet)
+    {
+        await _decodeLock.WaitAsync(_cts.Token);
+        try
+        {
+            // 隐患B修复：解码锁获取超时期间 Flush 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
+            if (_pendingDecoderReset)
+            {
+                _decoder.Reset();
+                _pendingDecoderReset = false;
+            }
+
+            // V2-08.1: 解码锁超时期间 Flush 可能跳过效果重置，此处补做，
+            // 确保有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）必然复位
+            if (_pendingEffectReset)
+            {
+                _effectReset?.Invoke();
+                _pendingEffectReset = false;
+            }
+
+            // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Flush 暂停）
+            if (_isPaused)
+            {
+                packet.Dispose();
+                return; // finally 会释放锁
+            }
+
+            AudioFrame? decodedFrame;
+            try
+            {
+                decodedFrame = await _decoder.DecodeAsync(packet);
+            }
+            finally
+            {
+                packet.Dispose();
+            }
+
+            if (decodedFrame != null)
+            {
+                if (!_sampleQueue.TryEnqueue(decodedFrame))
+                    ReturnFrame(decodedFrame); // V2: 队列满，归还帧到池
+            }
+        }
+        finally
+        {
+            _decodeLock.Release();
         }
     }
 

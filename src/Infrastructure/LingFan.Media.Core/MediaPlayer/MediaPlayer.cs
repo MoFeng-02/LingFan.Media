@@ -268,6 +268,24 @@ public sealed class MediaPlayer : IMediaPlayer
                     OutputSampleFormat = _options.AudioOutputSampleFormat,
                 };
                 _audioDecoder = _audioDecoderFactory.Create(audioTrack.AudioCodec.Value, audioSettings);
+
+                // 直通型解码器（MediaFoundation：真正的解码由 SourceReader 内部完成，解码器只包装 PCM 字节）
+                // 无从自知输出格式，须由此注入解封装层实测的 PCM 参数。
+                // 关键性：下方 _audioOutput.Initialize 以 OutputSampleRate/OutputChannels 打开 WASAPI 设备，
+                // 参数错误 → 音高/节奏错乱（早期 MF 解码器硬编码 44100/2，遇 48kHz 媒体即失真）。
+                // FFmpeg 解码器不实现此接口（自带 codec context，参数自知），pattern matching 自动跳过。
+                if (_audioDecoder is IAudioSourceFormatAware audioFormatAware
+                    && audioTrack.AudioInfo is { SampleRate: > 0, Channels: > 0 } audioInfo)
+                {
+                    audioFormatAware.SetSourceFormat(
+                        audioInfo.SampleRate,
+                        audioInfo.Channels,
+                        audioInfo.BitsPerSample switch
+                        {
+                            32 => SampleFormat.S32,
+                            _ => SampleFormat.S16
+                        });
+                }
             }
 
             // V2: 创建帧对象池并注入解码器（Session 级）

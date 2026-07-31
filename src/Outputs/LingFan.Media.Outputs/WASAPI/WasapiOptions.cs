@@ -17,9 +17,9 @@ public sealed class WasapiOptions
     /// </remarks>
     public bool ExclusiveMode { get; set; } = false;
 
-    /// <summary>缓冲时长。默认 50ms。</summary>
-    /// <remarks>缓冲越大越稳定但延迟越高。共享模式建议 50ms，独占模式可低至 10ms。</remarks>
-    public TimeSpan BufferDuration { get; set; } = TimeSpan.FromMilliseconds(50);
+    /// <summary>缓冲时长。默认 100ms。</summary>
+    /// <remarks>缓冲越大越稳定但延迟越高。共享模式建议 100ms（兼顾稳定与 A/V 同步），独占模式可低至 10ms。</remarks>
+    public TimeSpan BufferDuration { get; set; } = TimeSpan.FromMilliseconds(100);
 
     /// <summary>是否使用事件驱动模式。默认 true（V2）。</summary>
     /// <remarks>

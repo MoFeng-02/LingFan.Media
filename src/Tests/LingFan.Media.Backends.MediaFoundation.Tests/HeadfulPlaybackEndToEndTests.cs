@@ -49,9 +49,12 @@ public sealed class HeadfulPlaybackEndToEndTests
         var countingFactory = new CountingVideoRendererFactory(d3d11Factory);
         services.AddLingFanMedia()
                 .AddMediaFoundation()
-                .AddHeadlessAudioOutput();
+                .AddSilentAudioOutput();
         services.AddSingleton<IVideoRendererFactory>(countingFactory);
-        var sp = services.BuildServiceProvider();
+        // await using：测试结束时释放 ServiceProvider → 连带释放 MFBackend 单例（MFShutdown 配对）。
+        // 原实现从不释放 provider → MFStartup 计数泄漏 + MF 平台常驻测试进程。
+        // C# await using 的释放发生在方法体末尾（晚于 finally 中的 player.DisposeAsync()），顺序安全。
+        await using var sp = services.BuildServiceProvider();
         var player = sp.GetRequiredService<IMediaPlayer>();
 
         using var win = new HiddenWindow(640, 480); // 创建隐藏 HWND（SwapChain 绑定目标）
@@ -99,10 +102,11 @@ public sealed class HeadfulPlaybackEndToEndTests
     }
 
     /// <summary>
-    /// 有头音频：真实 WASAPI 输出（默认音频端点）。
+    /// 有头音频：真实 WASAPI 输出（默认音频端点）。本用例即"无头进程 + 真实音频设备"的典型场景
+    /// （<c>AddHeadlessRenderer()</c> 无画面 + <c>AddWasapiOutput()</c> 真出声——WASAPI 不需窗口）。
     /// MediaPlayer.OpenAsync 对音频输出初始化无 try/catch——故 OpenAsync 成功即证明真实 WASAPI 已
-    /// Initialize（设备枚举 + 格式协商通过）；随后播放驱动主时钟推进，证明 PCM 帧真实流向声卡。
-    /// 本机端点若不支持请求格式则 Skip（与既有 WasapiOutputTests 设计一致）。
+    /// Initialize（设备枚举 + 格式协商通过）；随后播满 ~3 秒驱动主时钟推进，人耳可实际听到、且断言"持续出声"
+    /// （而非仅瞬时 blip）。本机端点若不支持请求格式则 Skip（与既有 WasapiOutputTests 设计一致）。
     /// </summary>
     [Fact]
     public async Task PlayAsync_HeadfulAudio_Wasapi_InitializesAndPlays()
@@ -112,8 +116,14 @@ public sealed class HeadfulPlaybackEndToEndTests
                 .AddMediaFoundation()
                 .AddHeadlessRenderer()   // 视频走 NoOp，隔离音频验证
                 .AddWasapiOutput();      // 音频走真实 WASAPI
-        var sp = services.BuildServiceProvider();
+        // await using：释放 ServiceProvider → MFBackend 单例配对 MFShutdown（防泄漏，同上）。
+        await using var sp = services.BuildServiceProvider();
         var player = sp.GetRequiredService<IMediaPlayer>();
+
+        // 诊断：累计实际进入提交链（Submit 之前触发）的音频采样数，用于区分
+        // "真丢帧(underrun/超时)" vs "时钟/时间戳慢"——前者 submittedSec 明显小于墙钟/played。
+        long submittedSamples = 0;
+        player.AudioDataAvailable += f => System.Threading.Interlocked.Add(ref submittedSamples, f.FrameCount);
 
         var ct = TestContext.Current.CancellationToken;
         try
@@ -124,19 +134,28 @@ public sealed class HeadfulPlaybackEndToEndTests
             player.Session!.AudioTracks.Count.Should().BeGreaterThan(0, "m1.mp4 应含音轨");
 
             await player.PlayAsync();
+            _output.WriteLine($"[HEADFUL-AUDIO] after PlayAsync: state={player.State} startPos={player.Position}");
 
-            // 真实 WASAPI 驱动主时钟推进
-            var advanced = false;
-            for (var i = 0; i < 40 && !advanced; i++)
+            // 真实 WASAPI 驱动主时钟推进：播满 ~3 秒，既能让人耳实际听到，
+            // 也能断言"持续出声"而非仅瞬时 blip（原逻辑 position>0 即停，只放零点几秒，几乎不可闻）。
+            // 逐 500ms 采样位置时间线 + 状态，用于区分"真 stalled"与"时钟读数 lag"。
+            var startPos = player.Position;
+            var timeline = new List<string>();
+            for (var i = 1; i <= 6; i++)
             {
-                await Task.Delay(100, ct);
-                advanced = player.Position > TimeSpan.Zero;
+                await Task.Delay(500, ct);
+                timeline.Add($"{(i * 500)}ms pos={player.Position:g} state={player.State}");
             }
+            var played = player.Position - startPos;
 
             await player.StopAsync(ct);
 
-            _output.WriteLine($"[HEADFUL-AUDIO] wasapiInitialized=true positionAdvanced={advanced} position={player.Position}");
-            advanced.Should().BeTrue("有头音频：真实 WASAPI 应初始化并驱动主时钟推进");
+            _output.WriteLine($"[HEADFUL-AUDIO] wasapiInitialized=true startPos={startPos:g} played={played:g}");
+            _output.WriteLine($"[HEADFUL-AUDIO] timeline: {string.Join(" | ", timeline)}");
+            // m1.mp4 音频为 44.1kHz；submittedSamples/44100 = 实际提交给 WASAPI 的音频总时长
+            _output.WriteLine($"[HEADFUL-AUDIO] submittedSamples={submittedSamples} submittedSec={submittedSamples / 44100.0:F2} (wallClock≈3.0s)");
+            played.Should().BeGreaterThan(TimeSpan.FromSeconds(2.5),
+                "有头音频：真实 WASAPI 应持续出声并推进主时钟 ≥2.5s（非瞬时 blip）");
         }
         catch (Exception ex)
         {

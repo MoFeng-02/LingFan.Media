@@ -19,9 +19,9 @@ namespace LingFan.Media.Backends.MediaFoundation.Tests;
 /// ⚠️ <b>须禁用沙盒运行</b>：沙盒隔离边界会切断 MediaFoundation 等真实宿主系统 API（"楚门的世界"），
 /// 导致解码无法真实进行；且 <c>dotnet test</c> 的 test host 多进程模型在沙盒内会卡死（环境限制）。
 /// 仅 Windows 且系统已注册 H264 解码 MFT（Windows 10/11 默认）。
-/// 容器注册：<c>AddLingFanMedia().AddMediaFoundation().AddHeadlessRenderer().AddHeadlessAudioOutput()</c>——
+/// 容器注册：<c>AddLingFanMedia().AddMediaFoundation().AddHeadlessRenderer().AddSilentAudioOutput()</c>——
 /// <c>AddHeadlessRenderer</c> 注册 NoOp 渲染器工厂，替代 D3D11/Vulkan，使播放器无 GPU 设备运行；
-/// <c>AddHeadlessAudioOutput</c> 注册 NoOp 音频输出，按真实节奏节流以驱动主时钟（无音频硬件依赖）。
+/// <c>AddSilentAudioOutput</c> 注册 NoOp 音频输出，按真实节奏节流以驱动主时钟（无音频硬件依赖）。
 /// </remarks>
 [Trait("Category", "RequiresMediaFoundation")]
 public sealed class HeadlessFrameSinkEndToEndTests
@@ -36,8 +36,8 @@ public sealed class HeadlessFrameSinkEndToEndTests
         services.AddLingFanMedia()
                 .AddMediaFoundation()
                 .AddHeadlessRenderer()
-                .AddHeadlessAudioOutput();
-        var sp = services.BuildServiceProvider();
+                .AddSilentAudioOutput();
+        await using var sp = services.BuildServiceProvider(); // 释放 provider → MFBackend 配对 MFShutdown（防泄漏）
         var player = sp.GetRequiredService<IMediaPlayer>();
 
         var frameCount = 0;
@@ -90,8 +90,8 @@ public sealed class HeadlessFrameSinkEndToEndTests
         services.AddLingFanMedia()
                 .AddMediaFoundation()
                 .AddHeadlessRenderer()
-                .AddHeadlessAudioOutput();
-        var sp = services.BuildServiceProvider();
+                .AddSilentAudioOutput();
+        await using var sp = services.BuildServiceProvider(); // 释放 provider → MFBackend 配对 MFShutdown（防泄漏）
         var player = sp.GetRequiredService<IMediaPlayer>();
 
         // 最快模式：关掉音视频同步（同步器放行所有视频帧）、无头音频输出不实时节流，
@@ -138,8 +138,8 @@ public sealed class HeadlessFrameSinkEndToEndTests
         services.AddLingFanMedia()
                 .AddMediaFoundation()
                 .AddHeadlessRenderer()
-                .AddHeadlessAudioOutput();
-        var sp = services.BuildServiceProvider();
+                .AddSilentAudioOutput();
+        await using var sp = services.BuildServiceProvider(); // 释放 provider → MFBackend 配对 MFShutdown（防泄漏）
         var player = sp.GetRequiredService<IMediaPlayer>();
 
         var source = new FileMediaSource(TestResources.VideoM1);
@@ -176,8 +176,8 @@ public sealed class HeadlessFrameSinkEndToEndTests
         services.AddLingFanMedia()
                 .AddMediaFoundation()
                 .AddHeadlessRenderer()
-                .AddHeadlessAudioOutput();
-        var sp = services.BuildServiceProvider();
+                .AddSilentAudioOutput();
+        await using var sp = services.BuildServiceProvider(); // 释放 provider → MFBackend 配对 MFShutdown（防泄漏）
         var player = sp.GetRequiredService<IMediaPlayer>();
 
         var videoCount = 0;

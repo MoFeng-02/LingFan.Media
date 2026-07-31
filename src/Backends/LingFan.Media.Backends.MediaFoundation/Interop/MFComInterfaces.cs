@@ -10,20 +10,39 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// <para>仅声明实际被调用的 vtable 方法，槽位按 Windows SDK 真实顺序排列；未调用的方法（如 IMF2DBuffer、
 /// IMFTransform 全量）无需声明——原始 vtable 委托模式按需按槽取函数指针，不要求声明所有槽。</para>
 /// <para>仅 Windows 可用。</para>
+/// <para><b>⚠️ 调用约定铁律（2026-07-31 审计修正，全文件 37 处已统一）</b>：COM vtable 方法一律用
+/// <c>[UnmanagedFunctionPointer(CallingConvention.Winapi)]</c>，<b>禁止</b> <c>ThisCall</c>。
+/// 依据：Windows SDK 头文件中 COM 方法声明为 <c>STDMETHODCALLTYPE</c>（即 <c>__stdcall</c>），
+/// vtable 项的 C 原型形如 <c>HRESULT (STDMETHODCALLTYPE *Foo)(IFoo *This, ...)</c>——
+/// <c>This</c> 是普通的<b>栈上首参</b>（这正是 C 语言宏 <c>(This)-&gt;lpVtbl-&gt;Foo(This, ...)</c> 能成立的原因）。
+/// 而 .NET 的 <c>CallingConvention.ThisCall</c> 语义是"首参放 ECX 寄存器"（MSVC <c>__thiscall</c>，
+/// 用于导出的 C++ 成员函数），与 COM ABI 不符：x86 上会导致 this 进 ECX、其余实参整体错位 + 栈失衡；
+/// x64/ARM64 因只有单一 ABI 而侥幸等价，掩盖了问题。<c>Winapi</c> 在 Windows x86 解析为 StdCall、
+/// x64 为默认 ABI，两端都正确，且与 WASAPI 侧 <c>WasapiInterop.cs</c> 的既有写法一致。</para>
 /// </remarks>
 
 // ── IMFSourceReader（IUnknown 之后：GetStreamSelection=3, SetStreamSelection=4, GetNativeMediaType=5, … ReadSample=10）──
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSourceReader_SetStreamSelection(IntPtr self, uint dwStreamIndex, [MarshalAs(UnmanagedType.Bool)] bool fSelected);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSourceReader_GetNativeMediaType(IntPtr self, uint dwStreamIndex, int dwMediaTypeIndex, out IntPtr ppMediaType);
 
+/// <summary>IMFSourceReader::GetCurrentMediaType（绝对槽 6 → slotIndex 3）。
+/// ⚠️ 2026-07-31 审计补漏：此声明原本完全没有 [UnmanagedFunctionPointer] 特性（走默认约定，x64 侥幸可用）。
+/// 现已按本文件头的调用约定铁律补为 Winapi。所有 COM vtable 委托必须显式标注，勿再遗漏。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSourceReader_GetCurrentMediaType(IntPtr self, uint dwStreamIndex, out IntPtr ppMediaType);
+
+/// <summary>IMFSourceReader::SetCurrentMediaType（绝对槽 7 → slotIndex 4，已比对 Windows SDK 10.0.26100.0
+/// mfreadwrite.h:386 原型）。pdwReserved 为 <c>DWORD*</c> 保留参数，必须传 <see cref="IntPtr.Zero"/>。
+/// 为音频流设置部分 PCM 媒体类型可令 SourceReader 自动加载解码器 + 重采样器，直接输出解码后 PCM。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFSourceReader_SetCurrentMediaType(IntPtr self, uint dwStreamIndex, IntPtr pdwReserved, IntPtr pMediaType);
 
 /// <summary>IMFSourceReader::SetCurrentPosition（绝对槽 8 → slotIndex 5，槽位表已审计核验）。
 /// guidTimeFormat 传 GUID_NULL 表示 100ns 单位；varPosition 为 PROPVARIANT(VT_I8)。</summary>
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSourceReader_SetCurrentPosition(IntPtr self, ref Guid guidTimeFormat, ref MfPropVariant varPosition);
 
 /// <summary>
@@ -42,39 +61,39 @@ internal struct MfPropVariant
     internal const ushort VT_I8 = 20;
 }
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSourceReader_ReadSample(IntPtr self, uint dwStreamIndex, int dwControlFlags,
     out int pdwActualStreamIndex, out int pdwStreamFlags, out long pllTimestamp, out IntPtr ppSample);
 
 // ── IMFMediaType（继承 IMFAttributes 30 方法（slotIndex 0~29，其中 GetUINT32=4, GetUINT64=5, GetGUID=7）；
 //     自有方法：GetMajorType=30, IsCompressedFormat=31, IsEqual=32, GetRepresentation=33, FreeRepresentation=34）──
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaType_GetMajorType(IntPtr self, out Guid pguidMajorType);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaType_GetUINT32(IntPtr self, ref Guid guidKey, out uint punValue);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaType_GetUINT64(IntPtr self, ref Guid guidKey, out ulong punValue);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaType_GetGuid(IntPtr self, ref Guid guidKey, out Guid pguidValue);
 
 // ── IMFSample.ConvertToContiguousBuffer（slotIndex=38，运行时已验证；见下方 IMFSample 槽位说明）──
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSample_ConvertToContiguousBuffer(IntPtr self, out IntPtr ppBuffer);
 
 // ── IMFMediaBuffer（IUnknown 之后：Lock=3, Unlock=4, GetCurrentLength=5）──
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaBuffer_Lock(IntPtr self, out IntPtr ppbBuffer, out uint pcbMaxLength, out uint pcbCurrentLength);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaBuffer_Unlock(IntPtr self);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaBuffer_GetCurrentLength(IntPtr self, out uint pcbCurrentLength);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaBuffer_SetCurrentLength(IntPtr self, uint cbCurrentLength);
 
 // ── IMFAttributes（继承 IUnknown；slotIndex 按 mfobjects.idl 声明顺序：GetItem=0, GetItemType=1, CompareItem=2, Compare=3,
@@ -83,19 +102,26 @@ internal delegate int IMFMediaBuffer_SetCurrentLength(IntPtr self, uint cbCurren
 //     SetUINT32=18, SetUINT64=19, SetDouble=20, SetGUID=21, SetString=22, SetBlob=23, SetUnknown=24,
 //     LockStore=25, UnlockStore=26, GetCount=27, GetItemByIndex=28, CopyAllItems=29（共 30 方法）。
 //     锚点：GetUINT64=5、SetGUID=21 已本机运行时验证（2026-07-29）。⚠️ 早期注释误写 SetUINT64=13/SetGUID=14，勿回退。──
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFAttributes_SetUINT32(IntPtr self, ref Guid guidKey, uint unValue);
+
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_SetUINT64(IntPtr self, ref Guid guidKey, ulong unValue);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_SetGUID(IntPtr self, ref Guid guidKey, ref Guid guidValue);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_SetBlob(IntPtr self, ref Guid guidKey, IntPtr pbBuf, uint cbBufSize);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+/// <summary>IMFAttributes::DeleteItem（slotIndex 16）。用于协商失败后剔除过度约束的属性再重试。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFAttributes_DeleteItem(IntPtr self, ref Guid guidKey);
+
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_GetBlobSize(IntPtr self, ref Guid guidKey, out uint pcbBlobSize);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_GetBlob(IntPtr self, ref Guid guidKey, IntPtr pBuf, uint cbBufSize);
 
 // ── IMFTransform（IUnknown 之后，vtable 顺序见 Windows SDK mftransform.h；下列数字为 MfVTable.Get 的 slotIndex）：
@@ -109,32 +135,32 @@ internal struct MftOutputStreamInfo
     public uint cbAlignment; // 内存对齐要求
 }
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_GetOutputStreamInfo(IntPtr self, uint dwOutputStreamID, out MftOutputStreamInfo pStreamInfo);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_GetOutputAvailableType(IntPtr self, uint dwOutputStreamID, uint dwTypeIndex, out IntPtr ppType);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_SetInputType(IntPtr self, uint dwInputStreamID, IntPtr pInputType, uint dwFlags);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_SetOutputType(IntPtr self, uint dwOutputStreamID, IntPtr pOutputType, uint dwFlags);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_GetInputStatus(IntPtr self, uint dwInputStreamID, out uint pdwFlags);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_ProcessMessage(IntPtr self, int eMessage, nuint ulParam);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_ProcessInput(IntPtr self, uint dwInputStreamID, IntPtr pSample, uint dwFlags);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_ProcessOutput(IntPtr self, uint dwFlags, uint cOutputBufferCount,
     IntPtr pOutputBuffers, out uint pdwStatus);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_GetOutputCurrentType(IntPtr self, uint dwOutputStreamID, out IntPtr ppType);
 
 // ── IMFSample（继承 IMFAttributes，其 30 个方法占 slotIndex 0~29；IMFSample 自有方法按 mfobjects.idl 声明顺序：
@@ -144,22 +170,22 @@ internal delegate int IMFTransform_GetOutputCurrentType(IntPtr self, uint dwOutp
 //     锚点：ConvertToContiguousBuffer=38、AddBuffer=39、GetBufferCount=36、Get/SetSampleTime=32/33、Get/SetSampleDuration=34/35
 //     均已本机运行时验证（2026-07-29）。⚠️ 早期注释按"GetDuration/GetAttributes/GetStreamID"等臆测顺序推出 AddBuffer=44/
 //     ConvertToContiguousBuffer=48，全错——IMFSample 没有那些方法，勿回退。──
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSample_GetSampleTime(IntPtr self, out long pllTimeStamp);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSample_SetSampleTime(IntPtr self, long llTimeStamp);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSample_GetSampleDuration(IntPtr self, out long pllDuration);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSample_SetSampleDuration(IntPtr self, long llDuration);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSample_GetBufferByIndex(IntPtr self, uint dwBufferIndex, out IntPtr ppBuffer);
 
-[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSample_AddBuffer(IntPtr self, IntPtr pBuffer);
 
 /// <summary>

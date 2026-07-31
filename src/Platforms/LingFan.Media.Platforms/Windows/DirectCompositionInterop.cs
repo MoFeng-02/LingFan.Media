@@ -26,20 +26,20 @@ public sealed partial class DirectCompositionInterop : IDisposable
     // 委托首个参数为 COM 对象指针（this）；DCompVTable.Get 从绝对 vtable 槽位（3 + slotIndex）取函数指针。
     // 仅声明实际被调用的方法；槽位按 Windows SDK dcomp.h 真实顺序排列。
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionDevice_Commit(IntPtr self);
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionDevice_CreateTargetForHwnd(
         IntPtr self, IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool topmost, out IntPtr target);
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionDevice_CreateVisual(IntPtr self, out IntPtr visual);
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionVisual_SetContent(IntPtr self, IntPtr content);
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionTarget_SetRoot(IntPtr self, IntPtr visual);
 
     /// <summary>

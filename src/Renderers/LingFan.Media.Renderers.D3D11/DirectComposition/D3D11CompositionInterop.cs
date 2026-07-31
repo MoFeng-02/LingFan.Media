@@ -20,20 +20,20 @@ namespace LingFan.Media.Renderers.D3D11.DirectComposition;
 internal sealed partial class D3D11CompositionInterop : IDisposable
 {
     // ── COM vtable 委托（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）──
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionDevice_Commit(IntPtr self);
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionDevice_CreateTargetForHwnd(
         IntPtr self, IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool topmost, out IntPtr target);
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionDevice_CreateVisual(IntPtr self, out IntPtr visual);
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionVisual_SetContent(IntPtr self, IntPtr content);
 
-    [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionTarget_SetRoot(IntPtr self, IntPtr visual);
 
     /// <summary>
