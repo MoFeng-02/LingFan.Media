@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -33,6 +34,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private volatile bool _isPaused;
     private volatile bool _pauseAcknowledged;
     private TaskCompletionSource<bool>? _pauseAckTcs;
+    // 自然完成标志：仅当管线因"流末耗尽"（包源关闭）正常退出时置位，
+    // 用于区分 Ended（自然结束）与取消退出，避免停止/释放时误触发 Completed 事件。
+    private bool _completedNaturally;
 
     /// <summary>
     /// 解码锁：确保 DecodeAsync 与 Reset 不会并发执行。
@@ -109,6 +113,14 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>内部管线任务（供 DisposeAsync join）。</summary>
     internal Task? PipelineTask => _pipelineTask;
+
+    /// <summary>
+    /// 自然播放完成事件。当管线因"流末耗尽"（包源关闭、所有采样已提交）正常退出时触发；
+    /// 由 <c>Stop</c>/<c>Dispose</c> 取消退出时不触发。
+    /// <see cref="MediaPipelineHost"/> 聚合 video/audio 两条管线的 <see cref="Completed"/> 为
+    /// <c>PlaybackCompleted</c>，最终驱动播放器转 <see cref="MediaState.Ended"/>。
+    /// </summary>
+    public event EventHandler? Completed;
 
     /// <summary>
     /// 启动或恢复管线。
@@ -345,8 +357,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 }
                 catch (ChannelClosedException)
                 {
-                    // 流结束
+                    // 流结束：所有采样已提交，标记自然完成并退出，finally 中触发 Completed 事件。
                     _sampleQueue.Complete();
+                    _completedNaturally = true;
                     break;
                 }
 
@@ -369,6 +382,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         }
         finally
         {
+            // 仅当流末自然耗尽时触发 Completed（取消退出不触发，避免 Stop/Dispose 误报 Ended）。
+            if (_completedNaturally)
+                Completed?.Invoke(this, EventArgs.Empty);
             _isRunning = false;
         }
     }

@@ -379,6 +379,7 @@ public sealed class MediaPlayer : IMediaPlayer
             // 10. 管线宿主
             _pipelineHost = new MediaPipelineHost();
             _pipelineHost.Attach(_videoPipeline, _audioPipeline, _subtitleProcessor);
+            _pipelineHost.PlaybackCompleted += OnPlaybackCompleted;
 
             // 11. 配置网络流缓冲
             if (isLive)
@@ -701,6 +702,23 @@ public sealed class MediaPlayer : IMediaPlayer
         {
             PositionChanged?.Invoke(this, _clock.Position);
         }
+    }
+
+    /// <summary>
+    /// 播放自然完成回调（由 <see cref="MediaPipelineHost.PlaybackCompleted"/> 在 video/audio 两管线
+    /// 均耗尽流末后于管线线程触发）。冻结主时钟（Position 停在末尾，避免音频设备时钟继续推进致
+    /// Position 越过时长）、归还高精度定时器、转 <see cref="MediaState.Ended"/>。
+    /// 已提交的音频尾部缓冲仍由 WASAPI 设备自然放完，不被中断。
+    /// </summary>
+    /// <remarks>
+    /// 此方法运行于管线线程，所有被调用成员（MediaClock.Pause / WinMm / PlaybackController）均线程安全。
+    /// 若当前状态非 Playing（如用户在末尾刚好 Paused），状态机会忽略该转换（Paused→Ended 非法），属可接受的边界情形。
+    /// </remarks>
+    private void OnPlaybackCompleted(object? sender, EventArgs e)
+    {
+        try { _clock?.Pause(); } catch { }
+        ReleaseHighPrecisionTimer();
+        TransitionState(MediaState.Ended);
     }
 
     private void OnSubtitleReceived(object? sender, SubtitleFrame? frame)

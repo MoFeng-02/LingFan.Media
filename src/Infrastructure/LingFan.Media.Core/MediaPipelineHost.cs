@@ -1,3 +1,5 @@
+using System;
+
 namespace LingFan.Media.Core;
 
 /// <summary>
@@ -17,6 +19,16 @@ public sealed class MediaPipelineHost
     private AudioPipeline? _audioPipeline;
     private SubtitleProcessor? _subtitleProcessor;
 
+    /// <summary>播放自然完成事件：所有存在的 A/V 管线均耗尽流末后触发。MediaPlayer 据此转 <see cref="MediaState.Ended"/>。</summary>
+    public event EventHandler? PlaybackCompleted;
+
+    // 完成门控：仅聚合 video/audio 两条管线（字幕是显示层、由时钟驱动、不参与完成判定）。
+    // 任一管线为 null（纯音频/纯视频媒体）即视为该侧已完成；两侧均完成且未触发过 → 发 PlaybackCompleted。
+    private readonly object _completionLock = new();
+    private bool _videoCompleted;
+    private bool _audioCompleted;
+    private bool _completionRaised;
+
     /// <summary>
     /// 绑定管线（由 MediaPlayer 在创建管线后调用）。
     /// </summary>
@@ -28,16 +40,55 @@ public sealed class MediaPipelineHost
         _videoPipeline = video;
         _audioPipeline = audio;
         _subtitleProcessor = subtitle;
+
+        if (video != null) video.Completed += OnPipelineCompleted;
+        if (audio != null) audio.Completed += OnPipelineCompleted;
+        // 字幕无 Completed 事件且不参与完成门控，故不订阅。
     }
 
     /// <summary>
     /// 启动两条管线（纯内存：设标志位 + fire-and-forget）。
+    /// 同时重置完成门控标志，使重播（Ended → Playing）能再次正确触发 PlaybackCompleted。
     /// </summary>
     public void Start()
     {
+        lock (_completionLock)
+        {
+            _videoCompleted = false;
+            _audioCompleted = false;
+            _completionRaised = false;
+        }
+
         _videoPipeline?.Start();
         _audioPipeline?.Start();
         _subtitleProcessor?.Start();
+    }
+
+    /// <summary>
+    /// 聚合各 A/V 管线的自然完成信号。锁内判定"所有存在的管线均已完成"后，
+    /// 单次触发 <see cref="PlaybackCompleted"/>（_completionRaised 去重，防止重复触发）。
+    /// </summary>
+    private void OnPipelineCompleted(object? sender, EventArgs e)
+    {
+        lock (_completionLock)
+        {
+            if (ReferenceEquals(sender, _videoPipeline))
+                _videoCompleted = true;
+            else if (ReferenceEquals(sender, _audioPipeline))
+                _audioCompleted = true;
+            else
+                return; // 未知发送方（不应发生），忽略以防误判
+
+            bool allDone =
+                (_videoPipeline == null || _videoCompleted) &&
+                (_audioPipeline == null || _audioCompleted);
+
+            if (allDone && !_completionRaised)
+            {
+                _completionRaised = true;
+                PlaybackCompleted?.Invoke(this, EventArgs.Empty);
+            }
+        }
     }
 
     /// <summary>

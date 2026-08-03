@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -32,6 +33,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private Task? _pipelineTask;
     private Task? _decodeTask;
     private volatile bool _decodeDone;
+    // 自然完成标志：仅当管线因"流末耗尽"正常退出（非 Stop/Dispose 取消）时才置位，
+    // 用于区分 Ended（自然结束）与取消退出，避免停止/释放时误触发 Completed 事件。
+    private bool _completedNaturally;
 
     /// <summary>
     /// 前向解码缓冲目标深度（帧数）。解码生产者（<see cref="DecodeLoop"/>）将帧队列维持在
@@ -116,6 +120,14 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>内部管线任务（供 DisposeAsync join）。</summary>
     internal Task? PipelineTask => _pipelineTask;
+
+    /// <summary>
+    /// 自然播放完成事件。当管线因"流末耗尽"（包源关闭、所有帧已呈现）正常退出时触发；
+    /// 由 <c>Stop</c>/<c>Dispose</c> 取消退出时不触发。
+    /// <see cref="MediaPipelineHost"/> 聚合 video/audio 两条管线的 <see cref="Completed"/> 为
+    /// <c>PlaybackCompleted</c>，最终驱动播放器转 <see cref="MediaState.Ended"/>。
+    /// </summary>
+    public event EventHandler? Completed;
 
     /// <summary>
     /// 启动或恢复管线。
@@ -334,7 +346,11 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 {
                     // 队列空：若生产者已结束（流尾）则收尾；否则短暂让出，等待生产者补帧。
                     if (_frameQueue.IsCompleted || _decodeDone)
+                    {
+                        // 流末自然耗尽（非取消）：标记后退出，finally 中触发 Completed 事件。
+                        _completedNaturally = true;
                         break;
+                    }
                     Thread.Sleep(1);
                     continue;
                 }
@@ -393,6 +409,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         }
         finally
         {
+            // 仅当流末自然耗尽时触发 Completed（取消退出不触发，避免 Stop/Dispose 误报 Ended）。
+            if (_completedNaturally)
+                Completed?.Invoke(this, EventArgs.Empty);
             _isRunning = false;
         }
     }
