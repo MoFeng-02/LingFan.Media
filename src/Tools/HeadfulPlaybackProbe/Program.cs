@@ -84,6 +84,13 @@ internal static class Program
         bool visible = HasFlag(args, "--visible");
         bool enableCategory = HasFlag(args, "--category");
         bool softwareDecode = HasFlag(args, "--software-decode");
+        // —— WASAPI 模式对照开关（2026-08-03）——
+        // --exclusive：强制独占模式（默认共享）。--polling：关闭事件驱动改用 V1 轮询（默认事件驱动）。
+        // --audio-warmup：开启音频预热（默认关闭，见下方说明）。
+        bool exclusiveMode = HasFlag(args, "--exclusive");
+        bool pollingMode = HasFlag(args, "--polling");
+        bool audioWarmup = HasFlag(args, "--audio-warmup");
+        Console.WriteLine($"[HEADFUL-WASAPI-MODE] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup}");
         int saveFrames = (int)ParseDouble(args, "--save-frames", 0);
         string saveDir = ParseOption(args, "--save-dir")
             ?? Path.Combine(Directory.GetCurrentDirectory(), "TestInfo", "Diagnostics", "HeadfulPlaybackProbe");
@@ -160,7 +167,12 @@ internal static class Program
 
         // —— 音频侧 ——
         if (doAudio)
-            builder.AddWasapiOutput(o => o.EnableBackgroundCapableSession = enableCategory);
+            builder.AddWasapiOutput(o =>
+            {
+                o.EnableBackgroundCapableSession = enableCategory;
+                o.ExclusiveMode = exclusiveMode;       // --exclusive 强制独占
+                o.EventDrivenMode = !pollingMode;       // --polling 退回 V1 轮询
+            });
         else
             builder.AddSilentAudioOutput();
 
@@ -196,6 +208,35 @@ internal static class Program
             catch (Exception ex)
             {
                 Console.WriteLine($"[HEADFUL-MF] 预热失败（忽略，正式打开仍可用）: {ex.Message}");
+            }
+
+            // —— WASAPI 预热（opt-in，--audio-warmup）——
+            // ⚠️ 实测证明：throwaway 预热对「共享端点每客户端付 2.5s」无效——预热付完 2.5s 后 Dispose，
+            // 设备回到休眠，正式 OpenAsync 新建 IAudioClient 仍付 2.5s（同一进程内两个客户端都慢，已用
+            // [WASAPI-OPEN] 六步计时坐实）。故默认关闭；开启仅用于观察「预热段 vs 正式段」是否真有差异。
+            // 真·修复需音频客户端常驻（host 持单例跨播放复用），属架构改动，不在本次范围。
+            if (audioWarmup)
+            {
+                var audioWarmSw = Stopwatch.StartNew();
+                try
+                {
+                    var audioFactory = sp.GetRequiredService<IAudioOutputFactory>();
+                    var audioOut = audioFactory.Create();
+                    if (audioOut is IAudioOutputWarmup audioWarm)
+                    {
+                        await audioWarm.WarmupAsync(CancellationToken.None);
+                        Console.WriteLine($"[HEADFUL-WASAPI] 预热耗时 {audioWarmSw.Elapsed.TotalSeconds:F2}s（已提前拉起音频引擎，正式打开将显著加快）");
+                    }
+                    (audioOut as IDisposable)?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[HEADFUL-WASAPI] 预热失败（忽略，正式打开仍可用）: {ex.Message}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("[HEADFUL-WASAPI] 未启用音频预热（加 --audio-warmup 开启；但 throwaway 预热对共享端点无效，跨播放仍付 ~2.5s）");
             }
 
             if (doVideo)

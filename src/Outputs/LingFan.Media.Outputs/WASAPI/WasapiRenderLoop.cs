@@ -90,6 +90,10 @@ internal sealed class WasapiRenderLoop
     private int _submittedFrames;
     private long _droppedFrames;
 
+    // 冷启动诊断（WASAPI_OPEN_DIAG=1 时启用）：拆开 InitializeAsync/Initialize 各 COM 步耗时，定位 OpenAsync 2.8s 真凶。
+    private readonly bool _openDiag = System.Environment.GetEnvironmentVariable("WASAPI_OPEN_DIAG") == "1";
+    private Stopwatch? _initDiagSw;
+
     // V2: 设备原生采样格式（Initialize 时检测，Submit 时用于直出判断）
     private SampleFormat _deviceSampleFormat = SampleFormat.F32;
 
@@ -112,6 +116,8 @@ internal sealed class WasapiRenderLoop
     private readonly ConcurrentQueue<RenderItem> _queue = new();
     private readonly AutoResetEvent _workAvailable = new(false);
     private readonly ManualResetEventSlim _started = new(false);
+    // 关闭信号：Dispose 时置位，使 WaitForBufferSpace 立即放弃阻塞等待（残留帧在关闭期被跳过，不卡 2s 超时）
+    private readonly ManualResetEventSlim _shutdownEvent = new(false);
 
     /// <summary>
     /// 初始化 <see cref="WasapiRenderLoop"/> 的新实例。
@@ -126,6 +132,13 @@ internal sealed class WasapiRenderLoop
         _eventDrivenMode = options.EventDrivenMode;
     }
 
+    // 冷启动诊断辅助：WASAPI_OPEN_DIAG=1 时打印各 COM 步累计耗时（[WASAPI-OPEN]）。
+    private void LogOpen(string step)
+    {
+        if (_openDiag && _initDiagSw is not null)
+            _logger.LogInformation("[WASAPI-OPEN] {Step} 累计 {Ms}ms", step, _initDiagSw.ElapsedMilliseconds);
+    }
+
     /// <inheritdoc cref="WasapiOutput.InitializeAsync"/>
     /// <remarks>
     /// 接口契约：启动 STA 渲染线程 + 在渲染线程执行 InitializeCore（COM 设备枚举），均为同步 COM 调用，无 I/O 可 await。
@@ -134,8 +147,10 @@ internal sealed class WasapiRenderLoop
     public Task InitializeAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        if (_openDiag) _initDiagSw = Stopwatch.StartNew();
         EnsureRenderThread();
         RunControl(InitializeCore);
+        LogOpen("InitializeCore(设备枚举)完成");
         return Task.CompletedTask;
     }
 
@@ -150,13 +165,18 @@ internal sealed class WasapiRenderLoop
     /// V2 语义保持：Submit 不接管帧所有权。将帧投递给渲染线程并阻塞等待其写入完成（COM 背压在渲染线程内），
     /// 故调用方在 Submit 返回后可安全归还帧；不跨越调用方线程做 COM 封送。
     /// </remarks>
-    public void Submit(AudioFrame frame)
+    public void Submit(AudioFrame frame) => Submit(frame, CancellationToken.None);
+
+    /// <summary>
+    /// 提交单帧并阻塞等待渲染线程写入完成（可感知取消令牌）。
+    /// </summary>
+    public void Submit(AudioFrame frame, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(frame);
         var item = new RenderItem(ItemKind.Frame, frame);
         _queue.Enqueue(item);
         _workAvailable.Set();
-        item.Done.Wait();
+        item.Done.Wait(ct);
         if (item.Exception is not null)
             ExceptionDispatchInfo.Throw(item.Exception);
     }
@@ -165,7 +185,13 @@ internal sealed class WasapiRenderLoop
     /// 批量提交：把多帧音频投递给渲染线程（在渲染线程内连续写入，消除逐帧跨线程往返开销）。
     /// 单帧提交失败（缓冲区超时/参数异常）仅丢弃该帧并继续后续帧，不会中断整批。不接管帧所有权。
     /// </summary>
-    public void SubmitBatch(IEnumerable<AudioFrame> frames)
+    public void SubmitBatch(IEnumerable<AudioFrame> frames) => SubmitBatch(frames, CancellationToken.None);
+
+    /// <summary>
+    /// 批量提交（可感知取消令牌）。语义同 <see cref="SubmitBatch(IEnumerable{AudioFrame})"/>，
+    /// 但 <paramref name="ct"/> 触发取消时立即放弃对渲染线程的阻塞等待，使调用方（音频管线）在 Stop/Dispose 时快速退出。
+    /// </summary>
+    public void SubmitBatch(IEnumerable<AudioFrame> frames, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(frames);
 
@@ -182,7 +208,16 @@ internal sealed class WasapiRenderLoop
 
         foreach (var item in pending)
         {
-            item.Done.Wait();
+            try
+            {
+                item.Done.Wait(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // 取消（Stop/Dispose）是正常退出路径：立即放弃剩余帧提交，使音频管线快速退出，
+                // 不再冒泡成 fail 日志（回归修复 2026-08-03）。
+                break;
+            }
             if (item.Exception is TimeoutException tex)
             {
                 // 背压超时（缓冲区暂无可写空间）：仅丢弃该帧并继续后续帧。
@@ -363,6 +398,9 @@ internal sealed class WasapiRenderLoop
         {
             try
             {
+                // 先置位关闭信号：使残留帧的 WaitForBufferSpace 立即放弃等待（跳过而非卡 2s 超时），
+                // 渲染线程得以快速处理完队列并进入 Shutdown。
+                _shutdownEvent.Set();
                 var shutdown = new RenderItem(ItemKind.Shutdown, null);
                 _queue.Enqueue(shutdown);
                 _workAvailable.Set();
@@ -485,6 +523,7 @@ internal sealed class WasapiRenderLoop
     {
         WasapiInterop.CoInitializeEx(IntPtr.Zero, WasapiInterop.COINIT_APARTMENTTHREADED);
         _started.Set();
+        LogOpen("STA线程CoInit完成");
         try
         {
             // 渲染循环：持续消费队列中的控制消息与音频帧，直到收到 Shutdown。
@@ -552,6 +591,7 @@ internal sealed class WasapiRenderLoop
 
             _enumeratorPtr = pEnumerator;   // 持有 CoCreateInstance 返回的引用（refcount 由本类拥有）
             _enumeratorGetDefault = ComVTable.Get<IMMDeviceEnumerator_GetDefaultAudioEndpoint>(pEnumerator, 1);
+            LogOpen("CoCreateInstance(Enumerator)");
 
             // 3. 获取默认音频渲染设备
             hr = _enumeratorGetDefault(
@@ -563,6 +603,7 @@ internal sealed class WasapiRenderLoop
 
             _devicePtr = pDevice;   // 持有 GetDefaultAudioEndpoint 返回的引用
             _deviceActivate = ComVTable.Get<IMMDevice_Activate>(pDevice, 0);
+            LogOpen("GetDefaultAudioEndpoint");
         }
         catch
         {
@@ -604,6 +645,7 @@ internal sealed class WasapiRenderLoop
             Marshal.ThrowExceptionForHR(hr);
 
             _audioClientPtr = pAudioClient;   // 持有 Activate 返回的引用
+            LogOpen("Activate(IAudioClient)");
             // ComVTable.Get 的 slotIndex 为「相对 IUnknown 的方法索引」（IUnknown 占用 vtable 绝对槽位 0-2，故绝对槽位 = 3 + slotIndex）。
             // 标准 IAudioClient vtable（audioclient.h 官方声明顺序，IUnknown 之后相对索引）：
             //   0 Initialize | 1 GetBufferSize | 2 GetStreamLatency(未使用) | 3 GetCurrentPadding
@@ -645,6 +687,7 @@ internal sealed class WasapiRenderLoop
             else
             {
                 format = NegotiateSharedFormat(sampleRate, channels);
+                LogOpen("NegotiateSharedFormat");
             }
 
             _logger.LogDebug("WASAPI 格式协商完成：设备格式={Format}, 采样率={SampleRate}Hz, 声道={Channels}",
@@ -683,6 +726,7 @@ internal sealed class WasapiRenderLoop
                     (IntPtr)(&format),
                     ref sessionGuid);
             }
+            LogOpen("IAudioClient.Initialize");
 
             // V2 O7: 独占模式错误处理
             if (hr == WasapiInterop.AUDCLNT_E_DEVICE_IN_USE)
@@ -1285,7 +1329,7 @@ internal sealed class WasapiRenderLoop
     /// <summary>
     /// 等待 WASAPI 缓冲区有足够空间（COM 背压）。事件驱动模式使用 EventWaitHandle.WaitOne 替代 Sleep 轮询。
     /// </summary>
-    private void WaitForBufferSpace(uint requiredFrames)
+    private void WaitForBufferSpace(uint requiredFrames, CancellationToken ct = default)
     {
         if (_audioClientPtr == IntPtr.Zero) return;
 
@@ -1301,6 +1345,10 @@ internal sealed class WasapiRenderLoop
 
         while (true)
         {
+            // 关闭中：立即放弃缓冲等待，残留帧在关闭期被跳过（Dispose 不再为残留帧卡 2s 超时）
+            if (_shutdownEvent.IsSet)
+                throw new OperationCanceledException("WASAPI 渲染线程关闭中，跳过缓冲等待");
+
             int hr = _audioClientGetCurrentPadding!(_audioClientPtr, out uint padding);
             Marshal.ThrowExceptionForHR(hr);
 
@@ -1320,7 +1368,8 @@ internal sealed class WasapiRenderLoop
                 int remainingMs = (int)(timeoutMs - sw.ElapsedMilliseconds);
                 if (remainingMs <= 0)
                     break;
-                _bufferEvent.WaitOne(remainingMs);
+                // 同时等待缓冲事件与关闭信号：关闭置位时立即返回（上方检查抛出异常）
+                WaitHandle.WaitAny(new WaitHandle[] { _bufferEvent, _shutdownEvent.WaitHandle }, remainingMs);
             }
             else
             {

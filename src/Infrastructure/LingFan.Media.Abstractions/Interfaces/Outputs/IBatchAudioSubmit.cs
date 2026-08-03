@@ -20,4 +20,13 @@ public interface IBatchAudioSubmit
     /// </summary>
     /// <param name="frames">待提交音频帧集合（可能含 null，实现需跳过）。</param>
     void SubmitBatch(IEnumerable<AudioFrame> frames);
+
+    /// <summary>
+    /// 批量提交音频帧（可感知取消令牌）。语义同 <see cref="SubmitBatch(IEnumerable{AudioFrame})"/>，
+    /// 但当 <paramref name="ct"/> 触发取消时，实现应尽快放弃阻塞等待（背压/渲染线程握手）并返回，
+    /// 使调用方（音频管线）能在 Stop/Dispose 时立即退出，避免退出挂起。
+    /// </summary>
+    /// <param name="frames">待提交音频帧集合（可能含 null，实现需跳过）。</param>
+    /// <param name="ct">取消令牌（关闭/停止时触发）。</param>
+    void SubmitBatch(IEnumerable<AudioFrame> frames, CancellationToken ct);
 }

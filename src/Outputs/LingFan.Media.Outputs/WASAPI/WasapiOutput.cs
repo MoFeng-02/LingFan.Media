@@ -17,8 +17,10 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// 见其 XML 文档。本类不持有任何 COM 状态。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
-internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit
+internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit, IAudioOutputWarmup
 {
+    private readonly WasapiOptions _options;
+    private readonly ILogger<WasapiOutput> _logger;
     private readonly WasapiRenderLoop _loop;
 
     /// <summary>
@@ -28,7 +30,37 @@ internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit
     /// <param name="logger">日志器。</param>
     internal WasapiOutput(WasapiOptions options, ILogger<WasapiOutput> logger)
     {
+        _options = options;
+        _logger = logger;
         _loop = new WasapiRenderLoop(options, logger);
+    }
+
+    /// <inheritdoc cref="IAudioOutputWarmup.WarmupAsync"/>
+    /// <remarks>
+    /// <para>一次性 throwaway 渲染循环：触发 OS 音频引擎（audiodg.exe）首次拉起。WASAPI 的
+    /// <c>IAudioClient.Initialize</c> 首调用会冷启动音频子系统，产生 2~3s 一次性开销；预热后 Dispose 释放 COM
+    /// （引擎在进程内保持热态），使正式 <c>OpenAsync</c> 中的 <c>IAudioClient.Initialize</c> 几乎瞬时。</para>
+    /// <para>失败一律忽略：正式 <c>OpenAsync</c> 仍会完整初始化音频，预热只是把冷启动成本前移到 host 加载界面期。</para>
+    /// </remarks>
+    public async Task WarmupAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        // WasapiRenderLoop 持有原始 Dispose()（未声明 IDisposable 接口），故显式在 finally 释放以免 STA 线程/COM 泄漏。
+        WasapiRenderLoop? warm = null;
+        try
+        {
+            warm = new WasapiRenderLoop(_options, _logger);
+            await warm.InitializeAsync(ct).ConfigureAwait(false);
+            warm.Initialize(44100, 2); // 默认格式即可触发引擎路径；AUTOCONVERTPCM 保证任何格式都被接受
+        }
+        catch
+        {
+            // 预热失败不影响后续播放：正式 OpenAsync 仍会完整初始化音频。
+        }
+        finally
+        {
+            warm?.Dispose();
+        }
     }
 
     /// <inheritdoc/>
@@ -42,6 +74,9 @@ internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit
 
     /// <inheritdoc/>
     public void SubmitBatch(IEnumerable<AudioFrame> frames) => _loop.SubmitBatch(frames);
+
+    /// <inheritdoc cref="IBatchAudioSubmit.SubmitBatch(IEnumerable{AudioFrame},CancellationToken)"/>
+    public void SubmitBatch(IEnumerable<AudioFrame> frames, CancellationToken ct) => _loop.SubmitBatch(frames, ct);
 
     /// <inheritdoc/>
     public void Pause() => _loop.Pause();

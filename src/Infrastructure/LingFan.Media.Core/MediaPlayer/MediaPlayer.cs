@@ -746,7 +746,15 @@ public sealed class MediaPlayer : IMediaPlayer
                 }
                 catch (TimeoutException)
                 {
-                    _logger.LogWarning("管线线程退出超时（5s），继续释放；原生指针释放由后端 gate 保护，不会 UAF");
+                    // §12 诊断纪律：精确记录是哪个任务没退出，避免盲猜（未来复现可直接定位）。
+                    var pending = new List<string>();
+                    if (_bufferManager?.ReaderTask is { } bt && !bt.IsCompleted) pending.Add("BufferManager.ReaderTask");
+                    if (_videoPipeline?.PipelineTask is { } vt && !vt.IsCompleted) pending.Add("VideoPipeline.PipelineTask");
+                    if (_audioPipeline?.PipelineTask is { } at && !at.IsCompleted) pending.Add("AudioPipeline.PipelineTask");
+                    if (_subtitleProcessor?.ProcessTask is { } st && !st.IsCompleted) pending.Add("SubtitleProcessor.ProcessTask");
+                    var which = pending.Count > 0 ? string.Join(", ", pending) : "未知（可能已超时但状态竞态）";
+                    _logger.LogWarning("管线线程退出超时（{TimeoutMs}ms），未完成任务 = {Pending}；继续释放，原生指针释放由后端 gate 保护，不会 UAF",
+                        (int)timeout.TotalMilliseconds, which);
                 }
             }
 

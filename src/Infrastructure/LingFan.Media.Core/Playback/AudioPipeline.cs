@@ -319,10 +319,19 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 // 1. 提交阶段：把当前可用解码帧整批提交（一次 STA 往返写多帧，是修复掉速的关键）
                 if (_sampleQueue.Count > 0)
                 {
+                    // 关闭/停止：不再向渲染线程阻塞提交，直接归还剩余帧。
+                    // 避免 Stop/Dispose 时 SubmitBatch 卡在 WaitForBufferSpace 2s 超时累加 → 退出挂起 5s。
+                    if (_cts.IsCancellationRequested)
+                    {
+                        while (_sampleQueue.TryDequeue(out var f) && f != null)
+                            ReturnFrame(f);
+                        break;
+                    }
+
                     var batch = new List<AudioFrame>(_sampleQueue.Count);
                     while (_sampleQueue.TryDequeue(out var f) && f != null)
                         batch.Add(f);
-                    SubmitBatch(batch);
+                    SubmitBatch(batch, _cts.Token);
                     continue;
                 }
 
@@ -369,7 +378,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     /// 再一次性交给输出（支持 <see cref="IBatchAudioSubmit"/> 时折叠为单次 STA 往返，否则退回逐帧 Submit）。
     /// 帧所有权始终在本方法（pipeline 线程）内归还到池，绝不跨线程归还（帧池非线程安全）。
     /// </summary>
-    private void SubmitBatch(List<AudioFrame> batch)
+    private void SubmitBatch(List<AudioFrame> batch, CancellationToken ct = default)
     {
         if (batch.Count == 0) return;
 
@@ -400,13 +409,14 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         try
         {
             if (_output is IBatchAudioSubmit batched)
-                batched.SubmitBatch(prepared);
+                batched.SubmitBatch(prepared, ct);
             else
                 foreach (var f in prepared)
                     _output.Submit(f);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // 取消（Stop/Dispose）时 WasapiRenderLoop 已静默中断提交，正常路径不记错误（回归双保险）。
             _logger.LogError(ex, "音频批提交失败");
         }
         finally

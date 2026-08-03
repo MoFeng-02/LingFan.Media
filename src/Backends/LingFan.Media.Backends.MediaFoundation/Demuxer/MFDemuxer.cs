@@ -185,6 +185,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
             throw new InvalidOperationException("MFDemuxer 正在关闭，无法打开媒体源。");
         try
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             ct.ThrowIfCancellationRequested();
 
             // 复审 C-7：在**任何** MF 原生调用之前取得平台引用，且与 ReleaseNativeResources 中的
@@ -208,6 +209,8 @@ internal sealed class MFDemuxer : IMediaDemuxer
             // ⚠️ 审计核验（2026-07-28）：原 index 5 命中 SetCurrentPosition、误改 index 7 命中 Flush（签名不符→栈破坏崩溃），
             // 正确值恒为 index 6（绝对槽 9）。以 Wine/ReactOS 镜像的 Windows SDK idl 为权威。
             _readSample = MfVTable.Get<IMFSourceReader_ReadSample>(_sourceReader, 6);
+            _logger.LogInformation("[OPEN-DIAG] 创建 SourceReader+缓存vtable 耗时 {Ms}ms", sw.ElapsedMilliseconds);
+            sw.Restart();
 
             // 实查容器时长：MF 不自动填时长，须从 presentation descriptor 取 MF_PD_DURATION。
             // 这是完整播放测试「几秒假完成」的根因修复点——此前硬编码 TimeSpan.Zero 使 player.Duration 恒 0。
@@ -215,6 +218,8 @@ internal sealed class MFDemuxer : IMediaDemuxer
 
             // 解析轨道（携带容器时长，供各轨 VideoInfo/AudioInfo.Duration 与容器保持一致）
             _tracks = ParseTracks(_sourceReader, duration);
+            _logger.LogInformation("[OPEN-DIAG] ParseTracks(含音频PCM协商/AAC激活) 耗时 {Ms}ms", sw.ElapsedMilliseconds);
+            sw.Restart();
 
             // 选择所有流（让 SourceReader 输出所有轨道的采样）；SetStreamSelection = 槽 4 → index 1
             foreach (var track in _tracks)
@@ -239,6 +244,8 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 if (duration <= TimeSpan.Zero)
                     duration = ProbeDurationByDraining(_sourceReader);
             }
+            _logger.LogInformation("[OPEN-DIAG] 时长探测(末尾定位/整段排空) 耗时 {Ms}ms", sw.ElapsedMilliseconds);
+            sw.Restart();
 
             // 解析元数据（MF 不直接提供标题/艺术家等；时长由 QueryContainerDuration 实查，非硬编码 0）
             _metadata = new MediaMetadata
@@ -1052,10 +1059,34 @@ internal sealed class MFDemuxer : IMediaDemuxer
         {
             try
             {
-                // GUID_NULL 时间格式 = 100ns 单位；极大时间戳触发 SourceReader 夹到末样本。
                 Guid timeFormat = Guid.Empty;
+
+                // 预热：先对任意已选流读一帧，建立 demuxer 可读状态。
+                // 部分 MF 实现要求先 ReadSample 后才能 SetCurrentPosition（否则返回失败码）。
+                // 该 sample 直接释放，不影响后续探测。
+                if (_selectedStreamIndices.Length > 0)
+                {
+                    try
+                    {
+                        _readSample!(readerPtr, (uint)_selectedStreamIndices[0], 0,
+                            out _, out _, out long _, out IntPtr warmSample);
+                        if (warmSample != IntPtr.Zero)
+                            InteropTrace.ReleaseComPtr(warmSample, "ProbeDurationByEndSeek:warmSample");
+                    }
+                    catch { /* 预热失败不影响主路径 */ }
+                }
+
+                // GUID_NULL 时间格式 = 100ns 单位；极大时间戳触发 SourceReader 夹到末样本。
+                // 🔴 回归修复（2026-08-03）：必须检查 hr。seek 失败时（如本源返回负码）旧代码静默忽略，
+                // 导致后续从头读 16 帧 ≈ 0.53s（16/30fps）伪装成真实时长。失败时立即返回 Zero，
+                // 由 OpenCore 回退 ProbeDurationByDraining 拿正确时长（代价是同步阻塞）。
                 var endPos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = long.MaxValue };
-                MfVTable.Get<IMFSourceReader_SetCurrentPosition>(readerPtr, 5)(readerPtr, ref timeFormat, ref endPos);
+                int seekHr = MfVTable.Get<IMFSourceReader_SetCurrentPosition>(readerPtr, 5)(readerPtr, ref timeFormat, ref endPos);
+                if (seekHr < 0)
+                {
+                    _logger.LogDebug("末尾定位探测: SetCurrentPosition 失败 HRESULT=0x{HR:X8}，回退整段排空", seekHr);
+                    return TimeSpan.Zero;
+                }
 
                 long maxTicks = 0;
                 foreach (int s in _selectedStreamIndices)
@@ -1081,7 +1112,10 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 MfVTable.Get<IMFSourceReader_SetCurrentPosition>(readerPtr, 5)(readerPtr, ref timeFormat, ref resetPos);
 
                 if (maxTicks <= 0)
+                {
+                    _logger.LogDebug("末尾定位探测: 未取到末帧时间戳，回退整段排空");
                     return TimeSpan.Zero;
+                }
                 var dur = TimeSpan.FromTicks(maxTicks);
                 _logger.LogInformation("MF 末尾定位探测时长: {Duration}", dur);
                 return dur;
