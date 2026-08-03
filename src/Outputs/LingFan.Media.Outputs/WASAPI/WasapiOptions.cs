@@ -74,4 +74,18 @@ public sealed class WasapiOptions
     /// <para>修改默认值后务必先做 <c>dotnet clean</c> + 全量重建再跑测试。</para>
     /// </remarks>
     public bool EnableBackgroundCapableSession { get; set; } = false;
+
+    /// <summary>
+    /// 预热后是否让 <see cref="IAudioEngine"/> 的 anchor 流保持 <c>Start</c> 状态。默认 <c>true</c>。
+    /// </summary>
+    /// <remarks>
+    /// <para>仅影响 <see cref="IAudioEngine.Warmup"/> 建立的<b>保活流</b>，与任何播放会话无关。</para>
+    /// <para><c>true</c>（默认）：anchor 流 <c>Initialize</c> 后再 <c>Start</c>，成为一条活跃但<b>不写任何数据</b>
+    /// （因而完全静音）的流，最大化"OS 音频引擎不回休眠"的概率——这正是让后续 Session 的
+    /// <c>IAudioClient.Initialize</c> 走热路径、免掉 ~2.5s 冷启动的关键。</para>
+    /// <para><c>false</c>：anchor 只 <c>Initialize</c> 不 <c>Start</c>。用于对照实验——若某些驱动上
+    /// "仅 Initialize"已足够保活，可关掉以彻底避免一条常驻活跃流。</para>
+    /// <para>注意：本项默认值改动会影响冷启动实测结论，调整前请先跑 <c>[WASAPI-ENGINE]</c> / <c>[WASAPI-OPEN]</c> 对照。</para>
+    /// </remarks>
+    public bool KeepEngineAnchorRunning { get; set; } = true;
 }

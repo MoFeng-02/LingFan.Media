@@ -90,7 +90,8 @@ internal static class Program
         bool exclusiveMode = HasFlag(args, "--exclusive");
         bool pollingMode = HasFlag(args, "--polling");
         bool audioWarmup = HasFlag(args, "--audio-warmup");
-        Console.WriteLine($"[HEADFUL-WASAPI-MODE] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup}");
+        bool fullPlayback = HasFlag(args, "--full");
+        Console.WriteLine($"[HEADFUL-WASAPI-MODE] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup} Full={fullPlayback}");
         int saveFrames = (int)ParseDouble(args, "--save-frames", 0);
         string saveDir = ParseOption(args, "--save-dir")
             ?? Path.Combine(Directory.GetCurrentDirectory(), "TestInfo", "Diagnostics", "HeadfulPlaybackProbe");
@@ -211,23 +212,21 @@ internal static class Program
             }
 
             // —— WASAPI 预热（opt-in，--audio-warmup）——
-            // ⚠️ 实测证明：throwaway 预热对「共享端点每客户端付 2.5s」无效——预热付完 2.5s 后 Dispose，
-            // 设备回到休眠，正式 OpenAsync 新建 IAudioClient 仍付 2.5s（同一进程内两个客户端都慢，已用
-            // [WASAPI-OPEN] 六步计时坐实）。故默认关闭；开启仅用于观察「预热段 vs 正式段」是否真有差异。
-            // 真·修复需音频客户端常驻（host 持单例跨播放复用），属架构改动，不在本次范围。
+            // 真·修复：把「音频引擎/端点句柄」提取为 Infrastructure Singleton（IAudioEngine / WasapiAudioEngine）。
+            // 预热时在专用 STA 线程建立一条常驻 anchor 流（Initialize + 默认 Start），使 OS 音频引擎（audiodg）
+            // 在进程内保持热态；后续每个 Transient Session（WasapiOutput）的 IAudioClient.Initialize 走热路径，
+            // 免去 ~2.5s 冷启动。这与「host 持 WasapiOutput 单例」方案不同——Session 状态对象保持 Transient，
+            // 绝不升 Singleton（DI 宪法：长期原生资源 Singleton / Session 状态 Transient）。二者零耦合，
+            // 仅通过"OS 引擎已热"这一进程级副作用间接协作。预热失败一律降级为未预热，不影响播放。
             if (audioWarmup)
             {
                 var audioWarmSw = Stopwatch.StartNew();
                 try
                 {
-                    var audioFactory = sp.GetRequiredService<IAudioOutputFactory>();
-                    var audioOut = audioFactory.Create();
-                    if (audioOut is IAudioOutputWarmup audioWarm)
-                    {
-                        await audioWarm.WarmupAsync(CancellationToken.None);
-                        Console.WriteLine($"[HEADFUL-WASAPI] 预热耗时 {audioWarmSw.Elapsed.TotalSeconds:F2}s（已提前拉起音频引擎，正式打开将显著加快）");
-                    }
-                    (audioOut as IDisposable)?.Dispose();
+                    var audioEngine = sp.GetRequiredService<IAudioEngine>();
+                    await audioEngine.WarmupAsync(CancellationToken.None);
+                    Console.WriteLine($"[HEADFUL-WASAPI] 预热耗时 {audioWarmSw.Elapsed.TotalSeconds:F2}s " +
+                                      $"(EngineWarm={audioEngine.IsWarm}) 已拉起音频引擎，正式打开应显著加快");
                 }
                 catch (Exception ex)
                 {
@@ -236,7 +235,7 @@ internal static class Program
             }
             else
             {
-                Console.WriteLine("[HEADFUL-WASAPI] 未启用音频预热（加 --audio-warmup 开启；但 throwaway 预热对共享端点无效，跨播放仍付 ~2.5s）");
+                Console.WriteLine("[HEADFUL-WASAPI] 未启用音频预热（加 --audio-warmup 开启；引擎常驻保活可消除 ~2.5s 冷启动）");
             }
 
             if (doVideo)
@@ -284,7 +283,9 @@ internal static class Program
 
             var startPos = player.Position;
             var poll = Stopwatch.StartNew();
-            while (poll.Elapsed < TimeSpan.FromSeconds(seconds))
+            // 🔴 播放结束判定：--full 时播到真实结束（player.State == MediaState.Ended），
+            // 否则按 --seconds（默认 12）计时。带安全上限防 Ended 未触发导致死循环。
+            while (true)
             {
                 await Task.Delay(500);
                 if (doVideo && countingFactory?.Last is not null)
@@ -292,6 +293,24 @@ internal static class Program
                 if (visible || verbose)
                     Console.WriteLine($"  t={poll.Elapsed.TotalSeconds:F1}s pos={player.Position:g} " +
                                       $"present={presentCount} state={player.State}");
+                if (fullPlayback)
+                {
+                    if (player.State == MediaState.Ended) break;
+                    // 🔴 真实时长兜底：当前 player 不会主动发出 Ended（MediaState.Ended 在播放器内从未被
+                    // 触发——属已知的"播放完成检测"缺口），故以 Position 越过 Duration 作为结束信号。
+                    double dur = player.Duration.TotalSeconds;
+                    if (dur > 0 && player.Position.TotalSeconds >= dur - 0.25) break;
+                    double cap = Math.Max(dur * 2, 90);
+                    if (poll.Elapsed.TotalSeconds > cap)
+                    {
+                        Console.WriteLine("  [HEADFUL] 超时未收到 Ended，强制退出");
+                        break;
+                    }
+                }
+                else if (poll.Elapsed.TotalSeconds >= seconds)
+                {
+                    break;
+                }
             }
 
             var playedSec = (player.Position - startPos).TotalSeconds;

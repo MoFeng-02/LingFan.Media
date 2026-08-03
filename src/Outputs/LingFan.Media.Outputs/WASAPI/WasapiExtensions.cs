@@ -34,6 +34,12 @@ public static class WasapiExtensions
         // 注册工厂（Singleton，DI 自动注入 WasapiOptions + ILoggerFactory）
         builder.Services.AddSingleton<IAudioOutputFactory, WasapiOutputFactory>();
 
+        // 🔴 DI 宪法：长期原生资源（音频引擎/端点句柄）→ Infrastructure Singleton。
+        // WasapiAudioEngine 持常驻 anchor IAudioClient（让 OS 音频引擎 audiodg 在进程内保持热态），
+        // 使后续每个 Transient Session 的 IAudioClient.Initialize 走热路径、免掉 ~2.5s 冷启动。
+        // 与 WasapiOutput（Transient、纯 Session 状态）零耦合：二者仅通过"OS 引擎已热"这一进程级副作用间接协作。
+        builder.Services.AddSingleton<IAudioEngine, WasapiAudioEngine>();
+
         return builder;
     }
 }
