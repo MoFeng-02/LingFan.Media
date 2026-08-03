@@ -29,7 +29,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
 {
     // ── HLSL 源（内嵌常量；VS 全屏三角形 + 4 个 PS 入口）──
     private const string HlslSource = """
-        // 全屏三角形：SV_VertexID ∈ {0,1,2} → 覆盖全屏的超大三角形（无顶点缓冲）
+        // Fullscreen triangle: SV_VertexID in {0,1,2} -> oversized triangle covering screen (no vertex buffer)
         struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
         VSOut VSMain(uint id : SV_VertexID)
@@ -42,17 +42,17 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         }
 
         SamplerState LinearSampler : register(s0);
-        Texture2D TexRgb : register(t0);   // RGB 路径：BGRA/RGBA 纹理
-        Texture2D TexY   : register(t0);   // YUV 路径：Y 平面（R8）
-        Texture2D TexU   : register(t1);   // U 平面（R8）或 NV12/NV21 UV 平面（R8G8）
-        Texture2D TexV   : register(t2);   // V 平面（R8，仅平面格式）
+        Texture2D TexRgb : register(t0);   // RGB path: BGRA/RGBA texture
+        Texture2D TexY   : register(t0);   // YUV path: Y plane (R8)
+        Texture2D TexU   : register(t1);   // U plane (R8) or NV12/NV21 UV plane (R8G8)
+        Texture2D TexV   : register(t2);   // V plane (R8, planar only)
 
         float4 PSRgb(VSOut i) : SV_Target
         {
             return float4(TexRgb.Sample(LinearSampler, i.uv).rgb, 1.0);
         }
 
-        // BT.601 全范围（JFIF）矩阵——与 SkiaVideoPresenter CPU 路径一致
+        // BT.601 full range (JFIF) matrix -- matches SkiaVideoPresenter CPU path
         float3 YuvToRgb(float y, float u, float v)
         {
             float d = u - 0.5019608; // 128/255
@@ -81,7 +81,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         float4 PSNv21(VSOut i) : SV_Target
         {
             float y = TexY.Sample(LinearSampler, i.uv).r;
-            float2 vu = TexU.Sample(LinearSampler, i.uv).rg; // R=V, G=U（NV21 交错序相反）
+            float2 vu = TexU.Sample(LinearSampler, i.uv).rg; // R=V, G=U (NV21 interleave order reversed)
             return float4(YuvToRgb(y, vu.y, vu.x), 1.0);
         }
         """;
@@ -143,6 +143,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         EnsureShaders();
         EnsureFrameTextures(sw.Width, sw.Height, sw.Format);
         UploadPlanes(sw);
+        RegenerateMips(); // 重建 mip 链 → 硬件自动 LOD 三线性缩小，消摩尔纹
 
         // 选择 PS
         ID3D11PixelShader ps = sw.Format switch
@@ -251,6 +252,8 @@ internal sealed class D3D11ShaderPipeline : IDisposable
             if (uvData is not null) ArrayPool<byte>.Shared.Return(uvData);
         }
 
+        RegenerateMips(); // 重建 mip 链 → 硬件自动 LOD 三线性缩小，消摩尔纹
+
         // 3. 用 PS_Nv12 渲染
         _context.OMSetRenderTargets(rtv, null!);
         _context.RSSetViewport(0, 0, targetWidth, targetHeight, 0f, 1f);
@@ -298,6 +301,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         _context.CopySubresourceRegion(
             _planeTextures[0]!, 0u, 0u, 0u, 0u,
             srcTexture, (uint)subresourceIndex, null);
+        RegenerateMips(); // 重建 mip 链 → 硬件自动 LOD 三线性缩小，消摩尔纹
 
         // 复用 PSRgb + 平面0 SRV 采样缩放（与软帧 BGRA/RGBA 路径完全一致）
         _context.OMSetRenderTargets(rtv, null!);
@@ -463,17 +467,35 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         {
             Width = (uint)width,
             Height = (uint)height,
-            MipLevels = 1u,
+            // 全 mip 链：配合 _sampler 的 MinMagMipLinear + 着色器 Sample 自动 LOD，
+            // 硬件按屏幕空间导数选 LOD 做三线性过滤，消除 >2× 非整数缩小的摩尔纹
+            // （见 D3D11Renderer [D3D11-SCALE] 警告：1906x1080→640x480 x=2.98 纯双线性必欠采样）。
+            MipLevels = 0u,
             ArraySize = 1u,
             Format = format,
             SampleDescription = new SampleDescription(1, 0),
             Usage = ResourceUsage.Default,
-            BindFlags = BindFlags.ShaderResource,
+            BindFlags = BindFlags.ShaderResource | BindFlags.RenderTarget,
             CPUAccessFlags = CpuAccessFlags.None,
-            MiscFlags = ResourceOptionFlags.None,
+            MiscFlags = ResourceOptionFlags.GenerateMips,
         };
         _planeTextures[index] = _device.CreateTexture2D(desc);
+        // null desc ⇒ SRV 覆盖全部 mip 层级，供 GenerateMips + 自动 LOD 采样
         _planeSrvs[index] = _device.CreateShaderResourceView(_planeTextures[index]!, null);
+    }
+
+    /// <summary>
+    /// 上传后重建平面纹理 mip 链，供硬件按屏幕空间导数自动选 LOD 做三线性缩小（消摩尔纹）。
+    /// 平面纹理已带 <see cref="ResourceOptionFlags.GenerateMips"/> + RenderTarget 绑定；R8/R8G8 均为
+    /// 可过滤且可渲染格式，<c>GenerateMips</c> 受支持。着色器用 <c>Sample</c>（自动 LOD），故无需改 PS。
+    /// </summary>
+    private void RegenerateMips()
+    {
+        for (int i = 0; i < _planeSrvs.Length; i++)
+        {
+            if (_planeSrvs[i] is not null)
+                _context.GenerateMips(_planeSrvs[i]!);
+        }
     }
 
     /// <summary>

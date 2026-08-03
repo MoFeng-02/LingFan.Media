@@ -30,6 +30,13 @@
   <Folder Name="/Platforms/">
     <Project Path="src/Platforms/LingFan.Media.Platforms/LingFan.Media.Platforms.csproj" />
   </Folder>
+  <Folder Name="/Tools/">
+    <Project Path="src/Tools/MediaPlaybackProbe/MediaPlaybackProbe.csproj" />
+    <Project Path="src/Tools/WasapiDriverProbe/WasapiDriverProbe.csproj" />
+    <Project Path="src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
+    <Project Path="src/Tools/MediaCorrectnessProbe/MediaCorrectnessProbe.csproj" />
+    <Project Path="src/Tools/HeadfulPlaybackProbe/HeadfulPlaybackProbe.csproj" />
+  </Folder>
   <Folder Name="/UI/">
     <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
   </Folder>

@@ -14,5 +14,11 @@ internal static class TestResources
     public static string GetVideo(string name) =>
         Path.Combine(BasePath, "Video", name);
 
+    public static string GetAudio(string name) =>
+        Path.Combine(BasePath, "Audio", name);
+
     public static string VideoM1 => GetVideo("m1.mp4");
+
+    /// <summary>crickets_night01.mp3：3 分钟纯夜虫环境音，无视频轨，专门用于「纯音频 → WASAPI 真机出声」验证。</summary>
+    public static string AudioCrickets => GetAudio("crickets_night01.mp3");
 }

@@ -1,5 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <!-- [LibraryImport] 源生成器要求方法/类型可声明为 partial；开启不安全代码以承载原生互操作 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
   </ItemGroup>

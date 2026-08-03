@@ -49,6 +49,12 @@ public sealed class FrameQueue
     /// <summary>当前队列长度。</summary>
     public int Count => _channel.Reader.Count;
 
+    /// <summary>
+    /// 队列是否已完成（生产者已调用 <see cref="Complete"/> 且所有帧已排空）。
+    /// 供消费者判断「生产者结束 + 队列空」以收尾。
+    /// </summary>
+    public bool IsCompleted => _channel.Reader.Completion.IsCompleted;
+
     /// <summary>最大容量（帧数）。</summary>
     public int Capacity => _capacity;
 

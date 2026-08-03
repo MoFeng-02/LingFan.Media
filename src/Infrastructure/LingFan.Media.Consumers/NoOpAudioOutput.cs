@@ -20,14 +20,19 @@ public sealed class NoOpAudioOutput : IAudioOutput, IRealtimePacedOutput
     private float _volume = 1.0f;
     private bool _paceRealTime = true;
 
-    // 无头实时节流锚点：以首帧时间戳为基准，使音频主时钟按真实节奏推进。
+    // 无头实时节流锚点：以「首帧提交时刻(wall)」为基准，按「已提交采样数 / 采样率」推算真实播放进度。
+    // 不依赖帧 Timestamp/Duration（MF 解封装/解码器给出的时间戳可能不可靠，全 0 或基于压缩包），
+    // 否则 delay<=0 不 sleep → 音频瞬间提交完 → SyncTo 把主时钟瞬间拉到片尾 → Position 立即到顶、管线瞬间 EOF。
     private DateTime _anchorWall = default;
-    private TimeSpan _anchorTs = default;
     private bool _anchored;
+    private long _submittedSamples;
+    private int _sampleRate;
 
     /// <inheritdoc />
     public void Initialize(int sampleRate, int channels)
     {
+        _sampleRate = sampleRate;
+        _submittedSamples = 0;
         _anchored = false;
     }
 
@@ -45,20 +50,23 @@ public sealed class NoOpAudioOutput : IAudioOutput, IRealtimePacedOutput
         if (!_paceRealTime)
             return;
 
-        // 锚定首帧：记下来“首帧应在此时刻(wall)被消费”，其时间戳为锚点。
-        // 后续帧的目标消费时刻 = 锚点 wall + (frame.Timestamp - 锚点 ts)，
-        // 若尚未到时刻则阻塞至该时刻。这样管线线程被实时限速（1x），
-        // 与真实 WASAPI 由硬件节奏限速语义一致，且不依赖 frame.Duration / frameCount
-        // （MF 解封装器不设置 Duration、解码器可能给出压缩包大小，二者均不可靠）。
+        // 锚定首帧：记录“首帧在此 wall 时刻开始消费”，后续以「累计提交采样数 / 采样率」推算真实播放进度。
+        // 关键：MF 解封装/解码器给出的帧 Timestamp/Duration 可能不可靠（全 0 或基于压缩包大小），
+        // 若以其为锚点则 delay 恒 <=0 → 不 sleep → 音频瞬间提交完 → Synchronizer 用 SyncTo 把主时钟
+        // 瞬间拉到片尾 → Position 立即到顶、管线立即 EOF（表现为“几秒播完 21 秒视频”的假完成）。
+        // 改用「累计采样 / 采样率」与采样率强绑定，与帧时间戳无关，实时节奏恒定可靠，
+        // 与真实 WASAPI 由硬件节奏限速语义一致。
         if (!_anchored)
         {
             _anchored = true;
             _anchorWall = DateTime.UtcNow;
-            _anchorTs = frame.Timestamp;
+            _submittedSamples = 0;
             return;
         }
 
-        var target = _anchorWall + (frame.Timestamp - _anchorTs);
+        _submittedSamples += frame.FrameCount;
+        var played = _sampleRate > 0 ? (double)_submittedSamples / _sampleRate : 0d;
+        var target = _anchorWall + TimeSpan.FromSeconds(played);
         var delay = target - DateTime.UtcNow;
         if (delay > TimeSpan.Zero)
             Thread.Sleep(delay);
@@ -74,6 +82,7 @@ public sealed class NoOpAudioOutput : IAudioOutput, IRealtimePacedOutput
     public void Flush()
     {
         _anchored = false;
+        _submittedSamples = 0;
     }
 
     /// <inheritdoc />

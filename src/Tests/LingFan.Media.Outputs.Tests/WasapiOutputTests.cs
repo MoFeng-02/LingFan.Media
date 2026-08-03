@@ -26,7 +26,7 @@ public class WasapiOutputTests
     [Fact]
     public void ParseSampleFormat_NullPointer_ReturnsF32()
     {
-        var result = WasapiOutput.ParseSampleFormat(IntPtr.Zero);
+        var result = WasapiRenderLoop.ParseSampleFormat(IntPtr.Zero);
         result.Should().Be(SampleFormat.F32);
     }
 
@@ -45,7 +45,7 @@ public class WasapiOutputTests
         };
 
         using var ptr = AllocFormatPtr(wfx);
-        var result = WasapiOutput.ParseSampleFormat(ptr);
+        var result = WasapiRenderLoop.ParseSampleFormat(ptr);
         result.Should().Be(SampleFormat.F32);
     }
 
@@ -64,7 +64,7 @@ public class WasapiOutputTests
         };
 
         using var ptr = AllocFormatPtr(wfx);
-        var result = WasapiOutput.ParseSampleFormat(ptr);
+        var result = WasapiRenderLoop.ParseSampleFormat(ptr);
         result.Should().Be(SampleFormat.S16);
     }
 
@@ -83,7 +83,7 @@ public class WasapiOutputTests
         };
 
         using var ptr = AllocFormatPtr(wfx);
-        var result = WasapiOutput.ParseSampleFormat(ptr);
+        var result = WasapiRenderLoop.ParseSampleFormat(ptr);
         result.Should().Be(SampleFormat.S32);
     }
 
@@ -108,7 +108,7 @@ public class WasapiOutputTests
         };
 
         using var ptr = AllocExtensiblePtr(wfex);
-        var result = WasapiOutput.ParseSampleFormat(ptr);
+        var result = WasapiRenderLoop.ParseSampleFormat(ptr);
         result.Should().Be(SampleFormat.F32);
     }
 
@@ -133,7 +133,7 @@ public class WasapiOutputTests
         };
 
         using var ptr = AllocExtensiblePtr(wfex);
-        var result = WasapiOutput.ParseSampleFormat(ptr);
+        var result = WasapiRenderLoop.ParseSampleFormat(ptr);
         result.Should().Be(SampleFormat.S16);
     }
 
@@ -158,7 +158,7 @@ public class WasapiOutputTests
         };
 
         using var ptr = AllocExtensiblePtr(wfex);
-        var result = WasapiOutput.ParseSampleFormat(ptr);
+        var result = WasapiRenderLoop.ParseSampleFormat(ptr);
         result.Should().Be(SampleFormat.S32);
     }
 
@@ -177,7 +177,7 @@ public class WasapiOutputTests
         };
 
         using var ptr = AllocFormatPtr(wfx);
-        var result = WasapiOutput.ParseSampleFormat(ptr);
+        var result = WasapiRenderLoop.ParseSampleFormat(ptr);
         result.Should().Be(SampleFormat.F32);
     }
 
@@ -186,7 +186,7 @@ public class WasapiOutputTests
     [Fact]
     public void BuildWaveFormat_F32_CorrectStructure()
     {
-        var wfx = WasapiOutput.BuildWaveFormat(48000, 2, SampleFormat.F32);
+        var wfx = WasapiRenderLoop.BuildWaveFormat(48000, 2, SampleFormat.F32);
 
         wfx.wFormatTag.Should().Be(WasapiInterop.WAVE_FORMAT_IEEE_FLOAT);
         wfx.nChannels.Should().Be(2);
@@ -200,7 +200,7 @@ public class WasapiOutputTests
     [Fact]
     public void BuildWaveFormat_S16_CorrectStructure()
     {
-        var wfx = WasapiOutput.BuildWaveFormat(44100, 2, SampleFormat.S16);
+        var wfx = WasapiRenderLoop.BuildWaveFormat(44100, 2, SampleFormat.S16);
 
         wfx.wFormatTag.Should().Be(WasapiInterop.WAVE_FORMAT_PCM);
         wfx.nChannels.Should().Be(2);
@@ -214,7 +214,7 @@ public class WasapiOutputTests
     [Fact]
     public void BuildWaveFormat_S32_CorrectStructure()
     {
-        var wfx = WasapiOutput.BuildWaveFormat(48000, 6, SampleFormat.S32);
+        var wfx = WasapiRenderLoop.BuildWaveFormat(48000, 6, SampleFormat.S32);
 
         wfx.wFormatTag.Should().Be(WasapiInterop.WAVE_FORMAT_PCM);
         wfx.nChannels.Should().Be(6);
@@ -237,7 +237,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.F32, SampleFormat.F32);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.F32, SampleFormat.F32);
         }
 
         var dstFloats = MemoryMarshal.Cast<byte, float>(dst);
@@ -253,7 +253,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S16, SampleFormat.S16);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S16, SampleFormat.S16);
         }
 
         var dstShorts = MemoryMarshal.Cast<byte, short>(dst);
@@ -269,7 +269,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S32, SampleFormat.S32);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S32, SampleFormat.S32);
         }
 
         var dstInts = MemoryMarshal.Cast<byte, int>(dst);
@@ -286,7 +286,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S16, SampleFormat.F32);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S16, SampleFormat.F32);
         }
 
         var dstFloats = MemoryMarshal.Cast<byte, float>(dst).ToArray();
@@ -305,7 +305,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S32, SampleFormat.F32);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S32, SampleFormat.F32);
         }
 
         var dstFloats = MemoryMarshal.Cast<byte, float>(dst).ToArray();
@@ -325,7 +325,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.F32, SampleFormat.S16);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.F32, SampleFormat.S16);
         }
 
         var dstShorts = MemoryMarshal.Cast<byte, short>(dst).ToArray();
@@ -345,7 +345,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.F32, SampleFormat.S32);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.F32, SampleFormat.S32);
         }
 
         var dstInts = MemoryMarshal.Cast<byte, int>(dst).ToArray();
@@ -365,7 +365,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S16, SampleFormat.S32);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S16, SampleFormat.S32);
         }
 
         var dstInts = MemoryMarshal.Cast<byte, int>(dst).ToArray();
@@ -385,7 +385,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S32, SampleFormat.S16);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.S32, SampleFormat.S16);
         }
 
         var dstShorts = MemoryMarshal.Cast<byte, short>(dst).ToArray();
@@ -409,7 +409,7 @@ public class WasapiOutputTests
 
         fixed (byte* dstPtr = dst)
         {
-            WasapiOutput.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.F32, SampleFormat.S32);
+            WasapiRenderLoop.CopyOrConvert(src, (IntPtr)dstPtr, 4, SampleFormat.F32, SampleFormat.S32);
         }
 
         var dstInts = MemoryMarshal.Cast<byte, int>(dst).ToArray();
@@ -429,7 +429,8 @@ public class WasapiOutputTests
         options.ExclusiveMode.Should().BeFalse();
         options.EventDrivenMode.Should().BeTrue();       // V2 默认事件驱动
         options.PreferredSampleFormat.Should().BeNull(); // V2 默认自动检测
-        options.BufferDuration.Should().Be(TimeSpan.FromMilliseconds(50));
+        // 1d1b07f 起默认由 50ms 调整为 100ms：共享模式下兼顾播放稳定性与 A/V 同步。
+        options.BufferDuration.Should().Be(TimeSpan.FromMilliseconds(100));
         options.SampleRate.Should().Be(44100);
         options.Channels.Should().Be(2);
     }

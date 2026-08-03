@@ -35,6 +35,13 @@ internal static class MFConstants
     internal const uint MF_SOURCE_READER_ALL_STREAMS = 0xFFFFFFFE;
     internal const uint MF_SOURCE_READER_MEDIASOURCE = 0xFFFFFFFF;
 
+    // MF_PD_DURATION {8C1C9CF8-DEE1-4BFC-8C3F-4F8C7C2711AB}（mfidl.h 权威值）：
+    // presentation descriptor 时长属性（UINT64，100ns 单位）。MF 不会自动填充时长，
+    // 须由 IMFSourceReader.GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION) 取得。
+    // ⚠️ 早期 MFDemuxer 未查此属性、把 Duration 硬编码 TimeSpan.Zero，导致 player.Duration 恒为 0，
+    //    完整播放测试首轮即满足「pos >= duration-1」假完成（表现「几秒播完 21 秒视频」）。勿回退为 0。
+    internal static readonly Guid MF_PD_DURATION = new(0x8c1c9cf8, 0xdee1, 0x4bfc, 0x8c, 0x3f, 0x4f, 0x8c, 0x7c, 0x27, 0x11, 0xab);
+
     // MF_MT_* attribute IDs (subset)
     internal static readonly Guid MF_MT_MAJOR_TYPE = new(0x48eba18e, 0xf8c9, 0x4687, 0xbf, 0x11, 0x0a, 0x74, 0xc9, 0xf9, 0x6a, 0x8f); // {48EBA18E-F8C9-4687-BF11-0A74C9F96A8F} 已本机 SetInputType 运行时验证
     internal static readonly Guid MF_MT_SUBTYPE = new(0xf7e34c9a, 0x42e8, 0x4714, 0xb7, 0x4b, 0xcb, 0x29, 0xd7, 0x2c, 0x35, 0xe5);

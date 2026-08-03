@@ -9,6 +9,40 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// 故采用 vtable 委托方式，而非源生成式 COM。）</para>
 /// <para><b>不使用 NAudio</b>：NAudio 内部使用反射，不满足 AOT 友好要求。</para>
 /// </remarks>
+/// <summary>音频会话分类（IAudioClient2.SetClientProperties 使用，audioclient.h AudioClientCategory）。
+/// 媒体播放器应设为 <see cref="BackgroundCapableMedia"/> / <see cref="Movie"/> / <see cref="GameMedia"/>，
+/// 使 Windows 不将其当作可挂起的后台会话——否则控制台/隐藏窗口/非前台窗口的会话会在播放数秒后
+/// 被系统暂停音频（典型表现：声音 ~10-15s 后中断，视频却继续）。</summary>
+public enum AudioClientCategory
+{
+    /// <summary>未指定分类（与不设等价）。</summary>
+    Other = 0,
+    /// <summary>仅前台媒体。</summary>
+    ForegroundOnlyMedia = 1,
+    /// <summary>后台可播放媒体（音乐/视频类应用）。Windows 不会因窗口非前台而挂起该会话。</summary>
+    BackgroundCapableMedia = 2,
+    /// <summary>通信音频（通话等）。</summary>
+    Communications = 3,
+    /// <summary>提示音。</summary>
+    Alerts = 4,
+    /// <summary>音效。</summary>
+    SoundEffects = 5,
+    /// <summary>游戏语音。</summary>
+    GameChat = 6,
+    /// <summary>游戏媒体。</summary>
+    GameMedia = 7,
+    /// <summary>电影/长视频。</summary>
+    Movie = 8,
+    /// <summary>通用媒体。</summary>
+    Media = 9,
+    /// <summary>语音。</summary>
+    Speech = 10,
+    /// <summary>通知。</summary>
+    Notification = 11,
+    /// <summary>音频处理。</summary>
+    AudioProcessing = 12,
+}
+
 internal static partial class WasapiInterop
 {
     // ── 常量 ──
@@ -113,6 +147,16 @@ internal static partial class WasapiInterop
 
     public static readonly Guid IID_IAudioClient =
         new("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
+
+    // Audioclient.h: MIDL_INTERFACE("726778CD-F60A-4eda-82DE-E47610CD78AA") IAudioClient2 : public IAudioClient
+    // 🔴 vtable 绝对槽（逐方法照抄头文件，勿凭记忆推算）：
+    //   IUnknown(0..2) + IAudioClient 12 方法(3..14)
+    //   + IAudioClient2: IsOffloadCapable(15) / SetClientProperties(16) / GetBufferSizeLimits(17)
+    // 即 SetClientProperties 是绝对槽 16（ComVTable slotIndex 13），不是 15。
+    // 曾误写为 15 ⇒ 实际调到 IsOffloadCapable（多一个 BOOL* 出参）⇒ 野指针写 ⇒ 0xC0000005。
+    // 用于把音频会话分类为媒体类，避免 Windows 对后台/非前台会话施加节流或挂起策略。
+    public static readonly Guid IID_IAudioClient2 =
+        new("726778CD-F60A-4eda-82DE-E47610CD78AA");
 
     // Audioclient.h: MIDL_INTERFACE("F294ACFC-3146-4483-A7BF-ADDCA7C260E2") IAudioRenderClient
     // ⚠️ 此 GUID 曾误写为 ...-ADD077DB4D09，导致 GetService 恒返回 E_NOINTERFACE(0x80004002)，
@@ -237,6 +281,42 @@ internal delegate int IAudioClient_Start(IntPtr self);
 internal delegate int IAudioClient_Stop(IntPtr self);
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IUnknown_QueryInterface(IntPtr self, ref Guid iid, out IntPtr ppv);
+
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IUnknown_Release(IntPtr self);
+
+/// <summary>IAudioClient2::SetClientProperties — 设置音频会话分类（audioclient.h AudioClientProperties）。
+/// 必须在 IAudioClient::Initialize 之前调用。cbSize 取 Marshal.SizeOf 的本结构非托管大小。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IAudioClient2_SetClientProperties(IntPtr self, ref AudioClientProperties pProperties);
+
+/// <summary>IAudioClient2.SetClientProperties 的属性结构（audioclient.h AudioClientProperties）。
+/// <para>官方布局（Win8.1+，16 字节，字段顺序不可变）：
+/// <c>UINT32 cbSize; BOOL bIsOffload; AUDIO_STREAM_CATEGORY eCategory; AUDCLNT_STREAMOPTIONS Options;</c></para>
+/// <para>🔴 2026-08-02 根因修正：此前本结构<b>漏掉了 bIsOffload（BOOL，偏移 4）</b>，导致原生按官方布局解析时
+/// 整体错位一格——托管写入的 <c>eCategory=2</c> 被读作 <c>bIsOffload=TRUE</c>（<b>误申请硬件卸载流</b>），
+/// 托管写入的 <c>eStreamOptions=0</c> 被读作 <c>eCategory=Other</c>（会话分类实际从未生效）。
+/// 普通声卡不支持 offload，且 Win10 起 offload 流必须配合 <c>AUDCLNT_STREAMFLAGS_EVENTCALLBACK</c>，
+/// 于是 SetClientProperties 在原生侧触发 0xC0000005。此前三轮「vtable 槽位 / QI 改 BCL / 默认关闭」
+/// 均未触及该根因，故崩溃栈三次完全一致。</para>
+/// <para>顺序布局，成员全部 blittable（UINT32 / int / int 枚举 / int），AOT 友好。
+/// BOOL 用 <see cref="int"/> 表达（0 = FALSE），<b>不得改成 bool</b>——那会引入非 blittable 封送。</para></summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct AudioClientProperties
+{
+    /// <summary>本结构大小（Marshal.SizeOf = 16）。API 据此判断结构体版本。</summary>
+    public uint cbSize;
+    /// <summary>BOOL：音频流是否为硬件卸载（offload）流。<b>本库必须为 0（FALSE）</b>——走常规共享模式渲染；
+    /// 置 TRUE 会切到 offload 路径，多数声卡不支持且要求事件驱动，导致原生崩溃。</summary>
+    public int bIsOffload;
+    /// <summary>会话分类（AudioClientCategory）。</summary>
+    public AudioClientCategory eCategory;
+    /// <summary>流式选项（AUDCLNT_STREAMOPTIONS）；0 = AUDCLNT_STREAMOPTIONS_NONE。Win8.1+ 支持。</summary>
+    public int eStreamOptions;
+}
+
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_Reset(IntPtr self);
 
 /// <summary>
@@ -281,10 +361,16 @@ internal delegate int IAudioClock_GetPosition(IntPtr self, out ulong pu64DeviceP
 /// </summary>
 internal static class ComVTable
 {
-    public static TDelegate Get<TDelegate>(IntPtr comPtr, int slotIndex) where TDelegate : Delegate
+    /// <summary>读取第 (3 + slotIndex) 个 vtable 槽位的原始函数指针（绝对槽位 = IUnknown 3 槽 + slotIndex）。</summary>
+    public static IntPtr GetMethodPointer(IntPtr comPtr, int slotIndex)
     {
         IntPtr vtable = Marshal.ReadIntPtr(comPtr);
-        IntPtr methodPtr = Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
+        return Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
+    }
+
+    public static TDelegate Get<TDelegate>(IntPtr comPtr, int slotIndex) where TDelegate : Delegate
+    {
+        IntPtr methodPtr = GetMethodPointer(comPtr, slotIndex);
         return Marshal.GetDelegateForFunctionPointer<TDelegate>(methodPtr);
     }
 }

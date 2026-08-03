@@ -16,6 +16,15 @@ public sealed class Synchronizer
     private bool _realTimeSync = true;
 
     /// <summary>
+    /// 主时钟位置源（可选）。若设置，则 <see cref="CheckVideoFrame"/> 直接以该源返回的位置为准，
+    /// 不再读取 <see cref="_clock"/>，且 <see cref="OnAudioFrameSubmitted"/> 不再硬跳时钟
+    /// （避免批内逐帧 SyncTo 的突发锯齿 —— 见 <see cref="ClockTuning"/> 说明）。
+    /// <para>典型用法：塞入 <c>() => audioOutput.GetPlaybackPositionDirect()</c>，
+    /// 即设备真实播放游标，平滑且随缓冲耗尽自然停摆。</para>
+    /// </summary>
+    private Func<TimeSpan>? _masterClockProvider;
+
+    /// <summary>
     /// 初始化 <see cref="Synchronizer"/> 的新实例。
     /// </summary>
     /// <param name="clock">媒体时钟。</param>
@@ -37,15 +46,35 @@ public sealed class Synchronizer
     }
 
     /// <summary>
+    /// 设置主时钟位置源（真实播放位置驱动）。传入 <c>null</c> 恢复为 <see cref="_clock"/> 驱动。
+    /// </summary>
+    /// <param name="provider">返回当前主时钟位置（通常为音频设备真实播放游标）。</param>
+    public void SetMasterClockProvider(Func<TimeSpan>? provider)
+    {
+        _masterClockProvider = provider;
+        // 诊断提示：音频真实播放游标接管主时钟后，OnAudioFrameSubmitted 会旁路批内 SyncTo，
+        // 故 ClockJumpRecorder 不再收到样本（_count==0）。标记此模式，使 [CLOCK] 快照如实打印
+        // "音频时钟已驱动"，而非误导性的"音频未驱动时钟"。
+        if (provider != null)
+            PacingDiagnostics.Clock.MarkAudioDriven();
+    }
+
+    /// <summary>
     /// 音频帧提交通知，更新主时钟。
     /// </summary>
     /// <param name="frame">已提交的音频帧。</param>
     /// <remarks>
     /// 音频是主时钟来源。等价于以音频输出播放位置为基准：
     /// clock.Position = audioOutput.PlaybackPosition - audioOutput.Latency。
+    /// <para>若已切到 <see cref="_masterClockProvider"/> 驱动（真实播放位置），本方法直接返回 ——
+    /// 不再由"已提交末端时间"在批内逐帧硬跳时钟，从根本上消除锯齿波。</para>
     /// </remarks>
     public void OnAudioFrameSubmitted(AudioFrame frame)
     {
+        // 已切到真实播放位置主时钟：批提交内的逐帧硬跳是锯齿根因，直接跳过。
+        if (_masterClockProvider != null)
+            return;
+
         // 以音频帧的结束时间戳减去输出延迟，校准到"实际听到"的时间点
         _clock.SyncTo(frame.Timestamp + frame.Duration - _audioLatency);
     }
@@ -63,7 +92,9 @@ public sealed class Synchronizer
             return SyncAction.Present;
 
         var videoTime = frame.Timestamp;
-        var clockTime = _clock.Position;
+        var clockTime = _masterClockProvider != null
+            ? _masterClockProvider() - _audioLatency   // 真实播放游标（latency 实际为 0，此处仅保持设计对称）
+            : _clock.Position;
         var delta = videoTime - clockTime;
 
         if (delta > _clock.SyncThreshold)
@@ -81,6 +112,22 @@ public sealed class Synchronizer
         // 在阈值内 → 立即呈现
         return SyncAction.Present;
     }
+
+    /// <summary>
+    /// 当前主时钟时间（与 <see cref="CheckVideoFrame"/> 内部计算**完全一致**）。
+    /// 供视频管线做帧精确等待时复用同一时间源，避免判据分裂。
+    /// </summary>
+    internal TimeSpan GetCurrentMasterTime()
+    {
+        return _masterClockProvider != null
+            ? _masterClockProvider() - _audioLatency
+            : _clock.Position;
+    }
+
+    /// <summary>
+    /// 同步阈值：视频超前主时钟超过此值才判 <see cref="SyncAction.Wait"/>。
+    /// </summary>
+    internal TimeSpan SyncThreshold => _clock.SyncThreshold;
 
     /// <summary>
     /// Seek 协调。跳转时钟并标记需要 flush 管线。

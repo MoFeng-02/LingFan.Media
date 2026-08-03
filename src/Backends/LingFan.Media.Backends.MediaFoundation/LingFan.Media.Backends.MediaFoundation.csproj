@@ -12,4 +12,9 @@
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- NativeCallGate 等内部类型需由本测试工程直接单元测试 -->
+    <InternalsVisibleTo Include="LingFan.Media.Backends.MediaFoundation.Tests" />
+  </ItemGroup>
+
 </Project>

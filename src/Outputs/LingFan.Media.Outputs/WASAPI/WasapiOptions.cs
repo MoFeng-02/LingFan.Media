@@ -46,4 +46,32 @@ public sealed class WasapiOptions
     /// <summary>期望的声道数。默认 2（立体声）。</summary>
     /// <remarks>实际声道数由 <see cref="WasapiOutput.Initialize"/> 设置。</remarks>
     public int Channels { get; set; } = 2;
+
+    /// <summary>音频会话分类（IAudioClient2.SetClientProperties）首选值。默认 <see cref="AudioClientCategory.Movie"/>。
+    /// 仅在 <see cref="EnableBackgroundCapableSession"/> 为 <c>true</c> 时生效（该开关默认关闭）。</summary>
+    /// <remarks>
+    /// <para>V2 O10。需在 IAudioClient.Initialize 之前通过 IAudioClient2 设置；不支持 IAudioClient2 的旧系统自动跳过。</para>
+    /// <para>设置失败（负 HRESULT）时自动降级到同族候选（BackgroundCapableMedia → Movie → Media），全部失败则静默跳过。</para>
+    /// <para>历史注记（2026-08-02）：曾出现任意分类值都 <c>0xC0000005</c> 的现象，一度误判为「driver 全面损坏」。
+    /// 真因是 <c>TrySetSessionCategory</c> 的 vtable 槽位算错一格（slotIndex 12 = 绝对槽 15 = <c>IsOffloadCapable</c>，
+    /// 它比 SetClientProperties 多一个 <c>BOOL*</c> 出参，误调导致向未初始化寄存器指向的野地址写入）。
+    /// 修正为 slotIndex 13（绝对槽 16）后，独立官方 COM 探针九个分类全部 <c>S_OK</c>。</para>
+    /// </remarks>
+    public AudioClientCategory SessionCategory { get; set; } = AudioClientCategory.Movie;
+
+    /// <summary>是否启用 IAudioClient2.SetClientProperties 会话分类（默认 <c>false</c> = opt-in）。</summary>
+    /// <remarks>
+    /// <para>用途：把会话标记为媒体类，供音量混合器与电源策略参考；在确实会挂起后台会话的系统上可作为规避手段。</para>
+    /// <para>失败保护：QI 拿不到 IAudioClient2 时静默跳过；某分类返回负 HRESULT 时降级试下一个候选；全部失败仅记 Warning，
+    /// 不影响后续 <c>Initialize</c>。</para>
+    /// <para>🔴 2026-08-02 定案（两条独立结论，勿混淆）：</para>
+    /// <para>① <b>调用路径的 bug 已修</b>：此前任意分类都 <c>0xC0000005</c>，真因是 vtable 槽位算错一格
+    /// （误调 <c>IsOffloadCapable</c>，它多一个 <c>BOOL*</c> 出参 ⇒ 向未初始化寄存器指向的野地址写入）。
+    /// 修正为 slotIndex 13（绝对槽 16）后调用本身合法，独立官方 COM 探针九个分类全部 <c>S_OK</c>。</para>
+    /// <para>② <b>但默认仍为 false</b>：启用它的原始动机是「防止 OS 挂起后台会话」，而该前提<b>并未被证实</b>
+    /// （诊断探针的停滞判定在欠供给场景下恒不触发，属无效判定）；且用户本机实测默认启用后出现回归——
+    /// <b>约 30s 静音后才出声</b>。在动机未证实而副作用确凿的情况下，按「不引入未经验证的默认行为」原则保持 opt-in。</para>
+    /// <para>修改默认值后务必先做 <c>dotnet clean</c> + 全量重建再跑测试。</para>
+    /// </remarks>
+    public bool EnableBackgroundCapableSession { get; set; } = false;
 }

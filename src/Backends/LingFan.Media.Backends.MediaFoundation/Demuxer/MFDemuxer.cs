@@ -44,6 +44,26 @@ internal sealed class MFDemuxer : IMediaDemuxer
 
     private bool _opened;
     private bool _disposed;
+
+    // 两阶段关闭协议构件（D1/D6）：关闸 → 排空在途原生调用 → 独占释放或意泄漏。
+    private readonly NativeCallGate _readerGate = new();
+    private bool _leakedOnClose;   // drain 失败标记：已有意泄漏，禁止任何后续释放尝试
+
+    // ⚠️ 复审 C-7（2026-08-01 二轮审计）：本类必须**自己**持有一份 MF 平台引用，不能只靠构造注入的
+    // MFBackend「活着」。持有对象引用只防 GC，不防它被 Dispose——MFStartup/MFShutdown 是进程级的。
+    // 缺这份引用时，泄漏路径（R4）只护住了 COM 指针、没护住平台：drain 超时后读取线程仍卡在原生
+    // ReadSample 内，随后 MFBackend.Dispose() 把引用计数打到 0 ⇒ 真正的 MFShutdown 拆掉整个 MF 平台
+    // ⇒ 在途调用的内部状态被抽走 ⇒ 访问违规 ⇒ 0x80131506。测试进程里尤其致命：每个用例都新建/释放
+    // 一个 MFBackend（计数 0↔1，反复真启停平台），上一用例泄漏的在途线程会被下一次 MFShutdown 踩死，
+    // 表现为"冷启动 flaky 崩溃"。持有自身引用后，泄漏路径永不递减 ⇒ 平台永不拆除 ⇒ 在途调用始终有效，
+    // 这正是 R4「宁可泄漏也绝不释放」语义在平台层的自然延伸。
+    private bool _mfStartupAcquired;
+
+    // 防止 Close/Dispose/DisposeAsync 重入。0=未开始，1=已开始。
+    // ⚠️ 必须是 Interlocked 原子量而非普通 bool（审计 A-2）：Dispose(sync) 与 DisposeAsync 若在不同线程并发，
+    // 普通 bool 的「读-判-写」非原子，两者可同时通过守卫 ⇒ 对同一 IMFSourceReader 执行两次 Marshal.Release
+    // ⇒ 引用计数下溢 / 访问违例——正是本轮要根除的 0x80131506 故障族。
+    private int _closeStarted;
     private IReadOnlyList<MediaTrack> _tracks = Array.Empty<MediaTrack>();
     private MediaMetadata _metadata = new();
 
@@ -88,6 +108,12 @@ internal sealed class MFDemuxer : IMediaDemuxer
         ArgumentNullException.ThrowIfNull(stream);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        // D10 补强：关闭是**不可逆**的（gate 一旦 BeginClose 便永久关闸，见 NativeCallGate 不变量 I1）。
+        // 若允许在已关闭实例上重开，OpenCore 的 TryEnter 会失败 ⇒ 出现「_opened=true 但 _sourceReader==Zero」的半开状态。
+        // Session 级对象按约定为 Transient（MediaPlayer.OpenAsync 内新建），故此处直接快速失败而非静默降级。
+        if (Volatile.Read(ref _closeStarted) != 0)
+            throw new InvalidOperationException("该 MFDemuxer 实例已关闭，不可重复打开；请新建实例。");
+
         if (!OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException(
@@ -113,19 +139,33 @@ internal sealed class MFDemuxer : IMediaDemuxer
         // 伪异步：MFCreateSourceReaderFromURL + 轨道解析为同步 COM 调用。
         // 全部 SourceReader COM 调用钉在专用单线程（SingleThreadTaskScheduler），避免跨线程池线程访问
         // IMFSourceReader 触发原生堆损坏（COR_E_EXECUTIONENGINE / 0x80131506，非确定性崩溃）。
-        _readerScheduler = new SingleThreadTaskScheduler("MFDemuxer-Reader");
-        _readerFactory = new TaskFactory(_readerScheduler);
+        // 复审 C-3：持本地引用后再发布到字段。并发的 Close 可能在下面 await 期间跑完整套关闭协议，
+        // 其 ReleaseNativeResources 会把 _readerScheduler 置 null；届时 catch 里的 CloseSync 又因
+        // _closeStarted 已置位而空转 ⇒ 本方法刚创建的调度器无人关闭 ⇒ 后台线程 + 队列泄漏。
+        var scheduler = new SingleThreadTaskScheduler("MFDemuxer-Reader");
+        var factory = new TaskFactory(scheduler);
+        _readerScheduler = scheduler;
+        _readerFactory = factory;
         try
         {
-            await _readerFactory.StartNew(() => OpenCore(_url!, ct), ct).ConfigureAwait(false);
+            await factory.StartNew(() => OpenCore(_url!, ct), ct).ConfigureAwait(false);
             _opened = true;
         }
         catch
         {
-            // OpenCore 失败：专用线程尚未承载在途任务，直接释放避免线程泄漏。
-            _readerScheduler.Dispose();
-            _readerScheduler = null;
-            _readerFactory = null;
+            // D9/P10 修复：OpenCore 可能已在创建 _sourceReader 后抛异常（如 ParseTracks 失败）。
+            // 原逻辑仅 Dispose 调度器会泄漏 _sourceReader。此处改走两阶段关闭协议：此时无在途原生调用，
+            // drain 立即可成功，_sourceReader 被安全释放。
+            CloseSync();
+
+            // 复审 C-3 兜底：CloseSync 若因他线程已发起关闭而空转，本地 scheduler 不会被关闭。
+            // 用**零超时**——只做 CompleteAdding（足以让后台线程排空并自行退出），不在 async 链路上引入
+            // 任何同步阻塞；Shutdown 内部 Interlocked 幂等，与 CloseSync 中的调用重复无副作用。
+            //
+            // 🔴 I7 守卫（2026-08-01）：仅在**未走泄漏路径**时才兜底关闭。放行专用线程退出即放行其
+            // CoUninitialize，会拆掉泄漏中的 COM 指针所属单元、卸载其 in-proc server ⇒ 泄漏保护失效。
+            if (!_leakedOnClose)
+                scheduler.Shutdown(TimeSpan.Zero);
             throw;
         }
 
@@ -138,45 +178,79 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// </summary>
     private void OpenCore(string url, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-
-        int hr = MFInterop.MFCreateSourceReaderFromURL(url, IntPtr.Zero, out IntPtr readerPtr);
-        if (hr < 0 || readerPtr == IntPtr.Zero)
+        // D1：整个 OpenCore 处于 gate 内，使 _sourceReader/_readSample 的建立受关闭协议保护。
+        // 关闸期进入失败必须**显式抛出**（而非静默 return）：静默返回会让 OpenAsync 把 _opened 置 true，
+        // 却没有 _sourceReader ⇒ 半开状态。抛出后由 OpenAsync 的 catch 走 CloseSync 并向上传播。
+        if (!_readerGate.TryEnter())
+            throw new InvalidOperationException("MFDemuxer 正在关闭，无法打开媒体源。");
+        try
         {
-            throw new InvalidOperationException($"MFCreateSourceReaderFromURL 失败: HRESULT=0x{hr:X8}");
-        }
-        _sourceReader = readerPtr;
-        // 热路径缓存 ReadSample vtable 委托（绝对槽 9 → index 6；mfreadwrite.idl 顺序：
-        // GetStreamSelection=3, SetStreamSelection=4, GetNativeMediaType=5, GetCurrentMediaType=6,
-        // SetCurrentMediaType=7, SetCurrentPosition=8, ReadSample=9, Flush=10, GetServiceForStream=11, GetPresentationAttribute=12）
-        // ⚠️ 审计核验（2026-07-28）：原 index 5 命中 SetCurrentPosition、误改 index 7 命中 Flush（签名不符→栈破坏崩溃），
-        // 正确值恒为 index 6（绝对槽 9）。以 Wine/ReactOS 镜像的 Windows SDK idl 为权威。
-        _readSample = MfVTable.Get<IMFSourceReader_ReadSample>(_sourceReader, 6);
+            ct.ThrowIfCancellationRequested();
 
-        // 解析轨道
-        _tracks = ParseTracks(_sourceReader);
-
-        // 选择所有流（让 SourceReader 输出所有轨道的采样）；SetStreamSelection = 槽 4 → index 1
-        foreach (var track in _tracks)
-        {
-            hr = MfVTable.Get<IMFSourceReader_SetStreamSelection>(_sourceReader, 1)(_sourceReader, (uint)track.Index, true);
-            if (hr < 0)
+            // 复审 C-7：在**任何** MF 原生调用之前取得平台引用，且与 ReleaseNativeResources 中的
+            // MFPlatform.Shutdown 严格配对（泄漏路径 LeakNativeResources 刻意不递减，见 R4）。
+            // 幂等守卫：即便调用方违约重复 OpenAsync，也只 +1，避免计数被多加后再也归不了 0。
+            if (!_mfStartupAcquired)
             {
-                _logger.LogWarning("SetStreamSelection 失败: 流 {Index}, HRESULT=0x{HR:X8}", track.Index, hr);
+                MFPlatform.Startup();
+                _mfStartupAcquired = true;
             }
+
+            int hr = MFInterop.MFCreateSourceReaderFromURL(url, IntPtr.Zero, out IntPtr readerPtr);
+            if (hr < 0 || readerPtr == IntPtr.Zero)
+            {
+                throw new InvalidOperationException($"MFCreateSourceReaderFromURL 失败: HRESULT=0x{hr:X8}");
+            }
+            _sourceReader = readerPtr;
+            // 热路径缓存 ReadSample vtable 委托（绝对槽 9 → index 6；mfreadwrite.idl 顺序：
+            // GetStreamSelection=3, SetStreamSelection=4, GetNativeMediaType=5, GetCurrentMediaType=6,
+            // SetCurrentMediaType=7, SetCurrentPosition=8, ReadSample=9, Flush=10, GetServiceForStream=11, GetPresentationAttribute=12）
+            // ⚠️ 审计核验（2026-07-28）：原 index 5 命中 SetCurrentPosition、误改 index 7 命中 Flush（签名不符→栈破坏崩溃），
+            // 正确值恒为 index 6（绝对槽 9）。以 Wine/ReactOS 镜像的 Windows SDK idl 为权威。
+            _readSample = MfVTable.Get<IMFSourceReader_ReadSample>(_sourceReader, 6);
+
+            // 实查容器时长：MF 不自动填时长，须从 presentation descriptor 取 MF_PD_DURATION。
+            // 这是完整播放测试「几秒假完成」的根因修复点——此前硬编码 TimeSpan.Zero 使 player.Duration 恒 0。
+            var duration = QueryContainerDuration(_sourceReader);
+
+            // 解析轨道（携带容器时长，供各轨 VideoInfo/AudioInfo.Duration 与容器保持一致）
+            _tracks = ParseTracks(_sourceReader, duration);
+
+            // 选择所有流（让 SourceReader 输出所有轨道的采样）；SetStreamSelection = 槽 4 → index 1
+            foreach (var track in _tracks)
+            {
+                hr = MfVTable.Get<IMFSourceReader_SetStreamSelection>(_sourceReader, 1)(_sourceReader, (uint)track.Index, true);
+                if (hr < 0)
+                {
+                    _logger.LogWarning("SetStreamSelection 失败: 流 {Index}, HRESULT=0x{HR:X8}", track.Index, hr);
+                }
+            }
+
+            // 记录已选流索引，供 ReadPacketCore 逐流交织读取（track.Index == MF 流索引）
+            _selectedStreamIndices = _tracks.Select(t => t.Index).ToArray();
+
+            // 兜底：若 presentation descriptor 无 MF_PD_DURATION（少数 MP4/ fragmented 文件会缺失），
+            // 推算容器时长。优先「末尾定位探测」（O(log n) 索引跳转 + 读少量末帧，远快于整段排空，
+            // 消除 OpenAsync 内同步阻塞导致的启动 2~3s 卡顿）；仅极个别无索引/不可定位源才退化整段排空。
+            // 必须在 _selectedStreamIndices 就绪后调用。
+            if (duration <= TimeSpan.Zero)
+            {
+                duration = ProbeDurationByEndSeek(_sourceReader);
+                if (duration <= TimeSpan.Zero)
+                    duration = ProbeDurationByDraining(_sourceReader);
+            }
+
+            // 解析元数据（MF 不直接提供标题/艺术家等；时长由 QueryContainerDuration 实查，非硬编码 0）
+            _metadata = new MediaMetadata
+            {
+                Duration = duration,
+                ContainerFormat = ContainerFormat.Unknown
+            };
+
+            _pendingPackets.Clear();
+            _exhaustedStreams.Clear();
         }
-
-        // 解析元数据（MF 不直接提供标题/艺术家等，从轨道推算时长）
-        _metadata = new MediaMetadata
-        {
-            Duration = TimeSpan.Zero,
-            ContainerFormat = ContainerFormat.Unknown
-        };
-
-        // 记录已选流索引，供 ReadPacketCore 逐流交织读取（track.Index == MF 流索引）
-        _selectedStreamIndices = _tracks.Select(t => t.Index).ToArray();
-        _pendingPackets.Clear();
-        _exhaustedStreams.Clear();
+        finally { _readerGate.Exit(); }
     }
 
     /// <inheritdoc/>
@@ -186,15 +260,39 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// </remarks>
     public async ValueTask<MediaPacket?> ReadPacketAsync(CancellationToken ct = default)
     {
+        // D4/P11：关闸后任何新读请求立即以 EOS（null）返回，让 BufferManager.ReaderLoopAsync 走正常 Complete() 收尾，
+        // 避免把正常关闭变成 ObjectDisposedException / InvalidOperationException 异常路径。
+        // ⚠️ 复审 C-4：本短路**必须先于**下面的 _disposed / _opened 抛出检查，否则形同虚设。
+        // 关闭协议的写入顺序是 BeginClose → … → ReleaseNativeResources(_sourceReader=Zero) → _opened=false，
+        // 因此关闭完成后再进来的调用会**确定性**命中「解封装器尚未打开」抛出 InvalidOperationException，
+        // 被 BufferManager.ReaderLoopAsync 的兜底 catch 记成 LogError("缓冲管理器读取异常")——
+        // 把一次正常关闭伪装成读取故障。Dispose() 路径同理会先命中 _disposed 抛 ObjectDisposedException。
+        if (_readerGate.IsClosing || Volatile.Read(ref _closeStarted) != 0) return null;
+
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_opened || _sourceReader == IntPtr.Zero)
             throw new InvalidOperationException("解封装器尚未打开");
 
         ct.ThrowIfCancellationRequested();
 
+        // A-1：必须先取本地快照再用。ReleaseNativeResources 会把 _readerFactory 置 null，
+        // 而本方法通过 IsClosing 检查到 StartNew 之间存在窗口（此刻尚未进 gate，drain 可在此期间成功完成）
+        // ⇒ 直接 `_readerFactory!` 解引用会 NullReferenceException。快照 + null 短路 ⇒ 按 EOS 收尾。
+        var factory = _readerFactory;
+        if (factory is null) return null;
+
         // 伪异步：IMFSourceReader.ReadSample 为同步 COM 调用；在专用单线程上执行（见 OpenAsync）。
         // 未来改进：可通过 IMFSourceReaderCallback 异步回调实现真异步 ReadSample。
-        return await _readerFactory!.StartNew(() => ReadPacketCore(ct), ct).ConfigureAwait(false);
+        // P9：CompleteAdding 后入队会抛 InvalidOperationException/TaskSchedulerException（经 TPL 包装），
+        // 此处捕获并同样以 EOS 返回，消除关闭期噪音异常。
+        // A-4：异常过滤器**必须**限定在关闸期。否则 OpenCore/ReadPacketCore 内真实的
+        // InvalidOperationException（如 vtable 调用失败）会被无声吞成 EOS，故障被伪装成"正常播完"。
+        try
+        {
+            return await factory.StartNew(() => ReadPacketCore(ct), ct).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException) when (_readerGate.IsClosing) { return null; }
+        catch (TaskSchedulerException) when (_readerGate.IsClosing) { return null; }
     }
 
     /// <summary>
@@ -207,73 +305,82 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// </remarks>
     private MediaPacket? ReadPacketCore(CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-
-        const int maxEmptyRounds = 256; // 限制流 tick 空转轮数，避免无数据时空转卡死
-        int emptyRounds = 0;
-
-        while (true)
+        // D2：整个 ReadPacketCore（含对 _pendingPackets/_exhaustedStreams 的读写）处于 gate 内，
+        // 与 Close 的释放形成互斥，杜绝托管侧数据竞争（P8）。关闸时 TryEnter 返回 false ⇒ 立即以 EOS 返回。
+        if (!_readerGate.TryEnter()) return null;
+        try
         {
-            // 释放期止读：Stop/Dispose 取消后尽快退出循环，缩短 MediaPlayer 等待读线程的窗口，
-            // 避免 5s join 超时后继续释放造成 use-after-free（配合 Close() 的调度器先行关闭双保险）。
             ct.ThrowIfCancellationRequested();
 
-            // 1. 返回已缓存中时间戳最早的包
-            MediaPacket? earliest = null;
-            int earliestStream = -1;
-            foreach (var kvp in _pendingPackets)
+            const int maxEmptyRounds = 256; // 限制流 tick 空转轮数，避免无数据时空转卡死
+            int emptyRounds = 0;
+
+            while (true)
             {
-                if (earliest == null || kvp.Value.Timestamp < earliest.Timestamp)
+                // D3：关闸后立刻结束当前包读取，把 drain 时间压到"一次 ReadSample 返回"的量级。
+                if (_readerGate.IsClosing) return null;
+
+                // 释放期止读：Stop/Dispose 取消后尽快退出循环。
+                ct.ThrowIfCancellationRequested();
+
+                // 1. 返回已缓存中时间戳最早的包
+                MediaPacket? earliest = null;
+                int earliestStream = -1;
+                foreach (var kvp in _pendingPackets)
                 {
-                    earliest = kvp.Value;
-                    earliestStream = kvp.Key;
+                    if (earliest == null || kvp.Value.Timestamp < earliest.Timestamp)
+                    {
+                        earliest = kvp.Value;
+                        earliestStream = kvp.Key;
+                    }
                 }
-            }
-            if (earliest != null)
-            {
-                _pendingPackets.Remove(earliestStream);
-                return earliest;
-            }
-
-            // 2. 无缓存：为尚未结束的流各读一个样本填充 lookahead
-            bool progressed = false;
-            foreach (int s in _selectedStreamIndices)
-            {
-                if (_exhaustedStreams.Contains(s))
-                    continue;
-
-                var pkt = ExtractPacket(s, out bool eos);
-                if (eos)
+                if (earliest != null)
                 {
-                    _exhaustedStreams.Add(s);
-                    continue;
+                    _pendingPackets.Remove(earliestStream);
+                    return earliest;
                 }
-                if (pkt != null)
+
+                // 2. 无缓存：为尚未结束的流各读一个样本填充 lookahead
+                bool progressed = false;
+                foreach (int s in _selectedStreamIndices)
                 {
-                    _pendingPackets[s] = pkt;
-                    progressed = true;
+                    if (_exhaustedStreams.Contains(s))
+                        continue;
+
+                    var pkt = ExtractPacket(s, out bool eos);
+                    if (eos)
+                    {
+                        _exhaustedStreams.Add(s);
+                        continue;
+                    }
+                    if (pkt != null)
+                    {
+                        _pendingPackets[s] = pkt;
+                        progressed = true;
+                    }
                 }
-            }
 
-            if (_pendingPackets.Count > 0)
-                continue; // 下一轮返回最早
+                if (_pendingPackets.Count > 0)
+                    continue; // 下一轮返回最早
 
-            // 全部流结束且无缓存 → EOS
-            if (_exhaustedStreams.Count >= _selectedStreamIndices.Length)
-                return null;
+                // 全部流结束且无缓存 → EOS
+                if (_exhaustedStreams.Count >= _selectedStreamIndices.Length)
+                    return null;
 
-            // 仍有活跃流但本轮未取到（流 tick）：限次重试，避免空转
-            if (!progressed)
-            {
-                if (++emptyRounds > maxEmptyRounds)
-                    return null; // 防御性退出，交由上层在下个包请求时重试
-                Thread.Sleep(1);
-            }
-            else
-            {
-                emptyRounds = 0;
+                // 仍有活跃流但本轮未取到（流 tick）：限次重试，避免空转
+                if (!progressed)
+                {
+                    if (++emptyRounds > maxEmptyRounds)
+                        return null; // 防御性退出，交由上层在下个包请求时重试
+                    Thread.Sleep(1);
+                }
+                else
+                {
+                    emptyRounds = 0;
+                }
             }
         }
+        finally { _readerGate.Exit(); }
     }
 
     /// <summary>
@@ -287,12 +394,22 @@ internal sealed class MFDemuxer : IMediaDemuxer
         eos = false;
 
         // ReadSample = 绝对槽 9 → index 6（mfreadwrite.idl 顺序；运行时已验证 slot1/2 自洽布局）
+        // 错误链：检查 _sourceReader 是否已被释放（UAF 前兆，严格模式直接抛）。
+        InteropTrace.OnVTableGet(_sourceReader, "ExtractPacket:_sourceReader(ReadSample self)");
         int hr = _readSample!(_sourceReader, (uint)streamIndex, 0,
             out int actualStreamIndex, out int streamFlags, out long timestamp, out IntPtr samplePtr);
         if (hr < 0)
         {
-            // 防御：部分失败路径下原生侧可能已写入 *ppSample，须释放避免 COM 引用泄漏。
-            if (samplePtr != IntPtr.Zero) Marshal.Release(samplePtr);
+            // 🔴 R5-b（2026-08-02 修正）：失败路径【不得】释放 *ppSample。
+            // COM 规范要求方法失败时输出接口指针为 NULL；此处若非零，说明原生实现违规，
+            // 其语义（是否已 AddRef、是否已悬垂）无从判定 —— Release 有 double-free 风险。
+            // 依既定宪法「泄漏优于误释放」：一律不释放，仅记录诊断。
+            if (samplePtr != IntPtr.Zero)
+            {
+                _logger.LogError(
+                    "IMFSourceReader.ReadSample(流{Stream}) 失败(HRESULT=0x{HR:X8}) 但写回了非空 *ppSample=0x{Ptr:X}；" +
+                    "按 COM 规范此为原生侧违规，已有意泄漏该引用以避免 double-free。", streamIndex, hr, samplePtr);
+            }
             _logger.LogWarning("IMFSourceReader.ReadSample(流{Stream}) 失败: HRESULT=0x{HR:X8}", streamIndex, hr);
             eos = true; // 出错视为该流结束，避免无限重试
             return null;
@@ -300,60 +417,96 @@ internal sealed class MFDemuxer : IMediaDemuxer
         if ((streamFlags & MFConstants.MF_SOURCE_READERF_ENDOFSTREAM) != 0)
         {
             eos = true;
-            if (samplePtr != IntPtr.Zero) Marshal.Release(samplePtr);
+            if (samplePtr != IntPtr.Zero) InteropTrace.ReleaseComPtr(samplePtr, "ExtractPacket:samplePtr(EOS)");
             return null;
         }
         if (samplePtr == IntPtr.Zero)
             return null; // 流 tick，无数据，下次再试
 
-        // 提取采样数据：ConvertToContiguousBuffer = 绝对槽 41 → index 38
-        // （IMFAttributes 恰 30 方法，IMFSample 第 9 方法；运行时已验证 slot38 返回有效 buffer）
-        hr = MfVTable.Get<IMFSample_ConvertToContiguousBuffer>(samplePtr, 38)(samplePtr, out IntPtr bufferPtr);
-        if (hr < 0 || bufferPtr == IntPtr.Zero)
+        // 错误链：分配成功后清除该地址（LFH 可能复用已释放地址）的陈旧"已释放"标记，避免 UAF 误报。
+        InteropTrace.OnAlloc(samplePtr, "ExtractPacket:samplePtr");
+
+        // 自此 samplePtr 持有一份引用，所有退出路径（含异常）恰好释放一次。
+        try
         {
-            Marshal.Release(samplePtr);
-            _logger.LogWarning("ConvertToContiguousBuffer 失败: HRESULT=0x{HR:X8}", hr);
-            return null;
-        }
+            // 提取采样数据：ConvertToContiguousBuffer = 绝对槽 41 → index 38
+            // （IMFAttributes 恰 30 方法，IMFSample 第 9 方法；运行时已验证 slot38 返回有效 buffer）
+            hr = MfVTable.Get<IMFSample_ConvertToContiguousBuffer>(samplePtr, 38)(samplePtr, out IntPtr bufferPtr);
+            if (hr < 0 || bufferPtr == IntPtr.Zero)
+            {
+                _logger.LogWarning("ConvertToContiguousBuffer 失败: HRESULT=0x{HR:X8}", hr);
+                return null;
+            }
 
-        // Lock = 槽 3 → index 0；Unlock = 槽 4 → index 1（运行时已验证）
-        var lockDel = MfVTable.Get<IMFMediaBuffer_Lock>(bufferPtr, 0);
-        var unlockDel = MfVTable.Get<IMFMediaBuffer_Unlock>(bufferPtr, 1);
-        hr = lockDel(bufferPtr, out IntPtr dataPtr, out uint maxLen, out uint curLen);
-        if (hr < 0 || curLen == 0)
+            // 错误链：分配成功后清除陈旧标记（同 OnAlloc 注释）。
+            InteropTrace.OnAlloc(bufferPtr, "ExtractPacket:bufferPtr");
+
+            byte[] data;
+            try
+            {
+                // Lock = 槽 3 → index 0；Unlock = 槽 4 → index 1（运行时已验证）。
+                // 错误链：经 InteropTrace 记录并（严格模式下）校验 Lock/Unlock 配对。
+                var lockDel = MfVTable.Get<IMFMediaBuffer_Lock>(bufferPtr, 0);
+                var unlockDel = MfVTable.Get<IMFMediaBuffer_Unlock>(bufferPtr, 1);
+                hr = InteropTrace.LockBuffer(bufferPtr, lockDel, out IntPtr dataPtr, out _, out uint curLen,
+                    "ExtractPacket:IMFMediaBuffer.Lock");
+
+                // 🔴 R5 配对铁律（2026-08-02 根因修复，与 WASAPI GetBuffer/ReleaseBuffer 同构）：
+                //    IMFMediaBuffer.Unlock 只能与【成功的】Lock 配对，且恰好一次。
+                //    Lock 失败时【绝不能】Unlock —— ConvertToContiguousBuffer 返回的缓冲区常是
+                //    2D/DXGI 表面的「临时连续拷贝」实现，其 Unlock 会执行回拷 + 释放临时区；
+                //    在从未 Lock 的状态下调用 ⇒ 野指针写 / 重复释放 ⇒ 污染原生堆。
+                //    此类损坏不在原地崩溃，而是滞后到下一次 CLR 内部堆操作
+                //    （如 MfVTable.Get 的 GetDelegateForFunctionPointer）才以 0x80131506 暴露。
+                //    历史回归点：旧代码写作 `if (hr < 0 || curLen == 0) { unlockDel(...); }`，
+                //    把 Lock 失败与空缓冲混为一谈，是本崩溃的真正根因，勿回退。
+                if (hr < 0)
+                {
+                    _logger.LogWarning("IMFMediaBuffer.Lock 失败: HRESULT=0x{HR:X8}（未 Unlock，符合配对规范）", hr);
+                    return null;
+                }
+
+                // 至此 Lock 已成功 ⇒ 必须 Unlock 恰好一次（含下方任意 return / 异常路径）。
+                try
+                {
+                    if (curLen == 0 || dataPtr == IntPtr.Zero)
+                        return null; // 空缓冲：视为流 tick，交由上层重试
+
+                    data = new byte[curLen];
+                    Marshal.Copy(dataPtr, data, 0, (int)curLen);
+                }
+                finally
+                {
+                    InteropTrace.UnlockBuffer(bufferPtr, unlockDel, "ExtractPacket:IMFMediaBuffer.Unlock");
+                }
+            }
+            finally
+            {
+                InteropTrace.ReleaseComPtr(bufferPtr, "ExtractPacket:bufferPtr");
+            }
+
+            // 关键帧标记：MFSampleExtension_CleanPoint（IMFSample 继承 IMFAttributes，GetUINT32 = slotIndex 4）。
+            // 属性缺失时按非关键帧处理（音频等无该属性的流不受影响——调用方仅对视频用 KeyFrame）。
+            Guid cleanPointKey = MFConstants.MFSampleExtension_CleanPoint;
+            bool keyFrame = MfVTable.Get<IMFMediaType_GetUINT32>(samplePtr, 4)(samplePtr, ref cleanPointKey, out uint cleanPoint) >= 0
+                            && cleanPoint != 0;
+
+            // 提取时间戳（100ns 单位 → TimeSpan）
+            TimeSpan ts = timestamp > 0
+                ? TimeSpan.FromTicks(timestamp)
+                : TimeSpan.Zero;
+
+            return new MediaPacket(
+                actualStreamIndex,
+                data,
+                ts,
+                TimeSpan.Zero,
+                keyFrame);
+        }
+        finally
         {
-            unlockDel(bufferPtr);
-            Marshal.Release(bufferPtr);
-            Marshal.Release(samplePtr);
-            _logger.LogWarning("IMFMediaBuffer.Lock 失败: HRESULT=0x{HR:X8}", hr);
-            return null;
+            InteropTrace.ReleaseComPtr(samplePtr, "ExtractPacket:samplePtr");
         }
-
-        byte[] data = new byte[curLen];
-        Marshal.Copy(dataPtr, data, 0, (int)curLen);
-
-        unlockDel(bufferPtr);
-        Marshal.Release(bufferPtr);
-
-        // 关键帧标记：MFSampleExtension_CleanPoint（IMFSample 继承 IMFAttributes，GetUINT32 = slotIndex 4）。
-        // 属性缺失时按非关键帧处理（音频等无该属性的流不受影响——调用方仅对视频用 KeyFrame）。
-        Guid cleanPointKey = MFConstants.MFSampleExtension_CleanPoint;
-        bool keyFrame = MfVTable.Get<IMFMediaType_GetUINT32>(samplePtr, 4)(samplePtr, ref cleanPointKey, out uint cleanPoint) >= 0
-                        && cleanPoint != 0;
-
-        Marshal.Release(samplePtr);
-
-        // 提取时间戳（100ns 单位 → TimeSpan）
-        TimeSpan ts = timestamp > 0
-            ? TimeSpan.FromTicks(timestamp)
-            : TimeSpan.Zero;
-
-        return new MediaPacket(
-            actualStreamIndex,
-            data,
-            ts,
-            TimeSpan.Zero,
-            keyFrame);
     }
 
     /// <inheritdoc/>
@@ -362,94 +515,267 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// </remarks>
     public async Task<bool> SeekAsync(TimeSpan position, CancellationToken ct = default)
     {
+        // 复审 C-4：与 ReadPacketAsync 同构——关闭期短路必须先于 _disposed / _opened 抛出检查，
+        // 否则「关闭后 seek」会抛 InvalidOperationException 而非按约定返回 false。
+        if (_readerGate.IsClosing || Volatile.Read(ref _closeStarted) != 0) return false;
+
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_opened || _sourceReader == IntPtr.Zero)
             throw new InvalidOperationException("解封装器尚未打开");
 
         ct.ThrowIfCancellationRequested();
 
+        // A-1：同 ReadPacketAsync，先快照后使用；关闭已完成时 seek 直接失败返回而非 NRE。
+        var factory = _readerFactory;
+        if (factory is null) return false;
+
         // 伪异步：MF SourceReader seek 为同步 COM 调用；在专用单线程上执行（见 OpenAsync）。
-        return await _readerFactory!.StartNew(() =>
+        try
         {
-            // IMFSourceReader::SetCurrentPosition（绝对槽 8 → slotIndex 5，槽位表已审计核验）。
-            // guidTimeFormat = GUID_NULL → varPosition 为 100ns 单位（VT_I8）；
-            // SourceReader 会定位到 ≤ 目标位置的最近关键帧起读。
-            Guid timeFormat = Guid.Empty;
-            var pos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = position.Ticks };
-            var setPosition = MfVTable.Get<IMFSourceReader_SetCurrentPosition>(_sourceReader, 5);
-            int hr = setPosition(_sourceReader, ref timeFormat, ref pos);
-            if (hr < 0)
+            return await factory.StartNew(() =>
             {
-                _logger.LogWarning("MF Seek 失败: {Position}, HRESULT=0x{HR:X8}", position, hr);
-                return false;
-            }
+                // D5：seek lambda 触碰 _sourceReader 与 _pendingPackets，须处于 gate 内。
+                if (!_readerGate.TryEnter()) return false;
+                try
+                {
+                    // IMFSourceReader::SetCurrentPosition（绝对槽 8 → slotIndex 5，槽位表已审计核验）。
+                    // guidTimeFormat = GUID_NULL → varPosition 为 100ns 单位（VT_I8）；
+                    // SourceReader 会定位到 ≤ 目标位置的最近关键帧起读。
+                    Guid timeFormat = Guid.Empty;
+                    var pos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = position.Ticks };
+                    var setPosition = MfVTable.Get<IMFSourceReader_SetCurrentPosition>(_sourceReader, 5);
+                    int hr = setPosition(_sourceReader, ref timeFormat, ref pos);
+                    if (hr < 0)
+                    {
+                        _logger.LogWarning("MF Seek 失败: {Position}, HRESULT=0x{HR:X8}", position, hr);
+                        return false;
+                    }
 
-            // seek 后 lookahead 缓存全部失效：释放未投递的数据包并重置 EOS 标记
-            foreach (var pkt in _pendingPackets.Values)
-                pkt.Dispose();
-            _pendingPackets.Clear();
-            _exhaustedStreams.Clear();
+                    // seek 后 lookahead 缓存全部失效：释放未投递的数据包并重置 EOS 标记
+                    foreach (var pkt in _pendingPackets.Values)
+                        pkt.Dispose();
+                    _pendingPackets.Clear();
+                    _exhaustedStreams.Clear();
 
-            _logger.LogDebug("MF Seek 到 {Position}", position);
-            return true;
-        }, ct).ConfigureAwait(false);
+                    _logger.LogDebug("MF Seek 到 {Position}", position);
+                    return true;
+                }
+                finally { _readerGate.Exit(); }
+            }, ct).ConfigureAwait(false);
+        }
+        // A-4：与 ReadPacketAsync 同构——仅在关闸期把入队失败视为"seek 无效"，
+        // 非关闭期的同类异常必须继续上抛，不得伪装成 seek 失败。
+        catch (InvalidOperationException) when (_readerGate.IsClosing) { return false; }
+        catch (TaskSchedulerException) when (_readerGate.IsClosing) { return false; }
     }
 
     /// <inheritdoc/>
-    public void Close()
+    public void Close() => CloseSync();
+
+    /// <inheritdoc/>
+    /// <remarks>接口契约：升级为真异步 drain（关闭时存在真实的等待在途调用），不再同步转发。</remarks>
+    public ValueTask DisposeAsync()
     {
-        if (!_opened) return;
-        _opened = false;
+        _disposed = true;
+        // 快路径：关闭已发起/完成时不再分配状态机。真正的重入互斥在 CloseAsync 内由 Interlocked 完成。
+        if (Volatile.Read(ref _closeStarted) != 0) return ValueTask.CompletedTask;
+        return CloseAsync();
+    }
 
-        // ⚠️ 释放顺序铁律（2026-07-31 审计修复）：必须【先】关调度器、【后】释放 SourceReader。
-        // SingleThreadTaskScheduler.Dispose 语义 = CompleteAdding + 排空队列中全部待执行任务 + Join(2s)。
-        // 若先 Marshal.Release(_sourceReader)，排空阶段仍会执行排队的 ReadPacketCore/SeekAsync 任务，
-        // 它们拿着悬空指针调 ReadSample → 原生 use-after-free → 0x80131506（COR_E_EXECUTIONENGINE）
-        // 非确定性堆损坏崩溃（曾在 dotnet test Run2/Run3 实测复现，崩溃栈落在 ReadPacketAsync ← ReaderLoopAsync）。
-        if (_readerScheduler != null)
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        _disposed = true;
+        CloseSync();
+    }
+
+    // ── 两阶段关闭协议（D6）──
+    // ① BeginClose 关闸 → ② WaitDrain 排空在途原生调用 → ③【在专用 COM 单元线程上】释放 COM 指针
+    // → ④ 之后才 Shutdown 调度器（放行 CoUninitialize）→ ⑤ 托管收尾。任一环节失败即有意泄漏（R4）。
+    //
+    // 🔴 步骤顺序铁律（2026-08-01 二次根因修复，**勿把 ② 与 ④ 换回来**）：
+    //    旧顺序为「① → Shutdown 调度器 → WaitDrain → Release」，即**先让专用线程退出**（其 Loop 的 finally
+    //    执行 CoUninitialize）**再在关闭线程上 Marshal.Release**。而 _sourceReader 是 OpenCore 在专用线程上
+    //    经 MFCreateSourceReaderFromURL 创建的：CoUninitialize 会关闭该线程的 COM 库、卸载它加载的 in-proc
+    //    server（mfreadwrite/mfplat 等），并在它是最后一个 MTA 成员时拆除整个 MTA。此后那次 Release 跳进
+    //    已失效的 vtable ⇒ 原生访问违例 ⇒ `Fatal error. Internal CLR error. (0x80131506)`。
+    //    该失败是**确定性**的（每次关闭顺序固定），表现为 MF 测试程序集首跑即崩，与此前的 flaky 竞态无关。
+    //    基线（无 CoUninitialize）下旧顺序侥幸安全，加入 CoUninitialize 后即刻暴露。
+    //    ⇒ 不变量 I7：**在专用单元线程上创建的 COM 对象，其 Release 必须在同一线程、且先于该线程 CoUninitialize。**
+    //
+    // ⚠️ 重入互斥（审计 A-2）：CloseSync / CloseAsync 共用 _closeStarted 这一 Interlocked 令牌，
+    //    「先到者执行完整协议、后到者立即返回」。后到者不会等待协议完成——这是刻意取舍：
+    //    并发调用 Dispose 与 DisposeAsync 本身即为调用方误用，此处保证的是**绝不二次 Release**
+    //    （二次 Release 会直接引发访问违例），而非为误用提供关闭栅栏。
+
+    /// <summary>同步两阶段关闭（供 <see cref="Close"/> / <see cref="Dispose"/> 使用）。</summary>
+    private void CloseSync()
+    {
+        if (Interlocked.Exchange(ref _closeStarted, 1) != 0) return;
+        try
         {
-            _readerScheduler.Dispose();
-            _readerScheduler = null;
-            _readerFactory = null;
+            _readerGate.BeginClose();
+
+            // ② 排空在途原生调用。**此时专用线程仍存活、COM 单元完整**（这正是它必须先于 Shutdown 的原因）。
+            if (!_readerGate.WaitDrain(MediaPipelineTimeouts.NativeDrain))
+            {
+                LeakNativeResources("在途原生调用未在期限内排空", schedulerExited: false);
+                return;
+            }
+
+            var scheduler = _readerScheduler;
+            if (scheduler is null)
+            {
+                // 从未建立专用线程（Open 之前即关闭）。此时不应存在任何 COM 指针；若存在则说明状态异常，
+                // 在未知单元的线程上释放即违反 I7 ⇒ 取安全侧泄漏。
+                if (_sourceReader != IntPtr.Zero)
+                {
+                    LeakNativeResources("存在 COM 指针但专用单元线程已不可用", schedulerExited: true);
+                    return;
+                }
+                ReleaseComObjectsOnOwnerThread(); // 全 no-op，仅为收敛 _mfStartupAcquired
+                ReleaseManagedState();
+                return;
+            }
+
+            // ③ I7：把 Release 投递回创建它的专用单元线程，必须在该线程 CoUninitialize 之前完成。
+            if (!scheduler.TryRunOnSchedulerThread(ReleaseComObjectsOnOwnerThread, MediaPipelineTimeouts.NativeDrain))
+            {
+                LeakNativeResources("无法在专用 COM 单元线程上完成释放", schedulerExited: false);
+                return;
+            }
+
+            // ④ COM 指针已释放，现在才放行专用线程退出（其 finally 将执行 CoUninitialize）。
+            bool schedulerExited = scheduler.Shutdown(MediaPipelineTimeouts.SchedulerJoin);
+            if (!schedulerExited)
+                _logger.LogWarning("MFDemuxer 专用读取线程未在期限内退出；COM 指针已安全释放，仅线程与队列延迟回收。");
+
+            ReleaseManagedState(); // ⑤
         }
+        finally { _opened = false; }
+    }
 
-        // 调度器已排空并退出——此后不可能再有任何线程触碰 _sourceReader，才允许释放。
-        // 释放尚未投递的 lookahead 数据包（MediaPacket 独立拥有托管副本，Dispose 兜底，防泄漏）
-        foreach (var pkt in _pendingPackets.Values)
-            pkt.Dispose();
-        _pendingPackets.Clear();
-        _exhaustedStreams.Clear();
+    /// <summary>异步两阶段关闭（供 <see cref="DisposeAsync"/> 使用，全程 await，不阻塞调用线程）。</summary>
+    /// <remarks>
+    /// A-3：调度器等待走 <c>ShutdownAsync</c>（线程退出 TCS + <c>WaitAsync</c>），
+    /// 而非 <c>Shutdown</c> 的 <c>Thread.Join</c>——后者会在异步释放链上引入最长 5s 的硬同步阻塞，
+    /// 与「真异步方法一路 await 到底、禁止 .Wait()/.Result 式阻塞」的准则直接冲突。
+    /// 步骤顺序与 <see cref="CloseSync"/> 逐条同构（I7 同样适用）。
+    /// </remarks>
+    private async ValueTask CloseAsync()
+    {
+        if (Interlocked.Exchange(ref _closeStarted, 1) != 0) return;
+        try
+        {
+            _readerGate.BeginClose();
 
+            // ②
+            if (!await _readerGate.WaitDrainAsync(MediaPipelineTimeouts.NativeDrain).ConfigureAwait(false))
+            {
+                LeakNativeResources("在途原生调用未在期限内排空", schedulerExited: false);
+                return;
+            }
+
+            var scheduler = _readerScheduler;
+            if (scheduler is null)
+            {
+                if (_sourceReader != IntPtr.Zero)
+                {
+                    LeakNativeResources("存在 COM 指针但专用单元线程已不可用", schedulerExited: true);
+                    return;
+                }
+                ReleaseComObjectsOnOwnerThread();
+                ReleaseManagedState();
+                return;
+            }
+
+            // ③ I7
+            if (!await scheduler.TryRunOnSchedulerThreadAsync(
+                    ReleaseComObjectsOnOwnerThread, MediaPipelineTimeouts.NativeDrain).ConfigureAwait(false))
+            {
+                LeakNativeResources("无法在专用 COM 单元线程上完成释放", schedulerExited: false);
+                return;
+            }
+
+            // ④
+            bool schedulerExited = await scheduler.ShutdownAsync(MediaPipelineTimeouts.SchedulerJoin).ConfigureAwait(false);
+            if (!schedulerExited)
+                _logger.LogWarning("MFDemuxer 专用读取线程未在期限内退出；COM 指针已安全释放，仅线程与队列延迟回收。");
+
+            ReleaseManagedState(); // ⑤
+        }
+        finally { _opened = false; }
+    }
+
+    /// <summary>
+    /// 协议步骤③：释放原生 COM 资源。<b>必须且只能在创建它们的专用单元线程上执行</b>（不变量 I7）。
+    /// </summary>
+    /// <remarks>
+    /// 前置：gate 已排空（I3 独占）——不存在任何其它线程处于闸内，故本方法可独占访问 <c>_sourceReader</c>。
+    /// 调用点仅两处，均经 <c>TryRunOnSchedulerThread(Async)</c> 投递或在确认无 COM 指针时内联，不得直接调用。
+    /// </remarks>
+    private void ReleaseComObjectsOnOwnerThread()
+    {
         if (_sourceReader != IntPtr.Zero)
         {
             try
             {
-                Marshal.Release(_sourceReader);
+                // 错误链：经 tracer 记录并（严格模式）纳入 UAF/重复释放检测。
+                InteropTrace.ReleaseComPtr(_sourceReader, "MFDemuxer:_sourceReader");
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _logger.LogWarning(ex, "IMFSourceReader 释放异常");
             }
             _sourceReader = IntPtr.Zero;
-            _readSample = null;
+            _readSample = null; // 复审 C-2：同步置空 vtable 委托，漏网调用点得到可诊断 NRE 而非静默 UAF
+        }
+
+        // 复审 C-7：配对 MFPlatform 引用（仅成功分支执行；LeakNativeResources 绝不递减）。
+        // 与 OpenCore 中的 Startup 同线程同单元，且此刻 _sourceReader 已释放，递减不会踩到任何在途调用。
+        if (_mfStartupAcquired)
+        {
+            _mfStartupAcquired = false;
+            try { MFPlatform.Shutdown(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "MFShutdown 配对调用异常（忽略，不影响释放流程）");
+            }
         }
     }
 
-    /// <inheritdoc/>
-    /// <remarks>接口契约：COM 释放为快速同步操作，委托 Dispose + CompletedTask。</remarks>
-    public ValueTask DisposeAsync()
+    /// <summary>协议步骤⑤：纯托管收尾，无单元亲和要求，可在任意线程执行。</summary>
+    private void ReleaseManagedState()
     {
-        Dispose();
-        return ValueTask.CompletedTask;
+        // 释放尚未投递的 lookahead 数据包（MediaPacket 独立拥有托管副本，Dispose 兜底，防泄漏）
+        foreach (var pkt in _pendingPackets.Values)
+            pkt.Dispose();
+        _pendingPackets.Clear();
+        _exhaustedStreams.Clear();
+
+        // 复审 C-6：Shutdown 返回 false（判定时线程仍存活）的路径不会 Dispose 队列；丢弃引用前用零超时
+        // 再试一次，让「线程随后才退出」的迟到情形也能回收 BlockingCollection。零超时不阻塞、幂等、不碰 COM。
+        _readerScheduler?.Shutdown(TimeSpan.Zero);
+        _readerScheduler = null;
+        _readerFactory = null;
     }
 
-    /// <inheritdoc/>
-    public void Dispose()
+    /// <summary>协议失败分支（R4）：一切不动，有意泄漏并告警。绝不 Release / 置 NULL / 清容器 / 关调度器。</summary>
+    private void LeakNativeResources(string reason, bool schedulerExited)
     {
-        if (_disposed) return;
-        _disposed = true;
-
-        Close();
+        if (_leakedOnClose) return;
+        _leakedOnClose = true;
+        _logger.LogError("MFDemuxer 安全关闭失败（{Reason}；schedulerExited={SchedulerExited}）。" +
+            "已【有意泄漏】IMFSourceReader 以避免原生堆损坏（0x80131506 COR_E_EXECUTIONENGINE）。" +
+            "泄漏有界且可诊断；进程自杀不可接受。", reason, schedulerExited);
+        // 不 Release、不置 _sourceReader=Zero、不清 _pendingPackets、不置 _readSample=null（R4）。
+        // 复审 C-7：**也不递减 MFPlatform 引用**（_mfStartupAcquired 保持 true）。在途的原生 ReadSample
+        // 依赖 MF 平台仍然存活；此处若配对 Shutdown，可能让计数归 0 触发真 MFShutdown，把平台从在途调用
+        // 脚下抽走 ⇒ 恰好制造本协议要避免的 0x80131506。平台引用与 COM 指针同进退：要么一起释放，要么一起泄漏。
+        //
+        // 🔴 I7 推论（2026-08-01）：**也绝不 Shutdown 调度器**。让专用线程退出即让它 CoUninitialize，
+        // 会拆掉泄漏指针所属的 COM 单元、卸载其 in-proc server——泄漏本是为保住指针可用性，
+        // 拆单元等于把保护对象连根拔起。线程为后台线程，进程退出时由 OS 回收，泄漏有界。
     }
 
     // ── 辅助方法 ──
@@ -471,7 +797,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// 实例方法（非 static）：需要 <c>_logger</c> 上报属性缺失/媒体类型协商失败——这些是静默失败的高发区，
     /// 无日志会让下游拿到 0Hz/0ch 或压缩裸流而无从排查（2026-07-31 实锤，勿改回 static）。
     /// </remarks>
-    private IReadOnlyList<MediaTrack> ParseTracks(IntPtr readerPtr)
+    private IReadOnlyList<MediaTrack> ParseTracks(IntPtr readerPtr, TimeSpan containerDuration)
     {
         var tracks = new List<MediaTrack>();
         int index = 0;
@@ -529,7 +855,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                     {
                         Width = width,
                         Height = height,
-                        Duration = TimeSpan.Zero
+                        Duration = containerDuration
                     }
                 };
 
@@ -596,7 +922,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                         SampleRate = pcm.SampleRate,
                         Channels = pcm.Channels,
                         BitsPerSample = pcm.BitsPerSample,
-                        Duration = TimeSpan.Zero
+                        Duration = containerDuration
                     }
                 };
             }
@@ -612,6 +938,160 @@ internal sealed class MFDemuxer : IMediaDemuxer
 
         return tracks;
     }
+
+    /// <summary>
+    /// 查询容器总时长（presentation descriptor 的 <see cref="MFConstants.MF_PD_DURATION"/>，UINT64/100ns 单位）。
+    /// 通过 <c>IMFSourceReader.GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION)</c> 取得。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>为何必须显式查询</b>：MF 不会自动为源填充「时长」属性，<see cref="_metadata"/> 此前被硬编码为
+    /// <c>TimeSpan.Zero</c>，使 <c>player.Duration</c> 恒为 0——这是完整播放测试「几秒假完成」的根因
+    /// （测试以 <c>pos &gt;= duration-1</c> 判完成，duration=0 时首轮即满足）。</para>
+    /// <para><b>容错</b>：查询失败 / 属性缺失 / 非 VT_UI8 / 值为 0 时回落 <c>TimeSpan.Zero</c>，不抛异常，
+    /// 行为与旧代码一致（仅损失时长信息，不影响解码播放）。MF_PD_DURATION 为 VT_UI8 标量，输出 PROPVARIANT 无需 PropVariantClear。</para>
+    /// <para><b>槽位</b>：<c>GetPresentationAttribute</c> = 绝对槽 12 → slotIndex 9（见 <see cref="MFComInterfaces"/> 头注释）。</para>
+    /// </remarks>
+    private TimeSpan QueryContainerDuration(IntPtr readerPtr)
+    {
+        try
+        {
+            var getPresentationAttribute = MfVTable.Get<IMFSourceReader_GetPresentationAttribute>(readerPtr, 9);
+            Guid durationKey = MFConstants.MF_PD_DURATION;
+            // 用 ref + 预初始化（对齐已验证可用的 SetCurrentPosition 同款封送，避免 out 结构体在该路径不稳）。
+            var durVar = new MfPropVariant();
+            int hr = getPresentationAttribute(readerPtr, MFConstants.MF_SOURCE_READER_MEDIASOURCE,
+                ref durationKey, ref durVar);
+            if (hr < 0)
+            {
+                _logger.LogWarning("GetPresentationAttribute(MF_PD_DURATION) 失败: HRESULT=0x{HR:X8}，时长回落 0", hr);
+                return TimeSpan.Zero;
+            }
+            // MF_PD_DURATION 以 VT_UI8 存储 100ns 单位；MfPropVariant.hVal 与之同一 8 字节联合，直接读。
+            if (durVar.vt != MfPropVariant.VT_UI8)
+            {
+                _logger.LogWarning("MF_PD_DURATION 返回非 VT_UI8(VT=0x{VT:X4})，时长回落 0", durVar.vt);
+                return TimeSpan.Zero;
+            }
+            if (durVar.hVal <= 0)
+                return TimeSpan.Zero;
+            var duration = TimeSpan.FromTicks(durVar.hVal);
+            _logger.LogInformation("MF 容器时长: {Duration}", duration);
+            return duration;
+        }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "查询 MF 容器时长异常，时长回落 0");
+                return TimeSpan.Zero;
+            }
+        }
+
+        /// <summary>
+        /// 排空兜底时长探测：逐流 ReadSample 到 EOS，取所有样本时间戳最大值（100ns）作为容器时长。
+        /// 仅在 <see cref="QueryContainerDuration"/> 取不到（MF_PD_DURATION 缺失）时调用，保证 Duration 恒有正确值。
+        /// 探测后通过 <see cref="IMFSourceReader_SetCurrentPosition"/> 复位读取位置到开头，不影响后续正常播放。
+        /// </summary>
+        /// <remarks>
+        /// <para>样本时间戳由 ReadSample 的 <c>pllTimestamp</c> 直接给出（100ns，可靠），故排空法推算的时长精确。</para>
+        /// <para>🔴 R5-b 配对：ReadSample 失败时 <c>*ppSample</c> 语义不可判定，依「泄漏优于误释放」一律不 Release；
+        /// 仅成功路径（hr≥0 且 samplePtr≠0）释放样本，与 <see cref="ExtractPacket"/> 同构。</para>
+        /// </remarks>
+        private TimeSpan ProbeDurationByDraining(IntPtr readerPtr)
+        {
+            try
+            {
+                long maxTicks = 0;
+                foreach (int s in _selectedStreamIndices)
+                {
+                    while (true)
+                    {
+                        int hr = _readSample!(readerPtr, (uint)s, 0,
+                            out _, out int streamFlags, out long timestamp, out IntPtr samplePtr);
+                        if (hr < 0)
+                            break; // R5-b：失败路径不释放 *ppSample（泄漏优于误释放）
+                        bool eos = (streamFlags & MFConstants.MF_SOURCE_READERF_ENDOFSTREAM) != 0;
+                        if (samplePtr != IntPtr.Zero)
+                            InteropTrace.ReleaseComPtr(samplePtr, "ProbeDurationByDraining:samplePtr");
+                        if (eos)
+                            break;
+                        if (timestamp > maxTicks)
+                            maxTicks = timestamp;
+                    }
+                }
+
+                // 复位读取位置到开头，避免影响后续播放（与 SeekAsync(0) 同效）。
+                Guid timeFormat = Guid.Empty;
+                var pos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = 0 };
+                MfVTable.Get<IMFSourceReader_SetCurrentPosition>(readerPtr, 5)(readerPtr, ref timeFormat, ref pos);
+
+                if (maxTicks <= 0)
+                    return TimeSpan.Zero;
+                var dur = TimeSpan.FromTicks(maxTicks);
+                _logger.LogInformation("MF 排空探测时长: {Duration}", dur);
+                return dur;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "排空探测时长异常，时长回落 0");
+                return TimeSpan.Zero;
+            }
+        }
+
+        /// <summary>
+        /// 末尾定位探测：把读取位置夹到流末尾，逐流读少量末帧取最大样本时间戳（100ns）作为容器时长。
+        /// 用 IMFSourceReader 索引跳转（MP4/MKV 等有索引容器为 O(log n)）替代旧「整段排空到 EOS」，
+        /// 将 OpenAsync 内推算时长的同步阻塞从 ~2~3s 降到近乎瞬时，消灭启动白屏/黑屏后的长延迟。
+        /// 探测后复位读取位置到开头，不影响后续正常播放。
+        /// </summary>
+        /// <remarks>
+        /// <para>样本时间戳由 ReadSample 的 <c>pllTimestamp</c> 直接给出（100ns，可靠），与旧排空法一致。</para>
+        /// <para>🔴 R5-b 配对：ReadSample 失败时 <c>*ppSample</c> 语义不可判定，依「泄漏优于误释放」一律不 Release；
+        /// 仅成功路径（hr≥0 且 samplePtr≠0）释放样本，与 <see cref="ProbeDurationByDraining"/> 同构。</para>
+        /// <para>读上限 16 帧覆盖 B 帧重排导致的末段 PTS 非单调，取最大 PTS（与旧排空法语义一致）。</para>
+        /// </remarks>
+        private TimeSpan ProbeDurationByEndSeek(IntPtr readerPtr)
+        {
+            try
+            {
+                // GUID_NULL 时间格式 = 100ns 单位；极大时间戳触发 SourceReader 夹到末样本。
+                Guid timeFormat = Guid.Empty;
+                var endPos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = long.MaxValue };
+                MfVTable.Get<IMFSourceReader_SetCurrentPosition>(readerPtr, 5)(readerPtr, ref timeFormat, ref endPos);
+
+                long maxTicks = 0;
+                foreach (int s in _selectedStreamIndices)
+                {
+                    for (int i = 0; i < 16; i++)
+                    {
+                        int hr = _readSample!(readerPtr, (uint)s, 0,
+                            out _, out int streamFlags, out long timestamp, out IntPtr samplePtr);
+                        if (hr < 0)
+                            break; // R5-b：失败路径不释放 *ppSample（泄漏优于误释放）
+                        bool eos = (streamFlags & MFConstants.MF_SOURCE_READERF_ENDOFSTREAM) != 0;
+                        if (samplePtr != IntPtr.Zero)
+                            InteropTrace.ReleaseComPtr(samplePtr, "ProbeDurationByEndSeek:samplePtr");
+                        if (timestamp > maxTicks)
+                            maxTicks = timestamp;
+                        if (eos)
+                            break;
+                    }
+                }
+
+                // 复位读取位置到开头，避免影响后续播放（与 SeekAsync(0) 同效）。
+                var resetPos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = 0 };
+                MfVTable.Get<IMFSourceReader_SetCurrentPosition>(readerPtr, 5)(readerPtr, ref timeFormat, ref resetPos);
+
+                if (maxTicks <= 0)
+                    return TimeSpan.Zero;
+                var dur = TimeSpan.FromTicks(maxTicks);
+                _logger.LogInformation("MF 末尾定位探测时长: {Duration}", dur);
+                return dur;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "末尾定位探测时长异常，回落排空兜底");
+                return TimeSpan.Zero;
+            }
+        }
 
     /// <summary>
     /// 把指定音频流协商为**解码后 PCM** 输出，并回读 MF 实测采纳的格式。

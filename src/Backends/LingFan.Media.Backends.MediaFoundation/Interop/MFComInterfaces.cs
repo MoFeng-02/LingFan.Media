@@ -59,11 +59,18 @@ internal struct MfPropVariant
     internal long hVal;        // VT_I8 值（100ns 单位时间戳）
 
     internal const ushort VT_I8 = 20;
+    internal const ushort VT_UI8 = 21; // MF_PD_DURATION 等 UINT64 属性以 VT_UI8 存储；uhVal 与 hVal 同 8 字节联合，直接读 hVal 即可
 }
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSourceReader_ReadSample(IntPtr self, uint dwStreamIndex, int dwControlFlags,
     out int pdwActualStreamIndex, out int pdwStreamFlags, out long pllTimestamp, out IntPtr ppSample);
+
+/// <summary>IMFSourceReader::GetPresentationAttribute（绝对槽 12 → slotIndex 9，槽位表见本文件头注释）。
+/// dwStreamIndex 传 <see cref="MFConstants.MF_SOURCE_READER_MEDIASOURCE"/>(0xFFFFFFFF) 可取 presentation descriptor 属性；
+/// 取 <see cref="MFConstants.MF_PD_DURATION"/> 得容器时长（VT_UI8，100ns 单位）。VT_UI8 为标量、无指针成员，输出 PROPVARIANT 无需 PropVariantClear。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFSourceReader_GetPresentationAttribute(IntPtr self, uint dwStreamIndex, ref Guid guidAttribute, ref MfPropVariant pvarAttribute);
 
 // ── IMFMediaType（继承 IMFAttributes 30 方法（slotIndex 0~29，其中 GetUINT32=4, GetUINT64=5, GetGUID=7）；
 //     自有方法：GetMajorType=30, IsCompressedFormat=31, IsEqual=32, GetRepresentation=33, FreeRepresentation=34）──
@@ -124,9 +131,11 @@ internal delegate int IMFAttributes_GetBlobSize(IntPtr self, ref Guid guidKey, o
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_GetBlob(IntPtr self, ref Guid guidKey, IntPtr pBuf, uint cbBufSize);
 
-// ── IMFTransform（IUnknown 之后，vtable 顺序见 Windows SDK mftransform.h；下列数字为 MfVTable.Get 的 slotIndex）：
-//     GetOutputStreamInfo=4, SetInputType=11, SetOutputType=12, GetOutputCurrentType=14, GetInputStatus=15,
-//     ProcessMessage=19, ProcessInput=20, ProcessOutput=21 ──
+// ── IMFTransform（IUnknown 之后，vtable 顺序见 Windows SDK mftransform.h；下列数字为 MfVTable.Get 的 slotIndex）。
+//    注意含 GetStreamIDs(2) 与 AddInputStreams(9) 两个方法（早期头注漏数其中之一，致从 SetInputType 起全体 −1，已据 mftransform.h 校正）：
+//    GetOutputStreamInfo=4, GetOutputAvailableType=11, SetInputType=12, SetOutputType=13, GetInputCurrentType=14,
+//    GetOutputCurrentType=15, GetInputStatus=16, GetOutputStatus=17, SetOutputBounds=18, ProcessEvent=19,
+//    ProcessMessage=20, ProcessInput=21, ProcessOutput=22（GetAttributes=5 不可漏数）──
 [StructLayout(LayoutKind.Sequential)]
 internal struct MftOutputStreamInfo
 {
@@ -196,6 +205,8 @@ internal static class MfVTable
 {
     public static TDelegate Get<TDelegate>(IntPtr comPtr, int slotIndex) where TDelegate : Delegate
     {
+        // 错误链：记录每次 vtable 取入口；严格模式下若 comPtr 已释放则立刻指认 UAF。
+        InteropTrace.OnVTableGet(comPtr, typeof(TDelegate).Name);
         IntPtr vtable = Marshal.ReadIntPtr(comPtr);
         IntPtr methodPtr = Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
         return Marshal.GetDelegateForFunctionPointer<TDelegate>(methodPtr);

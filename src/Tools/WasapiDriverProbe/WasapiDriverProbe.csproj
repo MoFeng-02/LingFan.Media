@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Windows-only 诊断工具：用官方 [ComImport] COM 互操作，最大兼容性、零手写 vtable -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>WasapiDriverProbe</RootNamespace>
+    <AssemblyName>WasapiDriverProbe</AssemblyName>
+  </PropertyGroup>
+</Project>

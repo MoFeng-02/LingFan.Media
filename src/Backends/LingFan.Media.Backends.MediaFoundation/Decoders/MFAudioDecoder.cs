@@ -17,6 +17,9 @@ namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 /// <c>MFDemuxer</c> 侧由 SourceReader（协商 PCM 输出类型后自动加载解码 MFT）完成。
 /// 故输出格式无从自知，必须由 MediaPlayer 经 <see cref="IAudioSourceFormatAware"/> 注入实测值。
 /// 早期硬编码 44100Hz/2ch 会在 48kHz/单声道媒体上导致音高与节奏错乱。</para>
+/// <para><b>关闭安全性</b>：本类为<b>直通</b>实现，<b>不持有任何原生 MFT / COM 指针</b>（无 IMFTransform 实例，
+/// 亦无 Marshal.Release）——所有原生资源都在 MFDemuxer 与 MFVideoDecoder 侧。因此本类无需接入
+/// <c>NativeCallGate</c> 两阶段关闭协议（MF 冷启动 0x80131506 修复）；其 Dispose 仅释放托管状态。</para>
 /// </remarks>
 internal sealed class MFAudioDecoder : IAudioDecoder, IAudioSourceFormatAware
 {

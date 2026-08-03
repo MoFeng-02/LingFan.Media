@@ -80,6 +80,51 @@ internal static partial class MFInterop
     [LibraryImport("ole32.dll")]
     internal static partial void CoTaskMemFree(IntPtr pv);
 
+    /// <summary>COM 单元初始化标志（ole32）。MTA=0（多线程单元，无需消息泵）；STA=2（单线程单元，需消息泵）。</summary>
+    internal const uint COINIT_MULTITHREADED = 0x0;
+    internal const uint COINIT_APARTMENTTHREADED = 0x2;
+
+    /// <summary>
+    /// 初始化调用线程的 COM 单元（ole32）。
+    /// <para><b>必要性（2026-07-31 根因修复）</b>：MFDemuxer 的专用单线程（<see cref="LingFan.Media.Backends.MediaFoundation.Concurrency.SingleThreadTaskScheduler"/>）
+    /// 是手动 <c>new Thread</c> 创建，CLR 不会自动 <c>CoInitializeEx</c>。该线程承载 <c>IMFSourceReader</c> 的全部
+    /// <b>原始 vtable P/Invoke</b> 调用（ReadSample/OpenCore/SeekAsync）——RCW 才触发 CLR 自动单元初始化，
+    /// 裸线程因此处于「无 COM 单元」状态，MF 原生 COM 调用会间歇踩坏原生堆 →
+    /// <c>COR_E_EXECUTIONENGINE</c> / <c>0x80131506</c>（非确定性、常在若干次成功读后才爆发）。
+    /// 显式 MTA 初始化消除该竞态。</para>
+    /// </summary>
+    [LibraryImport("ole32.dll")]
+    internal static partial int CoInitializeEx(IntPtr pvReserved, uint dwCoInit);
+
+    /// <summary>反初始化调用线程的 COM 单元（ole32），须与返回 S_OK/S_FALSE 的 <see cref="CoInitializeEx"/> 配对。</summary>
+    /// <remarks>
+    /// ⚠️ 副作用远超「本线程注销」：会关闭本线程的 COM 库、对本线程加载过的 in-proc server 逐个
+    /// <c>DllCanUnloadNow</c> 卸载，并在本线程是最后一个 MTA 成员时**拆除整个 MTA**。
+    /// 故本线程创建的 COM 对象必须在此之前全部 Release（见 MFDemuxer 不变量 I7），
+    /// 且进程级 MTA 由 <see cref="CoIncrementMTAUsage"/> 单独保活（见 <see cref="MFPlatform"/>）。
+    /// </remarks>
+    [LibraryImport("ole32.dll")]
+    internal static partial void CoUninitialize();
+
+    /// <summary>
+    /// 保证进程内存在多线程单元（MTA），且不依赖任何具体线程的 <c>CoInitializeEx</c>（ole32，Windows 8+）。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>必要性（2026-08-01 纵深防御）</b>：任一裸线程调用 <see cref="CoUninitialize"/> 时，若它恰是当时
+    /// 唯一的 MTA 成员，整个 MTA 会被拆除、其中的 in-proc server 被卸载——殃及**其它组件**仍持有的
+    /// COM 对象（<c>MFVideoDecoder</c> 的 <c>IMFTransform</c>、<c>MFBackend</c> 的 MF 平台内部状态）。
+    /// 本引擎的 <c>SingleThreadTaskScheduler</c> 正是这样的裸线程，且在纯解封装测试（无解码器参与）中
+    /// 极可能成为唯一显式 MTA 成员。</para>
+    /// <para><c>CoIncrementMTAUsage</c> 是微软为此提供的官方机制：它把 MTA 的存活与线程解耦，
+    /// 无需常驻保活线程，直到配对的 <see cref="CoDecrementMTAUsage"/> 才释放。</para>
+    /// </remarks>
+    [LibraryImport("ole32.dll")]
+    internal static partial int CoIncrementMTAUsage(out IntPtr pCookie);
+
+    /// <summary>释放 <see cref="CoIncrementMTAUsage"/> 取得的 MTA 保活凭据（ole32，Windows 8+）。</summary>
+    [LibraryImport("ole32.dll")]
+    internal static partial int CoDecrementMTAUsage(IntPtr cookie);
+
     // ⚠️ 勿添加 MFSetAttributeGUID / MFSetAttributeUINT64 / MFGetAttributeUINT64 / MFSet(Get)AttributeSize 的 P/Invoke：
     // 它们是 mfapi.h 的 inline helper，mfplat.dll **没有这些导出**（本机 GetProcAddress 已验证 NOT EXPORTED，2026-07-29），
     // P/Invoke 一到运行时即 EntryPointNotFoundException。属性读写一律走 IMFAttributes vtable：

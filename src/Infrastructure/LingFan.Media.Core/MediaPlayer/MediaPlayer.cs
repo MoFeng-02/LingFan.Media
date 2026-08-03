@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using LingFan.Media.Core.Platform;
 
 namespace LingFan.Media.Core;
 
@@ -43,6 +44,9 @@ public sealed class MediaPlayer : IMediaPlayer
     private AudioPipeline? _audioPipeline;
     private SubtitleProcessor? _subtitleProcessor;
     private MediaPipelineHost? _pipelineHost;
+
+    /// <summary>高精度系统定时器是否已开启（配对 timeBeginPeriod / timeEndPeriod，避免泄漏）。</summary>
+    private bool _hpTimerActive;
     private readonly PlaybackController _controller = new();
 
     // V2 帧对象池（Session 级）
@@ -241,6 +245,10 @@ public sealed class MediaPlayer : IMediaPlayer
             _frameQueue = new FrameQueue();
             _sampleQueue = new SampleQueue();
             _synchronizer = new Synchronizer(_clock);
+            // 根治方案（LINGFAN_CLOCK_AUDIO_POS=1）：用音频设备真实播放游标驱动视频主时钟，
+            // 取代批提交内逐帧 SyncTo 的突发锯齿。闭包延后读取 _audioOutput（此时尚未 Create，调用时已就绪）。
+            if (ClockTuning.UseAudioPlaybackClock)
+                _synchronizer.SetMasterClockProvider(() => _audioOutput?.GetPlaybackPositionDirect() ?? TimeSpan.Zero);
             _bufferManager = new BufferManager(_demuxer, _loggerFactory.CreateLogger<BufferManager>());
 
             // 5. 创建解码器（延迟创建，需要 codec 信息）
@@ -416,6 +424,7 @@ public sealed class MediaPlayer : IMediaPlayer
         {
             _clock?.Start();
             _pipelineHost?.Start();
+            EnsureHighPrecisionTimer();
             TransitionState(MediaState.Playing);
         }
         catch (Exception ex)
@@ -453,6 +462,7 @@ public sealed class MediaPlayer : IMediaPlayer
         {
             _clock?.Reset();
             _pipelineHost?.Stop();
+            ReleaseHighPrecisionTimer();
             _bufferManager?.Clear();
             TransitionState(MediaState.Stopped);
         }
@@ -508,6 +518,45 @@ public sealed class MediaPlayer : IMediaPlayer
         }
     }
 
+    /// <summary>
+    /// 开启高精度系统定时器（若已开启则幂等），供视频帧精确等待消抖。
+    /// </summary>
+    private void EnsureHighPrecisionTimer()
+    {
+        if (!ClockTuning.HighPrecisionTimer || _hpTimerActive)
+            return;
+        try
+        {
+            WinMm.TimeBeginPeriod(1);
+            _hpTimerActive = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "开启高精度定时器失败，帧等待将退回默认 15.6ms 分辨率");
+        }
+    }
+
+    /// <summary>
+    /// 关闭高精度系统定时器（与 <see cref="EnsureHighPrecisionTimer"/> 配对，幂等）。
+    /// </summary>
+    private void ReleaseHighPrecisionTimer()
+    {
+        if (!_hpTimerActive)
+            return;
+        try
+        {
+            WinMm.TimeEndPeriod(1);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "关闭高精度定时器失败");
+        }
+        finally
+        {
+            _hpTimerActive = false;
+        }
+    }
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
@@ -543,7 +592,7 @@ public sealed class MediaPlayer : IMediaPlayer
         Step_ClearBufferManager();
 
         // 9. 关闭 Demuxer
-        Step_CloseDemuxer();
+        await Step_CloseDemuxerAsync();
 
         // 10. 关闭 MediaStream
         Step_CloseStream();
@@ -553,6 +602,9 @@ public sealed class MediaPlayer : IMediaPlayer
 
         // 12. 关闭 Session
         await Step_CloseSessionAsync();
+
+        // 13. 归还高精度定时器（与 PlayAsync 配对，避免整机定时器泄漏）
+        ReleaseHighPrecisionTimer();
     }
 
     /// <inheritdoc />
@@ -584,8 +636,11 @@ public sealed class MediaPlayer : IMediaPlayer
                     tasks.Add(_audioPipeline.PipelineTask);
                 if (_subtitleProcessor?.ProcessTask != null)
                     tasks.Add(_subtitleProcessor.ProcessTask);
+                // M1：补齐 BufferManager 读取线程——缺口 P1，原先不等它直接释放 Demuxer（跨线程 UAF 隐患）。
+                if (_bufferManager?.ReaderTask != null)
+                    tasks.Add(_bufferManager.ReaderTask);
                 if (tasks.Count > 0)
-                    Task.WaitAll(tasks.ToArray(), TimeSpan.FromSeconds(2));
+                    Task.WaitAll(tasks.ToArray(), MediaPipelineTimeouts.PipelineTaskWait);
             }
             catch { } // AggregateException（线程异常）或 TimeoutException 均忽略
 
@@ -609,6 +664,9 @@ public sealed class MediaPlayer : IMediaPlayer
             try { _demuxer?.Dispose(); } catch { }
             try { _stream?.Close(); } catch { }
             try { _bufferManager?.Clear(); } catch { }
+
+            // 归还高精度定时器（与 PlayAsync 配对，避免整机定时器泄漏）
+            try { ReleaseHighPrecisionTimer(); } catch { }
 
             // V2: 释放帧对象池
             try { _videoFramePool?.Dispose(); } catch { }
@@ -664,7 +722,7 @@ public sealed class MediaPlayer : IMediaPlayer
             _subtitleProcessor?.Stop();
 
             // 等待管线线程退出（5s 超时）
-            var timeout = TimeSpan.FromSeconds(5);
+            var timeout = MediaPipelineTimeouts.PipelineJoin;
             var tasks = new List<Task>();
 
             if (_bufferManager?.ReaderTask != null)
@@ -688,7 +746,7 @@ public sealed class MediaPlayer : IMediaPlayer
                 }
                 catch (TimeoutException)
                 {
-                    _logger.LogWarning("管线线程退出超时（5s），继续释放");
+                    _logger.LogWarning("管线线程退出超时（5s），继续释放；原生指针释放由后端 gate 保护，不会 UAF");
                 }
             }
 
@@ -794,10 +852,10 @@ public sealed class MediaPlayer : IMediaPlayer
         catch (Exception ex) { _logger.LogWarning(ex, "DisposeAsync 步骤7: 清空缓冲异常"); }
     }
 
-    private void Step_CloseDemuxer()
+    private async ValueTask Step_CloseDemuxerAsync()
     {
-        try { _demuxer?.Close(); _demuxer?.Dispose(); }
-        catch (Exception ex) { _logger.LogWarning(ex, "DisposeAsync 步骤8: 关闭 Demuxer 异常"); }
+        try { if (_demuxer != null) await _demuxer.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception ex) { _logger.LogWarning(ex, "DisposeAsync 步骤9: 关闭 Demuxer 异常"); }
     }
 
     private void Step_CloseStream()
@@ -842,9 +900,12 @@ public sealed class MediaPlayer : IMediaPlayer
             tasks.Add(_audioPipeline.PipelineTask);
         if (_subtitleProcessor?.ProcessTask != null)
             tasks.Add(_subtitleProcessor.ProcessTask);
+        // M2：补齐 BufferManager 读取线程（与 M1 对称）。
+        if (_bufferManager?.ReaderTask != null)
+            tasks.Add(_bufferManager.ReaderTask);
         if (tasks.Count > 0)
         {
-            try { await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(2)); }
+            try { await Task.WhenAll(tasks).WaitAsync(MediaPipelineTimeouts.PipelineTaskWait); }
             catch { }
         }
 

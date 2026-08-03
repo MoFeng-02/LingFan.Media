@@ -33,6 +33,15 @@ public interface IAudioOutput : IMediaComponent
     /// <summary>获取已播放位置（用于时钟同步）。</summary>
     TimeSpan GetPlaybackPosition();
 
+    /// <summary>
+    /// 高频、线程安全的播放位置读取（可选优化）。默认实现回落到 <see cref="GetPlaybackPosition"/>。
+    /// <para><b>用途</b>：视频主时钟需要以视频帧率（~30Hz）轮询播放位置。某些后端
+    /// （WASAPI）的 <see cref="GetPlaybackPosition"/> 走跨线程封送，高频调用有成本；
+    /// 这类后端应重写本方法，直接读取设备时钟（<c>IAudioClock::GetPosition</c> 可由任意线程调用，无需跨线程），
+    /// 既平滑又零封送开销。</para>
+    /// </summary>
+    TimeSpan GetPlaybackPositionDirect() => GetPlaybackPosition();
+
     /// <summary>当前输出延迟。</summary>
     TimeSpan Latency { get; }
 

@@ -102,11 +102,15 @@ public sealed class HeadfulPlaybackEndToEndTests
     }
 
     /// <summary>
-    /// 有头音频：真实 WASAPI 输出（默认音频端点）。本用例即"无头进程 + 真实音频设备"的典型场景
+    /// 有头音频（纯音频文件）：真实 WASAPI 输出（默认音频端点）+ 真实 MP3 解码。本用例即"无头进程 + 真实音频设备"的典型场景
     /// （<c>AddHeadlessRenderer()</c> 无画面 + <c>AddWasapiOutput()</c> 真出声——WASAPI 不需窗口）。
+    /// 源使用 <see cref="TestResources.AudioCrickets"/>（crickets_night01.mp3，3 分钟纯环境音，无视频轨），
+    /// 仅播放 ~10 秒验证 MF 解码真实 MP3 → WASAPI 真机持续出声（而非仅瞬时 blip）。
     /// MediaPlayer.OpenAsync 对音频输出初始化无 try/catch——故 OpenAsync 成功即证明真实 WASAPI 已
-    /// Initialize（设备枚举 + 格式协商通过）；随后播满 ~3 秒驱动主时钟推进，人耳可实际听到、且断言"持续出声"
-    /// （而非仅瞬时 blip）。本机端点若不支持请求格式则 Skip（与既有 WasapiOutputTests 设计一致）。
+    /// Initialize（设备枚举 + 格式协商通过）。
+    /// 全程依赖生产级媒体类会话分类（IAudioClient2.SetClientProperties，默认 Movie，避开本机 driver 对
+    /// BackgroundCapableMedia 的 0xC0000005 崩溃）防止 Windows 挂起后台/非前台会话；故 10 秒应被完整驱动、持续出声。
+    /// 本机端点若不支持请求格式则 Skip（与既有 WasapiOutputTests 设计一致）。
     /// </summary>
     [Fact]
     public async Task PlayAsync_HeadfulAudio_Wasapi_InitializesAndPlays()
@@ -115,7 +119,7 @@ public sealed class HeadfulPlaybackEndToEndTests
         services.AddLingFanMedia()
                 .AddMediaFoundation()
                 .AddHeadlessRenderer()   // 视频走 NoOp，隔离音频验证
-                .AddWasapiOutput();      // 音频走真实 WASAPI
+                .AddWasapiOutput();      // 音频走真实 WASAPI（共享模式；本机 driver 不支持独占/SetClientProperties，维持共享模式基线）
         // await using：释放 ServiceProvider → MFBackend 单例配对 MFShutdown（防泄漏，同上）。
         await using var sp = services.BuildServiceProvider();
         var player = sp.GetRequiredService<IMediaPlayer>();
@@ -128,20 +132,20 @@ public sealed class HeadfulPlaybackEndToEndTests
         var ct = TestContext.Current.CancellationToken;
         try
         {
-            var source = new FileMediaSource(TestResources.VideoM1);
+            var source = new FileMediaSource(TestResources.AudioCrickets);
             await player.OpenAsync(source, ct); // 成功 = 真实 WASAPI 已 Initialize
 
-            player.Session!.AudioTracks.Count.Should().BeGreaterThan(0, "m1.mp4 应含音轨");
+            player.Session!.AudioTracks.Count.Should().BeGreaterThan(0, "crickets_night01.mp3 应含音轨");
 
             await player.PlayAsync();
             _output.WriteLine($"[HEADFUL-AUDIO] after PlayAsync: state={player.State} startPos={player.Position}");
 
-            // 真实 WASAPI 驱动主时钟推进：播满 ~3 秒，既能让人耳实际听到，
-            // 也能断言"持续出声"而非仅瞬时 blip（原逻辑 position>0 即停，只放零点几秒，几乎不可闻）。
+            // 真实 WASAPI 驱动主时钟推进：播满 ~10 秒，既能让人耳实际听到，
+            // 也能断言"持续出声"而非仅瞬时 blip。依赖生产级 BackgroundCapableMedia 会话分类防止后台挂起。
             // 逐 500ms 采样位置时间线 + 状态，用于区分"真 stalled"与"时钟读数 lag"。
             var startPos = player.Position;
             var timeline = new List<string>();
-            for (var i = 1; i <= 6; i++)
+            for (var i = 1; i <= 20; i++)
             {
                 await Task.Delay(500, ct);
                 timeline.Add($"{(i * 500)}ms pos={player.Position:g} state={player.State}");
@@ -152,10 +156,10 @@ public sealed class HeadfulPlaybackEndToEndTests
 
             _output.WriteLine($"[HEADFUL-AUDIO] wasapiInitialized=true startPos={startPos:g} played={played:g}");
             _output.WriteLine($"[HEADFUL-AUDIO] timeline: {string.Join(" | ", timeline)}");
-            // m1.mp4 音频为 44.1kHz；submittedSamples/44100 = 实际提交给 WASAPI 的音频总时长
-            _output.WriteLine($"[HEADFUL-AUDIO] submittedSamples={submittedSamples} submittedSec={submittedSamples / 44100.0:F2} (wallClock≈3.0s)");
-            played.Should().BeGreaterThan(TimeSpan.FromSeconds(2.5),
-                "有头音频：真实 WASAPI 应持续出声并推进主时钟 ≥2.5s（非瞬时 blip）");
+            // submittedSamples/44100 仅作近似估算（Crickets MP3 实际采样率以会话为准），真实校验以 played 断言为准。
+            _output.WriteLine($"[HEADFUL-AUDIO] submittedSamples={submittedSamples} submittedSec(approx)={submittedSamples / 44100.0:F2} (wallClock≈10.0s)");
+            played.Should().BeGreaterThan(TimeSpan.FromSeconds(9.0),
+                "有头纯音频：真实 WASAPI 应在媒体类（Movie/Media）会话下持续出声并推进主时钟 ≥9s（非瞬时 blip，后台不被挂起；BackgroundCapableMedia 在本机 driver 会崩，已改用 Movie）");
         }
         catch (Exception ex)
         {

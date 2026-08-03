@@ -56,6 +56,9 @@ internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit
     public TimeSpan GetPlaybackPosition() => _loop.GetPlaybackPosition();
 
     /// <inheritdoc/>
+    public TimeSpan GetPlaybackPositionDirect() => _loop.GetPlaybackPositionDirect();
+
+    /// <inheritdoc/>
     public TimeSpan Latency => _loop.Latency;
 
     /// <inheritdoc/>

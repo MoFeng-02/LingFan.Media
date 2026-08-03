@@ -35,11 +35,9 @@ public sealed class MFBackend : IDisposable
 
         try
         {
-            int hr = MFInterop.MFStartup(MFConstants.MF_VERSION, MFConstants.MFSTARTUP_FULL);
-            if (hr < 0)
-            {
-                throw new InvalidOperationException($"MFStartup 失败: HRESULT=0x{hr:X8}");
-            }
+            // 经 MFPlatform 引用计数封装：真正的 MFShutdown 仅在所有消费者（解封装器 + 解码器）全部释放后才触发，
+            // 避免一侧先释放把仍 in-flight 的原生 ReadSample 踩成 AV（MF 冷启动 flaky 崩溃根因修复）。
+            MFPlatform.Startup();
             _initialized = true;
             _logger.LogDebug("MediaFoundation 平台初始化完成");
         }
@@ -47,6 +45,54 @@ public sealed class MFBackend : IDisposable
         {
             _logger.LogError(ex, "MediaFoundation 平台初始化失败");
             throw;
+        }
+    }
+
+    /// <summary>
+    /// 预热 MediaFoundation：提前打开一次样例媒体、强制激活解码器 MFT，把「进程首次
+    /// <c>MFCreateSourceReaderFromURL</c> 激活 H.264/AAC 解码器」的 2~3s 冷启动成本挪到
+    /// 调用方认为合适的位置（例如真实 App 的启动闪屏期、或探针创建可见窗口之前）。
+    /// 正式 <see cref="MFDemuxer.OpenAsync"/> 复用已加载的解码器 DLL，打开几乎瞬时完成。
+    /// </summary>
+    /// <remarks>
+    /// <para>幂等且容错：失败仅记 Debug 日志并静默返回，绝不抛异常影响正式打开。
+    /// 内部经 <see cref="MFPlatform"/> 引用计数，与正式播放共享同一 MF 平台生命周期。</para>
+    /// <para>仅 Windows 有效；非 Windows 直接 no-op。</para>
+    /// </remarks>
+    /// <param name="sampleUrl">用于触发解码器激活的任一媒体文件 URL/路径（通常与正式播放文件相同）。</param>
+    public void Warmup(string? sampleUrl)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrEmpty(sampleUrl))
+            return;
+
+        // 平台已在构造函数经 MFPlatform.Startup() 启动；此处再确保（幂等，引用计数 +1）。
+        MFPlatform.Startup();
+
+        int hr = MFInterop.MFCreateSourceReaderFromURL(sampleUrl!, IntPtr.Zero, out IntPtr reader);
+        if (hr < 0 || reader == IntPtr.Zero)
+        {
+            _logger.LogDebug("MF 预热跳过：MFCreateSourceReaderFromURL 失败 HRESULT=0x{HR:X8}", hr);
+            return;
+        }
+
+        try
+        {
+            // 强制激活解码器 MFT：首次 ReadSample 会触发 H.264/AAC 解码器实例初始化，
+            // 进程首次冷启动的 2~3s 主要花在解码器 DLL 加载 + MFT 初始化上。提前付出，
+            // 使正式 OpenAsync 复用已加载的解码器，把卡顿挪到窗口出现之前。
+            // MF_SOURCE_READER_FIRST_VIDEO_STREAM = 0xFFFFFFFC（无视频流时该流读取失败属正常，下方 catch 吞掉）。
+            var readSample = MfVTable.Get<IMFSourceReader_ReadSample>(reader, 6);
+            readSample(reader, 0xFFFFFFFCu, 0, out _, out _, out long _, out IntPtr sample);
+            if (sample != IntPtr.Zero)
+                Marshal.Release(sample);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogDebug(ex, "MF 预热读样例外（忽略，不影响正式打开）");
+        }
+        finally
+        {
+            Marshal.Release(reader);
         }
     }
 
@@ -62,7 +108,7 @@ public sealed class MFBackend : IDisposable
         {
             try
             {
-                MFInterop.MFShutdown();
+                MFPlatform.Shutdown();
                 _logger.LogDebug("MediaFoundation 平台资源释放完成");
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)

@@ -54,6 +54,18 @@ internal sealed class D3D11Renderer : IVideoRenderer
     private bool _disposed;
     private bool _attached;
 
+    /// <summary>诊断：剩余待回读落盘的 backbuffer 帧数（由 <c>LINGFAN_D3D11_DUMP</c> 门控，0=关闭）。</summary>
+    private int _dumpRemaining = D3D11Diagnostics.DumpCount;
+
+    /// <summary>诊断：已落盘的 backbuffer 序号。</summary>
+    private int _dumpIndex;
+
+    /// <summary>诊断：Present 序号（从 1 起），用于 DUMP_SKIP/DUMP_EVERY 采样控制。</summary>
+    private long _presentSeq;
+
+    /// <summary>诊断：源→目标缩放比只在首帧记一次（避免每帧刷屏）。</summary>
+    private bool _loggedScaleOnce;
+
     /// <summary>
     /// 串行化所有原生方法（Attach/Detach/Present/Clear/Dispose），化解管线线程 Present 与
     /// UI 线程 Resize/Detach 的并发原生竞态（方案 A）。普通 <see langword="lock"/>，同线程可重入。
@@ -145,16 +157,21 @@ internal sealed class D3D11Renderer : IVideoRenderer
             {
                 // V2-15 R7：优先使用 DirectComposition（无空域渲染）
                 // CreateSwapChainForComposition + DComp Visual 合成到窗口——视频帧不作为独立原生窗口
+                // 诊断门控 LINGFAN_D3D11_FORCE_HWND=1：跳过 DComp，直接走 HWND SwapChain
+                // （用于二分「合成层 vs 渲染层」责任，默认不生效）
                 bool dcompSuccess = false;
-                try
+                if (!D3D11Diagnostics.ForceHwnd)
                 {
-                    _swapChain = factory.CreateSwapChainForComposition(_device, swapChainDesc, null);
-                    _dcomp = new D3D11CompositionInterop();
-                    dcompSuccess = _dcomp.TryInitialize(hwnd, _swapChain.NativePointer);
-                }
-                catch
-                {
-                    dcompSuccess = false;
+                    try
+                    {
+                        _swapChain = factory.CreateSwapChainForComposition(_device, swapChainDesc, null);
+                        _dcomp = new D3D11CompositionInterop();
+                        dcompSuccess = _dcomp.TryInitialize(hwnd, _swapChain.NativePointer);
+                    }
+                    catch
+                    {
+                        dcompSuccess = false;
+                    }
                 }
 
                 if (!dcompSuccess)
@@ -185,7 +202,21 @@ internal sealed class D3D11Renderer : IVideoRenderer
             }
 
             _attached = true;
-            _logger.LogDebug("D3D11 渲染器已附加渲染目标：{Width}x{Height}", target.Width, target.Height);
+
+            // 一次性附加诊断：摊开几何与线程归属。
+            // 🔴 DirectComposition 要求视觉树（CreateTargetForHwnd / SetRoot / Commit）在【拥有该窗口
+            //    且有消息泵】的线程上操作。若 窗口线程 ≠ Attach 线程 且 合成=DComp，属已知误用形态
+            //    （表现为帧不更新 / 撕裂 / 延迟累积）。此行日志把该事实直接摆出来，无需推测。
+            var bbDesc = _backBuffer!.Description;
+            (uint winTid, uint curTid) = D3D11Diagnostics.InspectThreadAffinity(hwnd);
+            _logger.LogInformation(
+                "[D3D11-ATTACH] target={TW}x{TH} backbuffer={BW}x{BH} 合成={Comp} " +
+                "SwapEffect=FlipDiscard/BufferCount=2 SyncInterval={Sync} | " +
+                "窗口线程={WinTid} Attach线程={CurTid} 同线程={SameThread} | DUMP={Dump}",
+                target.Width, target.Height, bbDesc.Width, bbDesc.Height,
+                _dcomp is not null ? "DirectComposition" : "HWND",
+                D3D11Diagnostics.SyncInterval,
+                winTid, curTid, winTid == curTid, D3D11Diagnostics.DumpCount);
         }
     }
 
@@ -219,6 +250,27 @@ internal sealed class D3D11Renderer : IVideoRenderer
             var backBufferDesc = _backBuffer.Description;
             bool sizeMatches = (uint)frame.Width == backBufferDesc.Width &&
                                (uint)frame.Height == backBufferDesc.Height;
+
+            // 🔬 首帧一次性：把「源→目标」缩放比摊开。这是判定混叠的前置量——
+            //    平面纹理 MipLevels=1（无 mipmap），采样器只有双线性抽头；
+            //    缩小倍率 >2 时每个目标像素需覆盖 >4 源像素，双线性只取 4 抽头 ⇒ 必然高频欠采样，
+            //    表现为摩尔纹竖条 + 随画面运动逐帧游走（肉眼即"花屏/晃动"）。
+            if (!_loggedScaleOnce)
+            {
+                _loggedScaleOnce = true;
+                double sx = backBufferDesc.Width == 0 ? 0 : frame.Width / (double)backBufferDesc.Width;
+                double sy = backBufferDesc.Height == 0 ? 0 : frame.Height / (double)backBufferDesc.Height;
+                double worst = Math.Max(sx, sy);
+                string verdict = worst <= 1.0 ? "放大或1:1（无缩小混叠风险）"
+                               : worst <= 2.0 ? "轻度缩小（双线性尚可，混叠有限）"
+                               : "多倍缩小⚠（无 mipmap 下双线性必欠采样 ⇒ 摩尔纹/噪点/随运动游走）";
+                _logger.LogInformation(
+                    "[D3D11-SCALE] 源帧={SrcW}x{SrcH} backbuffer={DstW}x{DstH} | 缩小倍率 x={Sx:F2} y={Sy:F2} | " +
+                    "整数倍={IsInt} | 判定={Verdict}",
+                    frame.Width, frame.Height, backBufferDesc.Width, backBufferDesc.Height,
+                    sx, sy, Math.Abs(sx - Math.Round(sx)) < 1e-6 && Math.Abs(sy - Math.Round(sy)) < 1e-6,
+                    verdict);
+            }
 
             // Pattern matching 匹配 IFrameResource 类型（AOT 安全）
             // V2: Resource 可为 null（池化空壳），null 走 default 分支
@@ -266,10 +318,34 @@ internal sealed class D3D11Renderer : IVideoRenderer
                         "D3D11 渲染器支持 SoftwareFrameResource 和 IGpuTextureResource。");
             }
 
-            // 交换 SwapChain（VSync = 1）
+            // 🔬 诊断门控 LINGFAN_D3D11_DUMP=N：在 Present【之前】把已着色完成的 backbuffer 回读落盘。
+            //    这是切开问题空间的决定性判据——
+            //      backbuffer 干净 ⇒ 上传 + Shader 无辜，责任在呈现/合成侧（SwapChain/DComp/DWM/节奏）；
+            //      backbuffer 脏   ⇒ 责任在上传/Shader 路径，与合成无关。
+            //    默认 DumpCount=0，此分支完全不执行。
+            //    采样偏差防护：DUMP_SKIP 跳过开头 N 次 Present，DUMP_EVERY 拉开样本间隔，
+            //    避免全部样本挤在视频头 1 秒内而漏掉中后段才显现的问题。
+            _presentSeq++;
+            if (_dumpRemaining > 0 &&
+                _presentSeq > D3D11Diagnostics.DumpSkip &&
+                (_presentSeq - D3D11Diagnostics.DumpSkip - 1) % D3D11Diagnostics.DumpEvery == 0)
+            {
+                _dumpRemaining--;
+                try
+                {
+                    string stat = D3D11Diagnostics.DumpBackBuffer(_device, _context, _backBuffer, ++_dumpIndex);
+                    _logger.LogInformation("[D3D11-DUMP] present#{Seq} {Stat}", _presentSeq, stat);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("[D3D11-DUMP] backbuffer 回读失败：{Message}", ex.Message);
+                }
+            }
+
+            // 交换 SwapChain（SyncInterval 默认 1；LINGFAN_D3D11_SYNC=0 可二分「阻塞式 Present 造成的卡顿/延迟」）
             // B-DEVLOST: 检查 Present 返回值——DEVICE_REMOVED/RESET（TDR/驱动崩溃/GPU 拔出）
             // 时设备及全部资源永久失效，抛中立 GpuDeviceLostException 供会话层重建。
-            var presentResult = _swapChain.Present(1u, PresentFlags.None);
+            var presentResult = _swapChain.Present(D3D11Diagnostics.SyncInterval, PresentFlags.None);
             ThrowIfDeviceLost(presentResult, "Present");
         }
     }

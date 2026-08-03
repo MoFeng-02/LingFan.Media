@@ -103,7 +103,7 @@ internal sealed class WasapiRenderLoop
     // V2: IAudioClock 的设备频率（units/秒）。GetPosition 的返回值须除以它才是秒数，
     // 单位由设备定义（共享模式常见为字节/秒 = nSamplesPerSec * nBlockAlign），不等于采样率。
     // 0 表示不可用（GetFrequency 失败），此时 GetPlaybackPosition 回落到采样率换算并告警。
-    private ulong _audioClockFrequency;
+    private long _audioClockFrequency;
 
     // ── STA 渲染线程基础设施（Phase 1：常驻渲染循环，替代原"每次 RunOnSta 跨线程封送"）──
     // 单一 STA 线程：CoInitializeEx(STA) → 处理控制消息与音频帧 → 关闭时释放 COM + CoUninitialize。
@@ -265,6 +265,42 @@ internal sealed class WasapiRenderLoop
 
             return TimeSpan.FromSeconds((double)devicePosition / _sampleRate);
         });
+    }
+
+    /// <summary>
+    /// 线程安全的直接播放位置读取（不经过 <see cref="RunControl"/> 跨线程封送）。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>为什么不需要跨线程</b>：<c>IAudioClock::GetPosition</c> 按 MSDN 可由任意线程调用，
+    /// 它只读设备维护的原生播放游标，且只被设备自身写入；读取是稳定的单值读取。</para>
+    /// <para><b>为什么用它是根治方案</b>：该游标随真实播放平滑前进，且音频缓冲耗尽时天然停摆 ——
+    /// 不会像"已提交末端时间"那样在批提交时被瞬间预支、又在两批间自由运行超调后猛拽回退。
+    /// 视频主时钟应以此为准（</para>
+    /// <para><b>为什么用它根治</b>：该游标随真实播放平滑前进，且音频缓冲耗尽时天然停摆 ——
+    /// 不会像"已提交末端时间"那样在批提交时被瞬间预支、又在两批间自由运行超调后猛拽回退。
+    /// 视频主时钟应以此为准。</para>
+    /// <para>字段读取：<c>_audioClockPtr</c> / <c>_audioClockFrequency</c> / <c>_audioClockGetPosition</c>
+    /// 均为 Initialize 时一次性写入、播放期恒定（已标记 volatile），跨线程读取安全。</para>
+    /// </remarks>
+    internal TimeSpan GetPlaybackPositionDirect()
+    {
+        var clockPtr = Volatile.Read(ref _audioClockPtr);
+        var freq = Volatile.Read(ref _audioClockFrequency);
+        var getPos = Volatile.Read(ref _audioClockGetPosition);
+        if (clockPtr == IntPtr.Zero || freq == 0 || getPos is null)
+            return TimeSpan.Zero;
+
+        // WASAPI 回传 pu64QPCPosition（QPC 计数，100ns ticks），是本次 devicePosition 读数时刻的高精度
+        // 时间锚点。用 QPC 插值出「现在」的平滑播放位置，消除音频引擎周期(~10ms)的离散量化阶梯——
+        // 之前丢弃该值(out _)导致主时钟按 ~10ms 跳变，直接钉死 WaitUntilDue 的呈现时刻相位（残留墙钟抖动根因）。
+        int hr = getPos(clockPtr, out ulong devicePosition, out ulong qpcPosition);
+        if (hr < 0)
+            return TimeSpan.Zero;
+
+        long qpcNow = System.Diagnostics.Stopwatch.GetTimestamp(); // 100ns ticks，与 qpcPosition 同单位
+        double posSec = (double)devicePosition / freq;
+        double driftSec = (qpcNow - (long)qpcPosition) / 10_000_000.0; // QPC 单位 = 100ns
+        return TimeSpan.FromSeconds(posSec + driftSec);
     }
 
     /// <inheritdoc cref="WasapiOutput.Latency"/>
@@ -589,6 +625,17 @@ internal sealed class WasapiRenderLoop
             _audioClientSetEventHandle = ComVTable.Get<IAudioClient_SetEventHandle>(pAudioClient, 10);
             _audioClientGetService = ComVTable.Get<IAudioClient_GetService>(pAudioClient, 11);
 
+            // 1.5 V2 O10：在 Initialize 之前，通过 IAudioClient2.SetClientProperties 设置会话分类，
+            // 防止 Windows 将后台/非前台/隐藏窗口的音频会话在播放数秒后挂起（声音 ~15s 中断）。
+            // 全程 try/guard：任何不支持/失败都只记日志，不影响后续正常 Initialize（最坏退回旧行为）。
+            // ⚠️ 2026-08-02 结案：曾长期 0xC0000005，真因是本文件 TrySetSessionCategory 的 vtable 槽位算错一格
+            // （误调 IAudioClient2::IsOffloadCapable —— 它多一个 BOOL* 出参，导致向未初始化寄存器指向的野地址写入）。
+            // 槽位已修正为 slotIndex 13（绝对槽 16），官方 COM 探针九个分类均 S_OK，调用本身不再崩。
+            // 但 EnableBackgroundCapableSession 仍默认 false：启用它的原始动机（防 OS 挂起后台会话）未被证实，
+            // 且实测启用后出现「约 30s 静音后才出声」的回归。详见 WasapiOptions 上的说明。
+            if (_options.EnableBackgroundCapableSession)
+                TrySetSessionCategory(pAudioClient);
+
             // 2. V2 格式协商（O7 独占模式 + O9 多格式直出）
             WAVEFORMATEX format;
             if (_exclusiveMode)
@@ -734,7 +781,7 @@ internal sealed class WasapiRenderLoop
                 int freqHr = _audioClockGetFrequency(_audioClockPtr, out ulong clockFrequency);
                 if (freqHr >= 0 && clockFrequency > 0)
                 {
-                    _audioClockFrequency = clockFrequency;
+                    _audioClockFrequency = (long)clockFrequency;
                     _logger.LogDebug("IAudioClock 设备频率={Frequency} units/s（客户端 {SampleRate}Hz/{Channels}ch）",
                         clockFrequency, sampleRate, channels);
                 }
@@ -1137,6 +1184,103 @@ internal sealed class WasapiRenderLoop
         SampleFormat.F32 => 4,
         _ => 4
     };
+
+    /// <summary>
+    /// 通过 IAudioClient2.SetClientProperties 设置音频会话分类，防止 Windows 挂起后台/非前台/隐藏窗口的会话。
+    /// 必须在 IAudioClient.Initialize 之前调用。任何失败均记录日志并静默跳过，不影响正常初始化。
+    /// </summary>
+    /// <remarks>
+    /// IAudioClient2 由 IAudioClient 指针 QI 获得（vtable 绝对槽 0 = IUnknown.QueryInterface）。
+    /// 🔴 vtable 绝对槽位（逐方法照抄 audioclient.h，勿凭记忆推算）：
+    ///   IUnknown      : QueryInterface(0) AddRef(1) Release(2)
+    ///   IAudioClient  : Initialize(3) GetBufferSize(4) GetStreamLatency(5) GetCurrentPadding(6)
+    ///                   IsFormatSupported(7) GetMixFormat(8) GetDevicePeriod(9) Start(10)
+    ///                   Stop(11) Reset(12) SetEventHandle(13) GetService(14)   —— 共 12 个方法
+    ///   IAudioClient2 : IsOffloadCapable(15) SetClientProperties(16) GetBufferSizeLimits(17)
+    /// 故 SetClientProperties 绝对槽 = 16，ComVTable slotIndex = 16 - 3 = 13。
+    /// ⚠️ 曾误写为 slotIndex=12（绝对槽 15），实际调到 IsOffloadCapable —— 它有 3 个参数
+    /// (self, Category, BOOL* pbOffloadCapable)，我们只传 2 个，x64 下 R8 是未初始化垃圾值，
+    /// 原生侧向该野地址写 BOOL ⇒ 确定性 0xC0000005。官方 [ComImport] 探针九个分类全 S_OK 已反证 driver 无恙。
+    /// 释放时调用 IUnknown.Release（绝对槽 2）。
+    /// </remarks>
+    private void TrySetSessionCategory(IntPtr audioClientPtr)
+    {
+        try
+        {
+            if (_options.SessionCategory == AudioClientCategory.Other)
+                return; // 用户显式选择不设置
+
+            // QI 用 BCL Marshal.QueryInterface（稳健，避免手搓 vtable 调用出错）。
+            // 仅在 IAudioClient2 可用时继续；否则静默跳过（退回旧行为）。
+            var iid2 = WasapiInterop.IID_IAudioClient2;
+            int hrQi = Marshal.QueryInterface(audioClientPtr, in iid2, out IntPtr pClient2);
+            if (hrQi < 0 || pClient2 == IntPtr.Zero)
+            {
+                _logger.LogDebug("IAudioClient2 不可用（HRESULT=0x{HR:X8}），跳过会话分类设置", hrQi);
+                return;
+            }
+
+            try
+            {
+                // 🔴 SetClientProperties 绝对槽 = 16（IUnknown 3 + IAudioClient 12 方法占 3..14
+                // + IAudioClient2 首方法 IsOffloadCapable 占 15），故 slotIndex = 16 - 3 = 13。
+                // 绝不能是 12（=IsOffloadCapable，参数个数不同，误调 ⇒ 野指针写 ⇒ 0xC0000005）。
+                // 取函数指针后判空：若槽位异常（理论上不会），跳过而非崩进程。
+                IntPtr setPropsPtr = ComVTable.GetMethodPointer(pClient2, 13);
+                if (setPropsPtr == IntPtr.Zero)
+                {
+                    _logger.LogWarning("IAudioClient2.SetClientProperties 槽位为空，跳过会话分类设置");
+                    return;
+                }
+                var setProps = Marshal.GetDelegateForFunctionPointer<IAudioClient2_SetClientProperties>(setPropsPtr);
+
+                // 候选分类链：优先用户配置值，其次同族媒体类兜底（某些 driver 只认部分分类）。
+                // 历史注记：曾因 vtable 槽位算错（调到 IsOffloadCapable）导致任意分类都 0xC0000005，
+                // 一度误判为「driver 对 BackgroundCapableMedia 损坏」并将其排除；槽位修正后
+                // 官方 COM 探针九个分类全部 S_OK，该规避已撤销。
+                var candidates = new System.Collections.Generic.List<AudioClientCategory>(4)
+                {
+                    _options.SessionCategory
+                };
+                foreach (var m in new[] { AudioClientCategory.BackgroundCapableMedia, AudioClientCategory.Movie, AudioClientCategory.Media })
+                    if (!candidates.Contains(m)) candidates.Add(m);
+
+                bool categorySet = false;
+                foreach (var cat in candidates)
+                {
+                    var props = new AudioClientProperties
+                    {
+                        cbSize = (uint)Marshal.SizeOf<AudioClientProperties>(), // = 16（含 bIsOffload）
+                        bIsOffload = 0, // 🔴 必须 FALSE：本库走常规共享模式；置 TRUE 会申请硬件卸载流并崩溃
+                        eCategory = cat,
+                        eStreamOptions = 0
+                    };
+                    _logger.LogDebug("[DIAG-SETCLIENT] 试设会话分类：pClient2=0x{P2:X}, setPropsPtr=0x{SP:X}, cbSize={CB}, bIsOffload={OFF}, eCategory={CAT}",
+                        pClient2, setPropsPtr, props.cbSize, props.bIsOffload, props.eCategory);
+                    int hrSet = setProps(pClient2, ref props);
+                    if (hrSet < 0)
+                    {
+                        _logger.LogWarning("SetClientProperties({Category}) 失败（HRESULT=0x{HR:X8}），尝试下一个候选", cat, hrSet);
+                        continue;
+                    }
+                    _logger.LogDebug("WASAPI 会话分类已设为 {Category}", cat);
+                    categorySet = true;
+                    break;
+                }
+                if (!categorySet)
+                    _logger.LogWarning("所有候选会话分类均失败，会话分类未设置（后台会话被挂起时声音可能中断）");
+            }
+            finally
+            {
+                // 释放 QI 增加的引用：BCL Marshal.Release（IUnknown.Release）。
+                Marshal.Release(pClient2);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogWarning(ex, "设置 WASAPI 会话分类异常，已跳过");
+        }
+    }
 
     /// <summary>
     /// 等待 WASAPI 缓冲区有足够空间（COM 背压）。事件驱动模式使用 EventWaitHandle.WaitOne 替代 Sleep 轮询。
