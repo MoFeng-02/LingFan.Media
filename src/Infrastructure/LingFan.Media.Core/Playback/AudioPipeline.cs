@@ -33,6 +33,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private Task? _pipelineTask;
     private volatile bool _isRunning;
     private volatile bool _isPaused;
+    private volatile bool _isResuming;   // Pause 后置位；下次 Start 走恢复路径（立即 Resume 而非 preroll）
     private volatile bool _pauseAcknowledged;
     private TaskCompletionSource<bool>? _pauseAckTcs;
     // 自然完成标志：仅当管线因"流末耗尽"（包源关闭）正常退出时置位，
@@ -136,7 +137,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     /// 启动或恢复管线。
     /// Start() 同时处理首次启动和恢复（调用 audioOutput.Resume() 恢复输出）。
     /// </summary>
-    public void Start()
+    public async Task StartAsync()
     {
         if (_isRunning)
         {
@@ -156,12 +157,22 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             _cts = new CancellationTokenSource();
         }
 
-        // 首次启动必须真正启动 WASAPI 客户端（IAudioClient.Start），否则设备永不拉取缓冲区、
-        // 首帧写满缓冲后后续 Submit 全部超时丢帧 → 仅初始缓冲那 ~1 秒出声后静音。
-        // 原实现只在"恢复播放"分支调 _output.Resume()，首次启动漏调，导致首次播放无音频渲染。
-        _output.Resume();
-
-        _pipelineTask = Task.Run(PipelineLoop);
+        // 治本①（起播静默窗）：非恢复播放走 preroll —— WASAPI 内部 Stop→Reset 并 arm，
+        // 提交循环写满设备缓冲后自动 Start，引擎抓取真实数据而非静音 → 起播无静默窗。
+        // 恢复播放（Pause→Resume）走旧路径立即 Resume。
+        bool resuming = _isResuming;
+        _isResuming = false;
+        if (resuming)
+        {
+            _output.Resume();
+            _pipelineTask = Task.Run(PipelineLoop);
+        }
+        else
+        {
+            var prime = _output.BeginStreamingAsync(_cts.Token);
+            _pipelineTask = Task.Run(PipelineLoop);
+            await prime;
+        }
     }
 
     /// <summary>
@@ -170,6 +181,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     public void Pause()
     {
         _isPaused = true;
+        _isResuming = true;
         _output.Pause();
     }
 

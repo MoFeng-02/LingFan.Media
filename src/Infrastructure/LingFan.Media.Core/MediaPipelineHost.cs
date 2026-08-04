@@ -53,7 +53,7 @@ public sealed class MediaPipelineHost
     /// 启动两条管线（纯内存：设标志位 + fire-and-forget）。
     /// 同时重置完成门控标志，使重播（Ended → Playing）能再次正确触发 PlaybackCompleted。
     /// </summary>
-    public void Start()
+    public async Task StartAsync()
     {
         lock (_completionLock)
         {
@@ -62,8 +62,11 @@ public sealed class MediaPipelineHost
             _completionRaised = false;
         }
 
+        // 治本①（起播静默窗）：音频优先 —— 先 await 音频预填达标并启动（无静默窗），
+        // 再启动视频，使音画同时开始（避免"视频先出、音频静默"）。
+        if (_audioPipeline != null)
+            await _audioPipeline.StartAsync();
         _videoPipeline?.Start();
-        _audioPipeline?.Start();
         _subtitleProcessor?.Start();
     }
 

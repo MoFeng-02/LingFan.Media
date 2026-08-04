@@ -33,6 +33,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private Task? _pipelineTask;
     private Task? _decodeTask;
     private volatile bool _decodeDone;
+    private volatile bool _eosReached;     // EOS 意图（包源结束）已到达：让 Drop→Present 保护覆盖整个 DRAIN 窗口
     // 自然完成标志：仅当管线因"流末耗尽"正常退出（非 Stop/Dispose 取消）时才置位，
     // 用于区分 Ended（自然结束）与取消退出，避免停止/释放时误触发 Completed 事件。
     private bool _completedNaturally;
@@ -175,6 +176,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _isRunning = true;
         _isPaused = false;
         _decodeDone = false;
+        _eosReached = false;
         // 🔴 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
         // 否则残留 true 会在后续 Stop/Dispose 的 finally 中误触发 Completed → 错误发出 Ended。
         _completedNaturally = false;
@@ -412,7 +414,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 //   · eos && Present → 保持 Present。
                 // 尾冻已由 DecodeLoop 的 EOS DRAIN 根治（末段 GOP 已入队），此处不再依赖强制呈现；
                 // 正常播放末段帧按各自节奏呈现，爆发消失，末帧仍常驻屏直到音频结束。
-                bool eos = _frameQueue.IsCompleted || _decodeDone;
+                bool eos = _eosReached || _frameQueue.IsCompleted || _decodeDone;
                 if (eos && action == SyncAction.Drop)
                     action = SyncAction.Present;
 
@@ -505,9 +507,12 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 {
                     packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
                 }
-                catch (ChannelClosedException)
-                {
-                    // 包源结束：必须先 DRAIN 解码器把末尾 B 帧重排缓冲（末段 GOP）全部取出入队，
+                    catch (ChannelClosedException)
+                    {
+                        // EOS 意图已到达：提前置位，使下方 DRAIN 全窗口内 PipelineLoop 的
+                        // Drop→Present 保护生效（否则 DRAIN 期间 eos 未置位，尾帧走真丢分支）。
+                        _eosReached = true;
+                        // 包源结束：必须先 DRAIN 解码器把末尾 B 帧重排缓冲（末段 GOP）全部取出入队，
                     // 再 Complete 帧队列 —— 顺序颠倒会让呈现侧提前收尾，末段 GOP 整批丢失。
                     // 🔴 根因修复（2026-08-04）：原实现只 Complete 不 DRAIN，导致 H.264/H.265 尾部
                     // 重排帧滞留 MFT 内部缓冲永不吐出 → 最后呈现帧冻结（即"30s 画面不动"缺陷）。

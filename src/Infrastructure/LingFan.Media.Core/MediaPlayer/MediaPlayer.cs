@@ -435,14 +435,14 @@ public sealed class MediaPlayer : IMediaPlayer
                 //   3) _pipelineHost.Start() 因 _isRunning==false 会重建 CTS 并重启双管线循环
                 //      （VideoPipeline/AudioPipeline 的 Start 已支持从排干态重启）。
                 await SeekAsync(TimeSpan.Zero);
+                if (_pipelineHost != null) await _pipelineHost.StartAsync();   // 音频优先 + 预填，无起播静默窗
                 _clock?.Reset();
-                _clock?.Start();
-                _pipelineHost?.Start();
+                _clock?.Start();                     // 时钟在音频就绪后启动，避免起播前空走导致首帧被判过期 Drop
             }
             else
             {
+                if (_pipelineHost != null) await _pipelineHost.StartAsync();
                 _clock?.Start();
-                _pipelineHost?.Start();
             }
             EnsureHighPrecisionTimer();
             TransitionState(MediaState.Playing);

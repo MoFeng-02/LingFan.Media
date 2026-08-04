@@ -95,6 +95,8 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private readonly Queue<VideoFrame> _pendingOutputs = new();
     private long _notAcceptingDrops;      // 排空后仍被拒收而不得不丢弃的包数（应恒为 0）
     private bool _drainSent;              // MFT_MESSAGE_COMMAND_DRAIN 只发一次
+    private TimeSpan _lastFramePts;       // 上一成功帧 PTS（DRAIN/重排帧时间戳缺失时递增外推，禁用 0）
+    private TimeSpan _lastFrameDur;       // 上一成功帧 Duration
     private bool _warnedPendingBacklog;   // 积压异常告警只打一次
     private const int MaxNotAcceptingRetries = 8;  // 「排空→重投」最大轮数，防活锁
     private const int MaxOutputsPerDrain = 64;     // 单轮最多取帧数，防异常 MFT 无限吐帧
@@ -460,17 +462,26 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private int DrainAvailableOutputs(MediaPacket sourcePacket)
     {
         int produced = 0;
+        const int drainTransientRetryLimit = 8; // DRAIN 期间「无产出但非 NEED_MORE_INPUT」的连续重试上限
+        int noFramePulls = 0;
         for (int i = 0; i < MaxOutputsPerDrain; i++)
         {
             var frame = ProcessOutputOnce(sourcePacket, out bool needMoreInput);
-            if (frame == null)
+            if (needMoreInput)
+                break; // MFT 真正排空（DRAIN 收口信号）：调用方据此正常结束 EOS 排空
+            if (frame != null)
             {
-                // needMoreInput = MFT 已排空（正常收口）；否则为重协商失败/提取失败，同样停止本轮
-                _ = needMoreInput;
-                break;
+                _pendingOutputs.Enqueue(frame);
+                produced++;
+                noFramePulls = 0;
+                continue;
             }
-            _pendingOutputs.Enqueue(frame);
-            produced++;
+            // frame==null 且 needMoreInput==false：DRAIN 期间的瞬态（重协商失败 / 提取失败 /
+            // 硬件 MFT 在吐下一帧前的短暂空窗）。此时不应中断 —— 重试 ProcessOutput 往往能取出
+            // DPB 中滞留的尾帧；否则 DPB 剩余 ~10-16 帧（恰为 DPB 深度）永久丢失 = 末段尾帧偶发 Drop。
+            // 连续无产出达上限才收口，避免异常 MFT 死循环。
+            if (++noFramePulls >= drainTransientRetryLimit)
+                break;
         }
 
         // 积压异常兜底告警：正常仅为 MFT 重排深度（H.264 DPB ≤ 16）
@@ -562,9 +573,22 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             var getTime = MfVTable.Get<IMFSample_GetSampleTime>(sample, 32);     // IMFAttributes(30) + 2
             var getDur = MfVTable.Get<IMFSample_GetSampleDuration>(sample, 34);  // IMFAttributes(30) + 4
             if (getTime(sample, out long sampleTime) >= 0)
+            {
                 ts = TimeSpan.FromTicks(sampleTime);
+                _lastFramePts = ts;
+            }
+            else if (_lastFramePts != TimeSpan.Zero)
+            {
+                // DRAIN/重排帧时间戳缺失：用上一成功帧 PTS + Duration 递增外推，禁用 0
+                // （否则末段帧 PTS=0 → delta 巨负 → 必 Drop，正是尾帧丢失诱因之一）。
+                ts = _lastFramePts + _lastFrameDur;
+                _lastFramePts = ts;
+            }
             if (getDur(sample, out long sampleDur) >= 0 && sampleDur > 0)
+            {
                 dur = TimeSpan.FromTicks(sampleDur);
+                _lastFrameDur = dur;
+            }
 
             // 输出数据可能分散在多个 buffer，ConvertToContiguousBuffer 合并
             // IMFSample 槽位：ConvertToContiguousBuffer = 绝对 41 → slotIndex 38

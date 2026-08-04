@@ -1,3 +1,6 @@
+using System.Threading;
+using System.Threading.Tasks;
+
 namespace LingFan.Media.Abstractions;
 
 /// <summary>
@@ -26,6 +29,17 @@ public interface IAudioOutput : IMediaComponent
 
     /// <summary>恢复播放。</summary>
     void Resume();
+
+    /// <summary>
+    /// 开始流式输出，但在缓冲区预填足够真实 PCM 后再启动设备时钟（preroll 语义），
+    /// 返回时音频已开始流动。默认实现直接恢复播放（无预填需求的后端，如无声/无设备输出）；
+    /// WASAPI 重写为根治起播静默窗（引擎抓取的是真实数据而非静音）。
+    /// </summary>
+    ValueTask BeginStreamingAsync(CancellationToken ct)
+    {
+        Resume();
+        return ValueTask.CompletedTask;
+    }
 
     /// <summary>清空输出缓冲。</summary>
     void Flush();

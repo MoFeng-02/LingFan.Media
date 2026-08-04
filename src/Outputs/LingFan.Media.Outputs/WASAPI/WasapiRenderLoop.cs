@@ -78,6 +78,12 @@ internal sealed class WasapiRenderLoop
     private bool _initialized;
     private bool _disposed;
     private int _bufferSize;      // WASAPI 缓冲区大小（帧数）
+    // 治本①（起播静默窗）：预填目标帧数 = 设备缓冲总大小，写满后再 Start，引擎抓取真实数据而非静音。
+    private int _primeFrames;
+    private bool _prerollPending;             // BeginStreamingAsync 已 arm（Stop→Reset），等待 WriteFrame 预填达标后自动 Start
+    private bool _prerollStarted;             // 已自动 Start（防重复触发）
+    private TaskCompletionSource<bool>? _primeTcs;
+    private const int PrimeTimeoutMs = 600;  // 无音频轨/极短片段兜底：超时强制 Start，防 PlayAsync 挂起
     private double _streamLatencySec; // IAudioClient.GetStreamLatency() 返回的「提交→可闻」延迟（秒），用于主时钟校准
     // 🔴 音画同步（2026-08-04 实测校准，数据坐实前版 anchor/padding 修复为 no-op）：
     // 共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」（Start 后瞬间预取 ~0.5s
@@ -285,12 +291,68 @@ internal sealed class WasapiRenderLoop
             if (hr < 0)
                 _logger.LogWarning("IAudioClient.Start 失败：HRESULT=0x{HR:X8}", hr);
 
+            // 恢复播放路径：立即启动，清除 preroll 状态（避免 WriteFrame 误触发自动启动）。
+            _prerollStarted = true;
+            _prerollPending = false;
+            _primeTcs = null;
+
             // 🔴 音画同步修复（2026-08-04）：捕获启动锚点。Start 后立刻读一次设备游标作为本流
             // 「已播放量」的零点，主时钟后续用 (devicePosition - 锚点) 得到本流真实播放秒数，
             // 消除共享模式 devicePosition 启动即 ~0.5s 的任意累计偏移。重播时 Stop→Reset→Start
             // 会重新调用本方法，锚点随之刷新（Reset 后游标归零，新锚点≈旧锚点，差值连续）。
             CaptureStartAnchor();
         });
+    }
+
+    /// <inheritdoc cref="WasapiOutput.BeginStreamingAsync"/>
+    /// <remarks>
+    /// 根治起播静默窗（2026-08-04）：WASAPI 共享模式下，若在空缓冲上直接 Start，音频引擎会瞬间
+    /// 抓取 ~0.5s 静音进系统混音缓冲，真实 PCM 排在其后才可闻 → 起播出现静默窗。
+    /// 本方法只做 Stop→Reset 并 arm preroll（不 Start）；提交循环把真实 PCM 写满设备缓冲后，
+    /// <see cref="WriteFrame"/> 在 padding 达标时自动 Start，引擎抓取的是真实数据 → 无静默窗。
+    /// 返回的任务在自动 Start 后完成（或由超时兜底强制 Start，防无音频轨/极短片段挂起 PlayAsync）。
+    /// </remarks>
+    public ValueTask BeginStreamingAsync(CancellationToken ct)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_initialized || _audioClientPtr == IntPtr.Zero)
+            return ValueTask.CompletedTask;
+        RunControl(() =>
+        {
+            _audioClientStop!(_audioClientPtr);
+            _audioClientReset!(_audioClientPtr);
+            _prerollStarted = false;
+            _prerollPending = true;
+            _primeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        });
+        return new ValueTask(WaitForPrimeAsync(ct));
+    }
+
+    private async Task WaitForPrimeAsync(CancellationToken ct)
+    {
+        if (_primeTcs == null) return;
+        var tcs = _primeTcs;
+        var timeout = Task.Delay(PrimeTimeoutMs, ct);
+        var completed = await Task.WhenAny(tcs.Task, timeout);
+        if (completed != tcs.Task)
+        {
+            // 超时兜底：强制启动，避免 PlayAsync 在"无音频轨/极短片段"场景挂起。
+            RunControl(() =>
+            {
+                if (_prerollPending && !_prerollStarted)
+                {
+                    int hr = _audioClientStart!(_audioClientPtr);
+                    if (hr >= 0)
+                    {
+                        CaptureStartAnchor();
+                        _prerollStarted = true;
+                        _prerollPending = false;
+                    }
+                }
+            });
+        }
+        // 忽略 timeout 任务自身的取消异常（ct 取消时静默收尾）
+        try { await timeout; } catch { }
     }
 
     /// <inheritdoc cref="WasapiOutput.Flush"/>
@@ -301,6 +363,7 @@ internal sealed class WasapiRenderLoop
         RunControl(() =>
         {
             int hr = _audioClientReset!(_audioClientPtr);
+            _prerollPending = false;   // Seek/Flush 后清除 preroll 状态
             // 重播（Ended→Playing）场景下，自然 Ended 时客户端仍 Running（尾音由设备自然放完，不主动 Stop），
             // 此时调 Reset 会返回 AUDCLNT_E_NOT_STOPPED——属良性（后序 Resume 会 Stop→Reset→Start 正确清空并启动），
             // 不记入警告避免噪音。其余失败码仍告警。
@@ -886,6 +949,7 @@ internal sealed class WasapiRenderLoop
             hr = _audioClientGetBufferSize(_audioClientPtr, out uint bufferFrames);
             Marshal.ThrowExceptionForHR(hr);
             _bufferSize = (int)bufferFrames;
+            _primeFrames = _bufferSize;   // 预填目标 = 整设备缓冲（根治起播静默窗：引擎抓取真实数据而非静音）
 
             // 5.5 🔴 音画同步修复（2026-08-04）：获取「提交→可闻」流延迟，用于主时钟校准。
             // GetStreamLatency 必须在 Initialize 成功后调用（slot 2 已接）。返回值单位 100ns。
@@ -1072,6 +1136,20 @@ internal sealed class WasapiRenderLoop
             released = true;
             _submittedSamples += frame.FrameCount;   // 诊断：累计成功提交的采样帧数
             _submittedFrames++;
+
+            // 治本①（起播静默窗）：preroll 阶段写满设备缓冲后自动启动引擎，
+            // 抓取的是真实 PCM 而非静音 → 起播无静默窗。仅触发一次。
+            if (_prerollPending && !_prerollStarted && GetCurrentPaddingFrames() >= _primeFrames)
+            {
+                int startHr = _audioClientStart!(_audioClientPtr);
+                if (startHr >= 0)
+                {
+                    CaptureStartAnchor();
+                    _prerollStarted = true;
+                    _prerollPending = false;
+                    _primeTcs?.TrySetResult(true);
+                }
+            }
         }
         finally
         {
