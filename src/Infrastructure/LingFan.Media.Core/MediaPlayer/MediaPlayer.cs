@@ -524,6 +524,14 @@ public sealed class MediaPlayer : IMediaPlayer
             if (_bufferManager != null)
             {
                 await _bufferManager.StartAsync(ct);
+
+                // 🔴 重播（Ended→Playing）修复（2026-08-04）：流末 EOF 后 BufferManager.StartAsync 会
+                // 经 ResetQueues() 重建全新的包通道实例（旧通道已 Complete 不可重开）。两条管线在 OpenAsync
+                // 构造时按值捕获了旧通道引用，此处必须把其内部 _packetQueue 重新指向新通道——
+                // 否则重播的解码循环会从已 Complete 的旧通道瞬间 EOF，排空 0 帧，二次播放呈现 0 帧。
+                // 非 EOF 重播（播放中 Seek）下 ResetQueues 不触发，此处重指向同一实例，幂等无害。
+                _videoPipeline?.SetPacketQueue(_bufferManager.VideoPacketQueue);
+                _audioPipeline?.SetPacketQueue(_bufferManager.AudioPacketQueue);
             }
         }
         catch (Exception ex)

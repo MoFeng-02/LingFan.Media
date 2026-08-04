@@ -16,7 +16,7 @@ namespace LingFan.Media.Core;
 /// </remarks>
 public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 {
-    private readonly Channel<MediaPacket> _packetQueue;
+    private volatile Channel<MediaPacket> _packetQueue;
     private readonly IAudioDecoder _decoder;
     private readonly IAudioOutput _output;
     private readonly SampleQueue _sampleQueue;
@@ -116,6 +116,13 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>内部管线任务（供 DisposeAsync join）。</summary>
     internal Task? PipelineTask => _pipelineTask;
+
+    /// <summary>
+    /// 重播（Ended→Playing）修复：与 <see cref="VideoPipeline.SetPacketQueue"/> 同构。
+    /// <see cref="BufferManager.ResetQueues"/> 在流末 EOF 后重建包通道实例，
+    /// 本管线需把内部持有的包队列引用重指向新通道，避免重播时解码循环从已 Complete 的旧通道读到 EOF。
+    /// </summary>
+    internal void SetPacketQueue(Channel<MediaPacket> queue) => _packetQueue = queue;
 
     /// <summary>
     /// 自然播放完成事件。当管线因"流末耗尽"（包源关闭、所有采样已提交）正常退出时触发；

@@ -16,7 +16,7 @@ namespace LingFan.Media.Core;
 /// </remarks>
 public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 {
-    private readonly Channel<MediaPacket> _packetQueue;
+    private volatile Channel<MediaPacket> _packetQueue;
     private readonly IVideoDecoder _decoder;
     private readonly IVideoRenderer _renderer;
     private readonly FrameQueue _frameQueue;
@@ -120,6 +120,17 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>内部管线任务（供 DisposeAsync join）。</summary>
     internal Task? PipelineTask => _pipelineTask;
+
+    /// <summary>
+    /// 重播（Ended→Playing）修复：<see cref="BufferManager.ResetQueues"/> 在流末 EOF 后
+    /// <c>StartAsync</c> 会<b>重建全新的包通道实例</b>以恢复可写状态，而本管线在 OpenAsync 构造时
+    /// 按值捕获了旧通道引用。若不重指向新通道，重播时解码循环会从已 <c>Complete()</c> 的旧通道
+    /// 一上来就读到 <see cref="ChannelClosedException"/> → 排空 0 帧 → 立即收尾 → 二次播放呈现 0 帧。
+    /// <see cref="MediaPlayer.SeekAsync"/> 在 <c>BufferManager.StartAsync</c> 之后调用本方法把引用重新指向新通道；
+    /// 由于重播的 <c>Start()</c> 会重启解码循环（旧循环已在首播 EOF 时 break），新循环读到新通道即可正常取包。
+    /// 非 EOF 重播（播放中 Seek）下 <c>ResetQueues</c> 不触发，本方法重指向的是同一实例，幂等无害。
+    /// </summary>
+    internal void SetPacketQueue(Channel<MediaPacket> queue) => _packetQueue = queue;
 
     /// <summary>
     /// 自然播放完成事件。当管线因"流末耗尽"（包源关闭、所有帧已呈现）正常退出时触发；

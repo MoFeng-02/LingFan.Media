@@ -282,7 +282,10 @@ internal sealed class WasapiRenderLoop
         RunControl(() =>
         {
             int hr = _audioClientReset!(_audioClientPtr);
-            if (hr < 0)
+            // 重播（Ended→Playing）场景下，自然 Ended 时客户端仍 Running（尾音由设备自然放完，不主动 Stop），
+            // 此时调 Reset 会返回 AUDCLNT_E_NOT_STOPPED——属良性（后序 Resume 会 Stop→Reset→Start 正确清空并启动），
+            // 不记入警告避免噪音。其余失败码仍告警。
+            if (hr < 0 && hr != WasapiInterop.AUDCLNT_E_NOT_STOPPED)
                 _logger.LogWarning("IAudioClient.Reset 失败：HRESULT=0x{HR:X8}", hr);
         });
     }

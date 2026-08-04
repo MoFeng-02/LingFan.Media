@@ -130,6 +130,8 @@ internal static partial class WasapiInterop
 
     /// <summary>AUDCLNT_E_NOT_INITIALIZED：IAudioClient 尚未初始化。</summary>
     public const int AUDCLNT_E_NOT_INITIALIZED = unchecked((int)0x88890001);
+    /// <summary>AUDCLNT_E_NOT_STOPPED：Start/Reset/Stop 在错误的流状态下调用（如 Running 态调 Start）。</summary>
+    public const int AUDCLNT_E_NOT_STOPPED = unchecked((int)0x88890005);
 
     /// <summary>AUDCLNT_E_DEVICE_INVALIDATED：音频设备已被移除或失效。</summary>
     public const int AUDCLNT_E_DEVICE_INVALIDATED = unchecked((int)0x88890004);
