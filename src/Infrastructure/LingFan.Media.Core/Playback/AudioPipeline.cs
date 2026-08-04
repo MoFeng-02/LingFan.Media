@@ -339,6 +339,14 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     // 前瞻窗口（预解码帧数）：让提交阶段能成批提交，折叠逐帧 STA 跨线程往返的固定开销（修复听感卡顿/掉速）。
     private const int PrerollFrames = 16;
 
+    // 🔴 (b)① 架构补短（2026-08-04）：小量子连续提交。
+    // 旧逻辑一次性把 _sampleQueue 全部帧灌入设备（单批 ~750ms 阻塞），管线离场解码时 submittedSamples
+    // 冻结、主时钟平滑前进 → 诊断仪误报"音频间隙/stall"。改为每次最多提交 ~MaxSubmitChunkMs 的音频，
+    // 使渲染线程的 submittedSamples 连续推进（根治假 stall），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时）。
+    private const int MaxSubmitChunkMs = 40;   // 单批提交上限（毫秒）；远小于诊断仪 100ms stall 阈值，留足余量
+    private const int MinChunkSamples = 1024;  // 单批下限（采样数，≈23ms@44.1k/21ms@48k），避免过小批导致提交开销占比上升
+    private int _submitChunkSamples;           // 懒初始化：首次提交时按帧采样率换算（采样率跨流可能变化，故每流首帧确定）
+
     // 🔴 诊断（LINGFAN_AUDIO_DIAG=1）：打点音频循环各相位时长，定位 headful 断音根因。
     // 纯诊断、零架构风险：仅在 env 置 1 时开启，生产路径恒为 false，不改变任何控制流/时序。
     private static readonly bool AudioDiagEnabled =
@@ -362,7 +370,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     continue;
                 }
 
-                // 1. 提交阶段：把当前可用解码帧整批提交（一次 STA 往返写多帧，是修复掉速的关键）
+                // 1. 提交阶段：小量子连续提交（(b)① 架构补短）
+                //    每次最多提交 ~MaxSubmitChunkMs 的音频，使渲染线程的 submittedSamples 连续推进
+                //    （根治诊断仪"假 stall"），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时、抗 decode 抖动）。
                 if (_sampleQueue.Count > 0)
                 {
                     // 关闭/停止：不再向渲染线程阻塞提交，直接归还剩余帧。
@@ -374,9 +384,21 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                         break;
                     }
 
-                    var batch = new List<AudioFrame>(_sampleQueue.Count);
+                    // 先出首帧以确定小量子采样数上限（采样率跨流可能变化，故每流首帧懒初始化一次）
+                    if (!_sampleQueue.TryDequeue(out var head) || head is null)
+                        continue;
+                    if (_submitChunkSamples == 0)
+                        _submitChunkSamples = Math.Max(MinChunkSamples, (int)(head.SampleRate * MaxSubmitChunkMs / 1000.0));
+
+                    var batch = new List<AudioFrame>(_sampleQueue.Count + 1) { head };
+                    int chunkSamples = head.FrameCount;
                     while (_sampleQueue.TryDequeue(out var f) && f != null)
+                    {
                         batch.Add(f);
+                        chunkSamples += f.FrameCount;
+                        if (chunkSamples >= _submitChunkSamples)
+                            break; // 达小量子上限即停，剩余帧留队列供下一轮循环提交
+                    }
                     if (AudioDiagEnabled)
                     {
                         var subStart = Stopwatch.GetTimestamp();

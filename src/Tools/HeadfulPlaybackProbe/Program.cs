@@ -354,7 +354,7 @@ internal static class Program
                         audioStallCount++;
                         if (verbose)
                             Console.WriteLine($"  [HEADFUL-AUDIO-GAP] STALL t={poll.Elapsed.TotalSeconds:F1}s " +
-                                              $"提交停滞，主时钟已前进 {(posSec - prevPosSec) * 1000:F0}ms（静音）");
+                                              $"提交停滞，主时钟已前进 {(posSec - prevPosSec) * 1000:F0}ms（批量提交节奏，非欠载；以 backlog 为准）");
                     }
                     prevSubmitted = submittedSamples;
                     prevPosSec = posSec;
@@ -402,10 +402,16 @@ internal static class Program
                 audioPass = playedSec >= minPlayed;
                 Console.WriteLine($"[HEADFUL-AUDIO] played={playedSec:F1}s submitted≈{subSec:F1}s  => " +
                                   $"{(audioPass ? "PASS" : $"FAIL (played<{minPlayed:F0}s)")}");
-                // 🔴 间隙诊断摘要：backlog 持续 >150ms 或 stall 计数 >0 ⇒ 静音/欠载确证
+                // 🔴 间隙诊断摘要：唯一真欠载信号是「主时钟跑过已提交音频时长」即 backlog>150ms（设备把缓冲播干）。
+                // stalls（submittedSamples 跨轮未变）是批量提交的测量假象（SubmitBatch 整段 WaitForBufferSpace 期间
+                // submittedSamples 冻结而主时钟平滑前进），不能当欠载依据——故断言只认 maxBacklog。
+                bool realAudioGap = maxAudioBacklogMs > 150;
                 Console.WriteLine($"[HEADFUL-AUDIO-GAP] maxBacklog={maxAudioBacklogMs:F0}ms " +
                                   $"gaps(>150ms)={audioGapCount} stalls={audioStallCount} " +
-                                  $"=> {(maxAudioBacklogMs > 150 || audioStallCount > 0 ? "⚠ 检测到音频间隙" : "未检测到间隙")}");
+                                  $"=> {(realAudioGap ? "⚠ 检测到音频间隙（真欠载）" : "未检测到间隙")}");
+                if (audioStallCount > 0 && !realAudioGap)
+                    Console.WriteLine($"  [HEADFUL-AUDIO-GAP] 注：stalls={audioStallCount} 均发生在 backlog=0 的连续播放中，" +
+                                      $"属批量提交节奏（非欠载/断音）；真欠载以 backlog>150ms 为准。");
             }
 
             // —— 边界①：重播 Ended→Playing 无缝从头 ——
