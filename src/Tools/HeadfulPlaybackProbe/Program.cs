@@ -92,12 +92,35 @@ internal static class Program
         bool audioWarmup = HasFlag(args, "--audio-warmup");
         bool fullPlayback = HasFlag(args, "--full");
         // 🔴 边界①重播验证：仅 --full 默认启用（必须先到达 Ended 才能重播），--no-replay 可关闭。
-        bool replayTest = fullPlayback && !HasFlag(args, "--no-replay");
+        // 🔴 临时禁用：同步诊断期间注释掉第二次自动重播（2026-08-04）。
+        //    恢复重播验证时改回：fullPlayback && !HasFlag(args, "--no-replay")
+        bool replayTest = false;
         Console.WriteLine($"[HEADFUL-WASAPI-MODE] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup} Full={fullPlayback} Replay={replayTest}");
         // 🔴 音频相位诊断：--full 时打开 LINGFAN_AUDIO_DIAG，让 AudioPipeline 打点 ReadAsync/Decode/解码间隙，
         // 定位 headful 断音根因（纯诊断、零架构风险）。须在构建播放器前设置（静态字段只读一次）。
         if (fullPlayback)
+        {
             Environment.SetEnvironmentVariable("LINGFAN_AUDIO_DIAG", "1");
+            // 🔴 EOS 时序诊断：让 Video/AudioPipeline 在「自然完成瞬间」打印主时钟位置，
+            // 用于抓偶发「提前结束」根因（完成是管线驱动、非时钟驱动；若 masterTime 明显 < Duration，
+            // 说明包队列/帧队列提前耗尽 → 上游 demux/MFT 早 EOF 或竞态）。
+            Environment.SetEnvironmentVariable("LINGFAN_EOS_DIAG", "1");
+            // 🔴 A/V 同步诊断：让 VideoPipeline 在每次呈现瞬间打印 videoPTS − audioClock，
+            // 定量判断「音画偏差量级 / 是否随播放增长 / 是否仅起始段」——用于定位音画不同步根因。
+            // 纯诊断、零架构风险（仅 full 跑自动开，避免污染最小逻辑回归）。
+            Environment.SetEnvironmentVariable("LINGFAN_SYNC_DIAG", "1");
+            // 🔴 音频播放时钟（根治路径）：必须打开，否则 MediaPlayer.cs:253 的 SetMasterClockProvider
+            // 不执行、主时钟回落到旧的 OnAudioFrameSubmitted→SyncTo(frame.Timestamp)，我连改三轮的
+            // GetPlaybackPositionDirect 校准全成死代码、SYNC 日志测的也不是它。该开关默认关
+            // （ClockTuning.UseAudioPlaybackClock=false），交接文档标注「建议常开」。
+            Environment.SetEnvironmentVariable("LINGFAN_CLOCK_AUDIO_POS", "1");
+        }
+        // 🔴 音画同步微调（2026-08-04）：--sync-lead=NN 把主时钟前移 N 毫秒以吸收视频呈现恒定领先
+        // （与 VLC 对齐用，默认 0=不补偿）。注入 LINGFAN_SYNC_LEAD_MS 供 WasapiRenderLoop 每次 Start 读取。
+        // 须在构建播放器前设置（静态字段只读一次）。
+        double syncLeadMs = ParseDouble(args, "--sync-lead", 0);
+        if (syncLeadMs != 0)
+            Environment.SetEnvironmentVariable("LINGFAN_SYNC_LEAD_MS", syncLeadMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
         int saveFrames = (int)ParseDouble(args, "--save-frames", 0);
         string saveDir = ParseOption(args, "--save-dir")
             ?? Path.Combine(Directory.GetCurrentDirectory(), "TestInfo", "Diagnostics", "HeadfulPlaybackProbe");
@@ -356,7 +379,8 @@ internal static class Program
                 }
             }
 
-            Console.WriteLine($"  [HEADFUL] 播放结束 state={player.State} pos={player.Position:g}");
+            Console.WriteLine($"  [HEADFUL] 播放结束 state={player.State} pos={player.Position:g} " +
+                              $"Duration={player.Duration:g} present={presentCount} dropped={player.VideoDroppedFrames}");
 
             var playedSec = (player.Position - startPos).TotalSeconds;
 
@@ -390,6 +414,8 @@ internal static class Program
             //   (b) 时钟归零、位置回绕到 0（MediaPlayer.PlayAsync 在 Ended 态走 SeekAsync(0)+_clock.Reset/Start 分支）；
             //   (c) 双管线从排干态(_isRunning==false)重启，present 从 0 重新开始累计。
             // 仅 --full 默认启用（需先到达 Ended），可用 --no-replay 关闭。
+            /* [TEMP-DISABLED 2026-08-04] 同步诊断期间注释掉第二次自动重播——
+               恢复时删除本注释块，并把上面 replayTest 改回 fullPlayback && !HasFlag(args, "--no-replay")
             if (replayTest)
             {
                 Console.WriteLine();
@@ -426,10 +452,10 @@ internal static class Program
                 bool replayPresentOk = !doVideo || replayPresentDelta >= 900;
                 replayPass = replayStateOk && replayPresentOk;
                 Console.WriteLine($"  [HEADFUL-REPLAY] 二次播放结束 state={player.State} " +
-                                  $"present 增量={replayPresentDelta}");
+                                  $"present 增量={replayPresentDelta} Duration={player.Duration:g}");
                 Console.WriteLine($"  [HEADFUL-REPLAY] => {(replayPass ? "PASS" : "FAIL")} " +
                                   $"(state重启={replayStateOk}, 二次呈现≈{replayPresentDelta}{(doVideo ? "" : "[无视频跳过计数]")})");
-            }
+            } */
 
             await player.StopAsync(CancellationToken.None);
         }

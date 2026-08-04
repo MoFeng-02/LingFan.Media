@@ -44,11 +44,22 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     /// <remarks>可通过 <c>LINGFAN_VIDEO_AHEAD</c> 覆盖（1~30，默认 6 ≈ 250ms@24fps 余量）。</remarks>
     private static readonly int TargetDepth = ParseTargetDepth();
+    // 🔴 EOS 时序诊断（LINGFAN_EOS_DIAG=1）：记录自然完成瞬间的「主时钟位置」，定位偶发提前结束根因。
+    // 纯诊断、零架构风险：仅 env 置 1 时开启；生产路径恒为 false，不改变任何控制流/时序。
+    private static readonly bool EosDiagEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("LINGFAN_EOS_DIAG"), "1", StringComparison.Ordinal);
+    // 🔴 A/V 同步诊断（LINGFAN_SYNC_DIAG=1）：呈现瞬间记录「视频帧 PTS − 音频主时钟」= 用户实际感知的音画偏差。
+    // delta>0 ⇒ 视频领先音频；delta<0 ⇒ 视频落后；全程单调增长 ⇒ 时钟速率漂移。纯诊断、零架构风险。
+    private static readonly bool SyncDiagEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("LINGFAN_SYNC_DIAG"), "1", StringComparison.Ordinal);
     private volatile bool _isRunning;
     private volatile bool _isPaused;
     private volatile bool _pauseAcknowledged;
     private TaskCompletionSource<bool>? _pauseAckTcs;
     private long _droppedFrames;
+    // A/V 同步诊断节流字段（仅 LINGFAN_SYNC_DIAG=1 时读取，生产路径恒 0 不影响任何逻辑）。
+    private long _lastSyncDiagTicks;
+    private int _presentCount;
 
     /// <summary>
     /// 解码锁：确保 DecodeAsync 与 Reset 不会并发执行。
@@ -158,6 +169,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         // 🔴 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
         // 否则残留 true 会在后续 Stop/Dispose 的 finally 中误触发 Completed → 错误发出 Ended。
         _completedNaturally = false;
+
+        // A/V 同步诊断：每轮开播重置计数，重新抓取起始帧偏移（重播/恢复也重置）。
+        _presentCount = 0;
+        _lastSyncDiagTicks = 0;
 
         // 重新创建 CTS（如果旧的已取消）
         if (_cts.IsCancellationRequested)
@@ -362,6 +377,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     if (_frameQueue.IsCompleted || _decodeDone)
                     {
                         // 流末自然耗尽（非取消）：标记后退出，finally 中触发 Completed 事件。
+                        if (EosDiagEnabled)
+                            _logger.LogInformation(
+                                "[VIDEO-EOS] 自然完成 masterTime={Master:g} 帧队列余量={Cnt} decodeDone={DecodeDone}",
+                                _synchronizer.GetCurrentMasterTime(), _frameQueue.Count, _decodeDone);
                         _completedNaturally = true;
                         break;
                     }
@@ -375,13 +394,17 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 var headTimestamp = head.Timestamp;
                 var action = _synchronizer.CheckVideoFrame(head);
 
-                // 🔴 EOS（流末已到）覆盖：强制呈现剩余帧，标准 play-to-end 行为。
-                // 否则末段帧因落后主时钟（音频设备游标已冲到结尾）>DropThreshold 被判 Drop，
-                // 导致"结尾定格在倒数第 N 帧而非文件真实末帧"的残余尾冻（#9 收口，数据坐实：
-                // droppedFrames=10 + present=947 = 957 文件总帧，即末 10 帧被 Drop）。
-                // 流尾已到后队列不再补帧，逐帧顺序呈现末帧自然常驻屏直到音频结束，完全正确。
+                // 🔴 EOS（流末已到）覆盖（2026-08-04 修正）：原实现在 eos 下把 Wait/Drop 一律改为 Present，
+                // 导致末段缓冲超前的帧（TargetDepth≈6 帧 + DRAIN 尾 GOP）被瞬间整批呈现 →
+                // "帧直接推进 / 画面突然变快"（用户实测痛点：末秒帧爆发式推进后骤停）。
+                // 修正策略（仍保末帧绝不丢，但消除爆发）：
+                //   · eos && Drop（音频时钟已越界）→ 改 Present（绝不丢末帧）；
+                //   · eos && Wait（末段缓冲超前的帧）→ 保持 Wait，按各自 PTS 平滑收口；
+                //   · eos && Present → 保持 Present。
+                // 尾冻已由 DecodeLoop 的 EOS DRAIN 根治（末段 GOP 已入队），此处不再依赖强制呈现；
+                // 正常播放末段帧按各自节奏呈现，爆发消失，末帧仍常驻屏直到音频结束。
                 bool eos = _frameQueue.IsCompleted || _decodeDone;
-                if (eos && action != SyncAction.Present)
+                if (eos && action == SyncAction.Drop)
                     action = SyncAction.Present;
 
                 if (action == SyncAction.Wait)
@@ -595,6 +618,27 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 _logger.LogInformation("[PACING] {Report}", report);
                 _logger.LogInformation("[CLOCK] {Snapshot}", PacingDiagnostics.Clock.Snapshot());
             }
+        }
+
+        // 🔴 A/V 同步诊断（LINGFAN_SYNC_DIAG=1）：**独立于 PacingDiagnostics**，呈现瞬间记录
+        // 「视频帧 PTS − 音频主时钟」= 用户实际感知到的音画偏差。delta>0 ⇒ 视频领先音频（画面先到）；
+        // delta<0 ⇒ 视频落后音频（声音先到）。前 8 帧全采以暴露起始偏移；之后每 500ms 采样一次，
+        // 观察是否单调增长（时钟速率漂移）或长期恒定≈某值（固定偏移 = 视频/音频时间线起点不齐，
+        // 典型为 MF/MP4 edit list 使视频流 PTS 起点与音频时钟原点错开）。
+        // 纯观测、零架构风险：SyncDiagEnabled 恒 false 时整块跳过，且不依赖 PacingDiagnostics.Enabled。
+        if (SyncDiagEnabled)
+        {
+            var masterNow = _synchronizer.GetCurrentMasterTime();
+            double syncDeltaMs = (frame.Timestamp - masterNow).TotalMilliseconds;
+            long nowTicks = DateTime.UtcNow.Ticks;
+            if (_presentCount < 8 || nowTicks - _lastSyncDiagTicks > 5_000_000L) // 前 8 帧 + 每 500ms
+            {
+                _logger.LogInformation(
+                    "[SYNC] present videoPTS={V:g} audioClock={A:g} delta={D,7:F1}ms queue={Q} pidx={P}",
+                    frame.Timestamp, masterNow, syncDeltaMs, _frameQueue.Count, _presentCount);
+                _lastSyncDiagTicks = nowTicks;
+            }
+            _presentCount++;
         }
 
         try

@@ -332,6 +332,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private static readonly bool AudioDiagEnabled =
         string.Equals(Environment.GetEnvironmentVariable("LINGFAN_AUDIO_DIAG"), "1", StringComparison.Ordinal);
 
+    // 🔴 EOS 时序诊断（LINGFAN_EOS_DIAG=1）：记录自然完成瞬间的「主时钟位置」，定位偶发提前结束根因。
+    private static readonly bool EosDiagEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("LINGFAN_EOS_DIAG"), "1", StringComparison.Ordinal);
+
     private async Task PipelineLoop()
     {
         try
@@ -405,6 +409,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 catch (ChannelClosedException)
                 {
                     // 流结束：所有采样已提交，标记自然完成并退出，finally 中触发 Completed 事件。
+                    if (EosDiagEnabled)
+                        _logger.LogInformation("[AUDIO-EOS] 自然完成 masterTime={Master:g}",
+                            _synchronizer.GetCurrentMasterTime());
                     _sampleQueue.Complete();
                     _completedNaturally = true;
                     break;

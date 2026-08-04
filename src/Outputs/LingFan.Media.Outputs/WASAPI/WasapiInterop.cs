@@ -248,6 +248,9 @@ internal delegate int IAudioClient_Initialize(IntPtr self, int shareMode, int st
 internal delegate int IAudioClient_GetBufferSize(IntPtr self, out uint pNumBufferFrames);
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IAudioClient_GetStreamLatency(IntPtr self, out long pLatency);
+
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClient_GetCurrentPadding(IntPtr self, out uint pNumPaddingFrames);
 
 /// <summary>

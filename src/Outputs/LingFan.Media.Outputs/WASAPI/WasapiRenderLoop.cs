@@ -59,6 +59,7 @@ internal sealed class WasapiRenderLoop
     private IMMDevice_Activate? _deviceActivate;
     private IAudioClient_Initialize? _audioClientInitialize;
     private IAudioClient_GetBufferSize? _audioClientGetBufferSize;
+    private IAudioClient_GetStreamLatency? _audioClientGetStreamLatency;
     private IAudioClient_GetCurrentPadding? _audioClientGetCurrentPadding;
     private IAudioClient_IsFormatSupported? _audioClientIsFormatSupported;
     private IAudioClient_GetMixFormat? _audioClientGetMixFormat;
@@ -77,6 +78,20 @@ internal sealed class WasapiRenderLoop
     private bool _initialized;
     private bool _disposed;
     private int _bufferSize;      // WASAPI 缓冲区大小（帧数）
+    private double _streamLatencySec; // IAudioClient.GetStreamLatency() 返回的「提交→可闻」延迟（秒），用于主时钟校准
+    // 🔴 音画同步（2026-08-04 实测校准，数据坐实前版 anchor/padding 修复为 no-op）：
+    // 共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」（Start 后瞬间预取 ~0.5s
+    // 进系统混音缓冲），该领先对 GetCurrentPadding（仅本 IAudioClient 设备缓冲，≤bufferSize≈100ms）
+    // 与 GetStreamLatency（本机返回 0）均不可见，故直接减锚点/填充/延迟整段无效。
+    // 改为以墙钟为锚：起播 >100ms 后锁定 bias = rawSec - wallElapsed（引擎领先+常偏），
+    // 主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。三者跨线程（渲染线程写、时钟线程读）均用 Volatile 访问。
+    private System.Diagnostics.Stopwatch? _startStopwatch;
+    private double _calibratedBias;
+    private bool _biasLatched;
+    // 🔴 音画同步微调（2026-08-04）：可闻位置补偿（秒）。校准后稳态 delta≈+25ms（视频呈现相对墙钟
+    // 恒定领先），此值把主时钟再前移 N 毫秒使 videoPTS−audioClock→0。默认 0（不破坏现有行为），
+    // 由 LINGFAN_SYNC_LEAD_MS 环境变量注入（CaptureStartAnchor 每次 Start 重读，支持重播刷新）。零架构风险。
+    private double _syncLeadSec;
     private int _sampleRate;
     private int _channels;
     private float _volume = 1.0f;
@@ -271,6 +286,12 @@ internal sealed class WasapiRenderLoop
             int hr = _audioClientStart!(_audioClientPtr);
             if (hr < 0)
                 _logger.LogWarning("IAudioClient.Start 失败：HRESULT=0x{HR:X8}", hr);
+
+            // 🔴 音画同步修复（2026-08-04）：捕获启动锚点。Start 后立刻读一次设备游标作为本流
+            // 「已播放量」的零点，主时钟后续用 (devicePosition - 锚点) 得到本流真实播放秒数，
+            // 消除共享模式 devicePosition 启动即 ~0.5s 的任意累计偏移。重播时 Stop→Reset→Start
+            // 会重新调用本方法，锚点随之刷新（Reset 后游标归零，新锚点≈旧锚点，差值连续）。
+            CaptureStartAnchor();
         });
     }
 
@@ -349,7 +370,53 @@ internal sealed class WasapiRenderLoop
         long qpcNow = System.Diagnostics.Stopwatch.GetTimestamp(); // 100ns ticks，与 qpcPosition 同单位
         double posSec = (double)devicePosition / freq;
         double driftSec = (qpcNow - (long)qpcPosition) / 10_000_000.0; // QPC 单位 = 100ns
-        return TimeSpan.FromSeconds(posSec + driftSec);
+        double rawSec = posSec + driftSec;
+
+        double pendingSec = _sampleRate > 0 ? GetCurrentPaddingFrames() / (double)_sampleRate : 0.0;
+
+        // 🔴 音画同步修复（2026-08-04 实测校准，数据坐实前版 anchor/padding 修复为 no-op）：
+        // 共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」（Start 后瞬间预取
+        // ~0.5s 进系统混音缓冲）。该领先对 GetCurrentPadding（仅本 IAudioClient 设备缓冲，≤bufferSize≈100ms）
+        // 与 GetStreamLatency（本机返回 0）均不可见，故前版减 anchor(0)/padding(~0)/latency(0) 整段无效
+        // （log 证 start delta 仍为 -182ms、steady +45ms，与修复前完全一致）。
+        // 现以墙钟为锚：引擎领先稳定后（起播 >100ms）锁定 bias = rawSec - wallElapsed = 引擎领先+常偏，
+        // 主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。瞬态期（≤100ms）devicePosition≈墙钟，
+        // 直接以墙钟为准，避免相位跳变。零架构风险、纯本地可闻校准。
+        double wallElapsed = _startStopwatch?.Elapsed.TotalSeconds ?? 0.0;
+        const double CalibWindowSec = 0.1;
+        if (wallElapsed < CalibWindowSec)
+        {
+            double a0 = wallElapsed - pendingSec - _streamLatencySec + _syncLeadSec;
+            return TimeSpan.FromSeconds(a0 > 0 ? a0 : 0.0);
+        }
+        double bias = rawSec - wallElapsed;
+        if (!Volatile.Read(ref _biasLatched))
+        {
+            Volatile.Write(ref _calibratedBias, bias);
+            Volatile.Write(ref _biasLatched, true);
+            _logger.LogInformation("[WASAPI-CALIB] 锁定引擎领先偏移={BiasMs:F1}ms（主时钟将减此值对齐可闻位置）",
+                bias * 1000.0);
+        }
+        double audibleSec = rawSec - Volatile.Read(ref _calibratedBias) - pendingSec - _streamLatencySec + _syncLeadSec;
+        return TimeSpan.FromSeconds(audibleSec > 0 ? audibleSec : 0.0);
+    }
+
+    /// <summary>
+    /// 记录启动墙钟基准：在 <c>IAudioClient.Start()</c> 之后调用（渲染线程内，RunControl 同步执行）。
+    /// 用于起播后锁定音频引擎「抓取领先」偏移（<see cref="GetPlaybackPositionDirect"/> 的 bias 校准）。
+    /// 重播（Ended→Playing）时 Stop→Reset→Start 会重新调用本方法，基准与锁定标志随之刷新。
+    /// </summary>
+    private void CaptureStartAnchor()
+    {
+        // 记录 Start 时刻墙钟基准（用于起播后锁定引擎领先偏移）
+        _startStopwatch?.Stop();
+        _startStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        Volatile.Write(ref _biasLatched, false);
+        Volatile.Write(ref _calibratedBias, 0.0);
+        // 🔴 读同步领先补偿（毫秒，默认 0）：把主时钟再前移该值以吸收视频呈现相对墙钟的恒定领先。
+        string? leadEnv = Environment.GetEnvironmentVariable("LINGFAN_SYNC_LEAD_MS");
+        _syncLeadSec = int.TryParse(leadEnv, out int leadMs) ? leadMs / 1000.0 : 0.0;
+        _logger.LogInformation("[WASAPI-ANCHOR] 启动墙钟基准已记录（用于校准引擎领先偏移）；同步领先补偿={LeadMs:F0}ms", _syncLeadSec * 1000.0);
     }
 
     /// <inheritdoc cref="WasapiOutput.Latency"/>
@@ -670,7 +737,10 @@ internal sealed class WasapiRenderLoop
             //    实际调到 IsFormatSupported，x64 下垃圾 pFormat 被解引用 → 原生 AV 0xC0000005。
             _audioClientInitialize = ComVTable.Get<IAudioClient_Initialize>(pAudioClient, 0);
             _audioClientGetBufferSize = ComVTable.Get<IAudioClient_GetBufferSize>(pAudioClient, 1);
-            // 跳过未使用的 GetStreamLatency（相对 slot 2）
+            // 🔴 2026-08-04 音画同步修复：补上被刻意跳过的 slot 2 GetStreamLatency（不扰动后续槽位，
+            // 因为 GetCurrentPadding 仍在 slot 3，相对索引未变）。用于把主时钟从「设备渲染游标」校准到
+            // 「真实可闻位置」——之前不减数百 ms 延迟导致视频比听到的声音整体提前 ~0.5s。
+            _audioClientGetStreamLatency = ComVTable.Get<IAudioClient_GetStreamLatency>(pAudioClient, 2);
             _audioClientGetCurrentPadding = ComVTable.Get<IAudioClient_GetCurrentPadding>(pAudioClient, 3);
             _audioClientIsFormatSupported = ComVTable.Get<IAudioClient_IsFormatSupported>(pAudioClient, 4);
             _audioClientGetMixFormat = ComVTable.Get<IAudioClient_GetMixFormat>(pAudioClient, 5);
@@ -795,6 +865,25 @@ internal sealed class WasapiRenderLoop
             hr = _audioClientGetBufferSize(_audioClientPtr, out uint bufferFrames);
             Marshal.ThrowExceptionForHR(hr);
             _bufferSize = (int)bufferFrames;
+
+            // 5.5 🔴 音画同步修复（2026-08-04）：获取「提交→可闻」流延迟，用于主时钟校准。
+            // GetStreamLatency 必须在 Initialize 成功后调用（slot 2 已接）。返回值单位 100ns。
+            // 失败不影响播放，仅退回 0（主时钟不校准，保持旧行为）。
+            _streamLatencySec = 0.0;
+            if (_audioClientGetStreamLatency is not null)
+            {
+                hr = _audioClientGetStreamLatency(_audioClientPtr, out long latency100ns);
+                if (hr >= 0)
+                {
+                    _streamLatencySec = latency100ns / 10_000_000.0;
+                    _logger.LogInformation("[WASAPI-LATENCY] GetStreamLatency={LatencyMs:F1}ms（主时钟将减去此值以对齐可闻位置）",
+                        _streamLatencySec * 1000.0);
+                }
+                else
+                {
+                    _logger.LogWarning("IAudioClient.GetStreamLatency 失败：HRESULT=0x{HR:X8}（主时钟不校准）", hr);
+                }
+            }
 
             // 6. 获取 IAudioRenderClient
             var iidRender = WasapiInterop.IID_IAudioRenderClient;
@@ -1343,6 +1432,20 @@ internal sealed class WasapiRenderLoop
     /// <summary>
     /// 等待 WASAPI 缓冲区有足够空间（COM 背压）。事件驱动模式使用 EventWaitHandle.WaitOne 替代 Sleep 轮询。
     /// </summary>
+    /// <summary>
+    /// 读取设备缓冲里「尚未渲染到 DAC」的帧数（= 真实可闻延迟的帧表示）。
+    /// 主时钟据此减去 pending 帧对应的秒数，得到用户此刻实际听到的位置。
+    /// </summary>
+    private uint GetCurrentPaddingFrames()
+    {
+        var clientPtr = Volatile.Read(ref _audioClientPtr);
+        var getPadding = Volatile.Read(ref _audioClientGetCurrentPadding);
+        if (clientPtr == IntPtr.Zero || getPadding is null)
+            return 0;
+        int hr = getPadding(clientPtr, out uint padding);
+        return hr < 0 ? 0 : padding;
+    }
+
     private void WaitForBufferSpace(uint requiredFrames, CancellationToken ct = default)
     {
         if (_audioClientPtr == IntPtr.Zero) return;
