@@ -251,12 +251,23 @@ internal sealed class WasapiRenderLoop
     }
 
     /// <inheritdoc cref="WasapiOutput.Resume"/>
+    /// <remarks>
+    /// 🔴 重播（Ended→Playing）健壮性：自然 Ended 时客户端仍 Running（尾音由设备自然放完，不主动 Stop），
+    /// 重播若直接 Start 会得 <c>AUDCLNT_E_NOT_STOPPED</c>(0x88890005)。故先 Stop（幂等，已停止亦 S_OK）
+    /// 再 Reset（丢弃残留未播缓冲，避免重播开头混入上一次尾音）最后 Start，形成确定的「停止→清空→启动」序列。
+    /// 首次播放（从未 Start）与恢复暂停（Pause 已 Stop）场景下 Stop 均为幂等空操作，无副作用。
+    /// </remarks>
     public void Resume()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _audioClientPtr == IntPtr.Zero) return;
         RunControl(() =>
         {
+            // 1. 停止（幂等，忽略返回：Stop 在任意合法态均安全）
+            _audioClientStop!(_audioClientPtr);
+            // 2. 清空残留缓冲（不改动客户端 Running/Stopped 状态，仅丢弃未播样本）
+            _audioClientReset!(_audioClientPtr);
+            // 3. 启动
             int hr = _audioClientStart!(_audioClientPtr);
             if (hr < 0)
                 _logger.LogWarning("IAudioClient.Start 失败：HRESULT=0x{HR:X8}", hr);

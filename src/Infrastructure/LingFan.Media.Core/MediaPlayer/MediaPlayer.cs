@@ -45,6 +45,9 @@ public sealed class MediaPlayer : IMediaPlayer
     private SubtitleProcessor? _subtitleProcessor;
     private MediaPipelineHost? _pipelineHost;
 
+    /// <summary>累计视频丢帧数（诊断/可观测性，只读转发到管线宿主）。</summary>
+    public long VideoDroppedFrames => _pipelineHost?.VideoDroppedFrames ?? 0;
+
     /// <summary>高精度系统定时器是否已开启（配对 timeBeginPeriod / timeEndPeriod，避免泄漏）。</summary>
     private bool _hpTimerActive;
     private readonly PlaybackController _controller = new();
@@ -419,12 +422,28 @@ public sealed class MediaPlayer : IMediaPlayer
     }
 
     /// <inheritdoc />
-    public Task PlayAsync()
+    public async Task PlayAsync()
     {
         try
         {
-            _clock?.Start();
-            _pipelineHost?.Start();
+            if (_controller.CurrentState == MediaState.Ended)
+            {
+                // 🔴 重播（Ended → Playing 无缝从头）：流已自然排干，解码/呈现双管线循环已退出
+                // （PipelineLoop/DecodeLoop break，_isRunning=false）。重播需：
+                //   1) SeekAsync(0) 回绕 demuxer 到起点、重填缓冲通道、重置解码器/时钟基准；
+                //   2) 时钟先归零并启动（用归零后的基准做同步判定，避免首帧被判「过去太久」被 Drop）；
+                //   3) _pipelineHost.Start() 因 _isRunning==false 会重建 CTS 并重启双管线循环
+                //      （VideoPipeline/AudioPipeline 的 Start 已支持从排干态重启）。
+                await SeekAsync(TimeSpan.Zero);
+                _clock?.Reset();
+                _clock?.Start();
+                _pipelineHost?.Start();
+            }
+            else
+            {
+                _clock?.Start();
+                _pipelineHost?.Start();
+            }
             EnsureHighPrecisionTimer();
             TransitionState(MediaState.Playing);
         }
@@ -434,9 +453,6 @@ public sealed class MediaPlayer : IMediaPlayer
             ErrorOccurred?.Invoke(this, new MediaErrorEventArgs(
                 MediaErrorCode.Unknown, "播放失败", ex));
         }
-
-        // 纯内存操作，返回 Task.CompletedTask（接口契约层）
-        return Task.CompletedTask;
     }
 
     /// <inheritdoc />

@@ -89,6 +89,9 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <remarks>事件参数为契约层类型 <see cref="VideoFrame"/>，零外部引用合规。</remarks>
     event Action<VideoFrame>? VideoFrameAvailable;
 
+    /// <summary>累计视频丢帧数（诊断/可观测性，只读）。正常播放到结尾时若此值 ≈ 文件视频帧数 − 实际呈现帧数，说明末段尾帧被同步器判 Drop 而非呈现。</summary>
+    long VideoDroppedFrames { get; }
+
     // IDisposable.Dispose() — 同步快速释放兜底
     // IAsyncDisposable.DisposeAsync() — 异步完整释放（推荐）
 }

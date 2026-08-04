@@ -469,7 +469,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
             Height = (uint)height,
             // 全 mip 链：配合 _sampler 的 MinMagMipLinear + 着色器 Sample 自动 LOD，
             // 硬件按屏幕空间导数选 LOD 做三线性过滤，消除 >2× 非整数缩小的摩尔纹
-            // （见 D3D11Renderer [D3D11-SCALE] 警告：1906x1080→640x480 x=2.98 纯双线性必欠采样）。
+            // （见 D3D11Renderer [D3D11-SCALE]：1906x1080→640x480 x=2.98 多倍缩小，mipmap 三线性 LOD 已激活抑制摩尔纹）。
             MipLevels = 0u,
             ArraySize = 1u,
             Format = format,

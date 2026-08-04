@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -46,6 +47,8 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private readonly SemaphoreSlim _decodeLock = new(1, 1);
     private volatile bool _pendingDecoderReset;
     private bool _disposed;
+    // 诊断用：上次 SubmitBatch 结束的时间戳（Stopwatch ticks），用于计算「解码阶段间隙」。
+    private long _lastSubmitEndTs;
 
     /// <summary>
     /// 初始化 <see cref="AudioPipeline"/> 的新实例。
@@ -137,6 +140,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
         _isRunning = true;
         _isPaused = false;
+        // 🔴 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
+        // 否则残留 true 会在后续 Stop/Dispose 的 finally 中误触发 Completed → 错误发出 Ended。
+        _completedNaturally = false;
 
         if (_cts.IsCancellationRequested)
         {
@@ -208,7 +214,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             {
                 try
                 {
-                    _sampleQueue.Clear(_framePool);
+                    _sampleQueue.Reset(_framePool);
                     _decoder.Reset();
                     _effectReset?.Invoke(); // V2-08.1: 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
                     _output.Flush();
@@ -221,7 +227,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             else
             {
                 _logger.LogError("音频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
-                _sampleQueue.Clear(_framePool);
+                _sampleQueue.Reset(_framePool);
                 _output.Flush();
                 _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
                 _pendingEffectReset = true;    // 同上：有状态效果延迟重置，避免与 Process 并发
@@ -230,7 +236,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         else
         {
             // 管线未运行，无需锁
-            _sampleQueue.Clear(_framePool);
+            _sampleQueue.Reset(_framePool);
             _decoder.Reset();
             _output.Flush();
         }
@@ -278,7 +284,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             {
                 try
                 {
-                    _sampleQueue.Clear(_framePool);
+                    _sampleQueue.Reset(_framePool);
                     _decoder.Reset();
                     _effectReset?.Invoke(); // V2-08.1: 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
                     _output.Flush();
@@ -291,7 +297,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             else
             {
                 _logger.LogError("音频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
-                _sampleQueue.Clear(_framePool);
+                _sampleQueue.Reset(_framePool);
                 _output.Flush();
                 _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
                 _pendingEffectReset = true;    // 同上：有状态效果延迟重置，避免与 Process 并发
@@ -300,7 +306,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         else
         {
             // 管线未运行，无需锁
-            _sampleQueue.Clear(_framePool);
+            _sampleQueue.Reset(_framePool);
             _decoder.Reset();
             _output.Flush();
         }
@@ -313,6 +319,11 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
     // 前瞻窗口（预解码帧数）：让提交阶段能成批提交，折叠逐帧 STA 跨线程往返的固定开销（修复听感卡顿/掉速）。
     private const int PrerollFrames = 16;
+
+    // 🔴 诊断（LINGFAN_AUDIO_DIAG=1）：打点音频循环各相位时长，定位 headful 断音根因。
+    // 纯诊断、零架构风险：仅在 env 置 1 时开启，生产路径恒为 false，不改变任何控制流/时序。
+    private static readonly bool AudioDiagEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("LINGFAN_AUDIO_DIAG"), "1", StringComparison.Ordinal);
 
     private async Task PipelineLoop()
     {
@@ -343,17 +354,46 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     var batch = new List<AudioFrame>(_sampleQueue.Count);
                     while (_sampleQueue.TryDequeue(out var f) && f != null)
                         batch.Add(f);
-                    SubmitBatch(batch, _cts.Token);
+                    if (AudioDiagEnabled)
+                    {
+                        var subStart = Stopwatch.GetTimestamp();
+                        SubmitBatch(batch, _cts.Token);
+                        _lastSubmitEndTs = Stopwatch.GetTimestamp();
+                        var subMs = Stopwatch.GetElapsedTime(subStart).TotalMilliseconds;
+                        if (subMs > 80)
+                            _logger.LogWarning("[AUDIO-DIAG] SubmitBatch 阻塞 {Ms}ms（WaitForBufferSpace 设备节奏，属正常）", subMs);
+                    }
+                    else
+                    {
+                        SubmitBatch(batch, _cts.Token);
+                        _lastSubmitEndTs = Stopwatch.GetTimestamp();
+                    }
                     continue;
                 }
 
                 // 2. 解码阶段：队列空，读包解码；并预解码若干包填满前瞻窗口，
                 //    使提交阶段能成批提交（把解码与提交解耦，避免逐帧阻塞）。
+                // 解码阶段入口：记录自上次提交以来的总间隙
+                var phaseStart = Stopwatch.GetTimestamp();
+
                 MediaPacket? packet;
                 try
                 {
                     if (!_packetQueue.Reader.TryRead(out packet))
-                        packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
+                    {
+                        if (AudioDiagEnabled)
+                        {
+                            var readStart = Stopwatch.GetTimestamp();
+                            packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
+                            var readMs = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds;
+                            if (readMs > 80)
+                                _logger.LogWarning("[AUDIO-DIAG] ReadAsync 阻塞 {Ms}ms（上游包未及时到达 → 提交中断 → 静音）", readMs);
+                        }
+                        else
+                        {
+                            packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
+                        }
+                    }
                 }
                 catch (ChannelClosedException)
                 {
@@ -363,12 +403,43 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     break;
                 }
 
-                await DecodeAndEnqueueAsync(packet);
+                if (AudioDiagEnabled)
+                {
+                    var decStart = Stopwatch.GetTimestamp();
+                    await DecodeAndEnqueueAsync(packet);
+                    var decMs = Stopwatch.GetElapsedTime(decStart).TotalMilliseconds;
+                    if (decMs > 80)
+                        _logger.LogWarning("[AUDIO-DIAG] Decode+Enqueue 阻塞 {Ms}ms（解码慢）", decMs);
+                }
+                else
+                {
+                    await DecodeAndEnqueueAsync(packet);
+                }
 
                 // 前瞻：采样队列未填满且仍有包立即可用时，连续解码（不 await），把解码与提交解耦
                 while (_sampleQueue.Count < PrerollFrames && _packetQueue.Reader.TryRead(out var next))
                 {
-                    await DecodeAndEnqueueAsync(next);
+                    if (AudioDiagEnabled)
+                    {
+                        var pdStart = Stopwatch.GetTimestamp();
+                        await DecodeAndEnqueueAsync(next);
+                        var pdMs = Stopwatch.GetElapsedTime(pdStart).TotalMilliseconds;
+                        if (pdMs > 80)
+                            _logger.LogWarning("[AUDIO-DIAG] 前瞻 Decode 阻塞 {Ms}ms（解码慢）", pdMs);
+                    }
+                    else
+                    {
+                        await DecodeAndEnqueueAsync(next);
+                    }
+                }
+
+                // 解码阶段总间隙诊断（线程池续体延迟：读/解码均快但整段仍慢）
+                if (AudioDiagEnabled && _lastSubmitEndTs != 0)
+                {
+                    var gapMs = Stopwatch.GetElapsedTime(_lastSubmitEndTs).TotalMilliseconds;
+                    var totalPhaseMs = Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds;
+                    if (gapMs > 120 && totalPhaseMs < gapMs - 20)
+                        _logger.LogWarning("[AUDIO-DIAG] 解码阶段间隙 {Gap}ms 但读/解码均快 → 疑似线程池续体延迟", gapMs);
                 }
             }
         }

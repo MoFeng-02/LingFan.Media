@@ -123,12 +123,15 @@ public sealed class PlaybackController
             (MediaState.Playing, MediaState.Stopped) => true,
             (MediaState.Playing, MediaState.Ended) => true,
 
-            // Paused → Playing / Stopped
+            // Paused → Playing / Stopped / Ended
             (MediaState.Paused, MediaState.Playing) => true,
             (MediaState.Paused, MediaState.Stopped) => true,
+            // 末尾恰好暂停时流已排干，自然完成仍应登记为 Ended（不被卡在 Paused）
+            (MediaState.Paused, MediaState.Ended) => true,
 
-            // Ended → Playing (重新播放)
+            // Ended → Playing (重新播放) / Stopped (结束后停止，合法)
             (MediaState.Ended, MediaState.Playing) => true,
+            (MediaState.Ended, MediaState.Stopped) => true,
 
             // Stopped → Idle (重置)
             (MediaState.Stopped, MediaState.Idle) => true,

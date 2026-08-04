@@ -91,13 +91,19 @@ internal static class Program
         bool pollingMode = HasFlag(args, "--polling");
         bool audioWarmup = HasFlag(args, "--audio-warmup");
         bool fullPlayback = HasFlag(args, "--full");
-        Console.WriteLine($"[HEADFUL-WASAPI-MODE] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup} Full={fullPlayback}");
+        // 🔴 边界①重播验证：仅 --full 默认启用（必须先到达 Ended 才能重播），--no-replay 可关闭。
+        bool replayTest = fullPlayback && !HasFlag(args, "--no-replay");
+        Console.WriteLine($"[HEADFUL-WASAPI-MODE] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup} Full={fullPlayback} Replay={replayTest}");
+        // 🔴 音频相位诊断：--full 时打开 LINGFAN_AUDIO_DIAG，让 AudioPipeline 打点 ReadAsync/Decode/解码间隙，
+        // 定位 headful 断音根因（纯诊断、零架构风险）。须在构建播放器前设置（静态字段只读一次）。
+        if (fullPlayback)
+            Environment.SetEnvironmentVariable("LINGFAN_AUDIO_DIAG", "1");
         int saveFrames = (int)ParseDouble(args, "--save-frames", 0);
         string saveDir = ParseOption(args, "--save-dir")
             ?? Path.Combine(Directory.GetCurrentDirectory(), "TestInfo", "Diagnostics", "HeadfulPlaybackProbe");
         string? file = ParseOption(args, "--file");
         double seconds = ParseDouble(args, "--seconds", 12);
-        // 🔴 缩小混叠对照实验：默认 640x480 对 1906x1080 是 2.98x 缩小，而平面纹理 MipLevels=1（无 mipmap），
+        // 🔴 缩小混叠对照实验：默认 640x480 对 1906x1080 是 2.98x 缩小；平面纹理已开 MipLevels=0 + GenerateMips（mipmap 三线性抑制摩尔纹），
         // 双线性抽头在多倍缩小下必然高频欠采样 ⇒ 摩尔纹竖条 + 随运动游走。
         // 传 --window-w 1906 --window-h 1080 做 1:1 对照：若 1:1 干净，则混叠坐实为根因。
         int windowW = (int)ParseDouble(args, "--window-w", DefaultWindowW);
@@ -189,10 +195,22 @@ internal static class Program
             if (sampleRate == 0) sampleRate = f.SampleRate;
         };
 
+        // 🔴 音频间隙诊断（headful ~10s 断音定位）：对比「主时钟位置」与「已提交音频时长」。
+        //   backlog = pos - submittedSec（秒）：>0 表示音频落后主时钟 ⇒ 提交停滞/欠载 ⇒ 静音间隙；
+        //   stall = 主时钟前进 >100ms 但 submittedSamples 未变 ⇒ 音频管线停喂（确定静音）。
+        // 纯诊断、零架构风险；结论用于定位根因，而非盲改音频管线。
+        double maxAudioBacklogMs = 0;
+        int audioGapCount = 0;
+        int audioStallCount = 0;
+        long prevSubmitted = 0;
+        double prevPosSec = 0;
+
         RenderWindow? win = null;
         int presentCount = 0;
         bool videoPass = !doVideo;
         bool audioPass = !doAudio;
+        // 🔴 边界①：重播 Ended→Playing 判定（外层声明，使 try 内的重播块与 try 外的 overall 共享作用域）。
+        bool replayPass = !replayTest;
 
         try
         {
@@ -293,17 +311,42 @@ internal static class Program
                 if (visible || verbose)
                     Console.WriteLine($"  t={poll.Elapsed.TotalSeconds:F1}s pos={player.Position:g} " +
                                       $"present={presentCount} state={player.State}");
+                // 🔴 音频间隙检测：主时钟位置 vs 已提交音频时长
+                if (doAudio && sampleRate > 0 && player.State == MediaState.Playing)
+                {
+                    double subSec = submittedSamples / (double)sampleRate;
+                    double posSec = player.Position.TotalSeconds;
+                    double backlogMs = (posSec - subSec) * 1000.0;
+                    if (backlogMs > maxAudioBacklogMs) maxAudioBacklogMs = backlogMs;
+                    if (backlogMs > 150)
+                    {
+                        audioGapCount++;
+                        if (verbose)
+                            Console.WriteLine($"  [HEADFUL-AUDIO-GAP] t={poll.Elapsed.TotalSeconds:F1}s " +
+                                              $"backlog={backlogMs:F0}ms（音频落后主时钟，疑似断音/欠载）");
+                    }
+                    // 提交停滞：主时钟前进 >100ms 但采样数未变（prevSubmitted!=0 跳过首轮误报）
+                    if (prevSubmitted != 0 && submittedSamples == prevSubmitted && posSec > prevPosSec + 0.1)
+                    {
+                        audioStallCount++;
+                        if (verbose)
+                            Console.WriteLine($"  [HEADFUL-AUDIO-GAP] STALL t={poll.Elapsed.TotalSeconds:F1}s " +
+                                              $"提交停滞，主时钟已前进 {(posSec - prevPosSec) * 1000:F0}ms（静音）");
+                    }
+                    prevSubmitted = submittedSamples;
+                    prevPosSec = posSec;
+                }
                 if (fullPlayback)
                 {
+                    // 🔴 --full：播到播放器自然发出的 Ended 为止。
+                    // 注意：pos 来自音频设备时钟，流末后仍会推进越过 Duration；若以 pos 提前退出会抢在
+                    // A/V 双管线 drain 完成（≈Duration 时刻）之前退出，看不到 Ended。故不以 pos 作结束信号，
+                    // 仅用 Duration 之后 8s 作兜底，防播放完成检测失效时死等。
                     if (player.State == MediaState.Ended) break;
-                    // 🔴 真实时长兜底：当前 player 不会主动发出 Ended（MediaState.Ended 在播放器内从未被
-                    // 触发——属已知的"播放完成检测"缺口），故以 Position 越过 Duration 作为结束信号。
-                    double dur = player.Duration.TotalSeconds;
-                    if (dur > 0 && player.Position.TotalSeconds >= dur - 0.25) break;
-                    double cap = Math.Max(dur * 2, 90);
+                    double cap = player.Duration.TotalSeconds + 8;
                     if (poll.Elapsed.TotalSeconds > cap)
                     {
-                        Console.WriteLine("  [HEADFUL] 超时未收到 Ended，强制退出");
+                        Console.WriteLine("  [HEADFUL] 超时未收到 Ended（兜底退出），可能播放完成检测未触发");
                         break;
                     }
                 }
@@ -312,6 +355,8 @@ internal static class Program
                     break;
                 }
             }
+
+            Console.WriteLine($"  [HEADFUL] 播放结束 state={player.State} pos={player.Position:g}");
 
             var playedSec = (player.Position - startPos).TotalSeconds;
 
@@ -322,6 +367,8 @@ internal static class Program
                 videoPass = presentCount >= 5;
                 Console.WriteLine($"[HEADFUL-VIDEO] d3d11PresentCount={presentCount}  => " +
                                   $"{(videoPass ? "PASS" : "FAIL (present<5)")}");
+                // 🔴 诊断：视频丢帧数。若 ≈25（932→957 差值），即坐实末段尾帧被 Synchronizer 判 Drop 而非呈现
+                Console.WriteLine($"[HEADFUL-VIDEO-DROP] droppedFrames={player.VideoDroppedFrames} present={presentCount}");
             }
             if (doAudio)
             {
@@ -331,6 +378,57 @@ internal static class Program
                 audioPass = playedSec >= minPlayed;
                 Console.WriteLine($"[HEADFUL-AUDIO] played={playedSec:F1}s submitted≈{subSec:F1}s  => " +
                                   $"{(audioPass ? "PASS" : $"FAIL (played<{minPlayed:F0}s)")}");
+                // 🔴 间隙诊断摘要：backlog 持续 >150ms 或 stall 计数 >0 ⇒ 静音/欠载确证
+                Console.WriteLine($"[HEADFUL-AUDIO-GAP] maxBacklog={maxAudioBacklogMs:F0}ms " +
+                                  $"gaps(>150ms)={audioGapCount} stalls={audioStallCount} " +
+                                  $"=> {(maxAudioBacklogMs > 150 || audioStallCount > 0 ? "⚠ 检测到音频间隙" : "未检测到间隙")}");
+            }
+
+            // —— 边界①：重播 Ended→Playing 无缝从头 ——
+            // 第一次自然结束后立即二次 PlayAsync，验证：
+            //   (a) 状态机 Ended→Playing 合法转换（PlaybackController 已补该转换）；
+            //   (b) 时钟归零、位置回绕到 0（MediaPlayer.PlayAsync 在 Ended 态走 SeekAsync(0)+_clock.Reset/Start 分支）；
+            //   (c) 双管线从排干态(_isRunning==false)重启，present 从 0 重新开始累计。
+            // 仅 --full 默认启用（需先到达 Ended），可用 --no-replay 关闭。
+            if (replayTest)
+            {
+                Console.WriteLine();
+                Console.WriteLine("[HEADFUL-REPLAY] 边界①：第一次播放已 Ended，立即二次 PlayAsync 验证重播无缝从头…");
+                int presentBeforeReplay = presentCount;
+                double posBeforeReplay = player.Position.TotalSeconds;
+                await player.PlayAsync();
+                double posAfterReplay = player.Position.TotalSeconds;
+                Console.WriteLine($"  [HEADFUL-REPLAY] 二次 PlayAsync 后：state={player.State} " +
+                                  $"pos={player.Position:g}（重播前 pos={posBeforeReplay:F2}s）");
+                // 重播合法 + 位置已归零（非 Ended 态遗留的末尾位置）
+                bool replayStateOk = player.State == MediaState.Playing && posAfterReplay < 1.0;
+
+                var replayPoll = Stopwatch.StartNew();
+                while (true)
+                {
+                    await Task.Delay(500);
+                    if (doVideo && countingFactory?.Last is not null)
+                        presentCount = countingFactory.Last.PresentCount;
+                    if (visible || verbose)
+                        Console.WriteLine($"  [REPLAY] t={replayPoll.Elapsed.TotalSeconds:F1}s " +
+                                          $"pos={player.Position:g} present={presentCount} state={player.State}");
+                    if (player.State == MediaState.Ended) break;
+                    double cap = player.Duration.TotalSeconds + 8;
+                    if (replayPoll.Elapsed.TotalSeconds > cap)
+                    {
+                        Console.WriteLine("  [HEADFUL-REPLAY] 超时未收到第二次 Ended（兜底退出）");
+                        break;
+                    }
+                }
+                int presentAfterReplay = presentCount;
+                int replayPresentDelta = presentAfterReplay - presentBeforeReplay;
+                // 无视频用例跳过呈现计数判定
+                bool replayPresentOk = !doVideo || replayPresentDelta >= 900;
+                replayPass = replayStateOk && replayPresentOk;
+                Console.WriteLine($"  [HEADFUL-REPLAY] 二次播放结束 state={player.State} " +
+                                  $"present 增量={replayPresentDelta}");
+                Console.WriteLine($"  [HEADFUL-REPLAY] => {(replayPass ? "PASS" : "FAIL")} " +
+                                  $"(state重启={replayStateOk}, 二次呈现≈{replayPresentDelta}{(doVideo ? "" : "[无视频跳过计数]")})");
             }
 
             await player.StopAsync(CancellationToken.None);
@@ -346,7 +444,7 @@ internal static class Program
             try { win?.Dispose(); } catch { }
         }
 
-        bool overall = videoPass && audioPass;
+        bool overall = videoPass && audioPass && replayPass;
         Console.WriteLine();
         if (saveFrames > 0)
             Console.WriteLine($"[HEADFUL-SAVE] 共落盘 {FrameDumper.DumpedCount} 张帧 -> {saveDir}");

@@ -144,6 +144,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _isRunning = true;
         _isPaused = false;
         _decodeDone = false;
+        // 🔴 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
+        // 否则残留 true 会在后续 Stop/Dispose 的 finally 中误触发 Completed → 错误发出 Ended。
+        _completedNaturally = false;
 
         // 重新创建 CTS（如果旧的已取消）
         if (_cts.IsCancellationRequested)
@@ -215,7 +218,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             {
                 try
                 {
-                    _frameQueue.Clear(_framePool);
+                    _frameQueue.Reset(_framePool);
                     _decoder.Reset();
                     _processorReset?.Invoke(); // V2-06 二次审计修复：重置有状态处理器（释放 _held 等）
                 }
@@ -227,7 +230,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             else
             {
                 _logger.LogError("视频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
-                _frameQueue.Clear(_framePool); // Channel 线程安全，仍然清空
+                _frameQueue.Reset(_framePool); // Channel 线程安全，仍然清空
                 _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
                 _pendingProcessorReset = true;   // 同上：有状态处理器延迟重置，避免与 Process 并发
             }
@@ -235,7 +238,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         else
         {
             // 管线未运行，无需锁
-            _frameQueue.Clear(_framePool);
+            _frameQueue.Reset(_framePool);
             _decoder.Reset();
         }
 
@@ -282,7 +285,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             {
                 try
                 {
-                    _frameQueue.Clear(_framePool);
+                    _frameQueue.Reset(_framePool);
                     _decoder.Reset();
                     _processorReset?.Invoke(); // V2-06 二次审计修复：重置有状态处理器（释放 _held 等）
                 }
@@ -294,7 +297,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             else
             {
                 _logger.LogError("视频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
-                _frameQueue.Clear(_framePool); // Channel 线程安全，仍然清空
+                _frameQueue.Reset(_framePool); // Channel 线程安全，仍然清空
                 _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
                 _pendingProcessorReset = true;   // 同上：有状态处理器延迟重置，避免与 Process 并发
             }
@@ -302,7 +305,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         else
         {
             // 管线未运行，无需锁
-            _frameQueue.Clear(_framePool);
+            _frameQueue.Reset(_framePool);
             _decoder.Reset();
         }
 
@@ -360,6 +363,15 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 // （同时消除 R-2：旧 Wait 分支在帧所有权已转移后越界读 frame.Timestamp 的隐患）。
                 var headTimestamp = head.Timestamp;
                 var action = _synchronizer.CheckVideoFrame(head);
+
+                // 🔴 EOS（流末已到）覆盖：强制呈现剩余帧，标准 play-to-end 行为。
+                // 否则末段帧因落后主时钟（音频设备游标已冲到结尾）>DropThreshold 被判 Drop，
+                // 导致"结尾定格在倒数第 N 帧而非文件真实末帧"的残余尾冻（#9 收口，数据坐实：
+                // droppedFrames=10 + present=947 = 957 文件总帧，即末 10 帧被 Drop）。
+                // 流尾已到后队列不再补帧，逐帧顺序呈现末帧自然常驻屏直到音频结束，完全正确。
+                bool eos = _frameQueue.IsCompleted || _decodeDone;
+                if (eos && action != SyncAction.Present)
+                    action = SyncAction.Present;
 
                 if (action == SyncAction.Wait)
                 {
@@ -452,7 +464,23 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 }
                 catch (ChannelClosedException)
                 {
-                    // 包源结束 ⇒ 通知消费者收尾
+                    // 包源结束：必须先 DRAIN 解码器把末尾 B 帧重排缓冲（末段 GOP）全部取出入队，
+                    // 再 Complete 帧队列 —— 顺序颠倒会让呈现侧提前收尾，末段 GOP 整批丢失。
+                    // 🔴 根因修复（2026-08-04）：原实现只 Complete 不 DRAIN，导致 H.264/H.265 尾部
+                    // 重排帧滞留 MFT 内部缓冲永不吐出 → 最后呈现帧冻结（即"30s 画面不动"缺陷）。
+                    // 音频无 B 帧（无 ctts）不受影响，故仅视频侧需此 EOS 排空。
+                    try
+                    {
+                        VideoFrame? drained;
+                        while ((drained = await _decoder.FlushAsync()) != null)
+                        {
+                            await _frameQueue.EnqueueAsync(drained, _cts.Token);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "视频解码器 EOS 排空异常（末段帧可能丢失）");
+                    }
                     _frameQueue.Complete();
                     break;
                 }

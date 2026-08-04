@@ -22,6 +22,9 @@ public sealed class MediaPipelineHost
     /// <summary>播放自然完成事件：所有存在的 A/V 管线均耗尽流末后触发。MediaPlayer 据此转 <see cref="MediaState.Ended"/>。</summary>
     public event EventHandler? PlaybackCompleted;
 
+    /// <summary>累计视频丢帧数（诊断/可观测性，只读转发到视频管线）。</summary>
+    public long VideoDroppedFrames => _videoPipeline?.DroppedFrames ?? 0;
+
     // 完成门控：仅聚合 video/audio 两条管线（字幕是显示层、由时钟驱动、不参与完成判定）。
     // 任一管线为 null（纯音频/纯视频媒体）即视为该侧已完成；两侧均完成且未触发过 → 发 PlaybackCompleted。
     private readonly object _completionLock = new();

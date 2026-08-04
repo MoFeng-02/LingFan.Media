@@ -149,13 +149,21 @@ public sealed class SampleQueue
 
     /// <summary>
     /// 重置队列（V2-06 C3）。将已 Complete 的队列恢复为可写入状态。
-    /// 用于 Seek after stream end 场景。
+    /// 用于 Seek after stream end / 重播（Ended→Playing）场景。
     /// </summary>
-    /// <remarks>清空并释放所有残留帧（不持有帧对象池引用，直接 Dispose）。纯内存同步操作。</remarks>
-    public void Reset()
+    /// <param name="pool">帧对象池（V2，可为 null = Dispose 残留帧而非归还）。</param>
+    /// <remarks>
+    /// 🔴 必须 Pool-aware：残留帧归还到池而非 Dispose，否则重播/多次 Seek 会持续消耗池容量直至饿死。
+    /// </remarks>
+    public void Reset(IFramePool<AudioFrame>? pool = null)
     {
         while (_channel.Reader.TryRead(out var frame))
-            frame.Dispose();
+        {
+            if (pool != null)
+                pool.Return(frame);
+            else
+                frame.Dispose();
+        }
 
         _channel = Channel.CreateBounded<AudioFrame>(new BoundedChannelOptions(_capacity)
         {

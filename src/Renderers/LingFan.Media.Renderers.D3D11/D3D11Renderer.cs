@@ -251,10 +251,10 @@ internal sealed class D3D11Renderer : IVideoRenderer
             bool sizeMatches = (uint)frame.Width == backBufferDesc.Width &&
                                (uint)frame.Height == backBufferDesc.Height;
 
-            // 🔬 首帧一次性：把「源→目标」缩放比摊开。这是判定混叠的前置量——
-            //    平面纹理 MipLevels=1（无 mipmap），采样器只有双线性抽头；
-            //    缩小倍率 >2 时每个目标像素需覆盖 >4 源像素，双线性只取 4 抽头 ⇒ 必然高频欠采样，
-            //    表现为摩尔纹竖条 + 随画面运动逐帧游走（肉眼即"花屏/晃动"）。
+            // 🔬 首帧一次性：把「源→目标」缩放比摊开。判定混叠的前置量——
+            //    平面纹理已开 MipLevels=0 + GenerateMips，Present 时 RegenerateMips() 重建 mip 链，
+            //    着色器用 Sample（自动 LOD）走硬件三线性缩小；非整数多倍缩小时三线性显著优于纯双线性，
+            //    但仍非完美（mip 预滤波会丢部分高频细节）。本日志仅供观察缩放比，摩尔纹已被 mipmap 大幅抑制。
             if (!_loggedScaleOnce)
             {
                 _loggedScaleOnce = true;
@@ -263,7 +263,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
                 double worst = Math.Max(sx, sy);
                 string verdict = worst <= 1.0 ? "放大或1:1（无缩小混叠风险）"
                                : worst <= 2.0 ? "轻度缩小（双线性尚可，混叠有限）"
-                               : "多倍缩小⚠（无 mipmap 下双线性必欠采样 ⇒ 摩尔纹/噪点/随运动游走）";
+                               : "多倍缩小（mipmap 三线性 LOD 已激活，摩尔纹被大幅抑制；高频细节仍略损）";
                 _logger.LogInformation(
                     "[D3D11-SCALE] 源帧={SrcW}x{SrcH} backbuffer={DstW}x{DstH} | 缩小倍率 x={Sx:F2} y={Sy:F2} | " +
                     "整数倍={IsInt} | 判定={Verdict}",
