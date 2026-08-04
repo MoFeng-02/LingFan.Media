@@ -525,6 +525,8 @@ internal static class Program
                 FrameDumper.DumpFrame(frame, n, _saveDir);
             _inner.Present(frame);
         }
+        public TimeSpan PresentationLatency => TimeSpan.Zero;
+
         public void Clear() => _inner.Clear();
         public Task InitializeAsync(CancellationToken ct = default) => _inner.InitializeAsync(ct);
         public void Dispose() => _inner.Dispose();

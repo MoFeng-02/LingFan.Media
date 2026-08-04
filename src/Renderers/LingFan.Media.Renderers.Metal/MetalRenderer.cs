@@ -33,6 +33,9 @@ public sealed class MetalRenderer : IVideoRenderer
     public void Present(VideoFrame frame)
         => throw new NotSupportedException("Metal 渲染器尚未实现。");
 
+    /// <inheritdoc />
+    public TimeSpan PresentationLatency => TimeSpan.Zero;
+
     /// <inheritdoc/>
     public void Clear()
         => throw new NotSupportedException("Metal 渲染器尚未实现。");

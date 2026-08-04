@@ -34,6 +34,9 @@ public sealed class OpenGLRenderer : IVideoRenderer
     public void Present(VideoFrame frame)
         => throw new NotSupportedException("OpenGL 渲染器尚未实现。");
 
+    /// <inheritdoc />
+    public TimeSpan PresentationLatency => TimeSpan.Zero;
+
     /// <inheritdoc/>
     public void Clear()
         => throw new NotSupportedException("OpenGL 渲染器尚未实现。");

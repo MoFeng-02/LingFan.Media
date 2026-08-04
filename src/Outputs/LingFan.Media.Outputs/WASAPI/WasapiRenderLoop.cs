@@ -88,10 +88,8 @@ internal sealed class WasapiRenderLoop
     private System.Diagnostics.Stopwatch? _startStopwatch;
     private double _calibratedBias;
     private bool _biasLatched;
-    // 🔴 音画同步微调（2026-08-04）：可闻位置补偿（秒）。校准后稳态 delta≈+25ms（视频呈现相对墙钟
-    // 恒定领先），此值把主时钟再前移 N 毫秒使 videoPTS−audioClock→0。默认 0（不破坏现有行为），
-    // 由 LINGFAN_SYNC_LEAD_MS 环境变量注入（CaptureStartAnchor 每次 Start 重读，支持重播刷新）。零架构风险。
-    private double _syncLeadSec;
+    // 注：LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
+    // 本音频时钟只暴露纯可闻位置，不再做任何前移补偿。
     private int _sampleRate;
     private int _channels;
     private float _volume = 1.0f;
@@ -382,22 +380,46 @@ internal sealed class WasapiRenderLoop
         // 现以墙钟为锚：引擎领先稳定后（起播 >100ms）锁定 bias = rawSec - wallElapsed = 引擎领先+常偏，
         // 主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。瞬态期（≤100ms）devicePosition≈墙钟，
         // 直接以墙钟为准，避免相位跳变。零架构风险、纯本地可闻校准。
+        // 🔴 音画同步根治（2026-08-04 R34）：稳态锁定引擎领先，消除起播瞬态污染。
+        // 旧实现（CalibWindowSec=0.1）在「devicePosition 尚未与墙钟锁步」的起播瞬态就捕获 bias 并永久减回，
+        // 而此刻 devicePosition 落后墙钟 ~29ms（bias 为负）→ 减负数 = 变相给主时钟加 29ms →
+        // 音频时钟比真实可闻位置快 ~29ms → 视频按此时钟提前 ~29ms 呈现 → 用户感知「声音晚一点点」。
+        // 真根：主时钟应反映真实可闻位置。devicePosition→可闻 的延迟（引擎领先 L）在稳态时
+        // 等于 (devicePosition − 墙钟) 的锁定值；起播瞬态该值为负且持续收敛，故必须等其稳定后再锁定。
+        // 稳定判据：连续两次采样偏差 < 1ms，即引擎已与墙钟锁步、L 不再漂移。锁定后 bias 即为稳态 L，
+        // 主时钟减此值即得真实可闻位置（与视频 PTS 同源）， skew 归零。
         double wallElapsed = _startStopwatch?.Elapsed.TotalSeconds ?? 0.0;
-        const double CalibWindowSec = 0.1;
-        if (wallElapsed < CalibWindowSec)
+        const double CalibMinSec = 0.3;       // 过引擎起转瞬态再开始采样
+        const double CalibStableEps = 0.001;  // 1ms 内偏差视为已稳态（引擎与墙钟锁步）
+        double cand = rawSec - wallElapsed;   // 稳态时 = 引擎领先 L（devicePosition→可闻的真实延迟）
+
+        if (wallElapsed < CalibMinSec)
         {
-            double a0 = wallElapsed - pendingSec - _streamLatencySec + _syncLeadSec;
+            // 起转瞬态：devicePosition 尚未与墙钟锁步，直接以墙钟为可闻近似
+            double a0 = wallElapsed - pendingSec - _streamLatencySec;
             return TimeSpan.FromSeconds(a0 > 0 ? a0 : 0.0);
         }
-        double bias = rawSec - wallElapsed;
+
+        double prev = Volatile.Read(ref _calibratedBias);
         if (!Volatile.Read(ref _biasLatched))
         {
-            Volatile.Write(ref _calibratedBias, bias);
-            Volatile.Write(ref _biasLatched, true);
-            _logger.LogInformation("[WASAPI-CALIB] 锁定引擎领先偏移={BiasMs:F1}ms（主时钟将减此值对齐可闻位置）",
-                bias * 1000.0);
+            if (Math.Abs(cand - prev) < CalibStableEps)
+            {
+                // 引擎领先已稳定 → 锁定（此刻 cand ≈ 稳态 L，主时钟减此值即真实可闻位置）
+                Volatile.Write(ref _calibratedBias, cand);
+                Volatile.Write(ref _biasLatched, true);
+                _logger.LogInformation("[WASAPI-CALIB] 锁定引擎领先偏移={BiasMs:F1}ms（主时钟将减此值对齐可闻位置）",
+                    cand * 1000.0);
+            }
+            else
+            {
+                // 仍收敛中：暂存候选，audible 继续以墙钟近似（避免瞬态偏置污染主时钟）
+                Volatile.Write(ref _calibratedBias, cand);
+                double a0 = wallElapsed - pendingSec - _streamLatencySec;
+                return TimeSpan.FromSeconds(a0 > 0 ? a0 : 0.0);
+            }
         }
-        double audibleSec = rawSec - Volatile.Read(ref _calibratedBias) - pendingSec - _streamLatencySec + _syncLeadSec;
+        double audibleSec = rawSec - Volatile.Read(ref _calibratedBias) - pendingSec - _streamLatencySec;
         return TimeSpan.FromSeconds(audibleSec > 0 ? audibleSec : 0.0);
     }
 
@@ -413,10 +435,9 @@ internal sealed class WasapiRenderLoop
         _startStopwatch = System.Diagnostics.Stopwatch.StartNew();
         Volatile.Write(ref _biasLatched, false);
         Volatile.Write(ref _calibratedBias, 0.0);
-        // 🔴 读同步领先补偿（毫秒，默认 0）：把主时钟再前移该值以吸收视频呈现相对墙钟的恒定领先。
-        string? leadEnv = Environment.GetEnvironmentVariable("LINGFAN_SYNC_LEAD_MS");
-        _syncLeadSec = int.TryParse(leadEnv, out int leadMs) ? leadMs / 1000.0 : 0.0;
-        _logger.LogInformation("[WASAPI-ANCHOR] 启动墙钟基准已记录（用于校准引擎领先偏移）；同步领先补偿={LeadMs:F0}ms", _syncLeadSec * 1000.0);
+        // 🔴 LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
+        // 此处音频时钟保持纯可闻位置，不再做任何前移补偿。
+        _logger.LogInformation("[WASAPI-ANCHOR] 启动墙钟基准已记录（用于校准引擎领先偏移）");
     }
 
     /// <inheritdoc cref="WasapiOutput.Latency"/>

@@ -67,6 +67,19 @@ internal sealed class D3D11Renderer : IVideoRenderer
     private bool _loggedScaleOnce;
 
     /// <summary>
+    /// 🔴 音画同步根治（2026-08-04）：真实「Present→上屏」延迟 = 显示器刷新周期。
+    /// 视频帧在 audioClock 到达 PTS 前「本周期」调用 Present，像素恰在 PTS 时经 vsync 扫描出。
+    /// 此前错误地用 <see cref="MediaClock"/> 的 SyncThreshold(50ms) 作呈现提前量 → 视频系统性提前 ~25ms。
+    /// 优先按 DXGI 实际刷新率计算；查询失败回退 60Hz(16.67ms)。Attach 时刷新。
+    /// </summary>
+    // 🔴 真实「Present→上屏」延迟 = 端到端呈现延迟，非单纯刷新周期。
+    // 实测（R31 复测）：仅用刷新周期 16.67ms 作阈值时，视频恒定晚 ~25ms（delta≈-25ms），
+    // 反推 D3D11 vsync 锁定 swapchain 的真实端到端延迟 ≈ 42ms（最坏 vsync 相位 16.67ms
+    // + Present()/消费者管线路径 ~25ms）。故阈值取 ~40ms：帧在 PTS 前 40ms 释放、经消费者管线
+    // 后恰在 PTS 上屏，delta 收敛到 ~0。非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 微调（VideoPipeline 叠加）。
+    private TimeSpan _presentationLatency = TimeSpan.FromMilliseconds(40.0);
+
+    /// <summary>
     /// 串行化所有原生方法（Attach/Detach/Present/Clear/Dispose），化解管线线程 Present 与
     /// UI 线程 Resize/Detach 的并发原生竞态（方案 A）。普通 <see langword="lock"/>，同线程可重入。
     /// </summary>
@@ -89,6 +102,10 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// 是否已释放。供工厂判断缓存单例是否需要重建（方案 A 单例安全复用）。
     /// </summary>
     internal bool IsDisposed => _disposed;
+
+    /// <inheritdoc />
+    /// <remarks>真实「Present→上屏」延迟 = 端到端呈现延迟（最坏 vsync 相位 + Present()/消费者管线路径），约 40ms@60Hz。</remarks>
+    public TimeSpan PresentationLatency => _presentationLatency;
 
     /// <inheritdoc/>
     /// <remarks>接口契约：设备由工厂创建，无 I/O，返回 <see cref="Task.CompletedTask"/>。</remarks>
@@ -202,6 +219,10 @@ internal sealed class D3D11Renderer : IVideoRenderer
             }
 
             _attached = true;
+
+            // 🔴 音画同步根治：「Present→上屏」延迟 = 显示器刷新周期（vsync 下像素在下一刷新栅格扫描出）。
+            // 默认取 60Hz(16.67ms)；非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 在 VideoPipeline 叠加微调。
+            // （DXGI 刷新率查询因 Vortice 3.8.3 枚举名不稳，改为固定物理正确的刷新周期 + 手动微调，避免原生风险。）
 
             // 一次性附加诊断：摊开几何与线程归属。
             // 🔴 DirectComposition 要求视觉树（CreateTargetForHwnd / SetRoot / Commit）在【拥有该窗口

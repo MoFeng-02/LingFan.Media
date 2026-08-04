@@ -33,6 +33,9 @@ public sealed class NoOpVideoRenderer : IVideoRenderer
     public void Clear() { }
 
     /// <inheritdoc />
+    public TimeSpan PresentationLatency => TimeSpan.Zero;
+
+    /// <inheritdoc />
     public void Dispose() { }
 
     /// <inheritdoc />

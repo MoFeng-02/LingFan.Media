@@ -102,6 +102,15 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _frameQueue = frameQueue;
         _synchronizer = synchronizer;
         _clock = clock;
+        // 🔴 音画同步根治（2026-08-04）：呈现提前量 = 渲染后端真实「Present→上屏」端到端延迟
+        // （IVideoRenderer.PresentationLatency，D3D11≈40ms@60Hz 含 vsync 相位+Present/消费者管线，无头=0），
+        // 不再用 SyncThreshold(50ms) 作呈现偏移。LINGFAN_SYNC_LEAD_MS 仅作为叠加微调（默认 0，
+        // 作用于正确的「呈现延迟」变量，而非音频时钟）。
+        double manualLeadMs = 0.0;
+        string? leadEnv = System.Environment.GetEnvironmentVariable("LINGFAN_SYNC_LEAD_MS");
+        if (int.TryParse(leadEnv, out int leadMs) && leadMs > 0)
+            manualLeadMs = leadMs;
+        _synchronizer.PresentationLatency = _renderer.PresentationLatency + TimeSpan.FromMilliseconds(manualLeadMs);
         _logger = logger;
         _framePool = framePool;
         _processors = processors;
@@ -606,10 +615,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         // Drop 时取走并归还过期帧。此处被调用即表示队头帧已判定为 Present。
         if (PacingDiagnostics.Enabled)
         {
-            // 呈现误差：相对"最早可呈现时刻"(frame.Timestamp - SyncThreshold)的偏移。
+            // 呈现误差：相对"最早可呈现时刻"(frame.Timestamp − 真实上屏延迟)的偏移。
             // Peek 方案下理想值 ≈ 0~2ms（WaitUntilDue 自旋收口精度）；若该值显著 >0
             // 说明帧在队头等到了过期后才被取走呈现（仍被某处阻塞）。
-            var thr = _synchronizer.SyncThreshold;
+            var thr = _synchronizer.PresentationLatency;
             var masterNow = _synchronizer.GetCurrentMasterTime();
             double errMs = (masterNow - (frame.Timestamp - thr)).TotalMilliseconds;
             string? report = PacingDiagnostics.Present.OnPresent(frame.Timestamp, _frameQueue.Count, errMs);
@@ -671,7 +680,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private void WaitUntilDue(TimeSpan frameTimestamp, CancellationToken ct = default)
     {
         const double tailMs = 1.5;
-        var threshold = _synchronizer.SyncThreshold;
+        // 🔴 呈现目标 = frameTimestamp − 真实上屏延迟：帧在 audioClock 到达 PTS 前「本延迟」时刻调用 Present，
+        // 像素恰在 PTS 时可见（vsync）。此前错误用 SyncThreshold(50ms) → 视频系统性提前。
+        var threshold = _synchronizer.PresentationLatency;
         long targetQpc = 0;
 
         // 主体：睡到目标前 ~1.5ms，每轮一次平滑时钟读取。Stop() 取消时立即返回，

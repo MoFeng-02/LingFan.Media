@@ -50,6 +50,7 @@ internal sealed class StubVideoRenderer : IVideoRenderer
     public void Attach(IRenderTarget target) { }
     public void Detach() { }
     public void Present(VideoFrame frame) => frame.Dispose();
+    public TimeSpan PresentationLatency => TimeSpan.Zero;
     public void Clear() { }
     public void Dispose() { }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

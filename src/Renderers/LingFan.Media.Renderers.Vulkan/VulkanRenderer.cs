@@ -495,6 +495,9 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
 
     // ═══════════════ Clear ═══════════════
 
+    /// <inheritdoc />
+    public TimeSpan PresentationLatency => TimeSpan.Zero;
+
     /// <inheritdoc/>
     public void Clear()
     {

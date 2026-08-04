@@ -15,6 +15,11 @@ public sealed class Synchronizer
     private readonly TimeSpan _audioLatency;
     private bool _realTimeSync = true;
 
+    // 🔴 音画同步根治（2026-08-04）：视频帧「提前多少调用 Present」= 渲染后端真实「Present→上屏」延迟，
+    // 由 VideoPipeline 按 IVideoRenderer.PresentationLatency 注入（D3D11=刷新周期，无头=0）。
+    // 不再用时钟的 SyncThreshold(50ms) 作呈现偏移——那只是同步门限，错当提前量会让视频系统性提前 ~25ms。
+    private TimeSpan _presentationLatency = TimeSpan.FromMilliseconds(1000.0 / 60.0);
+
     /// <summary>
     /// 主时钟位置源（可选）。若设置，则 <see cref="CheckVideoFrame"/> 直接以该源返回的位置为准，
     /// 不再读取 <see cref="_clock"/>，且 <see cref="OnAudioFrameSubmitted"/> 不再硬跳时钟
@@ -43,6 +48,18 @@ public sealed class Synchronizer
     {
         get => _realTimeSync;
         set => _realTimeSync = value;
+    }
+
+    /// <summary>
+    /// 视频帧「提前多少调用 Present」的偏移量 = 渲染后端真实「Present→上屏」延迟
+    /// （详见 <see cref="IVideoRenderer.PresentationLatency"/>）。默认一个刷新周期(60Hz)，由视频管线注入真实值。
+    /// <para><b>这是音画对齐的真正依据</b>：帧在 audioClock 到达 PTS 前「本延迟」时刻调用 Present，
+    /// 像素恰在 PTS 时可见。与 <see cref="MediaClock.SyncThreshold"/>（同步门限）无关。</para>
+    /// </summary>
+    public TimeSpan PresentationLatency
+    {
+        get => _presentationLatency;
+        set => _presentationLatency = value >= TimeSpan.Zero ? value : TimeSpan.Zero;
     }
 
     /// <summary>
@@ -97,9 +114,9 @@ public sealed class Synchronizer
             : _clock.Position;
         var delta = videoTime - clockTime;
 
-        if (delta > _clock.SyncThreshold)
+        if (delta > _presentationLatency)
         {
-            // 视频超前时钟 → 等待
+            // 视频超前时钟超过「真实上屏延迟」→ 等待（帧留队头，待时钟追近到 PTS−上屏延迟再呈现）
             return SyncAction.Wait;
         }
 
