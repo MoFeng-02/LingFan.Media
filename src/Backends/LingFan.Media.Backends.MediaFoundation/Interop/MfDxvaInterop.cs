@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using LingFan.Media.Abstractions;
 
 namespace LingFan.Media.Backends.MediaFoundation.Interop;
 
@@ -143,16 +144,18 @@ internal static partial class MfDxvaInterop
     internal delegate int ID3D11VideoDevice_CheckVideoDecoderFormat(IntPtr self, ref Guid pDecoderProfile, int Format, out int pSupported);
 
     /// <summary>
-    /// 决定性探测：共享 D3D11 设备是否真能为 H264 解码到 NV12 分配 DXGI 视频表面。
+    /// 决定性探测：共享 D3D11 设备是否真能为指定解码 profile 解码到 NV12 分配 DXGI 视频表面。
     /// 这是区分「真 DXGI 零拷贝」与「半 DXVA（GPU 硬解但输出读回系统内存）」的唯一权威判据。
+    /// profile 须按编码选择（H264→H264_VLD_NOFGT；HEVC→HEVC_VLD_MAIN/MAIN10）。
     /// </summary>
     /// <param name="d3d11Device">共享 ID3D11Device 句柄（来自 IGpuDeviceContext.DeviceHandle）。</param>
-    /// <param name="supported">设备可分配 H264→NV12 的 DXGI 解码表面时为 true。</param>
+    /// <param name="decoderProfile">要验证的 DXVA 解码 profile GUID。</param>
+    /// <param name="supported">设备可分配该 profile→NV12 的 DXGI 解码表面时为 true。</param>
     /// <returns>
     /// true 表示探测本身成功执行（<paramref name="supported"/> 可信）；
     /// false 表示设备连 ID3D11VideoDevice 都不支持（即根本无视频解码能力，<paramref name="supported"/> 失真，调用方应按「不支持」处理）。
     /// </returns>
-    internal static bool TryProbeH264DxvaSupport(IntPtr d3d11Device, out bool supported)
+    internal static bool TryProbeDxvaSupport(IntPtr d3d11Device, Guid decoderProfile, out bool supported)
     {
         supported = false;
         if (d3d11Device == IntPtr.Zero) return false;
@@ -166,7 +169,7 @@ internal static partial class MfDxvaInterop
         try
         {
             var check = MfVTable.Get<ID3D11VideoDevice_CheckVideoDecoderFormat>(vd, 10);
-            Guid profile = MFConstants.D3D11_DECODER_PROFILE_H264_VLD_NOFGT;
+            Guid profile = decoderProfile;
             int s = 0;
             hr = check(vd, ref profile, MFConstants.DXGI_FORMAT_NV12, out s);
             if (hr < 0)
@@ -184,6 +187,21 @@ internal static partial class MfDxvaInterop
         }
     }
 
+    /// <summary>
+    /// 按视频编码选择对应的 DXVA 解码 profile（零拷贝能力探测用）。HEVC 优先 Main10、回落 Main。
+    /// </summary>
+    internal static Guid DxvaProfileForCodec(VideoCodec codec) => codec switch
+    {
+        VideoCodec.H265 => MFConstants.D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10,
+        _ => MFConstants.D3D11_DECODER_PROFILE_H264_VLD_NOFGT
+    };
+
+    /// <summary>
+    /// H264 专用便捷封装（保留旧调用语义）。
+    /// </summary>
+    internal static bool TryProbeH264DxvaSupport(IntPtr d3d11Device, out bool supported)
+        => TryProbeDxvaSupport(d3d11Device, MFConstants.D3D11_DECODER_PROFILE_H264_VLD_NOFGT, out supported);
+
     // ── ID3D11VideoDevice 解码 profile 枚举（用于彻底排查「profile 不匹配致 CreateVideoDecoder 失败」）──
     //    GetVideoDecoderProfileCount=11(→8), GetVideoDecoderProfile=12(→9)。
     // ★ SDK 实物 d3d11.h:13965-13967：GetVideoDecoderProfileCount 真实签名为
@@ -198,13 +216,13 @@ internal static partial class MfDxvaInterop
 
     /// <summary>
     /// 🔴 决定性验证 DXGI 管理器是否真正绑定上了【带视频能力的】设备：从管理器内部
-    /// <c>GetVideoService(IID_ID3D11VideoDevice)</c> 取回解码器实际会用的视频设备，并复测 H264→NV12
+    /// <c>GetVideoService(IID_ID3D11VideoDevice)</c> 取回解码器实际会用的视频设备，并复测指定 profile→NV12
     /// DXVA 能力。这是区分「绑定真正生效」与「ResetDevice 静默失败（P/Invoke 偏差 / token 不匹配 /
     /// 设备缺 VIDEO_SUPPORT）」的唯一权威判据。
     /// ★ SDK 实物 mfobjects.h:6631：<c>GetVideoService</c> 仅支持 <c>IID_ID3D11VideoDevice</c>（DXVA 服务接口），
     ///   查 <c>IID_ID3D11Device</c> 必返 E_NOINTERFACE —— 旧探针正是因此造出「绑定异常」假阴性。
     /// </summary>
-    internal static string? ProbeManagerBoundDevice(IntPtr manager)
+    internal static string? ProbeManagerBoundDevice(IntPtr manager, Guid decoderProfile)
     {
         if (manager == IntPtr.Zero) return null;
         // 正确流程：先 OpenDeviceHandle 取 HANDLE，再 GetVideoService(hDevice, IID_ID3D11VideoDevice, …)（SDK 仅支持该 IID）。
@@ -223,9 +241,9 @@ internal static partial class MfDxvaInterop
                 return $"[DXVA-DIAG] 管理器 GetVideoService(ID3D11VideoDevice) 失败 HRESULT=0x{hr & 0xFFFFFFFF:X8} → ResetDevice 未真正绑定到带视频能力的设备（token 不匹配 / 设备缺 VIDEO_SUPPORT），解码器将静默读回系统内存";
             try
             {
-                // vd 直接来自管理器内部设备，复测 H264→NV12 即等于验证「解码器经管理器取到的设备能否零拷贝解码」。
-                bool capable = TryProbeH264DxvaSupport(vd, out bool supported) && supported;
-                return $"[DXVA-DIAG] 管理器取回 ID3D11VideoDevice 成功 | CheckVideoDecoderFormat(管理器内部设备, H264→NV12)={(capable ? "支持" : "不支持")} → 绑定{(capable ? "生效（解码器拿到带视频能力的设备，零拷贝前置条件齐备）" : "异常")}";
+                // vd 直接来自管理器内部设备，复测 profile→NV12 即等于验证「解码器经管理器取到的设备能否零拷贝解码」。
+                bool capable = TryProbeDxvaSupport(vd, decoderProfile, out bool supported) && supported;
+                return $"[DXVA-DIAG] 管理器取回 ID3D11VideoDevice 成功 | CheckVideoDecoderFormat(管理器内部设备, profile→NV12)={(capable ? "支持" : "不支持")} → 绑定{(capable ? "生效（解码器拿到带视频能力的设备，零拷贝前置条件齐备）" : "异常")}";
             }
             finally
             {

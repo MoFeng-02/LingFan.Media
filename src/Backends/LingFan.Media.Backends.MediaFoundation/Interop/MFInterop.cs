@@ -76,7 +76,30 @@ internal static partial class MFInterop
         out IntPtr ppclsidMFT,
         out uint pcMFT);
 
-    /// <summary>释放 CoTaskMemAlloc 分配的内存（MFTEnum 返回的 CLSID 数组）。</summary>
+    /// <summary>
+    /// 增强版 MFT 枚举（MFTEnumEx）：返回 <c>IMFActivate*</c> 数组，可枚举异步/硬件/Store MFT。
+    /// HEVC 视频扩展等 Store 安装解码器为异步 MFT，旧 MFTEnum 枚举不到，必须走此 API。
+    /// </summary>
+    [LibraryImport(MfplatDll)]
+    internal static partial int MFTEnumEx(
+        ref Guid guidCategory,
+        uint Flags,
+        ref MftRegisterTypeInfo pInputType,
+        IntPtr pOutputType,
+        out IntPtr ppMFTActivate,
+        out uint pcMFTActivate);
+
+    /// <summary>同 <see cref="MFTEnumEx"/>，但 pInputType/pOutputType 以原生指针传入（可传 <see cref="IntPtr.Zero"/> 表示不过滤）。供诊断枚举全部视频解码器使用。</summary>
+    [LibraryImport(MfplatDll, EntryPoint = "MFTEnumEx")]
+    internal static partial int MFTEnumExRaw(
+        ref Guid guidCategory,
+        uint Flags,
+        IntPtr pInputType,
+        IntPtr pOutputType,
+        out IntPtr ppMFTActivate,
+        out uint pcMFTActivate);
+
+    /// <summary>释放 CoTaskMemAlloc 分配的内存（MFTEnum / MFTEnumEx 返回的数组）。</summary>
     [LibraryImport("ole32.dll")]
     internal static partial void CoTaskMemFree(IntPtr pv);
 

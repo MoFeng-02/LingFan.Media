@@ -80,7 +80,8 @@ internal static class MFConstants
     // Video subtype GUIDs
     internal static readonly Guid MFVideoFormat_H264 = new(0x34363248, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71); // "H264"
     internal static readonly Guid MFVideoFormat_H265 = new(0x35363248, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71); // "H265"
-    internal static readonly Guid MFVideoFormat_HEVC = new(0x43564548, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71); // "HEVC"（系统 H265 解码 MFT 注册的输入 subtype）
+    internal static readonly Guid MFVideoFormat_HEVC = new(0x43564548, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71); // "HEVC"（系统 H265 解码 MFT 注册的输入 subtype，hvc1/hev1 容器常用）
+    internal static readonly Guid MFVideoFormat_HEVC_ES = new(0x53564548, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71); // "HEVS"（HEVC 裸流，FCC 与 mfapi.h:2314 对齐）
     internal static readonly Guid MFVideoFormat_NV12 = new(0x3231564e, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71); // "NV12"
     internal static readonly Guid MFVideoFormat_RGB32 = new(0x00000016, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71);
 
@@ -102,10 +103,21 @@ internal static class MFConstants
     // ⚠️ 早期版本误写 9EA2FB4D-...（臆测值，枚举恒 count=0 → "无注册 MFT"假象），勿回退。
     internal static readonly Guid MFT_CATEGORY_VIDEO_DECODER = new(0xd6c02d4b, 0x6833, 0x45b4, 0x97, 0x1a, 0x05, 0xa4, 0xb0, 0x4b, 0xab, 0x91);
 
-    // MFTEnum（旧 API）Flags 参数按 MSDN 为 Reserved 必须传 0；下列 MFT_ENUM_FLAG_* 仅供未来 MFTEnumEx 使用
-    internal const uint MFT_ENUM_FLAG_SYNCHRONOUS = 0x00000080; // 仅同步 MFT（MFTEnumEx 专用）
-    internal const uint MFT_ENUM_FLAG_HARDWARE = 0x00000008;    // 硬件 MFT（可能需 D3D 设备管理器）
-    internal const uint MFT_ENUM_FLAG_ALL = 0x00000000;         // 枚举全部（同步 + 异步 + 硬件）
+    // MFTEnumEx 枚举标志（mfapi.h:2018-2029 权威值；旧 MFTEnum 的 Flags 仍保留 0）。
+    // 尤其 HEVC 视频扩展（Store 安装）注册为异步 MFT，MFTEnum 旧 API 枚举不到，必须用 MFTEnumEx
+    // 并包含 ASYNCMFT + HARDWARE + UNTRUSTED_STOREMFT 才能发现。
+    internal const uint MFT_ENUM_FLAG_SYNCMFT              = 0x00000001;
+    internal const uint MFT_ENUM_FLAG_ASYNCMFT             = 0x00000002;
+    internal const uint MFT_ENUM_FLAG_HARDWARE               = 0x00000004;
+    internal const uint MFT_ENUM_FLAG_FIELDOFUSE           = 0x00000008;
+    internal const uint MFT_ENUM_FLAG_LOCALMFT             = 0x00000010;
+    internal const uint MFT_ENUM_FLAG_TRANSCODE_ONLY       = 0x00000020;
+    internal const uint MFT_ENUM_FLAG_SORTANDFILTER        = 0x00000040;
+    internal const uint MFT_ENUM_FLAG_ALL                  = 0x0000003F; // 同步+异步+硬件（含过滤）
+    internal const uint MFT_ENUM_FLAG_UNTRUSTED_STOREMFT   = 0x00000400; // Store 下载的 MFT（HEVC 扩展）
+
+    // MFTEnumEx 返回的 IMFActivate 上取 CLSID 的属性键（mftransform.h:1644 权威值）
+    internal static readonly Guid MFT_TRANSFORM_CLSID_Attribute = new(0x6821c42b, 0x65a4, 0x4e82, 0x99, 0xbc, 0x9a, 0x88, 0x20, 0x5e, 0xcd, 0xc);
 
     // IMFTransform IID（mftransform.h 权威值 {bf94c121-5b05-4e6f-8000-ba598961414d}；
     // 本机运行时验证（2026-07-29）：CoCreateInstance + 全 vtable 槽位 S_OK。⚠️ 早期误写 ...8009-456E31185733（臆测值），勿回退）
@@ -148,6 +160,10 @@ internal static class MFConstants
     internal static readonly Guid IID_ID3D11Device = new(0x1841e5c8, 0x16b0, 0x489b, 0xbc, 0xc8, 0x44, 0xcf, 0xb0, 0xd5, 0xde, 0xae);
     // D3D11_DECODER_PROFILE_H264_VLD_FGT（d3d11.h:10040 DEFINE_GUID 权威值 {1B81BE69-...}）标准 H264 VLD 带 film grain。
     internal static readonly Guid D3D11_DECODER_PROFILE_H264_VLD_FGT = new(0x1b81be69, 0xa0c7, 0x11d3, 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5);
+    // D3D11_DECODER_PROFILE_HEVC_VLD_MAIN（d3d11.h:10058 权威值 {5B11D51B-2F4C-4452-BCC3-09F2A1160CC0}）标准 HEVC 主规 VLD 解码 profile。
+    internal static readonly Guid D3D11_DECODER_PROFILE_HEVC_VLD_MAIN = new(0x5b11d51b, 0x2f4c, 0x4452, 0xbc, 0xc3, 0x09, 0xf2, 0xa1, 0x16, 0x0c, 0xc0);
+    // D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10（d3d11.h:10059 权威值 {107AF0E0-EF1A-4D19-ABA8-67A163073D13}）HEVC Main10（10bit）VLD 解码 profile。
+    internal static readonly Guid D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10 = new(0x107af0e0, 0xef1a, 0x4d19, 0xab, 0xa8, 0x67, 0xa1, 0x63, 0x07, 0x3d, 0x13);
 
 
     // 🔴 MFT_MESSAGE_SET_D3D_MANAGER = 0x2（mftransform.h:174 SDK 实物）。
@@ -159,6 +175,10 @@ internal static class MFConstants
     //    2026-08-04 曾臆造 0x80000013：MFT 对未知消息按约定返回 S_OK 静默忽略 ⇒ 日志「硬解已激活」
     //    却全程软解（GPU零拷贝=0、每帧 QI(IMFDXGIBuffer) 得 E_NOINTERFACE）。此为「假绿」真根因。
     internal const int MFT_MESSAGE_SET_D3D_MANAGER = 0x00000002;
+
+    // MFT_TRANSFORM_FLAGS_Attribute（mfapi.h:1640 权威值 {9359BB7E-6275-46C4-A025-1C01E45F1A86}）：UINT32 属性，
+    // 低 bit0 = MFT_TRANSFORM_ASYNC（0x1）→ 异步 MFT（Store 安装的 HEVC 扩展等）。同步 MFT 该位为 0。
+    internal static readonly Guid MF_TRANSFORM_FLAGS_Attribute = new(0x9359bb7e, 0x6275, 0x46c4, 0xa0, 0x25, 0x1c, 0x01, 0xe4, 0x5f, 0x1a, 0x86);
 
     // MFT 设置类型标志
     internal const int MFT_SET_TYPE_TEST_ONLY = 0x00000001;

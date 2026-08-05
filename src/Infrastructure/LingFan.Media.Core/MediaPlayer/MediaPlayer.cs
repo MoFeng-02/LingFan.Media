@@ -67,7 +67,7 @@ public sealed class MediaPlayer : IMediaPlayer
     private readonly Action? _videoTransformsReset;
     private readonly Action? _audioTransformsReset;
     private Action<AudioFrame>? _audioDataSink;
-    private Action<VideoFrame>? _videoFrameSink;
+    private readonly FrameChannel _frameChannel = new();
     private bool _isMuted;
     private float _playbackRate = 1.0f;
     private Timer? _positionTimer;
@@ -218,8 +218,8 @@ public sealed class MediaPlayer : IMediaPlayer
     /// <inheritdoc />
     public event Action<VideoFrame>? VideoFrameAvailable
     {
-        add => _videoFrameSink += value;
-        remove => _videoFrameSink -= value;
+        add => _frameChannel.Subscribe(new DelegateFrameSink(value));
+        remove => _frameChannel.Unsubscribe(new DelegateFrameSink(value));
     }
 
     /// <inheritdoc />
@@ -262,9 +262,12 @@ public sealed class MediaPlayer : IMediaPlayer
             if (videoTrack != null && videoTrack.VideoCodec.HasValue)
             {
                 // 透传解封装器提取的编解码器私有配置（H264/H265 的 SPS+PPS）→ 解码器输入类型
+                // 同时透传公开开关 EnableHardwareAcceleration（V2-10）：用户显式关闭硬解时须真实生效，
+                // 否则两级与（会话级 VideoSettings × 后端级 FFmpegOptions）的会话级恒为 true 而失效。
                 _videoDecoder = _videoDecoderFactory.Create(videoTrack.VideoCodec.Value, new VideoSettings
                 {
-                    CodecConfiguration = videoTrack.VideoInfo?.CodecConfiguration ?? default
+                    CodecConfiguration = videoTrack.VideoInfo?.CodecConfiguration ?? default,
+                    EnableHardwareAcceleration = _options.EnableHardwareAcceleration
                 });
             }
 
@@ -344,17 +347,9 @@ public sealed class MediaPlayer : IMediaPlayer
                 _videoFramePool,
                 _videoTransforms,
                 _videoTransformsReset,
-                videoFrameSink: frame =>
-                {
-                    // 视频帧路由（订阅时机无关）：lambda 在管线触发时读取当前 _videoFrameSink 字段——
-                    // UI 已订阅（Skia 软渲染）→ 投递 sink；未订阅（D3D11 原生 GPU）→ 直接 Present 到共享 SwapChain。
-                    // 注意：必须显式路由，不能仅转发——否则 D3D11 模式（无订阅方）会因 lambda 非空而
-                    // 永不调用渲染器，导致视频不显示（T19 回归修复）。
-                    if (_videoFrameSink != null)
-                        _videoFrameSink(frame);              // Skia 软渲染（UI 已订阅 VideoFrameAvailable）
-                    else
-                        _videoRenderer?.Present(frame);     // D3D11 原生 GPU（管线线程直接呈现到共享 SwapChain）
-                });
+                // 统一帧投递：所有帧经 FrameChannel 扇出至订阅的 Sink（无头计算 / Skia 软渲染 / D3D11 零拷贝 GPU 呈现）。
+                // 有头与无头同饮此通道；D3D11 经 D3D11GpuPresenter 订阅同一通道 Present，零拷贝不变（T19 收敛修复）。
+                videoFrameSink: frame => _frameChannel.Emit(frame));
             }
 
             if (_audioDecoder != null && _audioOutput != null && audioTrack != null)

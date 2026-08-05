@@ -37,7 +37,7 @@ public sealed class HeadfulPlaybackEndToEndTests
 
     /// <summary>
     /// 有头视频：真实 D3D11 渲染器经隐藏窗口的 SwapChain 上屏。
-    /// 不订阅 VideoFrameAvailable → 帧路由到 _videoRenderer.Present（D3D11 原生 GPU 上屏）。
+    /// 经统一 FrameChannel 订阅 Present（与 D3D11GpuPresenter 行为一致）——原"不订阅→else _videoRenderer.Present"分支已移除。
     /// 计数装饰器精确统计真实 SwapChain.Present 调用次数。
     /// </summary>
     [Fact]
@@ -69,6 +69,9 @@ public sealed class HeadfulPlaybackEndToEndTests
 
             // 挂到隐藏窗口的 SwapChain（镜像 VideoView 的 D3D11GpuPresenter.Initialize）
             countingFactory.Last.Attach(new HwndRenderTarget(win.Hwnd, 640, 480));
+
+            // 收敛后 D3D11 经统一 FrameChannel 订阅 Present（与 D3D11GpuPresenter 行为一致；原 else 分支已移除）
+            player.VideoFrameAvailable += f => countingFactory.Last?.Present(f);
 
             await player.PlayAsync();
 

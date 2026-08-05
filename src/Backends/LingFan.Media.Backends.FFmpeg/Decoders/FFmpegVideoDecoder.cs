@@ -76,11 +76,18 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         Codec = codec;
         AVCodecID codecId = MapVideoCodecToFFmpeg(codec);
 
+        // 🔴 硬解开关是「两级与」：会话级 VideoSettings.EnableHardwareAcceleration
+        // 与后端级 FFmpegOptions.HardwareAcceleration 任一为 false 即禁用。
+        // 此前 FFmpegOptions.HardwareAcceleration 声明了却从未被任何代码读取——宿主写
+        // AddFFmpeg(o => o.HardwareAcceleration = false) 毫无效果（静默失效）。
+        // options 为 null（直接 new 解码器、未走 DI）时按 true 处理，保持既有行为。
+        bool hwEnabled = settings.EnableHardwareAcceleration && (_options?.HardwareAcceleration ?? true);
+
         // V2-17 B9: Android MediaCodec 硬解必须使用专用解码器（h264_mediacodec 等）——
         // avcodec_find_decoder 默认返回软件解码器，对其挂 hw_device_ctx 无效
         AVCodec* avCodec = null;
         bool useMediaCodec = false;
-        if (settings.EnableHardwareAcceleration && OperatingSystem.IsAndroid())
+        if (hwEnabled && OperatingSystem.IsAndroid())
         {
             string? mcName = GetMediaCodecDecoderName(codec);
             if (mcName is not null)
@@ -121,7 +128,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             }
             IsHardwareAccelerated = true;
         }
-        else if (settings.EnableHardwareAcceleration && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
+        else if (hwEnabled && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
         {
             // V2-15 B6: D3D11VA 硬件解码——使用渲染器共享的 D3D11 设备
             // 零拷贝链路：硬解输出 ID3D11Texture2D → D3D11HardwareFrameResource → D3D11Renderer
@@ -136,7 +143,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 IsHardwareAccelerated = false;
             }
         }
-        else if (settings.EnableHardwareAcceleration)
+        else if (hwEnabled)
         {
             // 硬解启用但无 GPU 设备上下文——保持软件解码
             IsHardwareAccelerated = false;

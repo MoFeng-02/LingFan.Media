@@ -464,15 +464,15 @@ public sealed class VideoView : Control, IRenderTarget
     }
 
     /// <summary>
-    /// V2-12: 根据当前 Presenter 类型与绑定 Player 维护视频帧 sink 订阅。
-    /// 仅当 Presenter 为 <see cref="SkiaVideoPresenter"/>（软渲染）且已绑定 Player 时订阅
-    /// <see cref="IMediaPlayer.VideoFrameAvailable"/>；D3D11/GPU Presenter 或未绑定时退订。
+    /// V2-12 收敛：所有 <see cref="IGpuPresenter"/>（Skia 软渲染 / D3D11 零拷贝 GPU 等）均订阅
+    /// <see cref="IMediaPlayer.VideoFrameAvailable"/>，经统一 FrameChannel 接收帧——有头与无头同饮一条通道，
+    /// 不再区分"订阅 vs 直接 Present"两条路径（原 T19 硬编码分支已移除）。<see cref="PresentFrame"/> 内部
+    /// 仅调 <c>_presenter.Present(frame)</c>：Skia 写位图并调度重绘，D3D11 经共享 SwapChain 零拷贝上屏。
     /// 幂等（由 <c>_videoSinkSubscribed</c> 标记防重复订阅）。
-    /// 订阅后管线线程同步触发 <see cref="PresentFrame"/>，后者写位图并调度 UI 重绘。
     /// </summary>
     private void UpdateVideoSinkSubscription()
     {
-        var shouldSubscribe = _player != null && _presenter is SkiaVideoPresenter;
+        var shouldSubscribe = _player != null && _presenter is IGpuPresenter;
         if (shouldSubscribe && !_videoSinkSubscribed)
         {
             _player!.VideoFrameAvailable += PresentFrame;

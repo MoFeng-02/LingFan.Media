@@ -853,11 +853,15 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 int width = (int)(frameSize >> 32);
                 int height = (int)(frameSize & 0xFFFFFFFF);
 
+                var vcodec = MapVideoCodec(subtype);
+                if (vcodec == VideoCodec.Unknown)
+                    _logger.LogWarning("[OPEN-DIAG] 未识别视频子类型 {Subtype} → 标记 Unknown（后端仅支持 H264/H265；AV1/VP9/MPEG 等需扩 codec 路由）", subtype);
+
                 track = new MediaTrack
                 {
                     Index = index,
                     Type = TrackType.Video,
-                    VideoCodec = MapVideoCodec(subtype),
+                    VideoCodec = vcodec,
                     VideoInfo = new VideoTrackInfo
                     {
                         Width = width,
@@ -1342,6 +1346,8 @@ internal sealed class MFDemuxer : IMediaDemuxer
     {
         _ when subtype == MFConstants.MFVideoFormat_H264 => VideoCodec.H264,
         _ when subtype == MFConstants.MFVideoFormat_H265 => VideoCodec.H265,
+        _ when subtype == MFConstants.MFVideoFormat_HEVC => VideoCodec.H265,
+        _ when subtype == MFConstants.MFVideoFormat_HEVC_ES => VideoCodec.H265,
         _ => VideoCodec.Unknown
     };
 }

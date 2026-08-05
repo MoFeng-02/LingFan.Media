@@ -125,6 +125,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private bool _dxvaActive;        // DXVA 是否成功激活（决定 ExtractFrame 走 GPU 纹理还是软解拷贝）
     private IntPtr _dxvaManager;     // IMFDXGIDeviceManager*（DXVA 必需；Dispose 时 Release）
     private uint _dxvaResetToken;    // ResetDevice 配对 reset token
+    private IntPtr _decoderActivate; // 经 MFTEnumEx 得到的 IMFActivate*（ActivateObject 激活后保留其上下文；Dispose 时 Release）
     private long _gpuZeroCopyFrames;  // DXVA 零拷贝 GPU 纹理帧计数（验证铁证）
     private long _cpuFallbackFrames;  // 软解 CPU 拷贝帧计数
     private bool _frameSummaryLogged; // 收尾帧路径统计仅打印一次
@@ -202,24 +203,24 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             MFPlatform.Startup();
             _mfStartupAcquired = true;
 
-            // 经 MFTEnum 动态发现注册的解码 MFT（避免硬编码 CLSID 在部分 Windows 上未注册 / HEVC 可选）
-            Guid clsid = FindDecoderClsid(_inputSubtype);
-            if (clsid == Guid.Empty)
-                throw new PlatformNotSupportedException(
-                    $"未找到 {codec} 解码 MFT（系统可能未注册对应解码器；HEVC 需安装“HEVC 视频扩展”）。");
+            // 解码器发现诊断（仅 LINGFAN_MF_DECODER_DIAG=1 时打印全部候选 CLSID，避免生产日志噪声）
+            if (DiagEnabled) DumpAllVideoDecoders();
 
-            // CoCreateInstance 实例化解码 MFT
-            Guid iid = MFConstants.IID_IMFTransform;
-            hr = MFInterop.CoCreateInstance(ref clsid, IntPtr.Zero, MFInterop.CLSCTX_ALL, ref iid, out _transform);
-            Marshal.ThrowExceptionForHR(hr);
+            // 实例化解码 MFT：优先 CoCreateInstance（已知 stock CLSID，如 H264 同步 stock MFT）；
+            // 失败则 MFTEnumEx + IMFActivate::ActivateObject（覆盖 Store/异步 MFT——其 IMFActivate 不设
+            // CLSID 属性、亦不可 CoCreateInstance，必须 ActivateObject）。注意：Store 安装的编解码器扩展
+            // （如 Microsoft HEVC 视频扩展）在未打包桌面进程中 ActivateObject 常返回 E_INVALIDARG/E_ACCESSDENIED，
+            // 此时 FindDecoderTransform 会抛出准确异常并建议改用 ffmpeg 后端。
+            _transform = FindDecoderTransform(_inputSubtype);
+            if (_transform == IntPtr.Zero)
+                throw new PlatformNotSupportedException(
+                    $"未找到 {codec} 解码 MFT（系统可能未注册对应解码器）。");
+            _logger.LogInformation("[DECODER-ENUM] 已获得 {Codec} 解码 MFT transform={Transform:X}（输入 subtype={Subtype:B}）", codec, _transform, _inputSubtype);
 
             // 缓存 vtable 委托（slotIndex = 绝对槽 − 3；经 Windows SDK mftransform.h 声明顺序推得，
-            // 并已于本机 MFTDiag 运行时逐槽验证（2026-07-29，CLSID_MSH264DecoderMFT 62ce7e72 全 S_OK））。
-            // IMFTransform 顺序（注意 GetAttributes=5，早期注释曾漏它导致全体差 1）：
-            //   GetStreamLimits=0/GetStreamCount=1/GetStreamIDs=2/GetInputStreamInfo=3/GetOutputStreamInfo=4/GetAttributes=5/
-            //   GetInputStreamAttributes=6/GetOutputStreamAttributes=7/DeleteInputStream=8/AddInputStreams=9/GetInputAvailableType=10/
-            //   GetOutputAvailableType=11/SetInputType=12/SetOutputType=13/GetInputCurrentType=14/GetOutputCurrentType=15/
-            //   GetInputStatus=16/GetOutputStatus=17/SetOutputBounds=18/ProcessEvent=19/ProcessMessage=20/ProcessInput=21/ProcessOutput=22
+            // 并已于本机 MFTDiag 运行时逐槽验证）。必须在任何 _processMessage 等调用之前缓存。
+            // IMFTransform 顺序：GetStreamLimits=0 … GetAttributes=5 … SetInputType=12/SetOutputType=13/
+            // ProcessMessage=20/ProcessInput=21/ProcessOutput=22
             _getOutputStreamInfo = MfVTable.Get<IMFTransform_GetOutputStreamInfo>(_transform, 4);   // 绝对 7
             _setInputType = MfVTable.Get<IMFTransform_SetInputType>(_transform, 12);                // 绝对 15
             _setOutputType = MfVTable.Get<IMFTransform_SetOutputType>(_transform, 13);              // 绝对 16
@@ -293,22 +294,23 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                     dxhr = resetDevice(_dxvaManager, _gpuContext.DeviceHandle, _dxvaResetToken);
                     Marshal.ThrowExceptionForHR(dxhr);
 
-                    // ④ 设备能力真值探测（决定性判据）：共享 D3D11 设备能否为 H264 解码到 NV12 分配 DXGI 表面。
+                    // ④ 设备能力真值探测（决定性判据）：共享 D3D11 设备能否为当前编码解码到 NV12 分配 DXGI 表面。
                     // 🔴 这是「半 DXVA（GPU 硬解但输出读回系统内存）」的唯一权威判据。若设备不支持
-                    //    H264 DXVA 解码到 NV12，MFT 会**静默**把结果拷贝回系统内存 → 输出 buffer 是普通
+                    //    该编码 DXVA 解码到 NV12，MFT 会**静默**把结果拷贝回系统内存 → 输出 buffer 是普通
                     //    IMFMediaBuffer（QI IMFDXGIBuffer=E_NOINTERFACE）→ 零拷贝永不生效。若不查，会陷入
                     //    「硬解激活=True 却 GPU零拷贝=0」的假绿（与 R40 消息号假绿同源）。
                     //    探测失败的处置：不阻断初始化，仅打告警，让后续真实输出行为说话。
-                    if (!MfDxvaInterop.TryProbeH264DxvaSupport(_gpuContext.DeviceHandle, out bool dxvaCapable))
+                    var dxvaProfile = MfDxvaInterop.DxvaProfileForCodec(codec);
+                    if (!MfDxvaInterop.TryProbeDxvaSupport(_gpuContext.DeviceHandle, dxvaProfile, out bool dxvaCapable))
                         _logger.LogWarning("[DXVA-DIAG] 共享 D3D11 设备不支持 ID3D11VideoDevice（无视频解码能力）→ 零拷贝不可能，将走软解");
                     else if (!dxvaCapable)
-                        _logger.LogWarning("[DXVA-DIAG] CheckVideoDecoderFormat(H264_VLD→NV12)=不支持 → 设备无法为 H264 分配 DXGI 解码表面，MFT 将静默回落读回系统内存（半 DXVA），零拷贝不成立");
+                        _logger.LogWarning("[DXVA-DIAG] CheckVideoDecoderFormat(profile→NV12)=不支持 → 设备无法为 {Codec} 分配 DXGI 解码表面，MFT 将静默回落读回系统内存（半 DXVA），零拷贝不成立", codec);
                     else
-                        _logger.LogInformation("[DXVA-DIAG] CheckVideoDecoderFormat(H264_VLD→NV12)=支持 → 设备具备 H264 DXGI 零拷贝解码能力");
+                        _logger.LogInformation("[DXVA-DIAG] CheckVideoDecoderFormat(profile→NV12)=支持 → 设备具备 {Codec} DXGI 零拷贝解码能力", codec);
 
                     // ⑥ 决定性验证：DXGI 管理器是否真正绑定上了设备（解码器经 GetVideoService 取设备）。
                     //    ResetDevice 即便 HRESULT 成功，若 P/Invoke 偏差致绑定未生效，解码器取回空设备 ⇒ 静默读回。
-                    string? mgrDiag = MfDxvaInterop.ProbeManagerBoundDevice(_dxvaManager);
+                    string? mgrDiag = MfDxvaInterop.ProbeManagerBoundDevice(_dxvaManager, dxvaProfile);
                     if (mgrDiag != null)
                         _logger.LogInformation("{Diag}", mgrDiag);
 
@@ -1385,6 +1387,12 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             Marshal.Release(_dxvaManager);
             _dxvaManager = IntPtr.Zero;
         }
+        // Store MFT 激活上下文（ActivateObject 时保留其 IMFActivate*；CloseNativeSync 不触碰，此处统一释放）
+        if (_decoderActivate != IntPtr.Zero)
+        {
+            Marshal.Release(_decoderActivate);
+            _decoderActivate = IntPtr.Zero;
+        }
         _dxvaResetToken = 0;
         _dxvaActive = false;
         _width = 0;
@@ -1407,14 +1415,199 @@ internal sealed class MFVideoDecoder : IVideoDecoder
 
     private static void ThrowIfFailed(int hr) => Marshal.ThrowExceptionForHR(hr);
 
-    /// <summary>经 <see cref="MFInterop.MFTEnum"/> 找到可实例化为 <c>IMFTransform</c> 的解码 MFT CLSID。</summary>
-    /// <remarks>MFTEnum（旧 API）的 Flags 参数按 MSDN 为 Reserved 必须 0（MFT_ENUM_FLAG_* 系 MFTEnumEx 专用）；
-    /// 本机运行时验证（2026-07-29）：H264 → CLSID_MSH264DecoderMFT (62ce7e72-4c71-4d20-b15d-452831a87d9d)。</remarks>
-    private static Guid FindDecoderClsid(Guid inputSubtype)
-        => EnumDecoderClsid(inputSubtype, 0);
+    /// <summary>🔴 临时诊断：枚举全部已注册视频解码器（不过滤 subtype），打印每个 CLSID，确认 HEVC Store 解码器是否可枚举。</summary>
+    private void DumpAllVideoDecoders()
+    {
+        Guid category = MFConstants.MFT_CATEGORY_VIDEO_DECODER;
+        int hr = MFInterop.MFTEnumExRaw(
+            ref category,
+            MFConstants.MFT_ENUM_FLAG_ALL | MFConstants.MFT_ENUM_FLAG_UNTRUSTED_STOREMFT,
+            IntPtr.Zero, IntPtr.Zero,
+            out IntPtr arr, out uint count);
+        _logger.LogWarning("[DECODER-DIAG] DumpAllVideoDecoders MFTEnumEx(ALL|STORE, 不过滤) hr=0x{Hr:X8} count={Count}", hr & 0xFFFFFFFF, count);
+        if (hr >= 0 && arr != IntPtr.Zero && count > 0)
+        {
+            Guid clsidKey = MFConstants.MFT_TRANSFORM_CLSID_Attribute;
+            for (uint i = 0; i < count; i++)
+            {
+                IntPtr act = Marshal.ReadIntPtr(arr, (int)(i * IntPtr.Size));
+                if (act == IntPtr.Zero) continue;
+                try
+                {
+                    var getGuid = MfVTable.Get<IMFAttributes_GetGUID>(act, 7);
+                    int hr2 = getGuid(act, ref clsidKey, out Guid g);
+                    _logger.LogWarning("[DECODER-DIAG]   [{I}] hr2=0x{Hr2:X8} CLSID={G:B}", i, hr2 & 0xFFFFFFFF, g);
+                }
+                finally { Marshal.Release(act); }
+            }
+            MFInterop.CoTaskMemFree(arr);
+        }
+    }
 
-    /// <summary>枚举给定输入 subtype 的解码 MFT，返回首个有效 CLSID（无则 <see cref="Guid.Empty"/>）。</summary>
-    private static Guid EnumDecoderClsid(Guid inputSubtype, uint flags)
+    /// <summary>经 <see cref="MFInterop.MFTEnumEx"/> 找到可实例化为 <c>IMFTransform</c> 的解码 MFT CLSID。</summary>
+    /// <remarks>
+    /// HEVC 视频扩展（Store 安装）注册为<strong>异步 Store MFT</strong>，旧 <c>MFTEnum</c> 枚举不到，
+    /// 必须用 <c>MFTEnumEx</c> 并包含 <c>ASYNCMFT | HARDWARE | UNTRUSTED_STOREMFT</c>。
+    /// 本机运行时验证（2026-07-29）：H264 → CLSID_MSH264DecoderMFT (62ce7e72-4c71-4d20-b15d-452831a87d9d)。
+    /// </remarks>
+    /// <summary>实例化解码 MFT，返回已激活的 <c>IMFTransform*</c>（零表示未找到）。
+    /// 策略：① 已知 stock CLSID + <c>CoCreateInstance</c>（H264 等同步 stock MFT）；
+    /// ② 失败则 <c>MFTEnumEx</c> + <c>IMFActivate::ActivateObject</c>（覆盖 Store/异步 HEVC MFT——
+    /// 其 <c>IMFActivate</c> 不设 <c>MFT_TRANSFORM_CLSID_Attribute</c>、亦不可 CoCreateInstance，必须 ActivateObject）。</summary>
+    private IntPtr FindDecoderTransform(Guid inputSubtype)
+    {
+        // 1) 已知 stock CLSID + CoCreateInstance（H264 stock MFT 等同步解码器）
+        IntPtr t = CoCreateStockDecoder(inputSubtype);
+        if (t != IntPtr.Zero) return t;
+
+        // 2) MFTEnumEx + ActivateObject（Store/异步 HEVC MFT 等不设 CLSID 属性、不可 CoCreateInstance）。
+        //    返回 lastActivateHr/lastCount：枚举到候选但激活失败（典型 Store HEVC MFT 拒绝未打包桌面进程）。
+        int lastActivateHr = 0;
+        uint lastCount = 0;
+        t = ActivateViaMFTEnumEx(inputSubtype,
+            MFConstants.MFT_ENUM_FLAG_ALL | MFConstants.MFT_ENUM_FLAG_UNTRUSTED_STOREMFT,
+            out lastActivateHr, out lastCount);
+        if (t != IntPtr.Zero) return t;
+        t = ActivateViaMFTEnumEx(inputSubtype, MFConstants.MFT_ENUM_FLAG_ALL, out lastActivateHr, out lastCount);
+        if (t != IntPtr.Zero) return t;
+
+        // 枚举到候选但无法在当前进程激活（Store 编解码器扩展需打包应用身份）
+        if (lastCount > 0)
+        {
+            throw new PlatformNotSupportedException(
+                $"找到 {_codecName(inputSubtype)} 解码 MFT（共 {lastCount} 个候选）但无法在当前进程激活" +
+                $"（ActivateObject hr=0x{lastActivateHr & 0xFFFFFFFF:X8}）。Store 安装的编解码器扩展" +
+                "（如 Microsoft HEVC 视频扩展）通常只供打包应用（系统播放器/照片）使用，未打包桌面进程直接激活会被拒绝。" +
+                "建议：HEVC 解码改走 ffmpeg 后端；或待本库异步 MFT 驱动 + 打包支持落地后再试。");
+        }
+        return IntPtr.Zero;
+    }
+
+    /// <summary>经 <c>MFTEnumEx</c> 找到匹配 subtype 的 <c>IMFActivate</c>，调用 <c>ActivateObject</c> 得到 <c>IMFTransform*</c>。
+    /// 这是 MFTEnumEx 结果的标准激活方式——Store/异步 MFT 不设 CLSID 属性、不可 CoCreateInstance。</summary>
+    private IntPtr ActivateViaMFTEnumEx(Guid inputSubtype, uint flags, out int lastActivateHr, out uint lastCount)
+    {
+        lastActivateHr = 0;
+        lastCount = 0;
+        MFInterop.MftRegisterTypeInfo input = new()
+        {
+            guidMajorType = MFConstants.MFMediaType_Video,
+            guidSubtype = inputSubtype
+        };
+        Guid category = MFConstants.MFT_CATEGORY_VIDEO_DECODER;
+        int hr = MFInterop.MFTEnumEx(
+            ref category, flags, ref input,
+            IntPtr.Zero, out IntPtr arr, out lastCount);
+        if (DiagEnabled)
+            Console.Error.WriteLine($"[DECODER-DIAG] ActivateViaMFTEnumEx flags=0x{flags:X} hr=0x{hr & 0xFFFFFFFF:X8} count={lastCount}");
+        if (hr < 0 || arr == IntPtr.Zero || lastCount == 0)
+            return IntPtr.Zero;
+
+        IntPtr transform = IntPtr.Zero;
+        try
+        {
+            for (uint i = 0; i < lastCount && transform == IntPtr.Zero; i++)
+            {
+                IntPtr activate = Marshal.ReadIntPtr(arr, (int)(i * IntPtr.Size));
+                if (activate == IntPtr.Zero) continue;
+                try
+                {
+                    var activateObject = MfVTable.Get<IMFActivate_ActivateObject>(activate, 28); // 绝对槽 31（IUnknown3+IMFAttributes28+ActivateObject）
+                    Guid iid = MFConstants.IID_IMFTransform;
+                    int hr2 = activateObject(activate, ref iid, out IntPtr pTransform);
+                    if (DiagEnabled)
+                        Console.Error.WriteLine($"[DECODER-DIAG]   [{i}] ActivateObject hr=0x{hr2 & 0xFFFFFFFF:X8} pTransform={(hr2 >= 0 ? pTransform.ToString("X") : "-")}");
+                    if (hr2 < 0 && lastActivateHr == 0)
+                        lastActivateHr = hr2;   // 记录首个激活失败 hr（供异常消息提示）
+                    if (hr2 >= 0 && pTransform != IntPtr.Zero)
+                    {
+                        transform = pTransform;
+                        _decoderActivate = activate;   // 保留 activate 上下文（Store 激活依赖它），Dispose 时释放
+                        activate = IntPtr.Zero;        // 所有权已转移，本循环不再 Release
+                        if (DiagEnabled) LogTransformDiag(transform, i);
+                    }
+                }
+                finally
+                {
+                    if (activate != IntPtr.Zero) Marshal.Release(activate);
+                }
+            }
+        }
+        finally
+        {
+            MFInterop.CoTaskMemFree(arr);
+        }
+        return transform;
+    }
+
+    /// <summary>已知 stock CLSID + <c>CoCreateInstance</c>（H264 等同步 stock MFT）。返回 <c>IMFTransform*</c> 或零。</summary>
+    private IntPtr CoCreateStockDecoder(Guid inputSubtype)
+    {
+        Guid clsid = EnumDecoderClsidEx(inputSubtype,
+            MFConstants.MFT_ENUM_FLAG_ALL | MFConstants.MFT_ENUM_FLAG_UNTRUSTED_STOREMFT);
+        if (clsid == Guid.Empty)
+            clsid = EnumDecoderClsidEx(inputSubtype, MFConstants.MFT_ENUM_FLAG_ALL);
+        // 兜底旧 MFTEnum（旧 API 对 H264 stock MFT 仍有效）
+        if (clsid == Guid.Empty)
+            clsid = EnumDecoderClsidLegacy(inputSubtype);
+        if (clsid == Guid.Empty)
+            return IntPtr.Zero;
+        Guid iid = MFConstants.IID_IMFTransform;
+        int hr = MFInterop.CoCreateInstance(ref clsid, IntPtr.Zero, MFInterop.CLSCTX_ALL, ref iid, out IntPtr t);
+        if (hr < 0)
+        {
+            Console.Error.WriteLine($"[DECODER-DIAG] CoCreateInstance({clsid:B}) hr=0x{hr & 0xFFFFFFFF:X8}");
+            return IntPtr.Zero;
+        }
+        _logger.LogInformation("[DECODER-ENUM] 选中 {Codec} 解码 MFT CLSID={Clsid:B}（CoCreateInstance）", _codecName(inputSubtype), clsid);
+        return t;
+    }
+
+    /// <summary>把输入 subtype 映射为可读编解码器名（仅日志用）。</summary>
+    private static string _codecName(Guid subtype)
+    {
+        if (subtype == MFConstants.MFVideoFormat_H264) return "H264";
+        if (subtype == MFConstants.MFVideoFormat_HEVC || subtype == MFConstants.MFVideoFormat_HEVC_ES) return "HEVC";
+        return subtype.ToString("B");
+    }
+
+    /// <summary>解码器发现诊断总开关：设环境变量 <c>LINGFAN_MF_DECODER_DIAG=1</c> 时打印全部候选 MFT CLSID /
+    /// ActivateObject hr / MF_SA_D3D11_AWARE 等细节（排查 Store HEVC MFT 枚举/激活问题时用），常态关闭避免生产日志噪声。</summary>
+    private static bool DiagEnabled => Environment.GetEnvironmentVariable("LINGFAN_MF_DECODER_DIAG") == "1";
+
+    /// <summary>🔴 临时诊断：打印 transform 关键属性（异步标志、MF_SA_D3D11_AWARE、CLSID），确认 HEVC 解码器能力。</summary>
+    private void LogTransformDiag(IntPtr transform, uint index)
+    {
+        var getAttrs = MfVTable.Get<IMFTransform_GetAttributes>(transform, 5);
+        int hr = getAttrs(transform, out IntPtr attrs);
+        if (hr < 0 || attrs == IntPtr.Zero)
+        {
+            Console.Error.WriteLine($"[DECODER-DIAG]   [{index}] GetAttributes hr=0x{hr & 0xFFFFFFFF:X8}");
+            return;
+        }
+        try
+        {
+            var getUint = MfVTable.Get<IMFAttributes_GetUINT32>(attrs, 4);
+            Guid flagsKey = MFConstants.MF_TRANSFORM_FLAGS_Attribute;
+            int hr2 = getUint(attrs, ref flagsKey, out uint flagsVal);
+            bool isAsync = (hr2 >= 0) && ((flagsVal & 0x1) != 0);
+            Console.Error.WriteLine($"[DECODER-DIAG]   [{index}] FLAGS hr=0x{hr2 & 0xFFFFFFFF:X8} val=0x{flagsVal:X8} async={isAsync}");
+            Guid awareKey = MFConstants.MF_SA_D3D11_AWARE;
+            int hr3 = getUint(attrs, ref awareKey, out uint aware);
+            Console.Error.WriteLine($"[DECODER-DIAG]   [{index}] MF_SA_D3D11_AWARE hr=0x{hr3 & 0xFFFFFFFF:X8} val={aware}");
+            var getGuid = MfVTable.Get<IMFAttributes_GetGUID>(attrs, 7);
+            Guid clsidKey = MFConstants.MFT_TRANSFORM_CLSID_Attribute;
+            int hr4 = getGuid(attrs, ref clsidKey, out Guid g);
+            Console.Error.WriteLine($"[DECODER-DIAG]   [{index}] CLSID(from transform) hr=0x{hr4 & 0xFFFFFFFF:X8} {g:B}");
+        }
+        finally
+        {
+            Marshal.Release(attrs);
+        }
+    }
+
+    /// <summary>使用 <c>MFTEnumEx</c> 枚举给定输入 subtype 的解码 MFT，返回首个有效 CLSID（无则 <see cref="Guid.Empty"/>）。</summary>
+    private static Guid EnumDecoderClsidEx(Guid inputSubtype, uint flags)
     {
         MFInterop.MftRegisterTypeInfo input = new()
         {
@@ -1422,15 +1615,63 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             guidSubtype = inputSubtype
         };
         Guid category = MFConstants.MFT_CATEGORY_VIDEO_DECODER; // 静态只读字段不可作 ref 实参（CS0199）
-        int found = MFInterop.MFTEnum(
+        int hr = MFInterop.MFTEnumEx(
             ref category, flags, ref input,
+            IntPtr.Zero, out IntPtr pActivateArray, out uint count);
+        Console.Error.WriteLine($"[DECODER-DIAG] EnumDecoderClsidEx flags=0x{flags:X} hr=0x{hr & 0xFFFFFFFF:X8} count={count}");
+        if (hr < 0 || pActivateArray == IntPtr.Zero || count == 0)
+            return Guid.Empty;
+
+        Guid result = Guid.Empty;
+        Guid clsidKey = MFConstants.MFT_TRANSFORM_CLSID_Attribute;
+        try
+        {
+            for (uint i = 0; i < count; i++)
+            {
+                IntPtr activate = Marshal.ReadIntPtr(pActivateArray, (int)(i * IntPtr.Size));
+                if (activate == IntPtr.Zero)
+                    continue;
+                try
+                {
+                    if (result == Guid.Empty)
+                    {
+                        var getGuid = MfVTable.Get<IMFAttributes_GetGUID>(activate, 7); // IMFAttributes::GetGUID
+                        int hr2 = getGuid(activate, ref clsidKey, out Guid candidate);
+                        if (hr2 >= 0 && candidate != Guid.Empty)
+                            result = candidate;
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(activate);
+                }
+            }
+        }
+        finally
+        {
+            MFInterop.CoTaskMemFree(pActivateArray);
+        }
+        return result;
+    }
+
+    /// <summary>使用旧 <c>MFTEnum</c> 兜底枚举给定输入 subtype 的解码 MFT（仅同步 MFT）。</summary>
+    private static Guid EnumDecoderClsidLegacy(Guid inputSubtype)
+    {
+        MFInterop.MftRegisterTypeInfo input = new()
+        {
+            guidMajorType = MFConstants.MFMediaType_Video,
+            guidSubtype = inputSubtype
+        };
+        Guid category = MFConstants.MFT_CATEGORY_VIDEO_DECODER;
+        int found = MFInterop.MFTEnum(
+            ref category, 0, ref input,
             IntPtr.Zero, IntPtr.Zero, out IntPtr pClsidArray, out uint count);
         // HRESULT 语义：S_OK=0 即成功——绝不能写 "<= 0"（会把成功误判为失败，制造"无注册 MFT"假象）
         if (found < 0 || pClsidArray == IntPtr.Zero || count == 0)
             return Guid.Empty;
         try
         {
-            // CLSID 数组元素为 16 字节 GUID（Sequential 布局：guidMajorType/guidSubtype 各 16 字节）
+            // CLSID 数组元素为 16 字节 GUID
             for (uint i = 0; i < count; i++)
             {
                 IntPtr p = IntPtr.Add(pClsidArray, (int)(i * 16));

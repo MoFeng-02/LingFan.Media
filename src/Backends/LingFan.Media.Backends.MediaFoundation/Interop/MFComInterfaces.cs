@@ -129,6 +129,17 @@ internal delegate int IMFAttributes_DeleteItem(IntPtr self, ref Guid guidKey);
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_GetUINT32(IntPtr self, ref Guid guidKey, out uint punValue);
 
+/// <summary>IMFAttributes::GetGUID（slotIndex 7）。用于从 MFTEnumEx 返回的 IMFActivate 读取 MFT_TRANSFORM_CLSID_Attribute。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFAttributes_GetGUID(IntPtr self, ref Guid guidKey, out Guid pguidValue);
+
+/// <summary>IMFActivate::ActivateObject（slotIndex 28，绝对槽 31；mfobjects.h IMFActivateVtbl：IUnknown(3)+IMFAttributes(28)+ActivateObject）。
+/// 经 <c>MFTEnumEx</c> 得到的 <c>IMFActivate</c> 必须调本方法获取 <c>IMFTransform</c>——Store/异步 MFT 的
+/// <c>IMFActivate</c> 不设 <c>MFT_TRANSFORM_CLSID_Attribute</c>、亦不可 <c>CoCreateInstance</c>，只能 ActivateObject。
+/// （已用 DumpAll 中 GetGUID@slot7 成功反证 IMFAttributes 数法正确 ⇒ ActivateObject 绝对槽 = 3+28 = 31 ⇒ slotIndex 28。）</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFActivate_ActivateObject(IntPtr self, ref Guid riid, out IntPtr ppv);
+
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_GetBlobSize(IntPtr self, ref Guid guidKey, out uint pcbBlobSize);
 

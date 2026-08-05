@@ -498,3 +498,6 @@ src/Template/V1/template.zip
 /slnx.ps1
 /Create-LingFanMedia.ps1
 /TestInfo
+
+# 第三方原生库（合规 ffmpeg 共享构建，仅运行时动态加载；不入库，见 THIRD_PARTY_NOTICES.md）
+ThirdParty/
