@@ -170,7 +170,7 @@ public sealed class VideoView : Control, IRenderTarget
     /// 呈现一帧到 VideoView。由管线或桥接组件调用。
     /// 同步方法——委托给 SkiaVideoPresenter.Present（纯内存 + GPU操作）。
     /// </summary>
-    /// <param name="frame">要呈现的视频帧（所有权转移给 Presenter）。</param>
+    /// <param name="frame">要呈现的视频帧（只读借用：所有权归管线，回调返回后由管线 ReturnFrame 释放）。</param>
     public void PresentFrame(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -179,8 +179,8 @@ public sealed class VideoView : Control, IRenderTarget
         var presenter = _presenter;
         if (presenter == null)
         {
-            // Presenter 尚未初始化，Dispose 帧防止泄漏
-            frame.Dispose();
+            // Presenter 尚未初始化：帧归还由管线 ReturnFrame 统一负责（只读借用契约）。
+            // 此处不得 Dispose——统一 FrameChannel 多播下，后续订阅方会读到已释放帧（use-after-free）。
             return;
         }
 

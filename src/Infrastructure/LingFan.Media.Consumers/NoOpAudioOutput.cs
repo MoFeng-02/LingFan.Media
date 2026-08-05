@@ -50,6 +50,12 @@ public sealed class NoOpAudioOutput : IAudioOutput, IRealtimePacedOutput
         if (!_paceRealTime)
             return;
 
+        // 🔴 兜底：若初始化时采样率未就绪（如 AAC 在 avcodec_open2 后 ctx->sample_rate 仍为 0，
+        // 解码器 OutputSampleRate 透传为 0），改用帧自带的采样率（解码后 avFrame->sample_rate 恒正确）
+        // 做实时背压，否则 played 恒为 0 → 不 sleep → 音频瞬间提交完 → SyncTo 把主时钟飙到片尾。
+        if (_sampleRate <= 0 && frame.SampleRate > 0)
+            _sampleRate = frame.SampleRate;
+
         // 锚定首帧：记录“首帧在此 wall 时刻开始消费”，后续以「累计提交采样数 / 采样率」推算真实播放进度。
         // 关键：MF 解封装/解码器给出的帧 Timestamp/Duration 可能不可靠（全 0 或基于压缩包大小），
         // 若以其为锚点则 delay 恒 <=0 → 不 sleep → 音频瞬间提交完 → Synchronizer 用 SyncTo 把主时钟

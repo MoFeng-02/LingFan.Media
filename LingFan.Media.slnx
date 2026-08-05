@@ -36,6 +36,7 @@
     <Project Path="src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
     <Project Path="src/Tools/MediaCorrectnessProbe/MediaCorrectnessProbe.csproj" />
     <Project Path="src/Tools/HeadfulPlaybackProbe/HeadfulPlaybackProbe.csproj" />
+    <Project Path="src/Tools/FfmpegPlaybackProbe/FfmpegPlaybackProbe.csproj" />
   </Folder>
   <Folder Name="/UI/">
     <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />

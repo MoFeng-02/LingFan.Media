@@ -7,7 +7,12 @@ namespace LingFan.Media.Abstractions;
 /// </summary>
 public interface IFrameSink
 {
-    /// <summary>消费一帧。管线线程同步调用；Sink 负责帧的所有权释放（归还对象池），且不应长时间阻塞。</summary>
+    /// <summary>
+    /// 消费一帧。管线线程同步调用。
+    /// <b>只读借用契约</b>：Sink 可在本次调用内读取/呈现帧，但<b>不得 Dispose</b>（所有权归管线，
+    /// 投递后由管线 <c>ReturnFrame</c> 统一释放），也<b>不得在调用返回后持有帧引用</b>
+    /// （多播下后续订阅方会读到已释放帧，use-after-free）。
+    /// </summary>
     void OnFrame(VideoFrame frame);
 }
 
@@ -18,11 +23,17 @@ public interface IFrameSink
 /// <remarks>
 /// 公开事件 <c>IMediaPlayer.VideoFrameAvailable</c> 即本通道的 <see cref="Action{VideoFrame}"/> 适配外观；
 /// 高级消费者（录制、缩略图等）可直接实现 <see cref="IFrameSink"/> 经本通道订阅，无需委托。
+/// <para><b>帧所有权</b>：<see cref="IFrameChannel.Emit"/> 由管线在 <c>try</c> 内调用，
+/// 其后 <c>finally</c> 中由管线 <c>ReturnFrame</c> 释放帧——<b>通道与所有 Sink 均为只读借用，绝不 Dispose</b>。
+/// 任一 Sink 在 <see cref="OnFrame"/> 内 Dispose 会在多播下破坏后续订阅方，属硬违例。</para>
 /// </remarks>
 public interface IFrameChannel
 {
     /// <summary>订阅一个 Sink，返回取消订阅的句柄（Dispose 即退订）。</summary>
     IDisposable Subscribe(IFrameSink sink);
+
+    /// <summary>退订一个 Sink（按引用/相等性匹配）。</summary>
+    void Unsubscribe(IFrameSink sink);
 
     /// <summary>向所有订阅者投递一帧。</summary>
     void Emit(VideoFrame frame);

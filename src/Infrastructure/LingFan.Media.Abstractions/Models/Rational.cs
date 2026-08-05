@@ -27,6 +27,12 @@ public readonly struct Rational : IEquatable<Rational>
     /// <summary>返回 "num/den" 格式的字符串。</summary>
     public override string ToString() => $"{Numerator}/{Denominator}";
 
+    /// <summary>
+    /// 转换为 double（分母为零时返回 0，避免除零）。用于 ffmpeg 时间戳换算
+    /// （<c>pts * av_q2d(time_base)</c> 与反向 <c>seconds / av_q2d(time_base)</c>）。
+    /// </summary>
+    public double ToDouble() => Denominator == 0 ? 0.0 : (double)Numerator / Denominator;
+
     /// <inheritdoc/>
     public bool Equals(Rational other)
         => Numerator == other.Numerator && Denominator == other.Denominator;

@@ -317,6 +317,9 @@ internal static class Program
                     countingFactory.Last.Attach(new HwndRenderTarget(win.Hwnd,
                         win.ClientW > 0 ? win.ClientW : windowW,
                         win.ClientH > 0 ? win.ClientH : windowH));
+                // 收敛后 D3D11 经统一 FrameChannel 订阅 Present（与 D3D11GpuPresenter 行为一致；原 else 分支已移除）。
+                // 不订阅则 PresentCount 恒为 0，验证失效。
+                player.VideoFrameAvailable += f => countingFactory.Last?.Present(f);
             }
 
             await player.PlayAsync();

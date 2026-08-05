@@ -57,6 +57,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private volatile bool _isPaused;
     private volatile bool _pauseAcknowledged;
     private TaskCompletionSource<bool>? _pauseAckTcs;
+    // 主时钟停摆降级标志（仅呈现线程读写，无需 volatile）：见 WaitUntilDue 的停摆看门狗。
+    // 置位后同步等待改用 50ms 宽限期，避免每帧空等 500ms 把画面压到 2fps；主时钟恢复推进即复位。
+    private bool _masterClockStalled;
     private long _droppedFrames;
     // A/V 同步诊断节流字段（仅 LINGFAN_SYNC_DIAG=1 时读取，生产路径恒 0 不影响任何逻辑）。
     private long _lastSyncDiagTicks;
@@ -690,12 +693,25 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         var threshold = _synchronizer.PresentationLatency;
         long targetQpc = 0;
 
+        // 🔴 主时钟停摆看门狗（2026-08-05 §27）：主时钟取自音频设备游标，一旦音频侧异常
+        // （设备未启动、启动锚点未捕获、引擎停摆），GetCurrentMasterTime 会恒定不前进 →
+        // 本循环永久自旋 → 画面永久冻结（实测现象：present=1 dropped=0，整片只上屏首帧）。
+        // 故记录进入时的主时钟与墙钟：墙钟已过 StallGraceMs 而主时钟前进不足 StallEpsilonMs，
+        // 即判定主时钟停摆，放弃等待直接呈现——降级为「按解码节奏出帧」，宁可轻微不同步也绝不冻结。
+        // 宽限期粘滞：首次判定用 500ms（足够长，绝不误伤正常抖动）；一旦确认停摆则降到 50ms，
+        // 否则每帧空等 500ms 会把画面压到 2fps。主时钟恢复推进时自动复位回正常模式。
+        double graceMs = _masterClockStalled ? 50.0 : 500.0;
+        const double StallEpsilonMs = 20.0;
+        var entryMaster = _synchronizer.GetCurrentMasterTime();
+        long entryQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+
         // 主体：睡到目标前 ~1.5ms，每轮一次平滑时钟读取。Stop() 取消时立即返回，
         // 避免专用实时线程在退出/暂停时仍按帧时睡眠（round-21 引入的回归：原 Thread.Sleep 不感知取消）。
         while (true)
         {
             if (ct.IsCancellationRequested) return;
-            var remaining = (frameTimestamp - threshold - _synchronizer.GetCurrentMasterTime()).TotalMilliseconds;
+            var master = _synchronizer.GetCurrentMasterTime();
+            var remaining = (frameTimestamp - threshold - master).TotalMilliseconds;
             if (remaining <= tailMs)
             {
                 // 音频时钟≈实时，故用本地高精度时钟反推目标 QPC，尾部纯自旋收口（零 COM 调用）。
@@ -703,7 +719,33 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                             + (long)(remaining * 10_000); // 100ns ticks
                 break;
             }
-            Thread.Sleep((int)Math.Ceiling(remaining - tailMs));
+
+            double waitedMs = System.Diagnostics.Stopwatch.GetElapsedTime(entryQpc).TotalMilliseconds;
+            double advancedMs = (master - entryMaster).TotalMilliseconds;
+
+            if (advancedMs >= StallEpsilonMs && _masterClockStalled)
+            {
+                _masterClockStalled = false;
+                graceMs = 500.0;
+                _logger.LogInformation("[SYNC] 主时钟已恢复推进，同步等待回到正常模式。");
+            }
+
+            if (waitedMs > graceMs && advancedMs < StallEpsilonMs)
+            {
+                if (!_masterClockStalled)
+                {
+                    _masterClockStalled = true;
+                    _logger.LogWarning(
+                        "[SYNC] 主时钟停摆：等待 {Waited:F0}ms 内主时钟仅前进 {Advanced:F1}ms（master={Master}），" +
+                        "放弃等待直接呈现帧 PTS={Pts}，避免画面永久冻结。后续帧改用 50ms 宽限期降级出帧。",
+                        waitedMs, advancedMs, master, frameTimestamp);
+                }
+                return;   // 立即呈现（跳过尾部自旋收口）
+            }
+
+            // 睡眠时长按宽限期截断：主时钟停摆时 remaining 可能高达整片时长（如 PTS=30s、master=0
+            // ⇒ 睡 30 秒），必须在宽限期内醒来复查，否则看门狗永无机会触发。
+            Thread.Sleep((int)Math.Ceiling(Math.Min(remaining - tailMs, graceMs)));
         }
 
         // 尾部：仅用本地 QPC 自旋精确收口（≤5ms 安全阀，防异常时钟停滞死自旋），无跨线程 COM。

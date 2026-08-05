@@ -32,4 +32,11 @@ public sealed class VideoTrackInfo
     /// 用可读写属性（非 init）：解封装器在轨道构建后于 ParseTracks 内回填。
     /// </summary>
     public ReadOnlyMemory<byte> CodecConfiguration { get; set; }
+
+    /// <summary>
+    /// 流时间基（<c>AVStream.time_base</c>）。ffmpeg 解码帧的 pts/dts 以此为单位，须透传给解码器
+    /// 写入 <c>AVCodecContext.pkt_timebase</c> 才能正确换算时间戳。解码后 <c>avFrame->time_base</c> /
+    /// <c>ctx->time_base</c> 常为 0，不能直接用于换算（否则帧时间戳全 0）。
+    /// </summary>
+    public Rational TimeBase { get; set; }
 }

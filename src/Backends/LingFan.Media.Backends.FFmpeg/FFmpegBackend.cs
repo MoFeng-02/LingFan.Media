@@ -43,8 +43,41 @@ public sealed class FFmpegBackend : IDisposable
     /// <param name="path">原生库目录路径。</param>
     internal static void SetLibraryPath(string path)
     {
+        // 🔴 FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「无版本号」名（avutil/avcodec/...）加载原生库，
+        // 但 BtbN lgpl-shared 等常见共享构建只提供 avutil-60.dll 等带版本文件。若目录下仅存在带版本名，
+        // AutoGen 加载失败 → 首个 ffmpeg.* 调用崩溃（静默退出码 127，无诊断）。
+        // 此处 best-effort 补一份「无版本号别名」（硬链接优先、失败退化为复制），使本库对 BtbN 构建开箱即用；
+        // 失败不抛（宿主应自行保证 DLL 可被 AutoGen 加载，构建期复制别名为首选方案）。
+        EnsureUnversionedAliases(path);
+
         // FFmpeg.AutoGen 通过 ffmpeg.RootPath 设置原生库搜索路径
         ffmpeg.RootPath = path;
+    }
+
+    /// <summary>
+    /// best-effort：为目录下「av&lt;name&gt;-&lt;digits&gt;.dll」创建同名无版本别名（av&lt;name&gt;.dll），
+    /// 使 FFmpeg.AutoGen 的 DynamicallyLoaded 绑定能找到它。幂等；任何异常静默忽略。
+    /// </summary>
+    private static void EnsureUnversionedAliases(string dir)
+    {
+        try
+        {
+            if (!Directory.Exists(dir)) return;
+            foreach (var file in Directory.EnumerateFiles(dir, "av*.dll"))
+            {
+                string name = Path.GetFileNameWithoutExtension(file);
+                string unversioned = System.Text.RegularExpressions.Regex.Replace(name, @"-\d+$", "");
+                if (unversioned == name) continue; // 已是无版本名
+                string alias = Path.Combine(dir, unversioned + ".dll");
+                if (File.Exists(alias)) continue;
+                // 复制出无版本别名（best-effort；硬链接 API 在部分 SDK 表面不可用，复制最稳）。
+                File.Copy(file, alias);
+            }
+        }
+        catch
+        {
+            // best-effort：忽略。宿主应在构建期产出无版本别名（见各 Host 的 CopyFFmpegNative）。
+        }
     }
 
     /// <summary>

@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using LingFan.Media.Abstractions;
@@ -9,6 +11,7 @@ using LingFan.Media.Renderers.D3D11;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using FFmpeg.AutoGen;
 
 namespace FfmpegPlaybackProbe;
 
@@ -36,6 +39,34 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
+        // ---- 全局异常/故障兜底（诊断用）----
+        // 🔴 已知症状：预检通过后仍静默死亡、无 [FATAL]、无栈迹。最可能是解码 worker 线程上的原生 AV
+        // （ffmpeg 在自有线程崩溃）或不被 Main 的 try/catch 捕获的故障。此处兜底打印，避免静默死。
+        System.AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            try
+            {
+                var ex = e.ExceptionObject as System.Exception;
+                Console.Error.WriteLine($"[UNHANDLED] {(ex?.GetType().Name ?? e.ExceptionObject?.GetType().ToString())}: {ex?.Message}");
+                Console.Error.WriteLine(ex?.StackTrace);
+                Console.Error.WriteLine($"  IsTerminating={e.IsTerminating}");
+            }
+            catch { }
+            finally { try { Console.Out.Flush(); Console.Error.Flush(); } catch { } }
+        };
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            try
+            {
+                Console.Error.WriteLine($"[UNOBSERVED-TASK] {e.Exception.GetType().Name}: {e.Exception.Message}");
+                Console.Error.WriteLine(e.Exception.StackTrace);
+                e.SetObserved();
+            }
+            catch { }
+            finally { try { Console.Out.Flush(); Console.Error.Flush(); } catch { } }
+        };
+        void Trace(string s) { Console.WriteLine($"  [trace] {s}"); Console.Out.Flush(); }
+
         bool verbose = args.Contains("-v") || args.Contains("--verbose");
         bool useHw = args.Contains("--hw");
         string? file = ParseOption(args, "--file") ?? ResolveDefaultMedia();
@@ -54,6 +85,68 @@ internal static class Program
         Console.WriteLine($"原生库路径    : AppContext.BaseDirectory（FFmpegOptions.FFmpegLibraryPath，LGPL 可替换）");
         Console.WriteLine();
 
+        // ---- FFmpeg 原生库预检（调试用）----
+        // 🔴 目的：FFmpeg.AutoGen 的惰性加载会在首个 ffmpeg.* 调用时才真正加载原生 DLL，
+        // 一旦失败（缺运行库 / ABI 不匹配 / 依赖解析失败）表现为「只打印头部 + 静默退出码 127」，
+        // 毫无诊断信息。此处显式按依赖顺序加载并报告真实 Win32 错误码，把静默死亡变成可读错误。
+        string ffmpegDir = AppContext.BaseDirectory;
+        Console.WriteLine($"FFmpeg 原生库预检（目录: {ffmpegDir}）:");
+        string[] coreLibs = { "avutil-60", "swresample-6", "swscale-9", "avcodec-62", "avformat-62" };
+        bool nativeOk = true;
+        foreach (var lib in coreLibs)
+        {
+            string dll = Path.Combine(ffmpegDir, lib + ".dll");
+            if (!File.Exists(dll))
+            {
+                Console.WriteLine($"  [缺失] {lib}.dll —— 文件不存在于上述目录");
+                nativeOk = false;
+                continue;
+            }
+            if (NativeLibrary.TryLoad(dll, out _))
+            {
+                Console.WriteLine($"  [OK]   {lib}.dll 已加载");
+            }
+            else
+            {
+                int le = Marshal.GetLastWin32Error();
+                string msg = le != 0 ? new Win32Exception(le).Message : "未知（可能为 ABI/版本不兼容）";
+                Console.WriteLine($"  [失败] {lib}.dll —— Win32 0x{le:X8}: {msg}");
+                nativeOk = false;
+            }
+        }
+        if (!nativeOk)
+        {
+            Console.WriteLine();
+            Console.WriteLine("✗ FFmpeg 原生库加载失败。排查方向：");
+            Console.WriteLine("  1) 目标机是否安装 Microsoft Visual C++ 2015-2022 Redistributable (x64)（vcruntime140.dll 等）；");
+            Console.WriteLine("  2) ThirdParty/ffmpeg 共享 DLL 与 FFmpeg.AutoGen 绑定版本是否匹配（均为 8.1）；");
+            Console.WriteLine("  3) FFmpegOptions.FFmpegLibraryPath 是否指向含上述 DLL 的目录。");
+            return 3;
+        }
+
+        // ---- FFmpeg.AutoGen 绑定核验（决定性诊断）----
+        // 🔴 FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「无版本号」名（avutil/avcodec/...）加载原生库，
+        // 但 BtbN 共享构建只提供 avutil-60.dll 等带版本号文件。上一步 NativeLibrary.TryLoad 成功仅证明
+        // 「文件可加载」，不代表 AutoGen 能找到它要的无版本名。此处直接触发首个 AutoGen 调用核验绑定：
+        // 若 AutoGen 找不到无版本名 avutil.dll，ffmpeg.av_log_set_level 委托为 null → 调用抛异常（被捕获）。
+        try
+        {
+            ffmpeg.RootPath = ffmpegDir;
+            ffmpeg.av_log_set_level(16 /* AV_LOG_ERROR */);
+            Console.WriteLine("  ✓ FFmpeg.AutoGen 原生绑定就绪（无版本别名到位）。");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  [失败] FFmpeg.AutoGen 绑定失败: {ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine("         根因通常是找不到无版本名 avutil.dll（BtbN 仅提供 avutil-60.dll）。");
+            Console.WriteLine("         须由复制步骤同时产出 avutil.dll / avcodec.dll 等无版本别名（见 CopyFFmpegNative）。");
+            return 3;
+        }
+
+        Console.WriteLine("  ✓ FFmpeg 原生库预检通过。");
+        Console.WriteLine();
+
+        Trace("DI：开始构建 ServiceCollection");
         var services = new ServiceCollection();
         services.AddLogging(b => b
             .AddSimpleConsole(o =>
@@ -62,6 +155,7 @@ internal static class Program
                 o.TimestampFormat = "[HH:mm:ss.fff] ";
             })
             .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
+        Trace("DI：AddLogging OK");
 
         // 仅注册 FFmpeg 后端（与 MediaFoundation 解耦）。FFmpegLibraryPath 指向输出目录——
         // 构建目标 CopyFFmpegNative 会把合规的共享 DLL 复制到此，运行时动态加载。
@@ -72,6 +166,7 @@ internal static class Program
                 o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
             })
             .AddSilentAudioOutput();
+        Trace("DI：AddLingFanMedia + AddFFmpeg + AddSilentAudioOutput OK");
 
         // --hw：只为拿到 IGpuDeviceContext（窗口无关的共享 ID3D11Device），供 FFmpeg D3D11VA 取设备。
         // 🔴 注册顺序有意为之：D3D11 在前、无头渲染器在后 —— 后注册者赢得 IVideoRendererFactory，
@@ -79,11 +174,17 @@ internal static class Program
         // 这依赖 AddD3D11Renderer 里 IGpuDeviceContext 由具体类型 D3D11RendererFactory 派生
         // （而非从 IVideoRendererFactory 强转），否则此处会 InvalidCastException。
         if (useHw)
+        {
             builder.AddD3D11Renderer();
+            Trace("DI：AddD3D11Renderer OK（--hw）");
+        }
         builder.AddHeadlessRenderer();
+        Trace("DI：AddHeadlessRenderer OK");
 
         await using var sp = services.BuildServiceProvider();
+        Trace("DI：BuildServiceProvider OK");
         var player = sp.GetRequiredService<IMediaPlayer>();
+        Trace("DI：GetRequiredService<IMediaPlayer> OK");
 
         // ---- 视频观测量 ----
         long videoFrames = 0;          // 累计交付（呈现）帧数
@@ -106,7 +207,9 @@ internal static class Program
         {
             var source = new FileMediaSource(file);
             sw.Start();
+            Trace("OpenAsync 开始");
             await player.OpenAsync(source, CancellationToken.None);
+            Trace($"OpenAsync 完成 ({sw.Elapsed.TotalSeconds:F2}s)");
             double openSec = sw.Elapsed.TotalSeconds;
 
             var duration = player.Duration;
@@ -123,7 +226,9 @@ internal static class Program
                 duration = TimeSpan.FromSeconds(40);
             }
 
+            Trace("PlayAsync 开始");
             await player.PlayAsync();
+            Trace("PlayAsync 返回");
             Console.WriteLine();
             Console.WriteLine("  t(s)    pos(s)   videoFrames  gpuZeroCopy   audioFrames   state");
             Console.WriteLine("  ------  -------  -----------  -----------  -----------  -----------");

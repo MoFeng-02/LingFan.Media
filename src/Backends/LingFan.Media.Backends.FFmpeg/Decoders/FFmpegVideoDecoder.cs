@@ -31,6 +31,14 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private SafeAVCodecContextHandle? _codecContextHandle;
     private SafeAVBufferRefHandle? _hwDeviceCtx;
     private IFramePool<VideoFrame>? _framePool;
+    private IntPtr _extradataBuffer;          // ctx->extradata 原生缓冲（含 64B padding），本类拥有，Dispose 释放
+    private unsafe AVBSFContext* _bsfContext; // mp4toannexb 比特流过滤器（HEVC/H264 in MP4），本类拥有
+
+    // 🔴 流时间基：解码帧 pts/dts 以「流 time_base」为单位。由 demuxer 透传，用于建立 ctx->pkt_timebase
+    // 并做时间戳换算（入向 pkt->pts、出向 frame.Timestamp）。解码后 avFrame->time_base / ctx->time_base
+    // 常为 0，直接换算会使帧时间戳全 0（→ 视频不节流突发提交、主时钟 SyncTo(0) 钉死、pos 不前进）。
+    private Rational _timeBase;
+    private double _tbSeconds;
     private bool _disposed;
     private bool _initialized;
 
@@ -110,7 +118,24 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         if (ctx == null)
             throw new InvalidOperationException("avcodec_alloc_context3 失败");
 
+        // 🔴 建立流时间基：解码帧 pts/dts 以流 time_base 为单位，须由调用方写入 ctx->pkt_timebase。
+        // 解码后 avFrame->time_base / ctx->time_base 常为 0，直接用其换算会使帧时间戳全 0。
+        // 故用 demuxer 透传的流 time_base 建立 pkt_timebase，并以同一秒值做时间戳换算。
+        _timeBase = settings.TimeBase;
+        _tbSeconds = _timeBase.ToDouble();
+        if (_timeBase.Denominator > 0)
+        {
+            AVRational tb = ctx->pkt_timebase;
+            tb.num = _timeBase.Numerator;
+            tb.den = _timeBase.Denominator;
+            ctx->pkt_timebase = tb;
+        }
+
         _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
+
+        // 🔴 应用编解码器私有配置（extradata）：MP4 中 HEVC/H264 为 length-prefixed，解码器需 hvcC/avcC 作为
+        // extradata 才能解析参数集；并需 hevc_mp4toannexb/h264_mp4toannexb 比特流过滤器将包转为 Annex-B。
+        ApplyCodecConfiguration(ctx, codec, codecId, settings.CodecConfiguration);
 
         // 配置硬件加速
         if (useMediaCodec)
@@ -182,6 +207,154 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         _logger.LogInformation("视频解码器初始化: {Codec}, 硬件加速={HwAccel}", codec, IsHardwareAccelerated);
     }
 
+    /// <summary>
+    /// 应用编解码器私有配置到解码上下文：设置 <c>extradata</c>，并对 MP4 中的 HEVC/H264 安装
+    /// <c>mp4toannexb</c> 比特流过滤器（将 length-prefixed 包转为 Annex-B 起始码格式）。
+    /// </summary>
+    /// <remarks>
+    /// <para>MP4 容器中的 HEVC/H264 样本为长度前缀格式，ffmpeg 解码器需 Annex-B（起始码）才能解析 NAL 单元；
+    /// 缺少 extradata 与转换会报「No start code is found. Error splitting the input into NAL units.」。</para>
+    /// <para>par_in->extradata 用 ffmpeg 分配器（<c>av_malloc</c>）分配，因 <c>av_bsf_free</c> 经
+    /// <c>avcodec_parameters_free→av_freep</c> 释放，须与分配器匹配，避免 <c>Marshal.AllocHGlobal</c> 堆损坏。</para>
+    /// </remarks>
+    private unsafe void ApplyCodecConfiguration(AVCodecContext* ctx, VideoCodec codec, AVCodecID codecId, ReadOnlyMemory<byte> cfg)
+    {
+        if (cfg.IsEmpty)
+            return;
+
+        bool needBsf = codec == VideoCodec.H264 || codec == VideoCodec.H265;
+        if (!needBsf)
+        {
+            SetExtradata(ctx, cfg);
+            return;
+        }
+
+        string filterName = codec == VideoCodec.H265 ? "hevc_mp4toannexb" : "h264_mp4toannexb";
+        AVBitStreamFilter* filter = ffmpeg.av_bsf_get_by_name(filterName);
+        if (filter == null)
+        {
+            _logger.LogWarning("未找到比特流过滤器 {Filter}，回退仅设置 extradata（HEVC/H264 可能仍无法解码）", filterName);
+            SetExtradata(ctx, cfg);
+            return;
+        }
+
+        AVBSFContext* bsfCtx = null;
+        int ret = ffmpeg.av_bsf_alloc(filter, &bsfCtx);
+        if (ret < 0 || bsfCtx == null)
+        {
+            _logger.LogWarning("av_bsf_alloc 失败 ({Error})，回退仅设置 extradata", GetErrorString(ret));
+            SetExtradata(ctx, cfg);
+            return;
+        }
+
+        bsfCtx->par_in->codec_id = codecId;
+        bsfCtx->par_in->codec_type = AVMediaType.AVMEDIA_TYPE_VIDEO;
+
+        // 用 ffmpeg 分配器拷贝 extradata（av_bsf_free 释放时须同分配器）。
+        int size = cfg.Length;
+        int padded = size + 64;
+        byte* edata = (byte*)ffmpeg.av_malloc((UIntPtr)padded);
+        if (edata == null)
+        {
+            ffmpeg.av_bsf_free(&bsfCtx);
+            SetExtradata(ctx, cfg);
+            return;
+        }
+        cfg.Span.CopyTo(new Span<byte>(edata, size));
+        new Span<byte>(edata + size, 64).Clear();
+        bsfCtx->par_in->extradata = edata;
+        bsfCtx->par_in->extradata_size = size;
+
+        ret = ffmpeg.av_bsf_init(bsfCtx);
+        if (ret < 0)
+        {
+            _logger.LogWarning("av_bsf_init 失败 ({Error})，回退仅设置 extradata", GetErrorString(ret));
+            ffmpeg.av_bsf_free(&bsfCtx);
+            SetExtradata(ctx, cfg);
+            return;
+        }
+
+        // 🔴 解码器 extradata 必须与「经 BSF 转换后的包格式」配套，绝不能沿用原始 hvcC/avcC：
+        //   ffmpeg 的 hevc/h264 解码器按 extradata 首字节判定码流格式 —— hvcC/avcC（首字节 0x01）
+        //   会令 is_nalff / is_avc = 1，解码器随后调用 ff_h2645_packet_split 按「长度前缀」拆 NAL；
+        //   而包经 mp4toannexb 之后已是 Annex-B 起始码格式 ⇒ 两者矛盾，解码依旧失败
+        //   （表现仍是 "No start code is found. / Error splitting the input into NAL units."）。
+        //   av_bsf_init 之后 par_out->extradata 即为 BSF 产出的 Annex-B 参数集（VPS/SPS/PPS），
+        //   用它设置解码器才自洽。par_out 为空属理论异常，回退原始 cfg 并告警。
+        AVCodecParameters* parOut = bsfCtx->par_out;
+        if (parOut != null && parOut->extradata != null && parOut->extradata_size > 0)
+        {
+            SetExtradata(ctx, new ReadOnlySpan<byte>(parOut->extradata, parOut->extradata_size).ToArray());
+        }
+        else
+        {
+            _logger.LogWarning("{Filter} 的 par_out->extradata 为空，回退使用原始 hvcC/avcC extradata（解码可能失败）", filterName);
+            SetExtradata(ctx, cfg);
+        }
+
+        _bsfContext = bsfCtx;
+        _logger.LogDebug("已安装 {Filter} 比特流过滤器（MP4→Annex-B，解码器 extradata={Size}B）",
+            filterName, ctx->extradata_size);
+    }
+
+    /// <summary>
+    /// 将编解码器私有配置写入 <c>ctx->extradata</c>（含 64 字节零填充，符合 ffmpeg 要求）。
+    /// 缓冲由本类以 <see cref="Marshal"/> 持有，<see cref="Dispose"/> 时释放。
+    /// </summary>
+    private unsafe void SetExtradata(AVCodecContext* ctx, ReadOnlyMemory<byte> cfg)
+    {
+        int size = cfg.Length;
+        if (size <= 0)
+            return;
+        int padded = size + 64;
+        IntPtr buf = Marshal.AllocHGlobal(padded);
+        Span<byte> span = new((void*)buf, padded);
+        cfg.Span.CopyTo(span);
+        span[size..].Clear();
+        _extradataBuffer = buf;
+        ctx->extradata = (byte*)buf;
+        ctx->extradata_size = size;
+    }
+
+    /// <summary>
+    /// 将包发送到解码器；若已安装 mp4toannexb 比特流过滤器，先经其转换为 Annex-B。
+    /// 返回 <c>avcodec_send_packet</c> 的结果（或 BSF 错误码）。
+    /// </summary>
+    private unsafe int SendPacket(AVCodecContext* ctx, AVPacket* pkt)
+    {
+        if (_bsfContext == null)
+            return ffmpeg.avcodec_send_packet(ctx, pkt);
+
+        int bret = ffmpeg.av_bsf_send_packet(_bsfContext, pkt);
+        if (bret < 0 && bret != EAGAIN)
+        {
+            if (bret != ffmpeg.AVERROR_EOF)
+                _logger.LogWarning("av_bsf_send_packet 返回 {Ret}: {Error}", bret, GetErrorString(bret));
+            return bret;
+        }
+
+        AVPacket* conv = ffmpeg.av_packet_alloc();
+        if (conv == null)
+            return ffmpeg.AVERROR(ffmpeg.ENOMEM);
+        try
+        {
+            // 单次 receive 即可：h264/hevc_mp4toannexb 是严格 1:1 过滤器（一个输入包恰产出一个输出包），
+            // 不会积压多包。若日后换用可能 1:N 的 BSF（如 split/merge 类），此处必须改为循环收取，
+            // 否则会静默丢包。
+            bret = ffmpeg.av_bsf_receive_packet(_bsfContext, conv);
+            if (bret == EAGAIN || bret == ffmpeg.AVERROR_EOF)
+                return bret;
+            if (bret < 0)
+                return bret;
+            return ffmpeg.avcodec_send_packet(ctx, conv);
+        }
+        finally
+        {
+            AVPacket* p = conv;
+            ffmpeg.av_packet_free(&p);
+        }
+    }
+
     /// <inheritdoc/>
     /// <remarks>
     /// 热路径异步：avcodec_send_packet + avcodec_receive_frame 是 CPU 密集型同步操作，
@@ -217,8 +390,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             if (allocRet < 0)
                 throw new InvalidOperationException($"av_new_packet 失败: {GetErrorString(allocRet)} (code={allocRet})");
             packet.Data.Span.CopyTo(new Span<byte>(pkt->data, packet.Data.Length));
-            // 防御 time_base.num==0 导致 av_q2d 返回 0 → 除以零产生 Infinity/NaN
-            double timeBase = ffmpeg.av_q2d(ctx->time_base);
+            // 用流时间基（demuxer 透传 → ctx->pkt_timebase）换算 pkt->pts；_tbSeconds 即其秒值。
+            // 注意：解码后 ctx->time_base / avFrame->time_base 常为 0，绝不能用其换算。
+            double timeBase = _tbSeconds;
             pkt->pts = timeBase > 0
                 ? (long)(packet.Timestamp.TotalSeconds / timeBase)
                 : ffmpeg.AV_NOPTS_VALUE;
@@ -226,8 +400,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             if (packet.KeyFrame)
                 pkt->flags |= ffmpeg.AV_PKT_FLAG_KEY;
 
-            // 发送数据包到解码器
-            int ret = ffmpeg.avcodec_send_packet(ctx, pkt);
+            // 发送数据包到解码器（HEVC/H264 经 mp4toannexb 比特流过滤器转换为 Annex-B）
+            int ret = SendPacket(ctx, pkt);
             if (ret < 0 && ret != EAGAIN)
             {
                 if (ret != ffmpeg.AVERROR_EOF)
@@ -252,7 +426,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 }
 
                 // V2-15 B6: 检查 D3D11VA 硬解输出格式
-                if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+                // 🔴 FFmpeg 8 版本漂移：D3D11VA 硬解帧的像素格式在 ffmpeg 8 中由旧名
+                //   AV_PIX_FMT_D3D11VA_VLD 改为 AV_PIX_FMT_D3D11（FFmpeg.AutoGen 8.1.0 两常量并存，
+                //   但本机 avcodec-62.dll 实际产出 AV_PIX_FMT_D3D11）。旧名常量数值已与运行时错位，
+                //   仅比对旧名会让硬解帧误入软件拷贝路径 → av_image_get_buffer_size(AV_PIX_FMT_D3D11)
+                //   返回 -22。故两种命名都接纳（兼容不同 ffmpeg 版本 / 硬件路径）。
+                var hwFmt = (AVPixelFormat)avFrame->format;
+                if (hwFmt is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
                 {
                     return CreateHardwareFrameFromAVFrame(avFrame);
                 }
@@ -312,7 +492,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 return null;
 
             // V2-15: Flush 时同样需检查 D3D11VA 硬解输出格式（与 DecodeCore 一致）
-            if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+            // 🔴 同 DecodeCore：FFmpeg 8 产出 AV_PIX_FMT_D3D11，两种命名都接纳。
+            var hwFmtFlush = (AVPixelFormat)avFrame->format;
+            if (hwFmtFlush is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
             {
                 return CreateHardwareFrameFromAVFrame(avFrame);
             }
@@ -348,12 +530,25 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     }
 
     /// <inheritdoc/>
-    public void Dispose()
+    public unsafe void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         _hwDeviceCtx?.Dispose();
         _hwDeviceCtx = null;
+        // 先释放比特流过滤器（其内部 par_in->extradata 由 ffmpeg 分配器管理）
+        if (_bsfContext != null)
+        {
+            AVBSFContext* local = _bsfContext;
+            ffmpeg.av_bsf_free(&local);
+            _bsfContext = null;
+        }
+        // 再释放本类持有的 extradata 缓冲（ctx->extradata 已被解码器读取，先于 codec context 释放安全）
+        if (_extradataBuffer != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_extradataBuffer);
+            _extradataBuffer = IntPtr.Zero;
+        }
         _codecContextHandle?.Dispose();
         _codecContextHandle = null;
         _initialized = false;
@@ -393,10 +588,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         resource ??= CreateCopyResource(avFrame, width, height, pixFmt, format);
 
         TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
-            ? TimeSpan.FromTicks((long)(avFrame->duration * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
 
@@ -486,6 +681,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <remarks>
     /// <para>同步操作（sync 分类）：FFmpeg hwdevice_ctx API 和 COM 操作均为同步原生调用，无 I/O await。</para>
     /// <para>共享设备零拷贝链路：渲染器 ID3D11Device → FFmpeg D3D11VA → 硬解纹理 → D3D11Renderer CopySubresourceRegion。</para>
+    /// <para><b>🔴 引用计数所有权</b>：FFmpeg 在销毁 AVHWDeviceContext 时<b>必定</b> Release
+    /// <c>device</c> 与 <c>device_context</c>（官方文档明示，与是否用户提供无关）。因本方法借用的是
+    /// 渲染器工厂持有的共享设备，故写入 hwctx 前对两者各 <c>Marshal.AddRef</c> 一次；否则工厂
+    /// Dispose 时将在已销毁对象上 Release，产生确定性 AccessViolation。详见方法内注释。</para>
     /// </remarks>
     /// <param name="ctx">FFmpeg 编解码上下文（设置其 hw_device_ctx 字段）。</param>
     private unsafe void InitializeD3D11VA(AVCodecContext* ctx)
@@ -508,6 +707,25 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             // AVD3D11VADeviceContext 布局：device(void*), device_context(void*), lock_ctx(uint), lock(fn*), unlock(fn*)
             AVHWDeviceContext* hwCtx = (AVHWDeviceContext*)hwRef->data;
             IntPtr* hwctxPtrs = (IntPtr*)hwCtx->hwctx;
+
+            // 🔴 FFmpeg 所有权契约（hwcontext_d3d11va.h 官方文档，device / device_context 两字段逐字相同）：
+            //   "Deallocating the AVHWDeviceContext will always release this interface,
+            //    and it does not matter whether it was user-allocated."
+            //   即 av_buffer_unref 引用归零时 d3d11va_device_free() 会对 device 与 device_context
+            //   各调用一次 Release —— 无论指针是不是用户塞进来的。
+            //
+            //   这里塞的是渲染器工厂（D3D11RendererFactory，Singleton）持有的共享设备，工厂自己
+            //   在 Dispose 时还要 Release 一次。若不补 AddRef，ffmpeg 那次 Release 会吃掉工厂的
+            //   那一份引用 ⇒ 设备/上下文提前销毁 ⇒ 工厂 Dispose 时在已销毁对象上 Release ⇒
+            //   确定性 AccessViolation（SharpGen.Runtime.ComObject.Release → CppObject.get_Item）。
+            //   故必须在写入 hwctx 前各 AddRef 一次，为 ffmpeg「借出」一份它有权释放的引用。
+            //
+            //   配对性：AddRef 紧贴写入（其间无抛出点）。此后任何失败路径都走 catch 内的
+            //   av_buffer_unref(hwRef) → free 回调 Release 两者，与本处 AddRef 精确配对，不泄漏、不多释放。
+            //   video_device / video_context 由 ffmpeg 在 init 内自行 QI（自带 AddRef），无需我方干预。
+            Marshal.AddRef(gpuCtx.DeviceHandle);
+            Marshal.AddRef(gpuCtx.ContextHandle);
+
             hwctxPtrs[0] = gpuCtx.DeviceHandle;    // device (ID3D11Device*)
             hwctxPtrs[1] = gpuCtx.ContextHandle;    // device_context (ID3D11DeviceContext*)
 
@@ -560,10 +778,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         var resource = new D3D11HardwareFrameResource(texturePtr, width, height, PixelFormat.NV12, subresourceIndex);
 
         TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
-            ? TimeSpan.FromTicks((long)(avFrame->duration * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
 
@@ -662,10 +880,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         var resource = new MediaCodecFrameResource(mcBuffer, width, height, frameOwner);
 
         TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
-            ? TimeSpan.FromTicks((long)(avFrame->duration * ffmpeg.av_q2d(avFrame->time_base) * TimeSpan.TicksPerSecond))
+            ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
 

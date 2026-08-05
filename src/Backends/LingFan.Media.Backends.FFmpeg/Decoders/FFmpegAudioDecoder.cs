@@ -30,6 +30,12 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     private SafeAVCodecContextHandle? _codecContextHandle;
     private IFramePool<AudioFrame>? _framePool;
     private SafeSwrContextHandle? _swrContext;
+    private IntPtr _extradataBuffer;          // ctx->extradata 原生缓冲（含 64B padding），本类拥有，Dispose 释放
+
+    // 🔴 流时间基：解码帧 pts 以「流 time_base」为单位。demuxer 透传，用于建立 ctx->pkt_timebase 并做时间戳换算。
+    // 解码后 ctx->time_base 常为 0，直接换算会使音频帧时间戳全 0（主时钟 SyncTo(0) 钉死、pos 不前进）。
+    private Rational _timeBase;
+    private double _tbSeconds;
     private AVSampleFormat _targetSampleFormat;
     private int _targetSampleRate;
     private int _targetChannels;
@@ -84,7 +90,23 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         if (ctx == null)
             throw new InvalidOperationException("avcodec_alloc_context3 失败");
 
+        // 🔴 建立流时间基：解码帧 pts 以流 time_base 为单位，须由调用方写入 ctx->pkt_timebase。
+        // 解码后 ctx->time_base 常为 0，直接用其换算会使音频帧时间戳全 0（主时钟 SyncTo(0) 钉死、pos 不前进）。
+        _timeBase = settings.TimeBase;
+        _tbSeconds = _timeBase.ToDouble();
+        if (_timeBase.Denominator > 0)
+        {
+            AVRational tb = ctx->pkt_timebase;
+            tb.num = _timeBase.Numerator;
+            tb.den = _timeBase.Denominator;
+            ctx->pkt_timebase = tb;
+        }
+
         _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
+
+        // 🔴 应用编解码器私有配置（extradata）：AAC 在 MP4 中为裸流，需 AudioSpecificConfig 才能解码，
+        // 否则 avcodec_send_packet 返回 Invalid data。
+        ApplyCodecConfiguration(ctx, settings.CodecConfiguration);
 
         int ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
         if (ret < 0)
@@ -140,6 +162,25 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             codec, ctx->sample_rate, ctx->ch_layout.nb_channels, ctx->sample_fmt, _swrContext != null);
     }
 
+    /// <summary>
+    /// 将编解码器私有配置写入 <c>ctx->extradata</c>（含 64 字节零填充，符合 ffmpeg 要求）。
+    /// 缓冲由本类以 <see cref="Marshal"/> 持有，<see cref="Dispose"/> 时释放。
+    /// </summary>
+    private unsafe void ApplyCodecConfiguration(AVCodecContext* ctx, ReadOnlyMemory<byte> cfg)
+    {
+        int size = cfg.Length;
+        if (size <= 0)
+            return;
+        int padded = size + 64;
+        IntPtr buf = Marshal.AllocHGlobal(padded);
+        Span<byte> span = new((void*)buf, padded);
+        cfg.Span.CopyTo(span);
+        span[size..].Clear();
+        _extradataBuffer = buf;
+        ctx->extradata = (byte*)buf;
+        ctx->extradata_size = size;
+    }
+
     /// <inheritdoc/>
     /// <remarks>热路径异步：CPU 密集型同步操作，<see cref="ValueTask.FromResult{TResult}"/> 同步完成。</remarks>
     public unsafe ValueTask<AudioFrame?> DecodeAsync(MediaPacket packet)
@@ -169,7 +210,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
                 throw new InvalidOperationException($"av_new_packet 失败: {GetErrorString(allocRet)} (code={allocRet})");
             packet.Data.Span.CopyTo(new Span<byte>(pkt->data, packet.Data.Length));
             // 防御 time_base.num==0 导致 av_q2d 返回 0 → 除以零产生 Infinity/NaN
-            double timeBase = ffmpeg.av_q2d(ctx->time_base);
+            double timeBase = _tbSeconds;
             pkt->pts = timeBase > 0
                 ? (long)(packet.Timestamp.TotalSeconds / timeBase)
                 : ffmpeg.AV_NOPTS_VALUE;
@@ -272,6 +313,11 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         _disposed = true;
         _swrContext?.Dispose();
         _swrContext = null;
+        if (_extradataBuffer != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_extradataBuffer);
+            _extradataBuffer = IntPtr.Zero;
+        }
         _codecContextHandle?.Dispose();
         _codecContextHandle = null;
         _initialized = false;
@@ -297,13 +343,20 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     private unsafe AudioFrame CreateAudioFrameFromAVFrame(AVFrame* avFrame, AVCodecContext* ctx)
     {
         TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * ffmpeg.av_q2d(ctx->time_base) * TimeSpan.TicksPerSecond))
+            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
 
         int frameCount = avFrame->nb_samples;
         int channels = avFrame->ch_layout.nb_channels;
         int sampleRate = avFrame->sample_rate;
         AVSampleFormat sampleFmt = (AVSampleFormat)avFrame->format;
+
+        // 🔴 AAC 等解码器在 avcodec_open2 后 ctx->sample_rate 可能仍为 0（采样率仅在首帧解出后可知）。
+        // 用首帧 avFrame->sample_rate / 声道数回填 OutputSampleRate/OutputChannels，使解码器向外导出正确采样率
+        // （供 WASAPI 等设备打开、NoOp 实时背压等；Initialize 时刻读到的 0 是 ffmpeg 延迟填充所致）。
+        if (OutputSampleRate <= 0 && sampleRate > 0) OutputSampleRate = sampleRate;
+        if (OutputChannels <= 0 && channels > 0) OutputChannels = channels;
+
         SampleFormat outFormat = MapSampleFormatFromFFmpeg(sampleFmt);
 
         bool isPlanar = ffmpeg.av_sample_fmt_is_planar(sampleFmt) != 0;

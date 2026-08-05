@@ -218,8 +218,14 @@ public sealed class MediaPlayer : IMediaPlayer
     /// <inheritdoc />
     public event Action<VideoFrame>? VideoFrameAvailable
     {
-        add => _frameChannel.Subscribe(new DelegateFrameSink(value));
-        remove => _frameChannel.Unsubscribe(new DelegateFrameSink(value));
+        add
+        {
+            if (value is not null) _frameChannel.Subscribe(new DelegateFrameSink(value));
+        }
+        remove
+        {
+            if (value is not null) _frameChannel.Unsubscribe(new DelegateFrameSink(value));
+        }
     }
 
     /// <inheritdoc />
@@ -267,6 +273,7 @@ public sealed class MediaPlayer : IMediaPlayer
                 _videoDecoder = _videoDecoderFactory.Create(videoTrack.VideoCodec.Value, new VideoSettings
                 {
                     CodecConfiguration = videoTrack.VideoInfo?.CodecConfiguration ?? default,
+                    TimeBase = videoTrack.VideoInfo?.TimeBase ?? default,
                     EnableHardwareAcceleration = _options.EnableHardwareAcceleration
                 });
             }
@@ -280,6 +287,10 @@ public sealed class MediaPlayer : IMediaPlayer
                     OutputSampleRate = _options.AudioOutputSampleRate,
                     OutputChannels = _options.AudioOutputChannels,
                     OutputSampleFormat = _options.AudioOutputSampleFormat,
+                    // 🔴 透传轨道 extradata（AAC 的 AudioSpecificConfig）。AAC 在 MP4 中为裸流，
+                    // 解码器必须据此设置 ctx->extradata 才能解码，否则 avcodec_send_packet 返回 Invalid data。
+                    CodecConfiguration = audioTrack.AudioInfo?.CodecConfiguration ?? default,
+                    TimeBase = audioTrack.AudioInfo?.TimeBase ?? default,
                 };
                 _audioDecoder = _audioDecoderFactory.Create(audioTrack.AudioCodec.Value, audioSettings);
 
@@ -331,7 +342,12 @@ public sealed class MediaPlayer : IMediaPlayer
                 // 契约对称（InitializeAsync 必须先于 Initialize，WASAPI 强制——设备枚举/COM 准备前置）。
                 // 无 I/O 的实现返回 Task.CompletedTask（非伪异步）。
                 await _audioOutput.InitializeAsync(ct);
-                _audioOutput.Initialize(_audioDecoder.OutputSampleRate, _audioDecoder.OutputChannels);
+                // 🔴 采样率可能在首帧解码后才知道（AAC 经 FFmpeg 时 OutputSampleRate 初始化为 0）。
+                // 仅当 OpenAsync 时刻已知合法采样率才在此显式初始化设备；否则延迟到首个音频帧
+                // Submit 时由输出（如 WasapiRenderLoop）按真实采样率惰性打开，避免 0Hz 触发
+                // ArgumentOutOfRangeException（WASAPI 设备必须以固定率打开）。
+                if (_audioDecoder.OutputSampleRate > 0 && _audioDecoder.OutputChannels > 0)
+                    _audioOutput.Initialize(_audioDecoder.OutputSampleRate, _audioDecoder.OutputChannels);
             }
 
             // 7. 设置轨道索引

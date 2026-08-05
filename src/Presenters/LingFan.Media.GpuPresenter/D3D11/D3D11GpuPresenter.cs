@@ -94,7 +94,8 @@ public sealed class D3D11GpuPresenter : IGpuPresenter
         ArgumentNullException.ThrowIfNull(frame);
         if (_renderer is null)
         {
-            frame.Dispose();
+            // 渲染器未就绪：帧归还由管线 ReturnFrame 统一负责（只读借用契约）。
+            // 多播通道下不得在此 Dispose，否则后续订阅方读到已释放帧（use-after-free）。
             return;
         }
         // 锁内双重检查：防止 Dispose（UI 线程）置 _disposed 后仍在进行的 Present 触达已释放的 SwapChain。
@@ -102,7 +103,7 @@ public sealed class D3D11GpuPresenter : IGpuPresenter
         {
             if (_disposed || _renderer is null)
             {
-                frame.Dispose();
+                // 同上：归还由管线负责，此处不得 Dispose。
                 return;
             }
             _renderer.Present(frame);

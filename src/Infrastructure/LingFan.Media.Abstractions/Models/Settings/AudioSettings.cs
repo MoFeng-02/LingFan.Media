@@ -16,4 +16,12 @@ public sealed class AudioSettings
 
     /// <summary>输出采样格式（null 表示使用源格式）。</summary>
     public SampleFormat? OutputSampleFormat { get; init; }
+
+    /// <summary>编解码器私有配置（如 AAC 的 AudioSpecificConfig）。透传自轨道 extradata，
+    /// 解码器据此设置 ctx->extradata。无则为默认空。</summary>
+    public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
+
+    /// <summary>流时间基（<c>AVStream.time_base</c>）。透传自轨道信息，供 FFmpeg 后端写入
+    /// <c>pkt_timebase</c> 以正确换算时间戳。默认 <c>default</c>（无效）。</summary>
+    public Rational TimeBase { get; init; }
 }

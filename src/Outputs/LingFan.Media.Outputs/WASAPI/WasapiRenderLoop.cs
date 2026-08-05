@@ -78,12 +78,14 @@ internal sealed class WasapiRenderLoop
     private bool _initialized;
     private bool _disposed;
     private int _bufferSize;      // WASAPI 缓冲区大小（帧数）
-    // 治本①（起播静默窗）：预填目标帧数 = 设备缓冲总大小，写满后再 Start，引擎抓取真实数据而非静音。
-    private int _primeFrames;
     private bool _prerollPending;             // BeginStreamingAsync 已 arm（Stop→Reset），等待 WriteFrame 预填达标后自动 Start
     private bool _prerollStarted;             // 已自动 Start（防重复触发）
     private TaskCompletionSource<bool>? _primeTcs;
     private const int PrimeTimeoutMs = 600;  // 无音频轨/极短片段兜底：超时强制 Start，防 PlayAsync 挂起
+    // 分段写入背压：缓冲满时等待引擎腾出空间的上限。引擎周期通常 ~10ms，200ms 内无信号即判定设备停摆
+    // （丢弃该帧剩余部分并计数），既保证正常播放全程无丢样，又不会让渲染线程上的控制消息被长时间阻塞。
+    private const int BufferWaitTimeoutMs = 200;
+    private const int BufferPollIntervalMs = 5;   // 轮询模式（设备不支持事件驱动）下缓冲满的重试间隔
     private double _streamLatencySec; // IAudioClient.GetStreamLatency() 返回的「提交→可闻」延迟（秒），用于主时钟校准
     // 🔴 音画同步（2026-08-04 实测校准，数据坐实前版 anchor/padding 修复为 no-op）：
     // 共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」（Start 后瞬间预取 ~0.5s
@@ -103,8 +105,13 @@ internal sealed class WasapiRenderLoop
     // V2: 事件驱动模式
     private EventWaitHandle? _bufferEvent;
 
+    // 设备是否处于 Running（引擎正在消费缓冲）。分段写入遇缓冲满时据此决策：
+    // 引擎在跑 → 等一个缓冲事件后续写（正确背压）；引擎已停 → 立即丢弃剩余数据，
+    // 绝不空等超时（否则 Pause 后的残留帧会逐帧空耗 BufferWaitTimeoutMs，拖慢控制消息响应）。
+    private volatile bool _deviceRunning;
+
     // 诊断计数器（纯观察，不影响音频逻辑）：定位"听感卡顿/断续"根因。
-    // submittedSamples = 实际成功写入 WASAPI 的累计采样帧数；droppedFrames = WaitForBufferSpace 超时/参数异常丢弃的帧数。
+    // submittedSamples = 实际成功写入 WASAPI 的累计采样帧数；droppedFrames = 缓冲满(available==0)丢弃的帧数。
     private long _submittedSamples;
     private int _submittedFrames;
     private long _droppedFrames;
@@ -135,7 +142,7 @@ internal sealed class WasapiRenderLoop
     private readonly ConcurrentQueue<RenderItem> _queue = new();
     private readonly AutoResetEvent _workAvailable = new(false);
     private readonly ManualResetEventSlim _started = new(false);
-    // 关闭信号：Dispose 时置位，使 WaitForBufferSpace 立即放弃阻塞等待（残留帧在关闭期被跳过，不卡 2s 超时）
+    // 关闭信号：Dispose 时置位，使 WaitForBufferSpaceOnce 立即放弃等待（残留帧在关闭期被跳过，不拖慢退出）
     private readonly ManualResetEventSlim _shutdownEvent = new(false);
 
     /// <summary>
@@ -258,6 +265,7 @@ internal sealed class WasapiRenderLoop
         RunControl(() =>
         {
             int hr = _audioClientStop!(_audioClientPtr);
+            _deviceRunning = false;
             // 审计修复：0x88890004 实际是 AUDCLNT_E_DEVICE_INVALIDATED（设备移除），非 AUDCLNT_E_NOT_INITIALIZED（0x88890001）。
             // 两者在 Stop() 上下文中均可安全忽略。
             if (hr < 0
@@ -290,6 +298,8 @@ internal sealed class WasapiRenderLoop
             int hr = _audioClientStart!(_audioClientPtr);
             if (hr < 0)
                 _logger.LogWarning("IAudioClient.Start 失败：HRESULT=0x{HR:X8}", hr);
+            else
+                _deviceRunning = true;
 
             // 恢复播放路径：立即启动，清除 preroll 状态（避免 WriteFrame 误触发自动启动）。
             _prerollStarted = true;
@@ -315,16 +325,24 @@ internal sealed class WasapiRenderLoop
     public ValueTask BeginStreamingAsync(CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized || _audioClientPtr == IntPtr.Zero)
-            return ValueTask.CompletedTask;
-        RunControl(() =>
+        // 🔴 修复（2026-08-05）：preroll 必须在 OpenAsync 之后、首帧之前 arm，即使设备尚未 Initialize
+        // （如 FFmpeg+AAC 采样率延迟到首帧回填的场景）。原逻辑在 !_initialized 时 early-return 导致
+        // _prerollPending 从未置位；渲染线程首帧惰性 Initialize 后才到 WriteFrame，此时已错过 arm →
+        // 设备永不 Start → 音频饥饿死锁（日志: 需要 2048 帧/可用 314 帧，卡死退不出）。
+        // 故 preroll 无条件 arm；仅 Stop/Reset 这类需有效客户端对象的操作在 _initialized 下执行
+        // （_audioClientPtr 仅在 InitializeImpl 成功后才非 Zero，与 _initialized 等价）。
+        if (_audioClientPtr != IntPtr.Zero)
         {
-            _audioClientStop!(_audioClientPtr);
-            _audioClientReset!(_audioClientPtr);
-            _prerollStarted = false;
-            _prerollPending = true;
-            _primeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        });
+            RunControl(() =>
+            {
+                _audioClientStop!(_audioClientPtr);
+                _audioClientReset!(_audioClientPtr);
+                _deviceRunning = false;
+            });
+        }
+        _prerollStarted = false;
+        _prerollPending = true;
+        _primeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         return new ValueTask(WaitForPrimeAsync(ct));
     }
 
@@ -337,13 +355,16 @@ internal sealed class WasapiRenderLoop
         if (completed != tcs.Task)
         {
             // 超时兜底：强制启动，避免 PlayAsync 在"无音频轨/极短片段"场景挂起。
+            // 🔴 守卫（2026-08-05）：惰性初始化场景下 600ms 兜底可能在设备尚未 Initialize 前触发，
+            // 此时 _audioClientStart 委托为 null，调用会 NRE；仅在 _initialized 下强制 Start。
             RunControl(() =>
             {
-                if (_prerollPending && !_prerollStarted)
+                if (_prerollPending && !_prerollStarted && _initialized && _audioClientPtr != IntPtr.Zero)
                 {
                     int hr = _audioClientStart!(_audioClientPtr);
                     if (hr >= 0)
                     {
+                        _deviceRunning = true;
                         CaptureStartAnchor();
                         _prerollStarted = true;
                         _prerollPending = false;
@@ -563,8 +584,8 @@ internal sealed class WasapiRenderLoop
         {
             try
             {
-                // 先置位关闭信号：使残留帧的 WaitForBufferSpace 立即放弃等待（跳过而非卡 2s 超时），
-                // 渲染线程得以快速处理完队列并进入 Shutdown。
+                // 先置位关闭信号：渲染线程在 WriteFrame 的缓冲满丢帧路径不阻塞；Shutdown 消息入队后
+                // 渲染线程得以快速处理完队列并进入 Shutdown（不再有 2s 卡顿退出）。
                 _shutdownEvent.Set();
                 var shutdown = new RenderItem(ItemKind.Shutdown, null);
                 _queue.Enqueue(shutdown);
@@ -706,7 +727,29 @@ internal sealed class WasapiRenderLoop
                     try
                     {
                         if (item.Kind == ItemKind.Frame)
-                            WriteFrame(item.Frame!);
+                        {
+                            // 🔴 惰性初始化（采样率延迟填充场景，如 FFmpeg+AAC）：OpenAsync 时刻
+                            // OutputSampleRate 可能为 0，无法提前打开 WASAPI 设备。首个音频帧到达渲染
+                            // 线程时按帧的真实采样率/声道数打开设备。必须在渲染线程内直接调用
+                            // InitializeImpl（禁止 RunControl，否则自死锁）。
+                            var f = item.Frame!;
+                            if (!_initialized)
+                            {
+                                bool lazyOk = false;
+                                try
+                                {
+                                    InitializeImpl(f.SampleRate, f.Channels);
+                                    lazyOk = true;
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, "[WASAPI] 惰性初始化失败（首帧 rate={Rate} ch={Ch}），丢弃该帧",
+                                        f.SampleRate, f.Channels);
+                                }
+                                if (!lazyOk) continue; // finally 仍会 item.Done.Set()
+                            }
+                            WriteFrame(f);
+                        }
                         else
                             item.Invoke();
                     }
@@ -722,7 +765,12 @@ internal sealed class WasapiRenderLoop
 
                 // 无待处理项时等待唤醒（新帧 / 控制消息 / Shutdown 均会 Set _workAvailable）。
                 // AutoResetEvent 保证：若在 TryDequeue 排空后、WaitAny 前发生 Enqueue+Set，等待会立即返回，无丢失唤醒。
-                _workAvailable.WaitOne();
+                // 🔴 修复（2026-08-05）：事件驱动模式下必须同时等待引擎缓冲事件(_bufferEvent)，否则引擎欠载时
+                // 发出的缓冲信号被错过 → 引擎暂停拉取 → 缓冲恒满 → 音频饥饿死锁。轮询模式(_bufferEvent==null)仅等新帧。
+                if (_bufferEvent != null)
+                    WaitHandle.WaitAny(new WaitHandle[] { _workAvailable, _bufferEvent });
+                else
+                    _workAvailable.WaitOne();
             }
         }
         finally
@@ -949,7 +997,6 @@ internal sealed class WasapiRenderLoop
             hr = _audioClientGetBufferSize(_audioClientPtr, out uint bufferFrames);
             Marshal.ThrowExceptionForHR(hr);
             _bufferSize = (int)bufferFrames;
-            _primeFrames = _bufferSize;   // 预填目标 = 整设备缓冲（根治起播静默窗：引擎抓取真实数据而非静音）
 
             // 5.5 🔴 音画同步修复（2026-08-04）：获取「提交→可闻」流延迟，用于主时钟校准。
             // GetStreamLatency 必须在 Initialize 成功后调用（slot 2 已接）。返回值单位 100ns。
@@ -1102,64 +1149,161 @@ internal sealed class WasapiRenderLoop
                 $"音频帧数据不足：期望 {expectedDataSize} 字节，实际 {frame.Data.Length} 字节。", nameof(frame));
         }
 
-        // gotBuffer 标记 GetBuffer 是否已成功锁定缓冲区；released 标记是否已正常释放。
-        bool gotBuffer = false;
-        bool released = false;
+        // 🔴 修复（2026-08-05 §27）：分段写入 + 缓冲事件续写，既不丢样本也不死锁。三代演进：
+        //  ①原版 WaitForBufferSpace(frame.FrameCount)：要求「整帧连续空间」且硬阻塞 2000ms。配合
+        //    BeginStreamingAsync 在 !_initialized 时 early-return（preroll 从未 arm）→ 设备永不 Start →
+        //    引擎不消费 → 缓冲恒满（日志「需要 2048 帧，可用 314 帧」）→ 每帧超时 2s → 音频饥饿死锁；
+        //    且启动锚点永不捕获 → 主时钟恒 0 → 视频管线永久 Wait（实测 present=1 dropped=0，画面全程冻结）。
+        //  ②§25 改为「只写 available、写不下的直接丢弃」：解了死锁，却把背压变成了采样丢弃 →
+        //    持续跳样 → 电音 / 音频加速（实测 submitted≈1.0s 而 played=40.0s，gaps=79 stalls=68）。
+        //  ③本版：循环分段写入直至整帧写完；空间不足时在渲染线程内等一次引擎缓冲事件后续写。
+        //    Submit 本就阻塞等待渲染线程完成，故此举等价于「把音频管线节流到设备实时速率」——正确的背压形态，
+        //    一个采样都不丢。等待有 BufferWaitTimeoutMs 上限 + _shutdownEvent 立即放弃，绝不退化为无界阻塞。
+        //    帧大小可超过设备缓冲区（分段天然支持），故不再限制 frame.FrameCount <= _bufferSize。
+        int totalFrames = frame.FrameCount;
+        int writtenFrames = 0;
 
-        // 等待缓冲区有足够空间（COM 背压）；超时/参数异常计为丢帧（被上层吞掉前统计，用于诊断卡顿根因）
-        try
+        while (writtenFrames < totalFrames)
         {
-            WaitForBufferSpace((uint)frame.FrameCount);
-        }
-        catch (Exception ex) when (ex is TimeoutException or ArgumentException)
-        {
-            _droppedFrames++;
-            throw;
-        }
+            uint padding = GetCurrentPaddingFrames();
+            uint available = padding >= (uint)_bufferSize ? 0u : (uint)_bufferSize - padding;
 
-        // 获取 WASAPI 缓冲区指针
-        int hr = _renderClientGetBuffer!(_renderClientPtr, (uint)frame.FrameCount, out IntPtr pData);
-        Marshal.ThrowExceptionForHR(hr);
-        gotBuffer = true;
-
-        try
-        {
-            var validSrc = frame.Data.Span[..expectedDataSize];
-
-            unsafe
+            if (available == 0)
             {
-                CopyOrConvert(validSrc, pData, sampleCount, frame.SampleFormat, _deviceSampleFormat);
+                // 缓冲满。先确保引擎已在消费，否则等待必然全部超时：
+                // ①preroll 已 arm → 正常自动启动路径；②调用方未走 BeginStreaming/Resume → 兜底强制启动。
+                TryStartPreroll();
+                EnsureDeviceStarted();
+
+                if (!WaitForBufferSpaceOnce())
+                {
+                    // 设备停摆或正在关闭：放弃本帧剩余部分（计数可观测），绝不无界阻塞渲染线程。
+                    _droppedFrames++;
+                    break;
+                }
+                continue;
             }
 
-            hr = _renderClientReleaseBuffer!(_renderClientPtr, (uint)frame.FrameCount, 0);
-            Marshal.ThrowExceptionForHR(hr);
-            released = true;
-            _submittedSamples += frame.FrameCount;   // 诊断：累计成功提交的采样帧数
-            _submittedFrames++;
+            uint toWrite = Math.Min((uint)(totalFrames - writtenFrames), available);
+            int toWriteSamples = (int)toWrite * frame.Channels;
+            int toWriteBytes = toWriteSamples * bytesPerSample;
+            int srcByteOffset = writtenFrames * frame.Channels * bytesPerSample;
 
-            // 治本①（起播静默窗）：preroll 阶段写满设备缓冲后自动启动引擎，
-            // 抓取的是真实 PCM 而非静音 → 起播无静默窗。仅触发一次。
-            if (_prerollPending && !_prerollStarted && GetCurrentPaddingFrames() >= _primeFrames)
+            // 获取 WASAPI 缓冲区指针
+            int hr = _renderClientGetBuffer!(_renderClientPtr, toWrite, out IntPtr pData);
+            Marshal.ThrowExceptionForHR(hr);
+
+            // gotBuffer 标记 GetBuffer 是否已成功锁定缓冲区；released 标记是否已正常释放。
+            bool gotBuffer = true;
+            bool released = false;
+            try
             {
-                int startHr = _audioClientStart!(_audioClientPtr);
-                if (startHr >= 0)
+                var validSrc = frame.Data.Span.Slice(srcByteOffset, toWriteBytes);
+
+                unsafe
                 {
-                    CaptureStartAnchor();
-                    _prerollStarted = true;
-                    _prerollPending = false;
-                    _primeTcs?.TrySetResult(true);
+                    CopyOrConvert(validSrc, pData, toWriteSamples, frame.SampleFormat, _deviceSampleFormat);
+                }
+
+                hr = _renderClientReleaseBuffer!(_renderClientPtr, toWrite, 0);
+                Marshal.ThrowExceptionForHR(hr);
+                released = true;
+            }
+            finally
+            {
+                // 配对规则（WASAPI 强制）：ReleaseBuffer 必须紧跟成功的 GetBuffer，且仅一次。
+                if (gotBuffer && !released)
+                {
+                    try { _renderClientReleaseBuffer!(_renderClientPtr, 0, WasapiInterop.AUDCLNT_BUFFERFLAGS_SILENT); }
+                    catch { /* 尽力释放，忽略二次异常 */ }
                 }
             }
+
+            writtenFrames += (int)toWrite;
+            _submittedSamples += toWrite;   // 诊断：累计成功提交的采样帧数
+
+            // 治本①（起播静默窗）：首段真实 PCM 落入设备缓冲后立即启动引擎，抓取的是真实数据而非静音。
+            // 提前到「每段写入后」而非「整帧写完后」，保证后续分段等待时引擎已在消费，等待必有进展。
+            TryStartPreroll();
         }
-        finally
+
+        if (writtenFrames > 0)
+            _submittedFrames++;
+    }
+
+    /// <summary>
+    /// preroll 阶段的自动启动：首段真实 PCM 写入设备缓冲后立即 Start，引擎抓取真实数据 → 无起播静默窗。
+    /// 幂等（仅首次生效），必须在渲染线程内调用。
+    /// </summary>
+    private void TryStartPreroll()
+    {
+        if (!_prerollPending || _prerollStarted) return;
+
+        int hr = _audioClientStart!(_audioClientPtr);
+        if (hr < 0)
         {
-            // 配对规则（WASAPI 强制）：ReleaseBuffer 必须紧跟成功的 GetBuffer，且仅一次。
-            if (gotBuffer && !released)
-            {
-                try { _renderClientReleaseBuffer!(_renderClientPtr, 0, WasapiInterop.AUDCLNT_BUFFERFLAGS_SILENT); }
-                catch { /* 尽力释放，忽略二次异常 */ }
-            }
+            _logger.LogWarning("preroll 自动启动失败：IAudioClient.Start HRESULT=0x{HR:X8}", hr);
+            return;
         }
+
+        _deviceRunning = true;
+        CaptureStartAnchor();
+        _prerollStarted = true;
+        _prerollPending = false;
+        _primeTcs?.TrySetResult(true);
+    }
+
+    /// <summary>
+    /// 兜底保障：设备从未启动过时强制 Start 并捕获启动锚点。
+    /// </summary>
+    /// <remarks>
+    /// 主时钟（<see cref="GetPlaybackPositionDirect"/>）依赖启动锚点 <c>_startStopwatch</c>；锚点为 null 时
+    /// 恒返回 0，视频管线据此判定「每帧都还没到时间」→ 永久等待 → 画面冻结。三个启动点（Resume /
+    /// preroll 自动启动 / prime 超时兜底）均会捕获锚点，故 <c>_startStopwatch == null</c> 精确等价于
+    /// 「设备从未启动」。仅在缓冲满且无人消费时触发，正常路径永不进入。
+    /// </remarks>
+    private void EnsureDeviceStarted()
+    {
+        if (_startStopwatch != null || _audioClientPtr == IntPtr.Zero || _audioClientStart is null)
+            return;
+
+        int hr = _audioClientStart(_audioClientPtr);
+        if (hr < 0 && hr != WasapiInterop.AUDCLNT_E_NOT_STOPPED)
+        {
+            _logger.LogWarning("兜底启动失败：IAudioClient.Start HRESULT=0x{HR:X8}", hr);
+            return;
+        }
+
+        _deviceRunning = true;
+        CaptureStartAnchor();
+        _logger.LogWarning(
+            "[WASAPI] 设备缓冲已满但引擎从未启动，已强制 Start 并捕获锚点" +
+            "（调用方未经 BeginStreamingAsync/Resume 即提交音频）。");
+    }
+
+    /// <summary>
+    /// 缓冲区已满时等待音频引擎腾出空间（至多一个等待周期）。
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> 表示可以重试写入；<see langword="false"/> 表示设备停摆或正在关闭，
+    /// 调用方应放弃剩余数据（记 droppedFrames），避免阻塞渲染线程上的控制消息。
+    /// </returns>
+    private bool WaitForBufferSpaceOnce()
+    {
+        if (_shutdownEvent.IsSet) return false;
+        // 引擎未在消费（Pause/Stop 后）：空间永不会释放，等待纯属空耗，立即放弃。
+        if (!_deviceRunning) return false;
+
+        if (_bufferEvent != null)
+        {
+            // 事件驱动：引擎每个周期（通常 ~10ms）发一次缓冲信号；关闭信号同等优先，任一到达即返回。
+            int idx = WaitHandle.WaitAny(
+                new WaitHandle[] { _bufferEvent, _shutdownEvent.WaitHandle }, BufferWaitTimeoutMs);
+            return idx == 0;
+        }
+
+        // 轮询模式（设备不支持事件驱动）：短睡后重试；关闭信号到达则放弃。
+        return !_shutdownEvent.Wait(BufferPollIntervalMs);
     }
 
     // ── V2 格式协商方法（O7 独占模式 + O9 多格式直出）──
@@ -1545,64 +1689,6 @@ internal sealed class WasapiRenderLoop
         return hr < 0 ? 0 : padding;
     }
 
-    private void WaitForBufferSpace(uint requiredFrames, CancellationToken ct = default)
-    {
-        if (_audioClientPtr == IntPtr.Zero) return;
-
-        if (requiredFrames > (uint)_bufferSize)
-        {
-            throw new ArgumentException(
-                $"音频帧大小（{requiredFrames} 帧）超过 WASAPI 缓冲区总大小（{_bufferSize} 帧），" +
-                "请减小帧大小或增大缓冲区时长。");
-        }
-
-        var sw = Stopwatch.StartNew();
-        const int timeoutMs = 2000;
-
-        while (true)
-        {
-            // 关闭中：立即放弃缓冲等待，残留帧在关闭期被跳过（Dispose 不再为残留帧卡 2s 超时）
-            if (_shutdownEvent.IsSet)
-                throw new OperationCanceledException("WASAPI 渲染线程关闭中，跳过缓冲等待");
-
-            int hr = _audioClientGetCurrentPadding!(_audioClientPtr, out uint padding);
-            Marshal.ThrowExceptionForHR(hr);
-
-            uint available = (uint)_bufferSize - padding;
-            if (available >= requiredFrames)
-                return;
-
-            if (sw.ElapsedMilliseconds > timeoutMs)
-            {
-                throw new TimeoutException(
-                    $"WASAPI 缓冲区等待超时（{timeoutMs}ms），音频设备可能已停止或卡死。" +
-                    $"需要 {requiredFrames} 帧，可用 {available} 帧。");
-            }
-
-            if (_bufferEvent != null)
-            {
-                int remainingMs = (int)(timeoutMs - sw.ElapsedMilliseconds);
-                if (remainingMs <= 0)
-                    break;
-                // 同时等待缓冲事件与关闭信号：关闭置位时立即返回（上方检查抛出异常）
-                WaitHandle.WaitAny(new WaitHandle[] { _bufferEvent, _shutdownEvent.WaitHandle }, remainingMs);
-            }
-            else
-            {
-                Thread.Sleep(1);
-            }
-        }
-
-        int hrFinal = _audioClientGetCurrentPadding!(_audioClientPtr, out uint finalPadding);
-        Marshal.ThrowExceptionForHR(hrFinal);
-        if ((uint)_bufferSize - finalPadding < requiredFrames)
-        {
-            throw new TimeoutException(
-                $"WASAPI 缓冲区等待超时（{timeoutMs}ms），音频设备可能已停止或卡死。" +
-                $"需要 {requiredFrames} 帧，可用 {(uint)_bufferSize - finalPadding} 帧。");
-        }
-    }
-
     /// <summary>
     /// 释放所有 COM 对象（逆序释放）。由渲染线程在 Shutdown 时调用。
     /// </summary>
@@ -1613,6 +1699,7 @@ internal sealed class WasapiRenderLoop
             try { _audioClientStop(_audioClientPtr); }
             catch { }
         }
+        _deviceRunning = false;
 
         ReleaseComPtr(ref _audioClockPtr);
         _audioClockGetPosition = null;
@@ -1655,6 +1742,7 @@ internal sealed class WasapiRenderLoop
             try { _audioClientStop(_audioClientPtr); }
             catch { }
         }
+        _deviceRunning = false;
 
         ReleaseComPtr(ref _audioClockPtr);
         _audioClockGetPosition = null;

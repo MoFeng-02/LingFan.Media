@@ -17,6 +17,13 @@ public sealed class AudioTrackInfo
     /// <summary>每采样位数。</summary>
     public int BitsPerSample { get; init; }
 
+    /// <summary>编解码器私有配置（如 AAC 的 AudioSpecificConfig）。解码器需据此设置 extradata。
+    /// 无则为默认空。</summary>
+    public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
+
+    /// <summary>流时间基（<c>AVStream.time_base</c>）。透传给解码器写入 <c>pkt_timebase</c> 以正确换算时间戳。</summary>
+    public Rational TimeBase { get; init; }
+
     /// <summary>轨道时长。</summary>
     public TimeSpan Duration { get; init; }
 }

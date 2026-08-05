@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using LingFan.Media.Backends.FFmpeg.Interop;
 using LingFan.Media.Backends.FFmpeg.SafeHandles;
@@ -109,61 +110,104 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     {
         ct.ThrowIfCancellationRequested();
 
+        // 🔴 诊断：在每条原生调用前后打印到 stderr 并 flush，
+        // 若进程在原生调用内静默死亡（无托管异常），最后一条 [demux-trace] 即指出崩溃点。
+        void Dbg(string s) { try { Console.Error.WriteLine($"  [demux-trace] {s}"); Console.Error.Flush(); } catch { } }
+
         try
         {
-            // 1. 分配 AVIO 缓冲区和上下文
-            _avioBuffer = Marshal.AllocHGlobal(AvioBufferSize);
-            if (_avioBuffer == IntPtr.Zero)
-                throw new InvalidOperationException("AllocHGlobal 失败：AVIO 缓冲区");
+            // 本地真实文件 → ffmpeg 原生 file 协议；否则自定义 AVIO（内存/网络流）。
+            // 🔴 规避：自定义 AVIO 需手动写 fmtCtx->pb/flags，当 AutoGen 8.1.0 的 AVFormatContext
+            // 布局与 BtbN master 的 avformat-62.dll 漂移时，该写会损坏原生结构体 → avformat_open_input
+            // 内部 0xC0000005。本地文件走 file 协议（传真实路径、让 ffmpeg 自分配上下文）彻底规避。
+            bool useFileProtocol = stream.Location != null
+                && stream.Location.IndexOf("://", StringComparison.Ordinal) < 0
+                && File.Exists(stream.Location);
 
-            // 委托实例已作为字段保持引用，回调通过实例方法访问 _stream
-            AVIOContext* avioCtx = ffmpeg.avio_alloc_context(
-                (byte*)_avioBuffer, AvioBufferSize,
-                0, // write_flag = 0 (read-only)
-                null, // opaque
-                (avio_alloc_context_read_packet)_readDelegate,
-                null, // write_packet (null = read-only)
-                stream.CanSeek ? (avio_alloc_context_seek)_seekDelegate : null);
+            AVFormatContext* pFmtCtx;
+            AVFormatContext* fmtCtx = null;
 
-            if (avioCtx == null)
-                throw new InvalidOperationException("avio_alloc_context 失败：内存不足");
-            _avioContext = (IntPtr)avioCtx;
-
-            // 2. 分配 AVFormatContext 并设置自定义 AVIO
-            AVFormatContext* fmtCtx = ffmpeg.avformat_alloc_context();
-            if (fmtCtx == null)
-                throw new InvalidOperationException("avformat_alloc_context 失败");
-            fmtCtx->pb = avioCtx;
-            fmtCtx->flags |= ffmpeg.AVFMT_FLAG_CUSTOM_IO;
-
-            // 3. 打开输入（使用自定义 AVIO，url 传 null）
-            // 注意：avformat_open_input 失败时会自动释放 fmtCtx 并将 pFmtCtx 置 null
-            // 因此 SafeHandle 必须在此调用成功后才创建
-            AVFormatContext* pFmtCtx = fmtCtx;
-            int ret = ffmpeg.avformat_open_input(&pFmtCtx, null, null, null);
-            if (ret < 0)
+            if (!useFileProtocol)
             {
-                // avformat_open_input 失败时已自动释放 fmtCtx 并将 pFmtCtx 置 null
-                // 不创建 SafeHandle，避免悬垂指针（use-after-free）
-                string errorMsg = GetErrorString(ret);
-                throw new InvalidOperationException($"avformat_open_input 失败: {errorMsg} (code={ret})");
+                // 1. 分配 AVIO 缓冲区和上下文
+                _avioBuffer = Marshal.AllocHGlobal(AvioBufferSize);
+                if (_avioBuffer == IntPtr.Zero)
+                    throw new InvalidOperationException("AllocHGlobal 失败：AVIO 缓冲区");
+
+                // 委托实例已作为字段保持引用，回调通过实例方法访问 _stream
+                Dbg("avio_alloc_context 之前");
+                AVIOContext* avioCtx = ffmpeg.avio_alloc_context(
+                    (byte*)_avioBuffer, AvioBufferSize,
+                    0, // write_flag = 0 (read-only)
+                    null, // opaque
+                    (avio_alloc_context_read_packet)_readDelegate,
+                    null, // write_packet (null = read-only)
+                    stream.CanSeek ? (avio_alloc_context_seek)_seekDelegate : null);
+
+                if (avioCtx == null)
+                    throw new InvalidOperationException("avio_alloc_context 失败：内存不足");
+                _avioContext = (IntPtr)avioCtx;
+                Dbg("avio_alloc_context OK");
+
+                // 2. 分配 AVFormatContext 并设置自定义 AVIO
+                fmtCtx = ffmpeg.avformat_alloc_context();
+
+                if (fmtCtx == null)
+                    throw new InvalidOperationException("avformat_alloc_context 失败");
+                fmtCtx->pb = avioCtx;
+                fmtCtx->flags |= ffmpeg.AVFMT_FLAG_CUSTOM_IO;
+                Dbg("avformat_alloc_context OK");
             }
 
-            // 成功：创建 SafeHandle（pFmtCtx 可能与原 fmtCtx 不同，avformat_open_input 可能重新分配）
+            if (useFileProtocol)
+            {
+                // ffmpeg 原生 file 协议：pFmtCtx 传 null 让 ffmpeg 自分配（正确原生布局），
+                // 不手动碰 pb/flags，彻底规避结构体布局漂移导致的 AV。
+                Dbg($"avformat_open_input（file 协议: {stream.Location}）之前");
+                pFmtCtx = null;
+                int openRet = ffmpeg.avformat_open_input(&pFmtCtx, stream.Location, null, null);
+                Dbg($"avformat_open_input 返回 ret={openRet}");
+                if (openRet < 0)
+                {
+                    string errorMsg = GetErrorString(openRet);
+                    throw new InvalidOperationException($"avformat_open_input（file 协议）失败: {errorMsg} (code={openRet})");
+                }
+            }
+            else
+            {
+                // 3. 打开输入（自定义 AVIO，url 传 null）
+                pFmtCtx = fmtCtx;
+                Dbg("avformat_open_input 之前");
+                int openRet = ffmpeg.avformat_open_input(&pFmtCtx, null, null, null);
+                Dbg($"avformat_open_input 返回 ret={openRet}");
+                if (openRet < 0)
+                {
+                    string errorMsg = GetErrorString(openRet);
+                    throw new InvalidOperationException($"avformat_open_input 失败: {errorMsg} (code={openRet})");
+                }
+            }
+
+            // 成功：创建 SafeHandle（pFmtCtx 由 ffmpeg 分配/重新分配，持有即有效）
             _formatContextHandle = new SafeAVFormatContextHandle((IntPtr)pFmtCtx);
+            Dbg("avformat_open_input OK，开始 find_stream_info");
 
             // 4. 查找流信息
-            ret = ffmpeg.avformat_find_stream_info(pFmtCtx, null);
+            int ret = ffmpeg.avformat_find_stream_info(pFmtCtx, null);
+            Dbg($"avformat_find_stream_info 返回 ret={ret}");
             if (ret < 0)
             {
                 _logger.LogWarning("avformat_find_stream_info 返回 {Ret}，部分轨道信息可能不可用", ret);
             }
 
             // 5. 解析轨道
+            Dbg("ParseTracks 之前");
             _tracks = ParseTracks(pFmtCtx);
+            Dbg($"ParseTracks OK（{_tracks.Count} 条）");
 
             // 6. 解析元数据
+            Dbg("ParseMetadata 之前");
             _metadata = ParseMetadata(pFmtCtx);
+            Dbg("ParseMetadata OK");
 
             _logger.LogInformation("FFmpeg 打开成功: {StreamCount} 条轨道, 时长 {Duration}",
                 pFmtCtx->nb_streams, _metadata.Duration);
@@ -339,13 +383,25 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     /// </remarks>
     private unsafe int ReadPacketCallback(void* opaque, byte* buf, int bufSize)
     {
-        if (_stream == null || _disposed)
+        // 🔴 同步边界：绝不允许托管异常逃逸进原生 ffmpeg（否则进程静默死亡、无托管栈迹）。
+        try
+        {
+            if (_stream == null || _disposed)
+                return ffmpeg.AVERROR_EOF;
+
+            if (bufSize <= 0)
+                return ffmpeg.AVERROR_EOF;
+
+            Span<byte> span = new(buf, bufSize);
+            int read = _stream.Read(span);
+
+            return read <= 0 ? ffmpeg.AVERROR_EOF : read;
+        }
+        catch (Exception ex)
+        {
+            try { _logger.LogError(ex, "AVIO ReadPacketCallback 异常（已吞除以防逃逸进原生 ffmpeg）"); } catch { }
             return ffmpeg.AVERROR_EOF;
-
-        Span<byte> span = new(buf, bufSize);
-        int read = _stream.Read(span);
-
-        return read == 0 ? ffmpeg.AVERROR_EOF : read;
+        }
     }
 
     /// <summary>
@@ -353,25 +409,34 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     /// </summary>
     private unsafe long SeekCallback(void* opaque, long offset, int whence)
     {
-        if (_stream == null || _disposed || !_stream.CanSeek)
-            return ffmpeg.AVERROR_EOF;
-
-        // AVSEEK_SIZE：查询流大小
-        if (whence == ffmpeg.AVSEEK_SIZE)
+        // 🔴 同步边界：同上，绝不允许托管异常逃逸进原生 ffmpeg。
+        try
         {
-            long len = _stream.Length;
-            return len < 0 ? ffmpeg.AVERROR_EOF : len;
+            if (_stream == null || _disposed || !_stream.CanSeek)
+                return ffmpeg.AVERROR_EOF;
+
+            // AVSEEK_SIZE：查询流大小
+            if (whence == ffmpeg.AVSEEK_SIZE)
+            {
+                long len = _stream.Length;
+                return len < 0 ? ffmpeg.AVERROR_EOF : len;
+            }
+
+            SeekOrigin origin = whence switch
+            {
+                0 => SeekOrigin.Begin,
+                1 => SeekOrigin.Current,
+                2 => SeekOrigin.End,
+                _ => SeekOrigin.Begin
+            };
+
+            return _stream.Seek(offset, origin);
         }
-
-        SeekOrigin origin = whence switch
+        catch (Exception ex)
         {
-            0 => SeekOrigin.Begin,
-            1 => SeekOrigin.Current,
-            2 => SeekOrigin.End,
-            _ => SeekOrigin.Begin
-        };
-
-        return _stream.Seek(offset, origin);
+            try { _logger.LogError(ex, "AVIO SeekCallback 异常（已吞除以防逃逸进原生 ffmpeg）"); } catch { }
+            return ffmpeg.AVERROR_EOF;
+        }
     }
 
     // ── 辅助方法 ──
@@ -383,6 +448,18 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
             return 0;
         AVRational tb = fmtCtx->streams[streamIndex]->time_base;
         return ffmpeg.av_q2d(tb);
+    }
+
+    /// <summary>从 ffmpeg 流参数拷贝 <c>extradata</c>（SPS+PPS / AudioSpecificConfig 等）到托管内存。
+    /// 返回默认空表示无 extradata。</summary>
+    /// <remarks>托管拷贝以确保生命周期独立于 AVStream（AVFormatContext 关闭后指针即失效）。</remarks>
+    private static unsafe ReadOnlyMemory<byte> CopyExtradata(AVCodecParameters* codecPar)
+    {
+        if (codecPar->extradata == null || codecPar->extradata_size <= 0)
+            return default;
+        var bytes = new byte[codecPar->extradata_size];
+        Marshal.Copy((IntPtr)codecPar->extradata, bytes, 0, bytes.Length);
+        return bytes;
     }
 
     /// <summary>解析所有轨道信息。</summary>
@@ -400,6 +477,12 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 ? TimeSpan.FromTicks((long)(avStream->duration * timeBase * TimeSpan.TicksPerSecond))
                 : TimeSpan.Zero;
 
+            // 🔴 流时间基（AVStream.time_base）：ffmpeg 解码帧的 pts/dts 以此为单位。须透传给解码器写入
+            // ctx->pkt_timebase，否则解码后 avFrame->time_base / ctx->time_base 常为 0，帧时间戳全 0
+            // （视频不节流突发提交、主时钟被 SyncTo(0) 钉死、pos 不前进）。den==0 表示无有效时间基，回落 default。
+            AVRational rawTb = avStream->time_base;
+            Rational trackTimeBase = rawTb.den > 0 ? new Rational(rawTb.num, rawTb.den) : default;
+
             MediaTrack? track = codecPar->codec_type switch
             {
                 AVMediaType.AVMEDIA_TYPE_VIDEO => new MediaTrack
@@ -415,7 +498,11 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                         Height = codecPar->height,
                         PixelFormat = MapPixelFormatFromFFmpeg((AVPixelFormat)codecPar->format),
                         FrameRate = GetFrameRate(avStream),
-                        Duration = streamDuration
+                        Duration = streamDuration,
+                        TimeBase = trackTimeBase,
+                        // 🔴 透传编解码器私有配置（H264/H265 的 SPS+PPS 等）。解码器需据此设置 extradata，
+                        // 否则 MP4 中 length-prefixed 的 HEVC/H264 包无法被解码器解析（No start code）。
+                        CodecConfiguration = CopyExtradata(codecPar)
                     }
                 },
 
@@ -431,6 +518,9 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                         SampleRate = codecPar->sample_rate,
                         Channels = codecPar->ch_layout.nb_channels,
                         BitsPerSample = codecPar->bits_per_coded_sample,
+                        TimeBase = trackTimeBase,
+                        // 🔴 透传 AudioSpecificConfig 等。AAC 在 MP4 中为裸流，解码器必须据此设置 extradata。
+                        CodecConfiguration = CopyExtradata(codecPar),
                         Duration = streamDuration
                     }
                 },

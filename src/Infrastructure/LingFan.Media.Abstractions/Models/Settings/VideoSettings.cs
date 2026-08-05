@@ -26,4 +26,10 @@ public sealed class VideoSettings
     /// 零外部引用（BCL <see cref="ReadOnlyMemory{T}"/>），符合契约层“只增不改”演进准则。
     /// </summary>
     public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
+
+    /// <summary>
+    /// 流时间基（<c>AVStream.time_base</c>）。透传自轨道信息，供 FFmpeg 等后端写入
+    /// <c>AVCodecContext.pkt_timebase</c>，使解码帧 pts/dts 换算为正确秒数。默认 <c>default</c>（无效）。
+    /// </summary>
+    public Rational TimeBase { get; init; }
 }

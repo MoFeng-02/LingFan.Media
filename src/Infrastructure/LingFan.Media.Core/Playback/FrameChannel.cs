@@ -9,8 +9,10 @@ namespace LingFan.Media.Core;
 /// 单一管线线程投递为主，订阅稳定后快照复用、热路径零分配。
 /// </summary>
 /// <remarks>
-/// 设计约束（来自帧路由宪法）：帧必有且仅有一个所有者消费（归还对象池）。本通道只负责扇出，
-/// 所有权由订阅的 Sink 约定——主视频 Sink 消费并释放；只读型消费者须另经独立机制，不在此重复释放。
+/// 设计约束（帧路由宪法）：管线始终在 <see cref="Emit"/> 调用后于 <c>finally</c> 中
+/// <c>ReturnFrame</c> 释放帧——<b>本通道与所有 Sink 均为只读借用，绝不 Dispose</b>。
+/// 通道只负责扇出；多播下任一 Sink 在 <see cref="IFrameSink.OnFrame"/> 内 Dispose 会让后续订阅方
+/// 读到已释放帧（use-after-free），故 Sink 一律不得 Dispose。
 /// </remarks>
 internal sealed class FrameChannel : IFrameChannel
 {
@@ -32,7 +34,7 @@ internal sealed class FrameChannel : IFrameChannel
             sink.OnFrame(frame);
     }
 
-    private void Unsubscribe(IFrameSink sink)
+    public void Unsubscribe(IFrameSink sink)
     {
         lock (_gate) _sinks.Remove(sink);
     }
