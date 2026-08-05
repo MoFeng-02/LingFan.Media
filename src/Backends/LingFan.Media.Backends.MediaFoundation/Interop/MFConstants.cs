@@ -111,6 +111,55 @@ internal static class MFConstants
     // 本机运行时验证（2026-07-29）：CoCreateInstance + 全 vtable 槽位 S_OK。⚠️ 早期误写 ...8009-456E31185733（臆测值），勿回退）
     internal static readonly Guid IID_IMFTransform = new(0xbf94c121, 0x5b05, 0x4e6f, 0x80, 0x00, 0xba, 0x59, 0x89, 0x61, 0x41, 0x4d);
 
+    // ── DXVA 零拷贝（V2-15 扩展）所需 IID 与消息常量 ──
+    // IMFDXGIDeviceManager（dxva2api.h 权威值 {AEC1CAF6-EE55-44FC-BC6A-E049C3F6D664}）
+    internal static readonly Guid IID_IMFDXGIDeviceManager = new(0xaec1caf6, 0xee55, 0x44fc, 0xbc, 0x6a, 0xe0, 0x49, 0xc3, 0xf6, 0xd6, 0x64);
+    // IMFDXGIBuffer（dxva2api.h 权威值 {D8AD0F58-EE55-4E44-AB48-5F6EA27FFB15}）
+    internal static readonly Guid IID_IMFDXGIBuffer = new(0xd8ad0f58, 0xee55, 0x4e44, 0xab, 0x48, 0x5f, 0x6e, 0xa2, 0x7f, 0xfb, 0x15);
+    // ID3D11Texture2D（d3d11.h 权威值 {6F15AAF2-D208-4E89-9AB4-489535D34F9C}）
+    internal static readonly Guid IID_ID3D11Texture2D = new(0x6f15aaf2, 0xd208, 0x4e89, 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c);
+    // ID3D10Multithread（d3d10.h:7119 DEFINE_GUID 权威值 {9B7E4E00-342C-4106-A19F-4F2704F689F0}）
+    // DXVA 共享设备必须开多线程保护：解码 MFT 与渲染在不同线程访问同一 ID3D11Device，
+    // 未开保护时 D3D11 运行时不做内部同步 ⇒ 竞态/设备移除（MSDN "Direct3D 11 Video APIs" 硬性要求）。
+    internal static readonly Guid IID_ID3D10Multithread = new(0x9b7e4e00, 0x342c, 0x4106, 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0);
+    // MF_SA_D3D11_AWARE（mftransform.h:1618 权威值 {206B4FC8-FCF9-4C51-AFE3-9764369E33A0}）
+    // MFT 属性：UINT32 非 0 表示该 MFT 支持 Direct3D 11 视频解码。发 SET_D3D_MANAGER 前必须探测——
+    // 不 aware 的 MFT 对未知/不支持消息普遍返回 S_OK 忽略，会制造「假激活」。
+    internal static readonly Guid MF_SA_D3D11_AWARE = new(0x206b4fc8, 0xfcf9, 0x4c51, 0xaf, 0xe3, 0x97, 0x64, 0x36, 0x9e, 0x33, 0xa0);
+    // IMFMediaBuffer（mfobjects.h 权威值 {045FA593-8799-42B8-BC8D-8968C6453508}）
+    internal static readonly Guid IID_IMFMediaBuffer = new(0x045fa593, 0x8799, 0x42b8, 0xbc, 0x8d, 0x89, 0x68, 0xc6, 0x45, 0x35, 0x07);
+    // IMF2DBuffer（mfobjects.h 权威值 {7DC9D5F9-9ED9-44EC-9BBF-0600BB589F56}）
+    internal static readonly Guid IID_IMF2DBuffer = new(0x7dc9d5f9, 0x9ed9, 0x44ec, 0x9b, 0xbf, 0x06, 0x00, 0xbb, 0x58, 0x9f, 0x56);
+    // MF_MT_VIDEO_NOMINAL_RANGE（mfapi.h 权威值 {C21B8EE5-B956-4071-917B-3894AA8DB48B}）
+    internal static readonly Guid MF_MT_VIDEO_NOMINAL_RANGE = new(0xc21b8ee5, 0xb956, 0x4071, 0x91, 0x7b, 0x38, 0x94, 0xaa, 0x8d, 0xb4, 0x8b);
+    // MF_MT_DEFAULT_STRIDE（mfapi.h 权威值 {644B4424-1063-42B4-B200-E6970237AD6B}）
+    internal static readonly Guid MF_MT_DEFAULT_STRIDE = new(0x644b4424, 0x1063, 0x42b4, 0xb2, 0x00, 0xe6, 0x97, 0x02, 0x37, 0xad, 0x6b);
+
+    // ── H264 DXVA 设备能力真值探测（决定性判据：区分「半 DXVA 读回」与「真 DXGI 零拷贝」）──
+    // ID3D11VideoDevice（d3d11.h:13727 MIDL_INTERFACE 权威值 {10EC4D5B-975A-4689-B9E4-D0AAC30FE333}）
+    // 🔴 旧记忆里的 1F010207-... 是 ID3D11VideoContext，非 VideoDevice——务必以 SDK 实物为准。
+    internal static readonly Guid IID_ID3D11VideoDevice = new(0x10ec4d5b, 0x975a, 0x4689, 0xb9, 0xe4, 0xd0, 0xaa, 0xc3, 0x0f, 0xe3, 0x33);
+    // D3D11_DECODER_PROFILE_H264_VLD_NOFGT（d3d11.h:10039 DEFINE_GUID 权威值 {1B81BE68-A0C7-11D3-B984-00C04F2E73C5}）
+    // 标准 H264 主/高规 VLD 解码 profile（无 film grain）。勿用臆测的 42EE2D3C-...（那是 DXVA2 其它 profile）。
+    internal static readonly Guid D3D11_DECODER_PROFILE_H264_VLD_NOFGT = new(0x1b81be68, 0xa0c7, 0x11d3, 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5);
+    // DXGI_FORMAT_NV12（dxgiformat.h:116 权威值 = 103；⚠️ 非 167，手敲易错）
+    internal const int DXGI_FORMAT_NV12 = 103;
+    // ID3D11Device（d3d11.h:1395 MIDL_INTERFACE 权威值 {1841E5C8-16B0-489B-BCC8-44CFB0D5DEAE}）
+    internal static readonly Guid IID_ID3D11Device = new(0x1841e5c8, 0x16b0, 0x489b, 0xbc, 0xc8, 0x44, 0xcf, 0xb0, 0xd5, 0xde, 0xae);
+    // D3D11_DECODER_PROFILE_H264_VLD_FGT（d3d11.h:10040 DEFINE_GUID 权威值 {1B81BE69-...}）标准 H264 VLD 带 film grain。
+    internal static readonly Guid D3D11_DECODER_PROFILE_H264_VLD_FGT = new(0x1b81be69, 0xa0c7, 0x11d3, 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5);
+
+
+    // 🔴 MFT_MESSAGE_SET_D3D_MANAGER = 0x2（mftransform.h:174 SDK 实物）。
+    //    **不存在** MFT_MESSAGE_SET_D3D11_MANAGER 这个枚举项 —— MFT_MESSAGE_TYPE 全集只有
+    //    FLUSH=0 / DRAIN=1 / SET_D3D_MANAGER=2 / DROP_SAMPLES=3 / COMMAND_TICK=4 /
+    //    NOTIFY_*=0x10000000..0x10000008 / COMMAND_MARKER=0x20000000。
+    //    D3D9(DXVA2) 与 D3D11(DXGI) **共用本消息**，区别仅在 ulParam 传 IDirect3DDeviceManager9*
+    //    还是 IMFDXGIDeviceManager*（MSDN "Supporting Direct3D 11 Video Decoding in Media Foundation"）。
+    //    2026-08-04 曾臆造 0x80000013：MFT 对未知消息按约定返回 S_OK 静默忽略 ⇒ 日志「硬解已激活」
+    //    却全程软解（GPU零拷贝=0、每帧 QI(IMFDXGIBuffer) 得 E_NOINTERFACE）。此为「假绿」真根因。
+    internal const int MFT_MESSAGE_SET_D3D_MANAGER = 0x00000002;
+
     // MFT 设置类型标志
     internal const int MFT_SET_TYPE_TEST_ONLY = 0x00000001;
 

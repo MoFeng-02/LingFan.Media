@@ -74,9 +74,22 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
             // 创建 D3D11 设备（硬件驱动 + BGRA 支持）
             // 注意：Vortice.Direct3D11.D3D11 是静态类，需完全限定名避免与本命名空间 D3D11 冲突
             // Vortice 便捷重载返回 ID3D11Device，通过 ImmediateContext 属性获取设备上下文
-            _device = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
-                DriverType.Hardware,                        // 硬件驱动（Vortice.Direct3D 命名空间）
-                DeviceCreationFlags.BgraSupport);            // BGRA 支持（SwapChain 需要）
+            // 创建 D3D11 设备（硬件驱动 + BGRA 支持；DXVA 零拷贝需 VideoSupport 标志）。
+            // 优先带 VideoSupport（DXVA 硬解要求）；若创建失败（极少数无视频能力设备）则回退不含该标志，
+            // 保证渲染仍可用（DXVA 会回落软解）。有头零拷贝依赖此共享设备带 VideoSupport。
+            try
+            {
+                _device = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
+                    DriverType.Hardware,                        // 硬件驱动（Vortice.Direct3D 命名空间）
+                    DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "带 VideoSupport 的 D3D11 设备创建失败，回退不含 VideoSupport（渲染仍可用，DXVA 可能不可用）");
+                _device = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
+                    DriverType.Hardware,
+                    DeviceCreationFlags.BgraSupport);
+            }
             _context = _device.ImmediateContext;
 
             // 创建设备上下文（RenderContext 实现 IGpuDeviceContext）并注入 GPU 能力（V2 R6/E2）。

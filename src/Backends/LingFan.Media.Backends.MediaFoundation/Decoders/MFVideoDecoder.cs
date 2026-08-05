@@ -118,6 +118,18 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// <summary>MFVideoArea blob 的原始 16 字节 hex，仅用于首帧诊断（防止结构布局理解错误时无从对证）。</summary>
     private string? _apertureBlobHex;
 
+    // ── DXVA 硬件解码零拷贝（V2-15 扩展，选项 B）──────────────────────────────
+    // 依赖契约层 IGpuDeviceContext（共享 D3D11 设备），不引用任何渲染器模块，严守依赖倒置。
+    // 有头：设备由 D3D11 渲染器注册（同设备 → 零拷贝）；无头：由 MF 自备（MfGpuDeviceContext），均经同一契约。
+    private readonly IGpuDeviceContext? _gpuContext;
+    private bool _dxvaActive;        // DXVA 是否成功激活（决定 ExtractFrame 走 GPU 纹理还是软解拷贝）
+    private IntPtr _dxvaManager;     // IMFDXGIDeviceManager*（DXVA 必需；Dispose 时 Release）
+    private uint _dxvaResetToken;    // ResetDevice 配对 reset token
+    private long _gpuZeroCopyFrames;  // DXVA 零拷贝 GPU 纹理帧计数（验证铁证）
+    private long _cpuFallbackFrames;  // 软解 CPU 拷贝帧计数
+    private bool _frameSummaryLogged; // 收尾帧路径统计仅打印一次
+    private bool _loggedDxvaDiagOnce; // DXVA 纹理提取失败诊断仅打印一次（专用标志，勿复用软解布局标志）
+
     // 输出 sample 分配策略（GetOutputStreamInfo）
     private bool _mftProvidesSamples;
     private uint _outputBufferSize;
@@ -130,9 +142,10 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private IMFTransform_ProcessInput? _processInput;
     private IMFTransform_ProcessOutput? _processOutput;
 
-    public MFVideoDecoder(ILogger<MFVideoDecoder> logger)
+    public MFVideoDecoder(ILogger<MFVideoDecoder> logger, IGpuDeviceContext? gpuContext = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _gpuContext = gpuContext;
     }
 
     /// <inheritdoc/>
@@ -155,7 +168,9 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             throw new InvalidOperationException("该 MF 视频解码器实例已关闭，不可重新初始化；请新建实例。");
 
         Codec = codec;
-        IsHardwareAccelerated = settings.EnableHardwareAcceleration;
+        // 🔴 真检测（2026-08-04 修正）：原实现 = settings.EnableHardwareAcceleration 原样回显（假回显 bug）。
+        // 现先置 false，待下方 DXVA 接入成功后再置 true；失败/无设备则保持 false（软件解码）。
+        IsHardwareAccelerated = false;
 
         // 输入 subtype（H265 系统 MFT 注册的输入 subtype 为 "HEVC"）
         if (codec == VideoCodec.H264) _inputSubtype = MFConstants.MFVideoFormat_H264;
@@ -247,6 +262,90 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 }
             }
 
+            // ── DXVA 硬件解码零拷贝接入（V2-15 扩展，选项 B）────────────────────────
+            // 依赖契约层 IGpuDeviceContext（共享 D3D11 设备），不引用渲染器，严守依赖倒置。
+            // ⚠️ R49 时序修正：SET_D3D_MANAGER 必须在 SetInputType/SetOutputType **之后**发送
+            // （MSDN「H.264 解码 MFT / IMFTransform DXVA2」规范：类型协商先于 D3D 管理器消息，
+            // 解码器据此在 ProcessOutput 首调用前创建 DXVA 解码配置）。早期版本臆造「须在类型协商前发送」
+            // 并据此把消息上移，导致 MFT 在 SetInputType 即锁定软件路径 → 虽 PROVIDES_SAMPLES=True，
+            // 运行时却静默回落 CPU（半 DXVA）。失败一律回退软件解码，绝不抛异常阻断播放。
+            _dxvaActive = false;
+            if (settings.EnableHardwareAcceleration && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
+            {
+                try
+                {
+                    // ① 能力探测：MF_SA_D3D11_AWARE。
+                    // 🔴 必须先探测再发消息：MFT 对**不支持的消息按 IMFTransform 约定返回 S_OK 静默忽略**，
+                    //    仅凭 ProcessMessage 的 HRESULT 无法区分「真接受」与「忽略」——这正是「硬解激活=True
+                    //    却 GPU零拷贝=0」假绿能长期存在的原因。此处把 MFT 自报能力作为第一道判据。
+                    if (!QueryD3D11Aware())
+                        throw new NotSupportedException("该解码 MFT 未声明 MF_SA_D3D11_AWARE（不支持 Direct3D 11 视频解码）");
+
+                    // ② 多线程保护：解码 MFT 与渲染器分处不同线程共享同一 ID3D11Device，
+                    //    未开保护时 D3D11 运行时不做内部同步 ⇒ 竞态/设备移除（MSDN 硬性要求）。
+                    if (!MfDxvaInterop.TryEnableMultithreadProtection(_gpuContext.DeviceHandle))
+                        _logger.LogWarning("[DXVA-DIAG] D3D11 设备不支持 ID3D10Multithread，无法开启多线程保护（DXVA 下存在竞态风险）");
+
+                    int dxhr = MfDxvaInterop.MFCreateDXGIDeviceManager(out _dxvaResetToken, out _dxvaManager);
+                    Marshal.ThrowExceptionForHR(dxhr);
+
+                    var resetDevice = MfVTable.Get<MfDxvaInterop.IMFDXGIDeviceManager_ResetDevice>(_dxvaManager, 4); // 绝对 7 = ResetDevice（vtable: CloseDeviceHandle=3,GetVideoService=4,LockDevice=5,OpenDeviceHandle=6,ResetDevice=7,TestDevice=8,UnlockDevice=9；MfVTable.Get 读 vtable+(3+slot)，故 slot=4）
+                    dxhr = resetDevice(_dxvaManager, _gpuContext.DeviceHandle, _dxvaResetToken);
+                    Marshal.ThrowExceptionForHR(dxhr);
+
+                    // ④ 设备能力真值探测（决定性判据）：共享 D3D11 设备能否为 H264 解码到 NV12 分配 DXGI 表面。
+                    // 🔴 这是「半 DXVA（GPU 硬解但输出读回系统内存）」的唯一权威判据。若设备不支持
+                    //    H264 DXVA 解码到 NV12，MFT 会**静默**把结果拷贝回系统内存 → 输出 buffer 是普通
+                    //    IMFMediaBuffer（QI IMFDXGIBuffer=E_NOINTERFACE）→ 零拷贝永不生效。若不查，会陷入
+                    //    「硬解激活=True 却 GPU零拷贝=0」的假绿（与 R40 消息号假绿同源）。
+                    //    探测失败的处置：不阻断初始化，仅打告警，让后续真实输出行为说话。
+                    if (!MfDxvaInterop.TryProbeH264DxvaSupport(_gpuContext.DeviceHandle, out bool dxvaCapable))
+                        _logger.LogWarning("[DXVA-DIAG] 共享 D3D11 设备不支持 ID3D11VideoDevice（无视频解码能力）→ 零拷贝不可能，将走软解");
+                    else if (!dxvaCapable)
+                        _logger.LogWarning("[DXVA-DIAG] CheckVideoDecoderFormat(H264_VLD→NV12)=不支持 → 设备无法为 H264 分配 DXGI 解码表面，MFT 将静默回落读回系统内存（半 DXVA），零拷贝不成立");
+                    else
+                        _logger.LogInformation("[DXVA-DIAG] CheckVideoDecoderFormat(H264_VLD→NV12)=支持 → 设备具备 H264 DXGI 零拷贝解码能力");
+
+                    // ⑥ 决定性验证：DXGI 管理器是否真正绑定上了设备（解码器经 GetVideoService 取设备）。
+                    //    ResetDevice 即便 HRESULT 成功，若 P/Invoke 偏差致绑定未生效，解码器取回空设备 ⇒ 静默读回。
+                    string? mgrDiag = MfDxvaInterop.ProbeManagerBoundDevice(_dxvaManager);
+                    if (mgrDiag != null)
+                        _logger.LogInformation("{Diag}", mgrDiag);
+
+                    // ⑦ 枚举设备真实解码 profile + 逐个验证 NV12，排查 profile 不匹配致 CreateVideoDecoder 失败。
+                    string? profDiag = MfDxvaInterop.ProbeDecoderProfiles(_gpuContext.DeviceHandle);
+                    if (profDiag != null)
+                        _logger.LogInformation("{Diag}", profDiag);
+
+                    // ⑤ 适配器身份探针（第二道根因探针）：确认共享设备是否落在 WARP/错误适配器上。
+                    // CheckVideoDecoderFormat 仅验格式、不验真实硬件解码引擎；若设备是 WARP，
+                    // 格式查询仍可能通过，但解码器在真正解码时无法建立硬件视频解码会话 ⇒ 静默读回系统内存。
+                    string? adapterDiag = MfDxvaInterop.ProbeDeviceAdapter(_gpuContext.DeviceHandle);
+                    if (adapterDiag != null)
+                        _logger.LogInformation("{Diag}", adapterDiag);
+
+                    // ③ MF DXGI 设备管理器已于上方创建并绑定（MFCreateDXGIDeviceManager + ResetDevice）。
+                    //    发送 MFT_MESSAGE_SET_D3D_MANAGER(=0x2) 的时机移到下方「类型协商之后」（见 R49 时序修正）。
+                    // 🔴 消息号必须是 0x2：SDK mftransform.h 中根本不存在 SET_D3D11_MANAGER；D3D9/D3D11
+                    //    共用本消息，只靠 ulParam 接口类型区分。旧代码臆造 0x80000013 被 MFT 当未知消息
+                    //    返回 S_OK 忽略 = 假激活真根因（R40）。
+                    // ⚠️ R49：SET_D3D_MANAGER 必须**在 SetInputType/SetOutputType 之后**发送（MSDN H.264 解码
+                    //    MFT / IMFTransform DXVA2 规范）。早于类型协商发送会令 MFT 在 SetInputType 锁定软件路径
+                    //    → 虽 PROVIDES_SAMPLES=True 却运行时静默回落 CPU（半 DXVA）。
+                }
+                catch (Exception ex)
+                {
+                    _dxvaActive = false;
+                    IsHardwareAccelerated = false;
+                    if (_dxvaManager != IntPtr.Zero) { Marshal.Release(_dxvaManager); _dxvaManager = IntPtr.Zero; }
+                    _logger.LogWarning(ex, "MF DXVA 硬解初始化失败，回退软件解码");
+                }
+            }
+            else if (settings.EnableHardwareAcceleration)
+            {
+                _logger.LogWarning("未提供 D3D11 设备上下文（IGpuDeviceContext），MF 无法启用 DXVA，回退软件解码");
+            }
+
             hr = _setInputType!(_transform, 0, _inputTypePtr, 0);
             Marshal.ThrowExceptionForHR(hr);
 
@@ -266,8 +365,51 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             hr = _setOutputType!(_transform, 0, _outputTypePtr, 0);
             Marshal.ThrowExceptionForHR(hr);
 
+            // ── R49：SET_D3D_MANAGER 时序修正 ────────────────────────────────────────
+            // 设备管理器已创建+绑定于上方早期探测块；此处（类型协商之后）才通知 MFT 使用它做 DXVA。
+            // 若 _dxvaManager 非零说明早期探测（MF_SA_D3D11_AWARE/设备能力/绑定/适配器/profile）全通过，
+            // 但仍需 MFT 真正接受消息才激活；被拒则回落软解，绝不「假激活」。
+            if (_dxvaManager != IntPtr.Zero)
+            {
+                try
+                {
+                    int setHr = _processMessage!(_transform, MFConstants.MFT_MESSAGE_SET_D3D_MANAGER, (nuint)_dxvaManager);
+                    Marshal.ThrowExceptionForHR(setHr);
+                    _dxvaActive = true;
+                    IsHardwareAccelerated = true;
+                    _logger.LogInformation("MF DXVA 硬解已激活（MF_SA_D3D11_AWARE=1，SET_D3D_MANAGER 类型协商后已接受，共享 D3D11 设备）");
+                }
+                catch (Exception ex)
+                {
+                    _dxvaActive = false;
+                    IsHardwareAccelerated = false;
+                    Marshal.Release(_dxvaManager);
+                    _dxvaManager = IntPtr.Zero;
+                    _logger.LogWarning(ex, "MF DXVA 硬解激活失败（SET_D3D_MANAGER 被拒），回退软件解码");
+                }
+            }
+
             // 查询输出 sample 分配策略与所需大小
             QueryOutputStreamInfo();
+
+            // 🔴 DXVA 生效的**第二道也是决定性判据**：类型协商完成后 MFT 是否改报 PROVIDES_SAMPLES。
+            // 系统 H264/H265 解码 MFT 在软件路径下由调用方分配输出 sample；一旦 DXVA 真正接管，
+            // 它必须自行分配 DXGI 纹理 sample（纹理只能由 MFT 从 D3D11 解码器输出池取），
+            // 于是 GetOutputStreamInfo 会置 MFT_OUTPUT_STREAM_PROVIDES_SAMPLES。
+            // 若此位为 0 而 _dxvaActive=true，说明 MFT 收下了 manager 却没走 DXVA —— 此时我方会继续用
+            // MFCreateMemoryBuffer 造系统内存 sample 交给 MFT 填充，输出永远不可能是 DXGI 表面
+            // （每帧 QI(IMFDXGIBuffer) 必得 E_NOINTERFACE）。必须在此显式暴露，绝不让它退化成静默软解。
+            if (_dxvaActive)
+            {
+                _logger.LogInformation(
+                    "[DXVA-DIAG] 类型协商后输出流信息：MFT自分配输出sample={Provides}, cbSize={Size} → 零拷贝{Verdict}",
+                    _mftProvidesSamples, _outputBufferSize,
+                    _mftProvidesSamples ? "前置条件成立" : "★前置条件不成立（MFT 未接管输出分配 = DXVA 未真正启用）★");
+                if (!_mftProvidesSamples)
+                    _logger.LogWarning(
+                        "[DXVA-DIAG] MFT 接受了 SET_D3D_MANAGER 但仍要求调用方分配输出 sample —— DXVA 未真正启用" +
+                        "（可能：设备缺 VIDEO_SUPPORT / 该分辨率无硬件解码配置 / 驱动不支持该 profile）。本次将全程软解。");
+            }
 
             // 通知开始流式处理
             _processMessage!(_transform, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
@@ -616,7 +758,38 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 _lastFrameDur = dur;
             }
 
-            // 输出数据可能分散在多个 buffer，ConvertToContiguousBuffer 合并
+            // DXVA 零拷贝路径：必须用 GetBufferByIndex 取 sample 原始 buffer，再 QI IMFDXGIBuffer。
+            // 🔴 绝不能改用 ConvertToContiguousBuffer：其契约就是「把 sample 合并并读回到连续系统内存」，
+            //    永远返回 CPU buffer、绝不可能承载 DXGI 纹理——用 slot38 做零拷贝在原理上注定失败（R41 已证伪）。
+            // vtable 槽位（与运行时已验证的 ConvertToContiguousBuffer=38 / AddBuffer=39 一致，IMFSample 第 8 方法）：
+            //   GetBufferByIndex = 绝对 40 → slotIndex 37
+            IntPtr rawBuffer = IntPtr.Zero;
+            if (_dxvaActive)
+            {
+                var getBuffer = MfVTable.Get<IMFSample_GetBufferByIndex>(sample, 37);
+                int hrRaw = getBuffer(sample, 0, out rawBuffer);
+            if (hrRaw >= 0 && rawBuffer != IntPtr.Zero)
+            {
+                var gpu = TryExtractDxgiTexture(rawBuffer);
+                    if (gpu is not null)
+                    {
+                        System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
+                        // rawBuffer 是 IMFMediaBuffer 自身的引用（GetBufferByIndex 已 AddRef），纹理引用由 gpu 持有。
+                        InteropTrace.ReleaseComPtr(rawBuffer, "ExtractFrame:dxva-rawBuffer");
+                        return new VideoFrame(_width, _height, PixelFormat.NV12, gpu, ts, dur, sourcePacket.KeyFrame);
+                    }
+                    // 原始 buffer 非 DXGI（或 GetResource 失败）：释放 rawBuffer，回落 ConvertToContiguousBuffer 软解。
+                    InteropTrace.ReleaseComPtr(rawBuffer, "ExtractFrame:dxva-rawBuffer-fallback");
+                    rawBuffer = IntPtr.Zero;
+                }
+                else
+                {
+                    _logger.LogWarning("GetBufferByIndex(0) 失败，HRESULT=0x{HR:X8}，回落 ConvertToContiguousBuffer", hrRaw);
+                    rawBuffer = IntPtr.Zero;
+                }
+            }
+
+            // 软解拷贝路径：输出数据可能分散在多个 buffer，ConvertToContiguousBuffer 合并并读回系统内存。
             // IMFSample 槽位：ConvertToContiguousBuffer = 绝对 41 → slotIndex 38
             // （IMFAttributes 恰 30 方法，IMFSample 第 9 方法；运行时已验证 slot38 返回有效 buffer）
             var toContig = MfVTable.Get<IMFSample_ConvertToContiguousBuffer>(sample, 38);
@@ -739,6 +912,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                     InteropTrace.UnlockBuffer(outBuffer, unlockDel, "ExtractFrame:IMFMediaBuffer.Unlock");
                 }
 
+                System.Threading.Interlocked.Increment(ref _cpuFallbackFrames);
                 return new VideoFrame(_width, _height, PixelFormat.NV12, resource, ts, dur, sourcePacket.KeyFrame);
             }
             finally
@@ -749,6 +923,136 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         finally
         {
             InteropTrace.ReleaseComPtr(sample, "ExtractFrame:sample");
+        }
+    }
+
+    /// <summary>
+    /// 从 DXVA 输出 buffer 提取 DXGI 纹理并包成 <see cref="MfD3D11TextureResource"/>（零拷贝）。
+    /// </summary>
+    /// <remarks>QueryInterface IMFDXGIBuffer → GetResource(ID3D11Texture2D) + GetSubresourceIndex。
+    /// GetResource 已 AddRef 纹理；失败时返回 null（调用方回落软解路径）。</remarks>
+    private MfD3D11TextureResource? TryExtractDxgiTexture(IntPtr buffer)
+    {
+        Guid iidDxgi = MFConstants.IID_IMFDXGIBuffer;
+        int hr = Marshal.QueryInterface(buffer, in iidDxgi, out IntPtr dxgi);
+        if (hr < 0 || dxgi == IntPtr.Zero)
+        {
+            // 每帧都打 warning 会刷屏，故只深度诊断一次。
+            // ⚠️ 必须用**专用**标志：旧代码借 _loggedLayoutOnce（软解布局诊断标志）当守卫，
+            //    该标志由软解路径设置，语义与生命周期都不对，属偶然可用。
+            if (!_loggedDxvaDiagOnce)
+            {
+                _loggedDxvaDiagOnce = true;
+                DiagnoseNonDxgiBuffer(buffer, hr);
+            }
+            return null;
+        }
+        try
+        {
+            var getResource = MfVTable.Get<MfDxvaInterop.IMFDXGIBuffer_GetResource>(dxgi, 0);   // 绝对 3
+            var getSub = MfVTable.Get<MfDxvaInterop.IMFDXGIBuffer_GetSubresourceIndex>(dxgi, 1); // 绝对 4
+
+            Guid iidTex = MFConstants.IID_ID3D11Texture2D;
+            hr = getResource(dxgi, ref iidTex, out IntPtr tex);
+            if (hr < 0 || tex == IntPtr.Zero)
+            {
+                _logger.LogWarning("[DXVA-DIAG] IMFDXGIBuffer.GetResource(ID3D11Texture2D) 失败：HRESULT=0x{HR:X8}", hr);
+                return null;
+            }
+            hr = getSub(dxgi, out uint sub);
+            if (hr < 0)
+            {
+                Marshal.Release(tex); // R5 配对：GetResource 成功已 AddRef 纹理，getSub 失败须释放，否则纹理引用泄漏
+                _logger.LogWarning("[DXVA-DIAG] IMFDXGIBuffer.GetSubresourceIndex 失败：HRESULT=0x{HR:X8}", hr);
+                return null;
+            }
+
+            return new MfD3D11TextureResource(tex, _width, _height, PixelFormat.NV12, (int)sub);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[DXVA-DIAG] DXVA 纹理提取异常，回落软解拷贝");
+            return null;
+        }
+        finally
+        {
+            Marshal.Release(dxgi);
+        }
+    }
+
+    /// <summary>
+    /// DXVA 已激活（PROVIDES_SAMPLES=True）但输出 buffer 不支持 <c>IMFDXGIBuffer</c> 时的一次性深度诊断。
+    /// 说明 MFT 把 GPU 纹理读回到了系统内存（"半 DXVA"）：解码走硬解，但零拷贝提取失败。
+    /// 本方法摊开 buffer 真实身份（是否仍是 IMFMediaBuffer / IMF2DBuffer / ID3D11Texture2D）与
+    /// 输出媒体类型属性（subtype / NominalRange / DefaultStride），用于定位"读回"的根因。
+    /// ⚠️ 全部诊断改用【已核验正确的 IID】+【Lock 实测】两类可信手段：
+    ///    - IID_IMFMediaBuffer 此前字节级错误（0x...3508→0x3507）曾令所有 QI 假阴性，现已订正；
+    ///    - Lock 复用真实 CPU 路径的 vtable 槽位 0/1/2，绝不依赖 QI，故即使 QI 仍异常也能给出真值。
+    /// </summary>
+    private void DiagnoseNonDxgiBuffer(IntPtr buffer, int dxgiHr)
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("[DXVA-DIAG] 输出 buffer 非 IMFDXGIBuffer(QI=0x").Append(dxgiHr.ToString("X8")).Append(") → 深度诊断：");
+
+            // ① buffer 是否仍是有效 IMFMediaBuffer（用【已订正】的 IID，真值）
+            int hrMb = Marshal.QueryInterface(buffer, in MFConstants.IID_IMFMediaBuffer, out IntPtr mb);
+            bool isMb = hrMb >= 0;
+            sb.Append(" IMFMediaBuffer=").Append(isMb ? "是" : "否");
+            if (isMb)
+            {
+                // ② 真值校验：直接 Lock（复用 CPU 路径 vtable 槽位 0/1/2）取长度，确认是系统内存 NV12。
+                //    若 Lock 成功且长度≈_outputBufferSize(cbSize)，则坐实「解码器产出系统内存读回 buffer」。
+                try
+                {
+                    var lockDel = MfVTable.Get<IMFMediaBuffer_Lock>(mb, 0);
+                    var unlockDel = MfVTable.Get<IMFMediaBuffer_Unlock>(mb, 1);
+                    var getLen = MfVTable.Get<IMFMediaBuffer_GetCurrentLength>(mb, 2);
+                    if (getLen(mb, out uint len) >= 0) sb.Append(" len=").Append(len);
+                    if (lockDel(mb, out IntPtr _, out uint _, out uint _) >= 0)
+                    {
+                        sb.Append(" Lock=OK");
+                        unlockDel(mb);
+                    }
+                    else sb.Append(" Lock=FAIL");
+                }
+                catch (Exception lex) { sb.Append(" Lock=异常(").Append(lex.GetType().Name).Append(")"); }
+                Marshal.Release(mb);
+            }
+
+            // ③ 是否 DXVA2( D3D9 )表面：微软 H264 解码器在部分配置下内部走 DXVA2 而非 DXGI，
+            //    此时 buffer 实现 IMF2DBuffer，零拷贝须走 D3D9 路径而非 IMFDXGIBuffer。
+            int hr2d = Marshal.QueryInterface(buffer, in MFConstants.IID_IMF2DBuffer, out IntPtr b2d);
+            sb.Append(" | IMF2DBuffer=").Append(hr2d >= 0 ? "是" : "否");
+            if (hr2d >= 0) Marshal.Release(b2d);
+
+            // ④ 是否直接包了 ID3D11Texture2D（极少数 MFT 不经 IMFDXGIBuffer 直接包纹理）
+            int hrTex = Marshal.QueryInterface(buffer, in MFConstants.IID_ID3D11Texture2D, out IntPtr tex);
+            sb.Append(" | ID3D11Texture2D=").Append(hrTex >= 0 ? "是" : "否");
+            if (hrTex >= 0) Marshal.Release(tex);
+
+            // ⑤ 输出媒体类型属性：subtype / NominalRange / DefaultStride
+            if (_outputTypePtr != IntPtr.Zero)
+            {
+                var getGuid = MfVTable.Get<IMFMediaType_GetGuid>(_outputTypePtr, 7);
+                Guid subKey = MFConstants.MF_MT_SUBTYPE;
+                if (getGuid(_outputTypePtr, ref subKey, out Guid sub) >= 0)
+                    sb.Append(" | outSubtype=").Append(sub.ToString("B").Substring(0, 8));
+                var getU32 = MfVTable.Get<IMFAttributes_GetUINT32>(_outputTypePtr, 4);
+                Guid nrKey = MFConstants.MF_MT_VIDEO_NOMINAL_RANGE;
+                int hrNr = getU32(_outputTypePtr, ref nrKey, out uint nr);
+                sb.Append(" | NominalRange=").Append(hrNr >= 0 ? nr.ToString() : "缺失");
+                Guid strideKey = MFConstants.MF_MT_DEFAULT_STRIDE;
+                int hrSt = getU32(_outputTypePtr, ref strideKey, out uint st);
+                sb.Append(" | DefaultStride=").Append(hrSt >= 0 ? ((int)st).ToString() : "缺失");
+            }
+
+            _logger.LogWarning(sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[DXVA-DIAG] 深度诊断自身异常（忽略）");
         }
     }
 
@@ -820,6 +1124,41 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             else Marshal.Release(type);
         }
         return first;
+    }
+
+    /// <summary>
+    /// 探测该解码 MFT 是否声明 <c>MF_SA_D3D11_AWARE</c>（支持 Direct3D 11 视频解码）。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 为何必须探测：<c>IMFTransform::ProcessMessage</c> 的契约允许 MFT 对**不认识的消息直接返回 S_OK
+    /// 静默忽略**，因此「SET_D3D_MANAGER 返回 S_OK」**不能**证明 DXVA 已启用。MFT 自报的
+    /// MF_SA_D3D11_AWARE 属性才是能力层面的权威判据。属性缺失（MF_E_ATTRIBUTENOTFOUND）即视为不支持。
+    /// </remarks>
+    private bool QueryD3D11Aware()
+    {
+        var getAttrs = MfVTable.Get<IMFTransform_GetAttributes>(_transform, 5); // 绝对 8
+        int hr = getAttrs(_transform, out IntPtr attrs);
+        if (hr < 0 || attrs == IntPtr.Zero)
+        {
+            _logger.LogWarning("[DXVA-DIAG] IMFTransform.GetAttributes 失败：HRESULT=0x{HR:X8}，无法确认 D3D11 能力", hr);
+            return false;
+        }
+        try
+        {
+            Guid key = MFConstants.MF_SA_D3D11_AWARE;
+            hr = MfVTable.Get<IMFAttributes_GetUINT32>(attrs, 4)(attrs, ref key, out uint aware);
+            if (hr < 0)
+            {
+                _logger.LogWarning("[DXVA-DIAG] MFT 未设置 MF_SA_D3D11_AWARE（HRESULT=0x{HR:X8}）→ 不支持 D3D11 硬解", hr);
+                return false;
+            }
+            _logger.LogInformation("[DXVA-DIAG] MF_SA_D3D11_AWARE={Aware}", aware);
+            return aware != 0;
+        }
+        finally
+        {
+            Marshal.Release(attrs);
+        }
     }
 
     /// <summary>查询输出流信息：MFT 是否自行提供输出 sample 与所需 buffer 大小。</summary>
@@ -1003,6 +1342,17 @@ internal sealed class MFVideoDecoder : IVideoDecoder
 
     private void ReleaseComObjects()
     {
+        // 收尾帧路径统计（DXVA 零拷贝验证铁证）：先于字段复位打印一次，确认零拷贝是否真生效。
+        if (!_frameSummaryLogged)
+        {
+            _frameSummaryLogged = true;
+            if (_gpuZeroCopyFrames > 0 || _cpuFallbackFrames > 0)
+                _logger.LogInformation(
+                    "[DXVA-FRAMEPATH] 解码帧路径统计：GPU零拷贝={Gpu} 帧 / CPU软解拷贝={Cpu} 帧 | 硬解激活={Hw} | 零拷贝生效={Verdict}",
+                    _gpuZeroCopyFrames, _cpuFallbackFrames, IsHardwareAccelerated,
+                    _dxvaActive && _gpuZeroCopyFrames > 0 ? "是" : "否(全程回落软解)");
+        }
+
         if (_transform != IntPtr.Zero)
         {
             Marshal.Release(_transform);
@@ -1028,6 +1378,15 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             Marshal.Release(_outputTypePtr);
             _outputTypePtr = IntPtr.Zero;
         }
+        // DXVA 管理器释放（与 _transform 同生命周期）：MFCreateDXGIDeviceManager 创建的 COM 对象。
+        // 配对的 D3D11 设备由 IGpuDeviceContext 持有（渲染器或无头 MfGpuDeviceContext），此处仅释放管理器自身。
+        if (_dxvaManager != IntPtr.Zero)
+        {
+            Marshal.Release(_dxvaManager);
+            _dxvaManager = IntPtr.Zero;
+        }
+        _dxvaResetToken = 0;
+        _dxvaActive = false;
         _width = 0;
         _height = 0;
         _initialized = false;

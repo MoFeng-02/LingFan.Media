@@ -125,6 +125,10 @@ internal delegate int IMFAttributes_SetBlob(IntPtr self, ref Guid guidKey, IntPt
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_DeleteItem(IntPtr self, ref Guid guidKey);
 
+/// <summary>IMFAttributes::GetUINT32（slotIndex 4）。用于探测 MFT 能力属性（如 MF_SA_D3D11_AWARE）。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFAttributes_GetUINT32(IntPtr self, ref Guid guidKey, out uint punValue);
+
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_GetBlobSize(IntPtr self, ref Guid guidKey, out uint pcbBlobSize);
 
@@ -146,6 +150,10 @@ internal struct MftOutputStreamInfo
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_GetOutputStreamInfo(IntPtr self, uint dwOutputStreamID, out MftOutputStreamInfo pStreamInfo);
+
+/// <summary>IMFTransform::GetAttributes（slotIndex 5，绝对槽 8）。取 MFT 全局属性存储（调用方须 Release）。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFTransform_GetAttributes(IntPtr self, out IntPtr ppAttributes);
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFTransform_GetOutputAvailableType(IntPtr self, uint dwOutputStreamID, uint dwTypeIndex, out IntPtr ppType);

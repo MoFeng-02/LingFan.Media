@@ -14,16 +14,18 @@ namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 public sealed class MFVideoDecoderFactory : IVideoDecoderFactory
 {
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IGpuDeviceContext? _gpuContext;
 
-    public MFVideoDecoderFactory(ILoggerFactory loggerFactory)
+    public MFVideoDecoderFactory(ILoggerFactory loggerFactory, IGpuDeviceContext? gpuContext = null)
     {
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _gpuContext = gpuContext;
     }
 
     /// <inheritdoc/>
     public IVideoDecoder Create(VideoCodec codec, VideoSettings settings)
     {
-        var decoder = new MFVideoDecoder(_loggerFactory.CreateLogger<MFVideoDecoder>());
+        var decoder = new MFVideoDecoder(_loggerFactory.CreateLogger<MFVideoDecoder>(), _gpuContext);
         decoder.Initialize(codec, settings);
         return decoder;
     }

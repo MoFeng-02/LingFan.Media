@@ -1,6 +1,7 @@
 using LingFan.Media.Backends.MediaFoundation.Decoders;
 using LingFan.Media.Backends.MediaFoundation.Demuxer;
 using LingFan.Media.Extensions;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LingFan.Media.Backends.MediaFoundation;
 
@@ -40,6 +41,12 @@ public static class MFExtensions
         builder.Services.AddSingleton<IMediaDemuxerFactory, MFDemuxerFactory>();
         builder.Services.AddSingleton<IVideoDecoderFactory, MFVideoDecoderFactory>();
         builder.Services.AddSingleton<IAudioDecoderFactory, MFAudioDecoderFactory>();
+
+        // ── 无头 DXVA 设备自备（依赖倒置关键）──
+        // IGpuDeviceContext 是 Abstractions 中立契约：有头模式由 AddD3D11Renderer / GPU Presenter 注册并胜出
+        // （解码器与渲染器同设备 → 零拷贝）；无头模式（AddHeadlessRenderer 不注册）由 MF 自备窗口无关 D3D11 设备，
+        // 供 DXVA 硬解。TryAdd 确保不覆盖已有注册（有头复用渲染器设备）。MF 与渲染器互不引用，仅经契约协作。
+        builder.Services.TryAddSingleton<IGpuDeviceContext, MfGpuDeviceContext>();
 
         return builder;
     }
