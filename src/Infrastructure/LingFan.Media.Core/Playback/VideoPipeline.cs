@@ -57,6 +57,27 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private volatile bool _isPaused;
     private volatile bool _pauseAcknowledged;
     private TaskCompletionSource<bool>? _pauseAckTcs;
+    // 🔴 重播衔接卡顿根治（2026-08-06 §33）：**首帧门控 + 视频预滚动**。
+    // 根因：MediaPipelineHost.StartAsync 原为「音频先启动 → 视频后启动」。首播时 BufferManager 在
+    // OpenAsync 阶段就已暖好包队列，视频首帧与音频同刻出现（实测 delta=0ms）；但**重播**路径下
+    // SeekAsync 会先 Stop 再重启 demuxer 读取线程、并 Reset 解码器，视频首帧要 ~800ms 才产出，
+    // 而音频设备（= 主时钟源 GetPlaybackPositionDirect）已在 0ms 起跑 →
+    //   ① 0.0~0.5s 的帧全部被 Synchronizer 判 Drop；
+    //   ② 这 800ms 空窗内屏幕停在「上一次播放的末帧」，随后突跳到 0.5s 处
+    //   ⇒ 用户感知为「第二次播放先卡一下再继续」。（实测 1.txt/2.txt：软解 801ms、硬解 824ms，
+    //      首帧 present 均为 videoPTS=0.500、delta≈-160~-190ms。）
+    // 修复：启动编排改为「视频先起 → 等预滚动 → 再启动音频设备 → 放行视频呈现」，
+    // 把 800ms 预热**吸收在 PlayAsync 内部**（主时钟尚未起跑，不计入播放时间线），
+    // 音频就绪后首帧与音频同刻出现 → 无缝。首播时预滚动瞬时满足，零回归。
+    private volatile bool _audioReadySignaled;   // 由 MediaPipelineHost 在音频设备启动后置位（跨线程写）
+    private volatile bool _audioGateOpened;      // 呈现线程已通过门控（Start 复位，之后仅呈现线程读写）
+    // 预滚动帧数下限：等帧队列预热到该深度再启动音频设备（吸收重播的重定位+解码开销）。
+    // 取 2 而非 TargetDepth(6)：够消除首帧空窗即可，等太久会让「点播放到出声」的体感延迟变长。
+    private const int VideoPrerollFrames = 2;
+    // 预滚动等待上限：超时即放行启动音频，宁可轻微不同步也绝不卡住播放（解码异常/无视频帧时兜底）。
+    private const int VideoPrerollTimeoutMs = 2000;
+    // 门控等待上限：SignalAudioReady 因音频启动异常未被调用时的兜底，绝不让呈现线程永久阻塞。
+    private const int AudioGateTimeoutMs = 3000;
     // 主时钟停摆降级标志（仅呈现线程读写，无需 volatile）：见 WaitUntilDue 的停摆看门狗。
     // 置位后同步等待改用 50ms 宽限期，避免每帧空等 500ms 把画面压到 2fps；主时钟恢复推进即复位。
     private bool _masterClockStalled;
@@ -178,6 +199,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
         _isRunning = true;
         _isPaused = false;
+        // 🔴 首帧门控复位（§33，仅全新启动/重播路径）：恢复暂停时上方已早退，门控保持已开启不受影响。
+        _audioReadySignaled = false;
+        _audioGateOpened = false;
         _decodeDone = false;
         _eosReached = false;
         // 🔴 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
@@ -201,6 +225,63 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             TaskCreationOptions.LongRunning, TaskScheduler.Default);
         _decodeTask = Task.Run(DecodeLoop);
     }
+
+    /// <summary>
+    /// 等待视频帧队列预滚动到 <see cref="VideoPrerollFrames"/> 帧（或超时/解码结束）。
+    /// 由 <see cref="MediaPipelineHost.StartAsync"/> 在 <see cref="Start"/> 之后、**启动音频设备之前** await，
+    /// 使主时钟（取自音频播放游标）在视频已有帧可呈现后才起跑。
+    /// </summary>
+    /// <remarks>
+    /// <para>这是 §33「重播先卡一下」的根治点：重播时 demuxer 重定位 + 解码器 Reset 需 ~800ms，
+    /// 若音频先起跑，这段空窗会被计入播放时间线，导致开头帧被判 Drop、画面停在上次末帧后突跳。
+    /// 把等待前移到音频启动前，该开销就落在「点击播放到出声」之间，用户感知为正常起播延迟而非卡顿。</para>
+    /// <para>首播路径下 <c>BufferManager</c> 已在 <c>OpenAsync</c> 阶段暖好包队列，本方法通常在
+    /// 一两个轮询周期内立即返回，无回归。</para>
+    /// <para>三条提前返回路径确保绝不卡死播放：取消、解码已结束（极短流/无帧）、超时（<see cref="VideoPrerollTimeoutMs"/>）。</para>
+    /// </remarks>
+    public async Task WaitForPrerollAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_isRunning)
+            return;
+
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (true)
+        {
+            if (cancellationToken.IsCancellationRequested || _cts.IsCancellationRequested)
+                return;
+            if (_frameQueue.Count >= VideoPrerollFrames)
+                return;
+            // 解码生产者已收尾（流极短或异常）：再等也不会有帧，立即放行。
+            if (_decodeDone || _frameQueue.IsCompleted)
+                return;
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds > VideoPrerollTimeoutMs)
+            {
+                _logger.LogWarning(
+                    "视频预滚动等待超时（{Timeout}ms，队列仅 {Count} 帧），继续启动音频以免阻塞播放。",
+                    VideoPrerollTimeoutMs, _frameQueue.Count);
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(5, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 通知视频管线「音频设备已启动、主时钟已可用」，放行呈现循环的首帧门控。
+    /// 由 <see cref="MediaPipelineHost.StartAsync"/> 在音频管线启动后（含异常路径的 finally）调用。
+    /// </summary>
+    /// <remarks>
+    /// 无音频轨时也必须调用（否则呈现线程会空等到 <see cref="AudioGateTimeoutMs"/> 兜底超时）。
+    /// 幂等：重复调用无副作用；<see cref="Start"/> 会在下一轮全新启动时复位。
+    /// </remarks>
+    public void SignalAudioReady() => _audioReadySignaled = true;
 
     /// <summary>
     /// 暂停管线（阻塞读取）。
@@ -381,6 +462,39 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     _pauseAckTcs?.TrySetResult(true);
                     Thread.Sleep(10);
                     continue;
+                }
+
+                // 🔴 首帧门控（§33）：音频设备（主时钟源）启动前，**不做任何同步判定/呈现**。
+                // 若不门控，此窗口内 GetCurrentMasterTime 恒为 0：第 0 帧会被立即 Present，
+                // 后续帧走 Wait 分支并触发 WaitUntilDue 的「主时钟停摆」看门狗（500ms 后降级直接出帧）
+                // → 画面按解码节奏爆发式推进，比原缺陷更糟。门控期间屏幕保持上一次播放的末帧，
+                // 待主时钟起跑后从 PTS=0 起同刻呈现，衔接无跳变。
+                if (!_audioGateOpened)
+                {
+                    long gateStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    while (!_audioReadySignaled)
+                    {
+                        if (_cts.IsCancellationRequested)
+                            break;
+                        // 门控等待期间仍需应答 Flush 的暂停确认，避免 FlushAsync 白等 50ms 走慢速路径。
+                        if (_isPaused)
+                        {
+                            _pauseAcknowledged = true;
+                            _pauseAckTcs?.TrySetResult(true);
+                        }
+                        if (System.Diagnostics.Stopwatch.GetElapsedTime(gateStart).TotalMilliseconds > AudioGateTimeoutMs)
+                        {
+                            _logger.LogWarning(
+                                "视频首帧门控等待音频就绪超时（{Timeout}ms），降级直接呈现以免画面永久冻结。",
+                                AudioGateTimeoutMs);
+                            break;
+                        }
+                        Thread.Sleep(2);
+                    }
+                    _audioGateOpened = true;
+                    if (_cts.IsCancellationRequested)
+                        break;
+                    continue;   // 重新走一轮，确保暂停/取消状态在放行后被重新评估
                 }
 
                 // 队头帧不出队即判定（Peek 在 SingleReader 下安全）。

@@ -397,15 +397,28 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         }
         else
         {
-            // 平面格式（如 FLTP）：拼接各平面数据（原生为多段非连续内存，无法零拷贝映射为单段）
+            // 平面格式（如 FLTP）：必须**逐样本交错**写入，绝不能按平面块拼接。
+            // 下游（WASAPI/无头音频）一律按交错语义解释 SampleFormat；若此处留平面块布局
+            // [L0..Ln][R0..Rn]，会被当成 [L0 R0 L1 R1…] 解释 → 每样本前半左声道、后半右声道，
+            // 周期性畸变 → 典型「电音」。原始注释声称"拼接多平面为交错内存布局"但实现从未交错。
             int dataSize = planeSize * channels;
             if (dataSize < 0)
                 throw new InvalidOperationException($"无效的音频数据大小: {dataSize}（frameCount={frameCount}, channels={channels}）");
             var buffer = new byte[dataSize];
-            for (int ch = 0; ch < channels; ch++)
+            fixed (byte* dstBase = buffer)
             {
-                if (avFrame->extended_data[ch] == null) continue;
-                Marshal.Copy((IntPtr)avFrame->extended_data[ch], buffer, ch * planeSize, planeSize);
+                for (int ch = 0; ch < channels; ch++)
+                {
+                    if (avFrame->extended_data[ch] == null) continue;
+                    byte* srcPlane = avFrame->extended_data[ch];
+                    for (int i = 0; i < frameCount; i++)
+                    {
+                        byte* src = srcPlane + (long)i * bytesPerSample;
+                        byte* dst = dstBase + (long)(i * channels + ch) * bytesPerSample;
+                        for (int b = 0; b < bytesPerSample; b++)
+                            dst[b] = src[b];
+                    }
+                }
             }
             data = buffer;
         }

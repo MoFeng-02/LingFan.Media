@@ -62,11 +62,32 @@ public sealed class MediaPipelineHost
             _completionRaised = false;
         }
 
-        // 治本①（起播静默窗）：音频优先 —— 先 await 音频预填达标并启动（无静默窗），
-        // 再启动视频，使音画同时开始（避免"视频先出、音频静默"）。
+        // 🔴 启动编排（2026-08-06 §33，顺序已据复验 1.txt/2.txt 修正）：
+        //   ① 视频管线先 Start —— 呈现循环被「首帧门控」挡住，**一帧都不上屏**，
+        //      仅让解码生产者提前把帧队列暖起来；
+        //   ② await 视频预滚动（≥2 帧或超时）——重播时此等待吸收 demuxer 重定位 + 解码器 Reset 的产出延迟；
+        //   ③ **先放行视频门控**（此刻音频设备即将/刚刚启动，主时钟处于「起转瞬态」≈0）；
+        //   ④ 再 await 音频管线启动 —— 主时钟随音频设备从 0 起跑。
+        //
+        // 关键时序（2026-08-06 复验暴露的真因）：WASAPI 主时钟在 audio.StartAsync 的 ~600ms preroll +
+        // 校准锁定期间会从 0 爬到 ~0.5s（wallElapsed<0.3s 的瞬态期返回 ≈0，之后锁定引擎领先偏移
+        // ~0.5s 才跳到可闻位置）。§33 初版把 SignalAudioReady 放在 ④ 之后（preroll 跑完、校准已锁定），
+        // 门控放行时主时钟已 ≈0.5s → 0.0~0.33s 的帧被 DropThreshold(200ms) 全判掉，首帧落到 0.33/0.36
+        // （实测软解 0.366@-184ms、硬解 0.333@-200ms，且首播也被拖成 0.3@-197ms，与「首播正常」相悖）。
+        // 修正：把放行提前到 ③ —— 让首帧 PTS=0 在「主时钟≈0 的瞬态期」就同刻呈现，完全复刻首播
+        // （首帧 delta≈0）的无缝行为；重播衔接处从「跳到 0.33/0.36」变为「从 0.0 续上」。
+        // GetPlaybackPositionDirect 在设备未开/瞬态期返回 0（不抛），故提前放行安全。
+        _videoPipeline?.Start();
+        if (_videoPipeline != null)
+            await _videoPipeline.WaitForPrerollAsync();
+
+        // ③ 在主时钟≈0（音频设备即将启动的瞬态期）先行放开视频门控。
+        _videoPipeline?.SignalAudioReady();
+
+        // ④ 启动音频设备；主时钟随其从 0 起跑。音频失败也保留已放行的视频门控（画面仍能播）。
         if (_audioPipeline != null)
             await _audioPipeline.StartAsync();
-        _videoPipeline?.Start();
+
         _subtitleProcessor?.Start();
     }
 

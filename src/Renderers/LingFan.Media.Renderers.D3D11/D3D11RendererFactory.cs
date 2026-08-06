@@ -92,6 +92,30 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
             }
             _context = _device.ImmediateContext;
 
+            // 🔴 §29（2026-08-06）：共享设备必须开启多线程保护。
+            //    本设备同时被「硬解线程（FFmpeg D3D11VA / MF DXVA 写解码纹理）」与
+            //    「呈现线程（CopySubresourceRegion + Present）」使用，而 ID3D11DeviceContext 非线程安全。
+            //    FFmpeg 内部那把 d3d11va_default_lock 只保护它自己的调用，渲染器不参与 ⇒ 并发操作同一
+            //    immediate context ⇒ 命令流交错（呈现错帧/半写入帧，表现为画面抽帧后跳场景）+ 驱动状态
+            //    破坏 ⇒ 原生 AccessViolation。SetMultithreadProtected(TRUE) 由运行时对 context 调用加
+            //    内部临界区，是共享设备做零拷贝硬解的硬性前提。
+            //    QI 目标：ID3D11Multithread 实现在 immediate context 上（MSDN 明示经
+            //    ID3D11DeviceContext::QueryInterface 获取）；部分驱动/运行时亦允许从 device 取到，
+            //    故 context 失败时回退 device，两者皆失败仅告警（老设备无该接口，渲染仍可用）。
+            bool mtProtected = D3D11MultithreadInterop.TryEnable(_context.NativePointer)
+                               || D3D11MultithreadInterop.TryEnable(_device.NativePointer);
+            if (mtProtected)
+            {
+                _logger.LogDebug("D3D11 共享设备已开启多线程保护（ID3D11Multithread.SetMultithreadProtected=TRUE）");
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "D3D11 设备不支持 ID3D11Multithread，无法开启多线程保护。" +
+                    "硬解零拷贝（D3D11VA/DXVA）与呈现共用 immediate context 时存在竞态风险，" +
+                    "可能出现错帧/花屏甚至驱动崩溃；建议改用软件解码。");
+            }
+
             // 创建设备上下文（RenderContext 实现 IGpuDeviceContext）并注入 GPU 能力（V2 R6/E2）。
             // 能力查询失败不应阻断设备创建——降级为默认能力快照。
             try

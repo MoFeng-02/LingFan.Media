@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using LingFan.Media.Backends.FFmpeg.Interop;
 using LingFan.Media.Backends.FFmpeg.Models;
@@ -25,6 +26,15 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// </remarks>
 internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoFrame>
 {
+    /// <summary>
+    /// D3D11VA 硬件帧池的额外余量（帧数），供管线长期持有切片使用。
+    /// </summary>
+    /// <remarks>
+    /// 取值依据：VideoPipeline 有界队列 5 + 渲染中 1 + 呈现完成待回收 1 = 7，向上取整留 1 帧安全裕度。
+    /// 每帧 NV12 1920x1080 ≈ 3MB，8 帧约 24MB 显存，代价可接受；过小会导致解码停摆（画面冻结但音频前进）。
+    /// </remarks>
+    private const int D3D11VAExtraHwFrames = 8;
+
     private readonly ILogger<FFmpegVideoDecoder> _logger;
     private readonly IGpuDeviceContext? _gpuContext;
     private readonly FFmpegOptions? _options;
@@ -33,6 +43,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private IFramePool<VideoFrame>? _framePool;
     private IntPtr _extradataBuffer;          // ctx->extradata 原生缓冲（含 64B padding），本类拥有，Dispose 释放
     private unsafe AVBSFContext* _bsfContext; // mp4toannexb 比特流过滤器（HEVC/H264 in MP4），本类拥有
+    // 重播/seek 重建 BSF 所需参数（原始 HVCC/avcC extradata；不可改用 ctx->extradata 的 Annex-B 版）
+    private VideoCodec _bsfCodec;
+    private AVCodecID _bsfCodecId;
+    private ReadOnlyMemory<byte> _bsfCfg;
 
     // 🔴 流时间基：解码帧 pts/dts 以「流 time_base」为单位。由 demuxer 透传，用于建立 ctx->pkt_timebase
     // 并做时间戳换算（入向 pkt->pts、出向 frame.Timestamp）。解码后 avFrame->time_base / ctx->time_base
@@ -41,6 +55,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private double _tbSeconds;
     private bool _disposed;
     private bool _initialized;
+
+    // 🔴 解码器内部缓冲：修复 avcodec_send_packet 返回 EAGAIN（解码器输入满）时「放包」导致关键参考帧
+    // 缺失、HEVC 重播整段 RPS 崩的问题。改为 FFmpeg 标准 send/receive 循环：待发送包入队、EAGAIN 时
+    // 持有并重试，绝不丢弃；HEVC B 帧重排可能一包多帧时，多产出的帧也入队待返回，绝不丢弃。
+    // 注：C# 泛型不接受指针类型参数（CS0306），故以 IntPtr 承载 AVPacket*。
+    private readonly Queue<IntPtr> _pendingConv = new();
+    private readonly Queue<VideoFrame> _pendingFrames = new();
 
     /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 ffmpeg.AVERROR(ffmpeg.EAGAIN) 计算，
     /// 禁止硬编码 -11（Windows 正确，但 macOS/iOS 的 EAGAIN=35，会误判"需要更多数据"为解码失败）。</summary>
@@ -159,6 +180,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             // 零拷贝链路：硬解输出 ID3D11Texture2D → D3D11HardwareFrameResource → D3D11Renderer
             try
             {
+                // 🔴 §29 配套：硬解帧现在由 D3D11HardwareFrameResource 持引用保活切片（详见该类注释），
+                //    管线在途帧数 = VideoPipeline 有界队列(5) + 渲染中(1) + 呈现完成待回收(1) ≈ 7。
+                //    若不给 hw frames pool 留余量，解码器会因取不到空闲切片而 av_hwframe_get_buffer 失败
+                //    → 解码停摆（表现为 present 计数卡死、画面冻结而音频照常前进）。
+                //    extra_hw_frames 语义即「在解码器自身 DPB 需求之外，额外分配供调用方长期持有的帧数」。
+                ctx->extra_hw_frames = D3D11VAExtraHwFrames;
+
                 InitializeD3D11VA(ctx);
                 IsHardwareAccelerated = true;
             }
@@ -219,6 +247,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// </remarks>
     private unsafe void ApplyCodecConfiguration(AVCodecContext* ctx, VideoCodec codec, AVCodecID codecId, ReadOnlyMemory<byte> cfg)
     {
+        // 记录参数供 Reset() 重播/seek 重建 BSF（必须从原始 HVCC/avcC extradata 重建，不能沿用 Annex-B 版）
+        _bsfCodec = codec;
+        _bsfCodecId = codecId;
+        _bsfCfg = cfg;
+
         if (cfg.IsEmpty)
             return;
 
@@ -311,48 +344,84 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         Span<byte> span = new((void*)buf, padded);
         cfg.Span.CopyTo(span);
         span[size..].Clear();
+        if (_extradataBuffer != IntPtr.Zero)
+            Marshal.FreeHGlobal(_extradataBuffer);   // 重播重建 BSF 时先释放旧缓冲，避免泄漏
         _extradataBuffer = buf;
         ctx->extradata = (byte*)buf;
         ctx->extradata_size = size;
     }
 
     /// <summary>
-    /// 将包发送到解码器；若已安装 mp4toannexb 比特流过滤器，先经其转换为 Annex-B。
-    /// 返回 <c>avcodec_send_packet</c> 的结果（或 BSF 错误码）。
+    /// 将入向 <see cref="MediaPacket"/> 转换为待发送 AVPacket：填充数据/pts/dts/keyframe 标志，
+    /// 若已安装 mp4toannexb BSF 则先经其转换为 Annex-B（hevc_mp4toannexb 为严格 1:1 过滤器）。
+    /// 返回的 AVPacket 由调用方入队 <c>_pendingConv</c>，发送成功后由调用方 av_packet_free。
+    /// 返回 null 表示当前无法转换（如 BSF 尚未产出，1:1 过滤器下罕见）。
     /// </summary>
-    private unsafe int SendPacket(AVCodecContext* ctx, AVPacket* pkt)
+    private unsafe AVPacket* ConvertToConv(MediaPacket packet)
     {
-        if (_bsfContext == null)
-            return ffmpeg.avcodec_send_packet(ctx, pkt);
+        AVPacket* pkt = ffmpeg.av_packet_alloc();
+        if (pkt == null)
+            return null;
+        int allocRet = ffmpeg.av_new_packet(pkt, packet.Data.Length);
+        if (allocRet < 0)
+        {
+            ffmpeg.av_packet_free(&pkt);
+            return null;
+        }
+        packet.Data.Span.CopyTo(new Span<byte>(pkt->data, packet.Data.Length));
+        // 时间戳换算：以「流 time_base」为单位，绝不能用解码后 ctx->time_base（常 0 → 时间戳全 0）。
+        double timeBase = _tbSeconds;
+        pkt->pts = timeBase > 0
+            ? (long)(packet.Timestamp.TotalSeconds / timeBase)
+            : ffmpeg.AV_NOPTS_VALUE;
+        pkt->dts = pkt->pts;
+        if (packet.KeyFrame)
+            pkt->flags |= ffmpeg.AV_PKT_FLAG_KEY;
 
+        if (_bsfContext == null)
+            return pkt; // 无 BSF：pkt 即待发送包
+
+        // 经 BSF 转换（BSF 内部引用 pkt 数据；pkt 随后释放安全）
         int bret = ffmpeg.av_bsf_send_packet(_bsfContext, pkt);
         if (bret < 0 && bret != EAGAIN)
         {
             if (bret != ffmpeg.AVERROR_EOF)
                 _logger.LogWarning("av_bsf_send_packet 返回 {Ret}: {Error}", bret, GetErrorString(bret));
-            return bret;
+            ffmpeg.av_packet_free(&pkt);
+            return null;
         }
-
         AVPacket* conv = ffmpeg.av_packet_alloc();
         if (conv == null)
-            return ffmpeg.AVERROR(ffmpeg.ENOMEM);
-        try
         {
-            // 单次 receive 即可：h264/hevc_mp4toannexb 是严格 1:1 过滤器（一个输入包恰产出一个输出包），
-            // 不会积压多包。若日后换用可能 1:N 的 BSF（如 split/merge 类），此处必须改为循环收取，
-            // 否则会静默丢包。
-            bret = ffmpeg.av_bsf_receive_packet(_bsfContext, conv);
-            if (bret == EAGAIN || bret == ffmpeg.AVERROR_EOF)
-                return bret;
-            if (bret < 0)
-                return bret;
-            return ffmpeg.avcodec_send_packet(ctx, conv);
+            ffmpeg.av_packet_free(&pkt);
+            return null;
         }
-        finally
+        bret = ffmpeg.av_bsf_receive_packet(_bsfContext, conv);
+        ffmpeg.av_packet_free(&pkt); // 转换完成，原始包释放（conv 为独立分配）
+        if (bret == EAGAIN || bret == ffmpeg.AVERROR_EOF)
         {
-            AVPacket* p = conv;
-            ffmpeg.av_packet_free(&p);
+            // 1:1 过滤器下罕见：BSF 暂未产出。pkt 已被 BSF 消费，conv 未用。
+            ffmpeg.av_packet_free(&conv);
+            return null;
         }
+        if (bret < 0)
+        {
+            _logger.LogWarning("av_bsf_receive_packet 返回 {Ret}: {Error}", bret, GetErrorString(bret));
+            ffmpeg.av_packet_free(&conv);
+            return null;
+        }
+        return conv;
+    }
+
+    /// <summary>由已接收的 AVFrame 构造 <see cref="VideoFrame"/>（区分 D3D11VA/MediaCodec/软件路径）。</summary>
+    private unsafe VideoFrame? MakeFrame(AVFrame* avFrame)
+    {
+        var hwFmt = (AVPixelFormat)avFrame->format;
+        if (hwFmt is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
+            return CreateHardwareFrameFromAVFrame(avFrame);
+        if (hwFmt == AVPixelFormat.AV_PIX_FMT_MEDIACODEC)
+            return CreateMediaCodecSurfaceFrame(avFrame);
+        return CreateVideoFrameFromAVFrame(avFrame);
     }
 
     /// <inheritdoc/>
@@ -371,93 +440,79 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     }
 
     /// <summary>DecodeAsync 的核心逻辑。</summary>
+    /// <remarks>
+    /// FFmpeg 标准 send/receive 循环：新包先经 BSF 转 Annex-B 入队 <c>_pendingConv</c>；
+    /// 随后尽可能把队首包喂给解码器（<c>avcodec_send_packet</c> 返回 EAGAIN 表示输入缓冲满，
+    /// 此时停发并留在队中，下次调用再重试——绝不放包）；最后排空解码器已产出的所有帧
+    /// （HEVC B 帧重排可能一包多帧，多出的帧入 <c>_pendingFrames</c> 留待下次返回，绝不丢弃）。
+    /// 这样无论首播还是重播，都不会因 EAGAIN 丢弃关键参考帧，根治 HEVC 重播 RPS 崩。
+    /// </remarks>
     private unsafe VideoFrame? DecodeCore(MediaPacket packet)
     {
         AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle!.DangerousGetHandle();
 
-        // 分配临时 AVPacket 并填充数据
-        AVPacket* pkt = ffmpeg.av_packet_alloc();
-        if (pkt == null)
-            throw new InvalidOperationException("av_packet_alloc 失败");
+        // 1) 转换新包并入队
+        AVPacket* conv = ConvertToConv(packet);
+        if (conv != null)
+            _pendingConv.Enqueue((IntPtr)conv);
 
+        AVFrame* avFrame = ffmpeg.av_frame_alloc();
+        if (avFrame == null)
+            throw new InvalidOperationException("av_frame_alloc 失败");
         try
         {
-            // 使用 av_new_packet 分配（含 AV_INPUT_BUFFER_PADDING_SIZE 填充）
-            // FFmpeg 位流读取器会一次读取 32/64 位，可能越过缓冲区末尾，
-            // 必须有 64 字节零填充尾部，否则可能 AccessViolation 或数据损坏。
-            // av_new_packet 通过 pkt->buf 引用计数管理内存，av_packet_unref 自动释放。
-            int allocRet = ffmpeg.av_new_packet(pkt, packet.Data.Length);
-            if (allocRet < 0)
-                throw new InvalidOperationException($"av_new_packet 失败: {GetErrorString(allocRet)} (code={allocRet})");
-            packet.Data.Span.CopyTo(new Span<byte>(pkt->data, packet.Data.Length));
-            // 用流时间基（demuxer 透传 → ctx->pkt_timebase）换算 pkt->pts；_tbSeconds 即其秒值。
-            // 注意：解码后 ctx->time_base / avFrame->time_base 常为 0，绝不能用其换算。
-            double timeBase = _tbSeconds;
-            pkt->pts = timeBase > 0
-                ? (long)(packet.Timestamp.TotalSeconds / timeBase)
-                : ffmpeg.AV_NOPTS_VALUE;
-            pkt->dts = pkt->pts;
-            if (packet.KeyFrame)
-                pkt->flags |= ffmpeg.AV_PKT_FLAG_KEY;
-
-            // 发送数据包到解码器（HEVC/H264 经 mp4toannexb 比特流过滤器转换为 Annex-B）
-            int ret = SendPacket(ctx, pkt);
-            if (ret < 0 && ret != EAGAIN)
+            // 2) 发送所有解码器能接受的包（EAGAIN 即停，留待重试）
+            while (_pendingConv.Count > 0)
             {
-                if (ret != ffmpeg.AVERROR_EOF)
+                AVPacket* p = (AVPacket*)_pendingConv.Peek();
+                int ret = ffmpeg.avcodec_send_packet(ctx, p);
+                if (ret == 0)
+                {
+                    _pendingConv.Dequeue();
+                    ffmpeg.av_packet_free(&p);
+                }
+                else if (ret == EAGAIN)
+                {
+                    break; // 解码器输入满，稍后重试（包仍保留在队中）
+                }
+                else if (ret == ffmpeg.AVERROR_EOF)
+                {
+                    _pendingConv.Dequeue();
+                    ffmpeg.av_packet_free(&p);
+                }
+                else
+                {
                     _logger.LogWarning("avcodec_send_packet 返回 {Ret}: {Error}", ret, GetErrorString(ret));
-                return null;
+                    _pendingConv.Dequeue();
+                    ffmpeg.av_packet_free(&p);
+                }
             }
 
-            // 接收解码帧
-            AVFrame* avFrame = ffmpeg.av_frame_alloc();
-            if (avFrame == null)
-                throw new InvalidOperationException("av_frame_alloc 失败");
-
-            try
+            // 3) 排空解码器已产出的所有帧，一律入队（保证 FIFO 帧序，绝不丢弃）
+            while (true)
             {
-                ret = ffmpeg.avcodec_receive_frame(ctx, avFrame);
-                if (ret == EAGAIN || ret == ffmpeg.AVERROR_EOF) // EAGAIN or EOF
-                    return null; // 需要更多数据或流结束
+                int ret = ffmpeg.avcodec_receive_frame(ctx, avFrame);
+                if (ret == EAGAIN || ret == ffmpeg.AVERROR_EOF)
+                    break;
                 if (ret < 0)
                 {
                     _logger.LogWarning("avcodec_receive_frame 返回 {Ret}: {Error}", ret, GetErrorString(ret));
-                    return null;
+                    break;
                 }
-
-                // V2-15 B6: 检查 D3D11VA 硬解输出格式
-                // 🔴 FFmpeg 8 版本漂移：D3D11VA 硬解帧的像素格式在 ffmpeg 8 中由旧名
-                //   AV_PIX_FMT_D3D11VA_VLD 改为 AV_PIX_FMT_D3D11（FFmpeg.AutoGen 8.1.0 两常量并存，
-                //   但本机 avcodec-62.dll 实际产出 AV_PIX_FMT_D3D11）。旧名常量数值已与运行时错位，
-                //   仅比对旧名会让硬解帧误入软件拷贝路径 → av_image_get_buffer_size(AV_PIX_FMT_D3D11)
-                //   返回 -22。故两种命名都接纳（兼容不同 ffmpeg 版本 / 硬件路径）。
-                var hwFmt = (AVPixelFormat)avFrame->format;
-                if (hwFmt is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
-                {
-                    return CreateHardwareFrameFromAVFrame(avFrame);
-                }
-
-                // V2-17 B9: 检查 MediaCodec 表面直渲染输出格式
-                if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_MEDIACODEC)
-                {
-                    return CreateMediaCodecSurfaceFrame(avFrame);
-                }
-
-                return CreateVideoFrameFromAVFrame(avFrame);
-            }
-            finally
-            {
-                AVFrame* p = avFrame;
-                ffmpeg.av_frame_free(&p);
+                VideoFrame? f = MakeFrame(avFrame);
+                if (f != null)
+                    _pendingFrames.Enqueue(f);
+                ffmpeg.av_frame_unref(avFrame);
             }
         }
         finally
         {
-            // av_packet_unref 释放 av_new_packet 分配的内部缓冲（通过 pkt->buf 引用计数）
-            ffmpeg.av_packet_unref(pkt);
-            AVPacket* p = pkt;
-            ffmpeg.av_packet_free(&p);
+            AVFrame* af = avFrame;
+            ffmpeg.av_frame_free(&af);
         }
+
+        // 4) 从队首取一帧返回（多余帧留待后续调用返回，帧序严格 FIFO）
+        return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
     }
 
     /// <inheritdoc/>
@@ -472,16 +527,38 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         return ValueTask.FromResult(frame);
     }
 
-    /// <summary>FlushAsync 的核心逻辑：发送 null packet 刷新解码器。</summary>
+    /// <summary>FlushAsync 的核心逻辑：排空内部队列后发送 null packet 刷新解码器。</summary>
+    /// <remarks>
+    /// 调用顺序严格为「积压帧 → 待发包 → null packet → receive」：
+    /// DecodeCore 的 EAGAIN 重试队列在 EOS 时可能仍有残包，必须先喂完再进入 draining，
+    /// 否则尾部若干帧会被静默丢弃（表现为末段掉帧 / Ended 提前）。
+    /// </remarks>
     private unsafe VideoFrame? FlushCore()
     {
         AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle!.DangerousGetHandle();
 
-        // 发送 null packet 刷新解码器
-        int ret = ffmpeg.avcodec_send_packet(ctx, null);
-        if (ret < 0)
-            return null;
+        // 0) 先交出 DecodeCore 一包多帧时积压的帧（严格 FIFO）
+        if (_pendingFrames.Count > 0)
+            return _pendingFrames.Dequeue();
 
+        // 1) 把仍挂在待发队列里的包尽力喂完；EAGAIN 表示解码器输入满 → 先去 receive 腾空间
+        while (_pendingConv.Count > 0)
+        {
+            AVPacket* pending = (AVPacket*)_pendingConv.Peek();
+            int sret = ffmpeg.avcodec_send_packet(ctx, pending);
+            if (sret == EAGAIN)
+                break;
+            _pendingConv.Dequeue();
+            ffmpeg.av_packet_free(&pending);
+            if (sret < 0 && sret != ffmpeg.AVERROR_EOF)
+                _logger.LogWarning("avcodec_send_packet(flush) 返回 {Ret}: {Error}", sret, GetErrorString(sret));
+        }
+
+        // 2) 待发队列排空后才进入 draining 模式（重复发 null packet 是安全的）
+        if (_pendingConv.Count == 0)
+            ffmpeg.avcodec_send_packet(ctx, null);
+
+        int ret;
         AVFrame* avFrame = ffmpeg.av_frame_alloc();
         if (avFrame == null)
             throw new InvalidOperationException("av_frame_alloc 失败");
@@ -520,13 +597,48 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         _framePool = pool;
     }
 
+    /// <summary>
+    /// 清空 send/receive 内部队列：释放未发送的包、归还未交出的帧。
+    /// </summary>
+    /// <remarks>
+    /// 🔴 重播/seek 必调：上一轮残留的待发包属于旧时间线，若混入新流会造成参考帧错乱；
+    /// 残留帧未归还帧池则会导致 D3D11VA 硬件帧池枯竭（画面冻结但音频前进）。
+    /// </remarks>
+    private unsafe void ClearPendingQueues()
+    {
+        while (_pendingConv.Count > 0)
+        {
+            AVPacket* p = (AVPacket*)_pendingConv.Dequeue();
+            ffmpeg.av_packet_free(&p);
+        }
+        while (_pendingFrames.Count > 0)
+        {
+            _pendingFrames.Dequeue().Dispose();
+        }
+    }
+
     /// <inheritdoc/>
     public unsafe void Reset()
     {
         if (!_initialized || _codecContextHandle == null) return;
         AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle.DangerousGetHandle();
+
+        // ★ 先丢弃旧时间线的残留包/帧，再重建 BSF 与冲刷解码器
+        ClearPendingQueues();
+
+        // ★ 重播/seek 必须**重建** BSF 状态机（不能只 av_bsf_flush）：
+        // hevc/h264_mp4toannexb 在 av_bsf_flush 下不保证重新注入 VPS/SPS/PPS 参数集
+        // （实证：仅 flush 时重播首帧即报「Could not find ref with POC N / Error constructing the frame RPS」
+        //  → 0 帧上屏）。从原始 HVCC/avcC extradata 重新创建 BSF 上下文，确保新流参数集被重新注入。
+        if (_bsfContext != null)
+        {
+            AVBSFContext* local = _bsfContext;
+            _bsfContext = null;
+            ffmpeg.av_bsf_free(&local);
+            ApplyCodecConfiguration(ctx, _bsfCodec, _bsfCodecId, _bsfCfg);
+        }
         ffmpeg.avcodec_flush_buffers(ctx);
-        _logger.LogDebug("视频解码器已重置");
+        _logger.LogDebug("视频解码器已重置(bsfAfter={BsfAfter},edSize={Ed})", (IntPtr)_bsfContext, ctx->extradata_size);
     }
 
     /// <inheritdoc/>
@@ -534,6 +646,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     {
         if (_disposed) return;
         _disposed = true;
+        ClearPendingQueues();
         _hwDeviceCtx?.Dispose();
         _hwDeviceCtx = null;
         // 先释放比特流过滤器（其内部 par_in->extradata 由 ffmpeg 分配器管理）
@@ -760,7 +873,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <remarks>
     /// <para>D3D11VA 帧布局：data[0] = ID3D11Texture2D*（纹理数组），data[1] = 纹理数组索引。</para>
     /// <para>输出 PixelFormat.NV12（D3D11VA 标准输出格式）。</para>
-    /// <para>同步操作（hot 路径）：COM AddRef + 对象构造，无 I/O。</para>
+    /// <para><b>🔴 切片保活（2026-08-06 §29）</b>：必须 <c>av_frame_clone</c> 持有 <c>buf[0]</c> 引用，
+    /// 否则调用方 <c>DecodeCore</c> 的 <c>finally { av_frame_free }</c> 会让切片立即回池，
+    /// 解码器随后把新图像写进同一切片 ⇒ 渲染时拷到错帧（画面抽帧后跳场景）。
+    /// 与软解 BGRA 零拷贝路径、MediaCodec 表面路径保持同一所有权模型。</para>
+    /// <para>同步操作（hot 路径）：av_frame_clone（仅引用计数，不拷贝像素）+ COM AddRef + 对象构造，无 I/O。</para>
     /// </remarks>
     private unsafe VideoFrame CreateHardwareFrameFromAVFrame(AVFrame* avFrame)
     {
@@ -774,8 +891,17 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         if (texturePtr == IntPtr.Zero)
             throw new InvalidOperationException("D3D11VA 帧纹理指针为空");
 
-        // D3D11VA 标准输出 NV12 格式
-        var resource = new D3D11HardwareFrameResource(texturePtr, width, height, PixelFormat.NV12, subresourceIndex);
+        // 🔴 切片保活：av_frame_clone = av_frame_alloc + av_frame_ref，对 buf[0]（池内切片）引用计数 +1。
+        //    不拷贝任何显存，纯引用计数操作，零拷贝语义不变。
+        AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
+        if (clone == null)
+            throw new InvalidOperationException("av_frame_clone 失败（D3D11VA 硬解帧，内存不足）");
+
+        var frameOwner = new SafeAVFrameHandle((IntPtr)clone);
+
+        // D3D11VA 标准输出 NV12 格式（构造失败时由构造函数负责释放 frameOwner，不泄漏）
+        var resource = new D3D11HardwareFrameResource(
+            texturePtr, width, height, PixelFormat.NV12, subresourceIndex, frameOwner);
 
         TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
             ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))

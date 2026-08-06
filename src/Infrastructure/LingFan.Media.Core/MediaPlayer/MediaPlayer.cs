@@ -446,8 +446,12 @@ public sealed class MediaPlayer : IMediaPlayer
                 //   3) _pipelineHost.Start() 因 _isRunning==false 会重建 CTS 并重启双管线循环
                 //      （VideoPipeline/AudioPipeline 的 Start 已支持从排干态重启）。
                 await SeekAsync(TimeSpan.Zero);
-                if (_pipelineHost != null) await _pipelineHost.StartAsync();   // 音频优先 + 预填，无起播静默窗
+                // 🔴 归零必须先于 StartAsync（§33）：新启动编排会在 StartAsync 内部等视频预滚动，
+                // 门控放行瞬间就已有帧可判定。若此时 _clock 仍停在上一轮的结束位置（如 32s），
+                // 无音频轨场景（主时钟回退到 _clock.Position）会把 PTS=0 的首帧判成落后 32s → 全部 Drop。
+                // SeekAsync 内 OnSeek→SeekTo(0) 已归零，此处为显式不变量加固（幂等）。
                 _clock?.Reset();
+                if (_pipelineHost != null) await _pipelineHost.StartAsync();   // 视频预滚动 → 启动音频 → 放行呈现
                 _clock?.Start();                     // 时钟在音频就绪后启动，避免起播前空走导致首帧被判过期 Drop
             }
             else
