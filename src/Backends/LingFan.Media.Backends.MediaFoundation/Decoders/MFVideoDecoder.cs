@@ -252,14 +252,16 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 var setBlob = MfVTable.Get<IMFAttributes_SetBlob>(_inputTypePtr, 23);
                 var cfg = settings.CodecConfiguration;
                 IntPtr h = Marshal.AllocHGlobal(cfg.Length);
+                var kh = GCHandle.Alloc(seqKey, GCHandleType.Pinned);
                 try
                 {
                     Marshal.Copy(cfg.Span.ToArray(), 0, h, cfg.Length);
-                    ThrowIfFailed(setBlob(_inputTypePtr, ref seqKey, h, (uint)cfg.Length));
+                    ThrowIfFailed(setBlob(_inputTypePtr, kh.AddrOfPinnedObject(), h, (uint)cfg.Length));
                 }
                 finally
                 {
                     Marshal.FreeHGlobal(h);
+                    kh.Free();
                 }
             }
 
@@ -1201,46 +1203,48 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         }
 
         // 显示孔径：MFVideoArea（16 字节）= MFOffset OffsetX(4: short fract + short value) ×2 + SIZE(cx4, cy4)
+        // AOT 安全：用 GetAllocatedBlob（slot13，原生自分配 buffer），绕开 GetBlob 向调用方 buffer 大块写入在 AOT 崩溃的路径。
         Guid apertureKey = MFConstants.MF_MT_MINIMUM_DISPLAY_APERTURE;
-        var getBlobSize = MfVTable.Get<IMFAttributes_GetBlobSize>(_outputTypePtr, 11);
-        if (getBlobSize(_outputTypePtr, ref apertureKey, out uint blobSize) >= 0 && blobSize >= 16)
+        var kh = GCHandle.Alloc(apertureKey, GCHandleType.Pinned);
+        IntPtr aperturePtr = kh.AddrOfPinnedObject();
+        IntPtr blobPtr = IntPtr.Zero;
+        try
         {
-            IntPtr buf = Marshal.AllocHGlobal((int)blobSize);
-            try
+            var getAllocatedBlob = MfVTable.Get<IMFAttributes_GetAllocatedBlob>(_outputTypePtr, 13);
+            if (getAllocatedBlob(_outputTypePtr, aperturePtr, out blobPtr, out uint blobSize) >= 0 && blobSize >= 16 && blobPtr != IntPtr.Zero)
             {
-                if (MfVTable.Get<IMFAttributes_GetBlob>(_outputTypePtr, 12)(_outputTypePtr, ref apertureKey, buf, blobSize) >= 0)
+                // 原始字节留证：结构布局若理解有误，只有 hex 能对证（宪法：vtable/结构必须照抄头文件，不臆测）
+                var raw = new byte[16];
+                Marshal.Copy(blobPtr, raw, 0, 16);
+                _apertureBlobHex = Convert.ToHexString(raw);
+
+                // MFOffset = { WORD fract; short value; }（fract 在低地址）；实际偏移 = value + fract/65536
+                int offXValue = Marshal.ReadInt16(blobPtr, 2);
+                ushort offXFract = (ushort)Marshal.ReadInt16(blobPtr, 0);
+                int offYValue = Marshal.ReadInt16(blobPtr, 6);
+                ushort offYFract = (ushort)Marshal.ReadInt16(blobPtr, 4);
+
+                int cx = Marshal.ReadInt32(blobPtr, 8);
+                int cy = Marshal.ReadInt32(blobPtr, 12);
+                if (cx > 0 && cy > 0 && cx <= _codedWidth && cy <= _codedHeight)
                 {
-                    // 原始字节留证：结构布局若理解有误，只有 hex 能对证（宪法：vtable/结构必须照抄头文件，不臆测）
-                    var raw = new byte[16];
-                    Marshal.Copy(buf, raw, 0, 16);
-                    _apertureBlobHex = Convert.ToHexString(raw);
-
-                    // MFOffset = { WORD fract; short value; }（fract 在低地址）；实际偏移 = value + fract/65536
-                    int offXValue = Marshal.ReadInt16(buf, 2);
-                    ushort offXFract = (ushort)Marshal.ReadInt16(buf, 0);
-                    int offYValue = Marshal.ReadInt16(buf, 6);
-                    ushort offYFract = (ushort)Marshal.ReadInt16(buf, 4);
-
-                    int cx = Marshal.ReadInt32(buf, 8);
-                    int cy = Marshal.ReadInt32(buf, 12);
-                    if (cx > 0 && cy > 0 && cx <= _codedWidth && cy <= _codedHeight)
-                    {
-                        _width = cx;
-                        _height = cy;
-                        // 偏移必须落在编码帧内，否则视为异常并归零（宁可退回旧行为，也不越界读源 buffer）
-                        _apertureOffsetX = offXValue >= 0 && offXValue + cx <= _codedWidth ? offXValue : 0;
-                        _apertureOffsetY = offYValue >= 0 && offYValue + cy <= _codedHeight ? offYValue : 0;
-                        if (offXFract != 0 || offYFract != 0)
-                            _logger.LogWarning(
-                                "[APERTURE] 显示孔径偏移含非零小数部分 fractX={FX} fractY={FY}（已按整数部分处理，可能产生半像素误差）",
-                                offXFract, offYFract);
-                    }
+                    _width = cx;
+                    _height = cy;
+                    // 偏移必须落在编码帧内，否则视为异常并归零（宁可退回旧行为，也不越界读源 buffer）
+                    _apertureOffsetX = offXValue >= 0 && offXValue + cx <= _codedWidth ? offXValue : 0;
+                    _apertureOffsetY = offYValue >= 0 && offYValue + cy <= _codedHeight ? offYValue : 0;
+                    if (offXFract != 0 || offYFract != 0)
+                        _logger.LogWarning(
+                            "[APERTURE] 显示孔径偏移含非零小数部分 fractX={FX} fractY={FY}（已按整数部分处理，可能产生半像素误差）",
+                            offXFract, offYFract);
                 }
             }
-            finally
-            {
-                Marshal.FreeHGlobal(buf);
-            }
+        }
+        finally
+        {
+            // GetAllocatedBlob 用 CoTaskMem 分配，须 FreeCoTaskMem（非 FreeHGlobal）。
+            if (blobPtr != IntPtr.Zero) Marshal.FreeCoTaskMem(blobPtr);
+            kh.Free();
         }
     }
 

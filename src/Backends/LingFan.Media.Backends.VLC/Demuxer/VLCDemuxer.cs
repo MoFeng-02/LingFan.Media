@@ -38,6 +38,7 @@ internal sealed class VLCDemuxer : IMediaDemuxer
     private VLCMedia? _media;
     private MediaPlayer? _mediaPlayer;
     private MediaStreamInput? _mediaInput;
+    private IMediaStream? _sourceStream; // 仅地址式打开时持有，Close 时关闭（MediaInput 路径由包装器关闭）
 
     // 帧交付 Channel
     private readonly Channel<MediaPacket> _frameChannel;
@@ -64,13 +65,20 @@ internal sealed class VLCDemuxer : IMediaDemuxer
     private int _videoHeight;
     private int _videoPitch;
     private int _videoTrackIndex = -1;
+    private long _videoFrameCounter;        // 自增帧计数，用于合成单调递增视频 PTS（VLC 内存回调不向 lock/unlock 传递帧 PTS）
+    private long _videoFrameDurationTicks;  // 单帧时长(ticks)，来自视频轨帧率；OnVideoUnlock 据此合成真实 PTS
 
     // 音频格式
     private int _audioSampleRate;
     private int _audioChannels;
-    private int _audioBytesPerSample = 2; // 默认 S16N（每样本 2 字节），OnAudioSetup 按真实格式校正
-    private SampleFormat _audioSampleFormat = SampleFormat.S16; // OnAudioSetup 按真实格式校正
+    private int _audioBytesPerSample = 2; // S16N（每样本 2 字节）——OnAudioSetup 固定为该格式
+    private SampleFormat _audioSampleFormat = SampleFormat.S16; // 与固定格式 S16N 对齐
     private int _audioTrackIndex = -1;
+    private long _audioSampleCounter;       // 累计已交付样本数(每声道)，用于合成流内相对音频 PTS（见 OnAudioPlay 根因注释）
+
+    // 时间轴基准(ticks)：音视频合成 PTS 的共同起点。常态为 0；SeekAsync 后重定位到目标位置，
+    // 使 seek 后新产出的帧仍处于与主时钟一致的流内时间轴上。
+    private long _ptsBaseTicks;
 
     // 状态
     private bool _opened;
@@ -132,8 +140,25 @@ internal sealed class VLCDemuxer : IMediaDemuxer
 
         await stream.ConnectAsync(ct).ConfigureAwait(false);
 
-        _mediaInput = new MediaStreamInput(stream);
-        _media = new VLCMedia(_backend.LibVLC, _mediaInput);
+        // ── 地址式打开优先（修复 imem 错误）──
+        // stream.Location 对文件流返回完整路径、对网络流返回 URL，契约上本就「供需要按地址打开的 backend 使用」。
+        // 直接交 VLC 原生访问+解封装（file/https/rtsp…），稳定且<b>不经 imem 模块</b>。
+        // 旧路径用 MediaStreamInput 包 IMediaStream 走 imem access 模块，VLC 3.x 下 imem 的 get/release 指针校验失败，
+        // 报 "[imem demux error: Invalid get/release function pointers]" → Parse 出 0 轨道/0 时长 →
+        // 下方回调因 trackIndex<0 未注册 → 无帧捕获、音频经 VLC 默认输出逸出（用户听到声音但看不到可视化）。
+        string? location = stream.Location;
+        if (!string.IsNullOrEmpty(location))
+        {
+            _sourceStream = stream;
+            _media = new VLCMedia(_backend.LibVLC, location);
+        }
+        else
+        {
+            // 无地址（内存/透传流）：回退 imem 路径。MediaStreamInput 实现 IMediaStream 同步读/定位边界，
+            // 供无 Location 的字节流使用（此分支仍受 imem 3.x 限制，罕见路径）。
+            _mediaInput = new MediaStreamInput(stream);
+            _media = new VLCMedia(_backend.LibVLC, _mediaInput);
+        }
 
         await _media.Parse(MediaParseOptions.ParseLocal | MediaParseOptions.FetchLocal, -1, ct).ConfigureAwait(false);
 
@@ -147,6 +172,22 @@ internal sealed class VLCDemuxer : IMediaDemuxer
             else if (track.Type == LingFan.Media.Abstractions.TrackType.Audio && _audioTrackIndex < 0)
                 _audioTrackIndex = track.Index;
         }
+
+        // 计算单帧时长（ticks），供 OnVideoUnlock 合成单调递增的真实视频 PTS。
+        // VLC 内存回调(SetVideoCallbacks)的 lock/unlock/display 均不向回调传递帧 PTS，
+        // 旧代码用 _mediaPlayer.Time（VLC 播放游标，解码时刻取值，与帧本身无关）打戳 → 帧戳失真。
+        // 改用「帧计数 × 单帧时长」合成流内相对 PTS（CFR 近似）：单调递增、从 0 起，
+        // 与 OnAudioPlay 的「累计样本 / 采样率」处于同一时间轴基准，可直接与主时钟比对。
+        double fps = 30.0;
+        foreach (var t in _tracks)
+        {
+            if (t.Type == LingFan.Media.Abstractions.TrackType.Video && t.VideoInfo != null && t.VideoInfo.FrameRate > 0)
+            {
+                fps = t.VideoInfo.FrameRate;
+                break;
+            }
+        }
+        _videoFrameDurationTicks = (long)(TimeSpan.TicksPerSecond / fps);
 
         // 伪异步：VLC MediaPlayer.Play 为同步原生调用，Task.Run 仅卸载到线程池避免阻塞调用线程。
         // 未来改进：若 VLC 提供异步播放 API，应替换为真异步调用。
@@ -216,6 +257,12 @@ internal sealed class VLCDemuxer : IMediaDemuxer
         // 未来改进：若 VLC 提供异步 seek API，应替换为真异步调用。
         return await Task.Run(() =>
         {
+            // 时间轴重定位：音视频 PTS 由「计数 × 单位时长」合成、恒自基准起算，
+            // seek 后若不换基准，新帧仍从 0 递增 → 与主时钟错位、被同步器全判 Drop。
+            // 先置基准再 SeekTo：SeekTo 会触发 flush 与新帧回调，基准须早于首个新帧就位。
+            _ptsBaseTicks = position.Ticks;
+            _videoFrameCounter = 0;
+            _audioSampleCounter = 0;
             _mediaPlayer.SeekTo(TimeSpan.FromMilliseconds(position.TotalMilliseconds));
             return true;
         }, ct).ConfigureAwait(false);
@@ -237,6 +284,8 @@ internal sealed class VLCDemuxer : IMediaDemuxer
         }
 
         _frameChannel.Writer.TryComplete();
+
+        _sourceStream?.Close();
 
         if (_videoBuffer != IntPtr.Zero)
         {
@@ -279,6 +328,7 @@ internal sealed class VLCDemuxer : IMediaDemuxer
         _videoWidth = (int)width;
         _videoHeight = (int)height;
         _videoPitch = (int)pitches;
+        _videoFrameCounter = 0; // 新格式/新流起点：重置 PTS 合成计数
 
         if (_videoBuffer != IntPtr.Zero)
             Marshal.FreeHGlobal(_videoBuffer);
@@ -311,69 +361,53 @@ internal sealed class VLCDemuxer : IMediaDemuxer
         byte[] data = new byte[dataSize];
         Marshal.Copy(_videoBuffer, data, 0, dataSize);
 
+        // 合成流内相对 PTS：VLC 内存回调不提供帧 PTS（见 OpenAsync 内帧率推导）。
+        // 计数【先取值后自增】——首帧 PTS 必须为 _ptsBaseTicks（常态 0），与音频首包同起点；
+        // 若先自增则首帧被推后一个帧时长，起播时与主时钟错位。
+        var pts = TimeSpan.FromTicks(_ptsBaseTicks + _videoFrameCounter * _videoFrameDurationTicks);
+        _videoFrameCounter++;
+
         var packet = new MediaPacket(
             _videoTrackIndex, data,
-            TimeSpan.FromMilliseconds(_mediaPlayer?.Time ?? 0),
+            pts,
             TimeSpan.Zero, keyFrame: true,
             width: _videoWidth, height: _videoHeight, stride: _videoPitch);
 
         _frameChannel.Writer.TryWrite(packet);
     }
 
+    // display 回调：帧已在 OnVideoUnlock 交付通道，此处无需动作。
+    // ⚠ 曾在此加「实时 Thread.Sleep 节流」以为要把 VLC「推式超速解码」压到实时——【该假设已被实测证伪】：
+    // 两次运行 VideoDroppedFrames 均恰为 985 = 30fps × 32.83s = 媒体完整帧数，说明【一帧都没在
+    // _frameChannel(64/DropOldest) 里被挤掉】，全部抵达 Synchronizer 后才被判 Drop；且墙钟耗时 ≈ 媒体时长
+    // ⇒ VLC 的 vout 本就按媒体时钟实时限流，不存在灌帧。真因是音频 PTS 污染主时钟（见 OnAudioPlay）。
+    // 故此处保持空实现——不要在 VLC 回调线程上做阻塞 sleep（会拖住 VLC vout 线程并引发其内部丢帧）。
     private void OnVideoDisplay(IntPtr opaque, IntPtr picture) { }
 
     // ── VLC 音频回调 ──
 
     private int OnAudioSetup(ref IntPtr opaque, ref IntPtr format, ref uint rate, ref uint channels)
     {
+        // 🔴 关键 ABI 约束（踩坑两次后的结论）：
+        // LibVLCSharp 把 AudioSetupCallback 的 format 声明为 ref IntPtr，但 VLC 原生
+        // vlc_audio_setup_cb 的 format 是 char*（指向 4 字节格式缓冲，按值传递）。
+        // 托管封送器把 ref IntPtr 当成 char**，对 format 的读取/写回都会多解一次间接：
+        //   · 读取 format → 野指针 → Marshal.PtrToStringAnsi 崩溃 (0xC0000005，初版 bug)
+        //   · 写回 format = buffer → 向 4 字节缓冲写入 8 字节指针 → 破坏 VLC 栈 (stack smashing，二版 bug)
+        // 因此【绝不触碰 format】：VLC 的 amem 音频输出默认即以 S16N(16 位交织) 交付，
+        // 我们按固定 2 字节/样本、SampleFormat.S16 消费即可（与 LibVLCSharp 官方样例一致）。
         _audioSampleRate = (int)rate;
         _audioChannels = (int)channels;
-        _audioBytesPerSample = BytesPerSampleFromFormat(format);
-        _audioSampleFormat = SampleFormatFromFormat(format);
+        _audioBytesPerSample = 2;            // S16N：16 位有符号，每样本 2 字节
+        _audioSampleFormat = SampleFormat.S16;
+        _audioSampleCounter = 0;             // 新音频格式/新流起点：重置 PTS 合成计数
         return 0;
     }
 
-    /// <summary>
-    /// 根据 VLC 音频格式 FourCC（如 "S16N"/"FL32"/"S32N"）推导每样本字节数。
-    /// 修复 H6：原 OnAudioPlay 固定按 2 字节（S16）计算帧大小，忽略真实格式导致数据错位/截断。
-    /// </summary>
-    private static int BytesPerSampleFromFormat(IntPtr formatPtr)
+    private void OnAudioCleanup(IntPtr opaque)
     {
-        if (formatPtr == IntPtr.Zero) return 2; // 默认 S16N
-        var fmt = Marshal.PtrToStringAnsi(formatPtr, 4);
-        return fmt switch
-        {
-            "U8" or "S8" => 1,
-            "S16N" or "S16L" or "S16B" or "S16" => 2,
-            "S24N" or "S24L" or "S24B" => 4, // VLC S24 按 4 字节对齐交付
-            "S32N" or "S32L" or "S32B" or "S32" => 4,
-            "FL32" or "F32L" or "F32B" or "F32" => 4,
-            "FL64" or "F64L" or "F64B" or "F64" => 8,
-            _ => 2
-        };
+        // 音频格式缓冲不再由我们分配（见 OnAudioSetup 的 ABI 约束），此处无需释放。
     }
-
-    /// <summary>
-    /// 根据 VLC 音频格式 FourCC 映射到 <see cref="SampleFormat"/>（修复 H5/H6：解码器须用真实采样格式而非硬编码 S16）。
-    /// 枚举仅含 S16/S32/F32，对无对应枚举的格式做最佳近似（8 位→S16，24 位→S32，64 位浮点→F32）。
-    /// </summary>
-    private static SampleFormat SampleFormatFromFormat(IntPtr formatPtr)
-    {
-        if (formatPtr == IntPtr.Zero) return SampleFormat.S16; // 默认 S16N
-        var fmt = Marshal.PtrToStringAnsi(formatPtr, 4);
-        return fmt switch
-        {
-            "U8" or "S8" => SampleFormat.S16,
-            "S16N" or "S16L" or "S16B" or "S16" => SampleFormat.S16,
-            "S24N" or "S24L" or "S24B" => SampleFormat.S32,
-            "S32N" or "S32L" or "S32B" or "S32" => SampleFormat.S32,
-            "FL32" or "F32L" or "F32B" or "F32" => SampleFormat.F32,
-            "FL64" or "F64L" or "F64B" or "F64" => SampleFormat.F32,
-            _ => SampleFormat.S16
-        };
-    }
-
-    private void OnAudioCleanup(IntPtr opaque) { }
 
     private void OnAudioPause(IntPtr data, long pts)
     {
@@ -408,17 +442,37 @@ internal sealed class VLCDemuxer : IMediaDemuxer
         // VLC 音频排空回调——VLC 已播完所有数据，无需处理
     }
 
+    // 🔴 根因（VLC 后端「视频 0 交付 / 985 全丢、音频却全到」的真凶，2026-08-06 收口）：
+    // libvlc 的 audio play 回调形参 pts 有两个易踩的性质——
+    //   ① 单位是【微秒】(int64)，不是毫秒；
+    //   ② 属于【libvlc 绝对时钟域】(vlc_tick_now，≈系统单调时钟)，不是流内相对时间。
+    // 旧代码 `TimeSpan.FromMilliseconds(pts)` 同时踩中两条：µs 当 ms（×1000）+ 绝对时刻当流时间。
+    // 实测后果：音频包时间戳 ≈ 4.165e7 秒（探针 pos 列显示 41,650,190s，且以 1000 倍速前进；
+    // 反推 4.165e10µs = 11.57h ≈ 当时系统开机时长，完全吻合）。
+    // 该戳经 AudioPipeline → Synchronizer.SyncTo 成为【主时钟】，于是每个视频帧：
+    //   delta = videoPTS(0~32s) - clockTime(4.165e7s) ≈ -4.16e7 秒 << -DropThreshold(200ms)
+    //   → Synchronizer 判「严重落后」→【985 帧无一幸免全部 Drop】。
+    // 而音频不经同步器 Drop 逻辑（宪法：音频不套 FrameChannel，直投 IAudioOutput），故 678 帧照常送达
+    // ——「音频正常、视频全丢」这一非对称表象正是主时钟被污染的特征信号。
+    // 修复：弃用 VLC 的绝对 pts，改按【累计样本数 / 采样率】合成流内相对 PTS。
+    // PCM 下该式精确无误差、单调递增、自 0 起，与 OnVideoUnlock 的「帧计数 × 单帧时长」共用
+    // 同一时间轴基准（_ptsBaseTicks），音视频天然对齐。
     private void OnAudioPlay(IntPtr data, IntPtr samples, uint count, long pts)
     {
-        if (_audioTrackIndex < 0) return;
+        if (_audioTrackIndex < 0 || _audioSampleRate <= 0) return;
 
         int dataSize = (int)count * _audioChannels * _audioBytesPerSample;
         byte[] audioData = new byte[dataSize];
         Marshal.Copy(samples, audioData, 0, dataSize);
 
+        // 先取值后累加：首包 PTS = _ptsBaseTicks（常态 0），与视频首帧同起点。
+        var timestamp = TimeSpan.FromTicks(
+            _ptsBaseTicks + _audioSampleCounter * TimeSpan.TicksPerSecond / _audioSampleRate);
+        _audioSampleCounter += count;
+
         var packet = new MediaPacket(
             _audioTrackIndex, audioData,
-            TimeSpan.FromMilliseconds(pts),
+            timestamp,
             TimeSpan.Zero, keyFrame: true,
             sampleRate: _audioSampleRate, channels: _audioChannels, format: _audioSampleFormat);
 

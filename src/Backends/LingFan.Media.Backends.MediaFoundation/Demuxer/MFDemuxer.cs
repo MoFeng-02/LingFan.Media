@@ -1237,27 +1237,43 @@ internal sealed class MFDemuxer : IMediaDemuxer
         }
     }
 
-    /// <summary>读取 IMFAttributes Blob 属性（GetBlobSize=slot11 / GetBlob=slot12）。属性不存在返回空数组。</summary>
+    /// <summary>读取 IMFAttributes Blob 属性（GetAllocatedBlob=slot13，AOT 安全：原生自分配 buffer 并返回指针+长度，
+    /// 与已工作的 GetBlobSize 同形，彻底绕开 GetBlob「原生向调用方 buffer 大块写入」在 AOT 发布二进制静默 AV 退出的路径）。
+    /// 属性不存在返回空数组。</summary>
     private static byte[] TryGetBlob(IntPtr attributesPtr, Guid key)
     {
-        var getBlobSize = MfVTable.Get<IMFAttributes_GetBlobSize>(attributesPtr, 11);
-        if (getBlobSize(attributesPtr, ref key, out uint size) < 0 || size == 0)
-            return Array.Empty<byte>();
-
-        IntPtr buffer = Marshal.AllocHGlobal((int)size);
+        // Guid 用 GCHandle 固定后传 IntPtr 地址（与 GetBlobSize/GetAllocatedBlob 的 IntPtr guidKey 一致）。
+        var kh = GCHandle.Alloc(key, GCHandleType.Pinned);
+        IntPtr keyPtr = kh.AddrOfPinnedObject();
+        IntPtr blobPtr = IntPtr.Zero;
+        uint size = 0;
         try
         {
-            var getBlob = MfVTable.Get<IMFAttributes_GetBlob>(attributesPtr, 12);
-            if (getBlob(attributesPtr, ref key, buffer, size) < 0)
+            var getAllocatedBlob = MfVTable.Get<IMFAttributes_GetAllocatedBlob>(attributesPtr, 13);
+            try
+            {
+                if (getAllocatedBlob(attributesPtr, keyPtr, out blobPtr, out size) < 0 || size == 0 || blobPtr == IntPtr.Zero)
+                {
+                    return Array.Empty<byte>();
+                }
+                var result = new byte[size];
+                Marshal.Copy(blobPtr, result, 0, (int)size);
+                return result;
+            }
+            catch (Exception)
+            {
+                // 原生属性读取异常（极少见）不应中断 Open；缺失序列头的解码失败会在后续 ProcessOutput 暴露
                 return Array.Empty<byte>();
-
-            var result = new byte[size];
-            Marshal.Copy(buffer, result, 0, (int)size);
-            return result;
+            }
+            finally
+            {
+                // GetAllocatedBlob 用 CoTaskMem 分配，须 FreeCoTaskMem（非 FreeHGlobal）。
+                if (blobPtr != IntPtr.Zero) Marshal.FreeCoTaskMem(blobPtr);
+            }
         }
         finally
         {
-            Marshal.FreeHGlobal(buffer);
+            kh.Free();
         }
     }
 

@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>VlcPlaybackProbe</RootNamespace>
+    <AssemblyName>VlcPlaybackProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- VLC 后端经托管层 LibVLCSharp 驱动 VLC 引擎（零原生依赖、AOT 合规）。
+         真正的原生 libvlc 运行时由 VideoLAN.LibVLC.Windows NuGet 包随本探针输出目录自带分发包（LGPL），
+         使最小程序可独立发布/分发，无需目标机预装 VLC。该原生包只落在 Tools 探针里，不污染库本体（库保持 AOT 100%）。 -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+    <!-- 原生 libvlc 运行时分发包（LGPL）。仅探针携带，用于独立分发；库本体不含原生运行时。 -->
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
+    <!-- LibVLCSharp 由 Backends.VLC 经 NuGet 透传提供（"引用 VLC 后端即拥有 LibVLCSharp"），此处无需重复显式引用。 -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 仅注册 VLC 后端（独立验证 VLC 链路，与 MF/FFmpeg 解耦）。
+         VLC 解码器为直通（BGRA32 内存帧），无需 D3D11 渲染器提供 GPU 设备上下文。 -->
+    <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 真实媒体资源（与 ffmpeg 探针同源） -->
+    <None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

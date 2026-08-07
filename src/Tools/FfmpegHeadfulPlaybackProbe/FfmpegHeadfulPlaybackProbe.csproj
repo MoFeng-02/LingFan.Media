@@ -1,41 +1,68 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>FfmpegHeadfulPlaybackProbe</RootNamespace>
-    <AssemblyName>FfmpegHeadfulPlaybackProbe</AssemblyName>
-    <IsPackable>false</IsPackable>
-    <!-- FFmpeg 后端经 FFmpeg.AutoGen 调用原生 DLL；D3D11VA / WASAPI 为 Windows-only：抑制 CA1416。 -->
-    <NoWarn>CA1416</NoWarn>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-  </PropertyGroup>
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>FfmpegHeadfulPlaybackProbe</RootNamespace>
+		<AssemblyName>FfmpegHeadfulPlaybackProbe</AssemblyName>
+		<IsPackable>false</IsPackable>
+		<!-- FFmpeg 后端经 FFmpeg.AutoGen 调用原生 DLL；D3D11VA / WASAPI 为 Windows-only：抑制 CA1416。
+		     Vortice/SharpGen 经反射构建 COM vtable，NativeAOT 下 trim 标注不全，整族 IL2xxx 均为第三方缺陷；
+		     已用 TrimmerRootAssembly 根留这些程序集保证运行时存在，此处仅静默分析器级告警。 -->
+		<NoWarn>CA1416;IL2067;IL2070;IL2072;IL2075;IL2080;IL2087;IL2091</NoWarn>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
-  </ItemGroup>
+		<PublishAot>true</PublishAot>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <!-- 有头全链路：FFmpeg 解码（HEVC 等 MF 后端不可达的编码）+ D3D11 上屏（渲染器） + WASAPI 出声（输出）。 -->
-    <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
-    <!-- 硬件加速 + 零拷贝需 IGpuDeviceContext（由 D3D11 渲染器提供）；软解上屏也走 D3D11Renderer 上传 NV12。 -->
-    <ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
-    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
-    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
-    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
-    <ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
-  </ItemGroup>
+	<!-- Vortice.Direct3D11 (= SharpGen.Runtime) 经反射构建 COM vtable，NativeAOT 下 trim 标注不完整会触发
+	     IL2067/IL2072（被 Directory.Build.props 的 TreatWarningsAsErrors 提升为 error）。该库本身 AOT 运行时兼容，
+	     属第三方标注缺陷，非本库问题。做法（Vortice + NativeAOT 已知配方）：
+	     ① 根留 SharpGen.Runtime / Vortice.*，防运行时反射读取 vtable 成员被裁掉（否则 MissingMethodException）；
+	     ② 抑制该第三方库的 trim 分析告警。本库自有 COM 互操作走手搓 vtable P/Invoke 且标注合规，不会触发 IL2xxx。 -->
+	<ItemGroup>
+		<TrimmerRootAssembly Include="SharpGen.Runtime" />
+		<TrimmerRootAssembly Include="Vortice.Direct3D11" />
+		<TrimmerRootAssembly Include="Vortice.DXGI" />
+		<TrimmerRootAssembly Include="Vortice.D3DCompiler" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <!-- 真实媒体资源（与测试工程同源） -->
-    <None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+	</ItemGroup>
 
-  <!--
+	<ItemGroup>
+		<!-- 有头全链路：FFmpeg 解码（HEVC 等 MF 后端不可达的编码）+ D3D11 上屏（渲染器） + WASAPI 出声（输出）。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
+		<!-- 硬件加速 + 零拷贝需 IGpuDeviceContext（由 D3D11 渲染器提供）；软解上屏也走 D3D11Renderer 上传 NV12。 -->
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+		<ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 真实媒体资源（与测试工程同源） -->
+		<None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 🔴 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布到发布目录：
+		     AOT publish 不会自动携带「构建期复制」的原生 DLL，须显式声明为发布内容项，
+		     否则运行目录为空 → EnsureUnversionedAliases 建不出无版本别名 → AutoGen 桩抛 NotSupportedException。
+		     无版本别名由 FFmpegBackend.EnsureUnversionedAliases 运行时兜底创建。 -->
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll"
+		      Link="%(Filename)%(Extension)"
+		      CopyToOutputDirectory="PreserveNewest"
+		      CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<!--
     LGPL 合规关键步骤：把「合规的 ffmpeg 共享构建（LGPL，BtbN lgpl-shared）」复制到输出目录，
     使 FFmpeg.AutoGen 的 DynamicallyLoaded 绑定在运行时从应用目录动态加载 avcodec-*.dll 等。
     - 动态链接（绝不静态合并 ffmpeg 进本程序集）；
@@ -43,25 +70,40 @@
       用户可替换/升级这些 DLL 而不重编译本库。
     原生 DLL 来自 ThirdParty/ffmpeg/<解压目录>/bin，不入库（gitignore）。
   -->
-  <Target Name="CopyFFmpegNative" AfterTargets="Build">
-    <ItemGroup>
-      <FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
-      <!-- 🔴 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载，
+	<!--
+    🔴 AOT 发布关键：dotnet publish 不会自动把「构建期复制」的原生 ffmpeg DLL 带进 publish/ 子目录，
+       须在此显式复制到 $(PublishDir)，否则发布版运行时空目录 → NotSupportedException 桩崩溃。
+       复制目标同时挂 Build 与 Publish（AfterTargets="Build;Publish"），PublishDir 仅在 publish 阶段有值。
+  -->
+	<Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
+		<ItemGroup>
+			<FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
+			<!-- 🔴 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载，
            但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名（根因 D 修复）。 -->
-      <FFmpegDll>
-        <Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
-      </FFmpegDll>
-    </ItemGroup>
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != ''" />
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != ''" />
-    <Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll->Count()) 个 ffmpeg 原生 DLL + 同名无版本别名到 $(OutDir)" Importance="high" />
-    <Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
-  </Target>
+			<FFmpegDll>
+				<Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
+			</FFmpegDll>
+		</ItemGroup>
+		<!-- 构建输出（dotnet run / Debug） -->
+		<Copy SourceFiles="@(FFmpegDll)"
+			  DestinationFolder="$(OutDir)"
+			  SkipUnchangedFiles="true"
+			  Condition="'@(FFmpegDll)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)"
+			  DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')"
+			  SkipUnchangedFiles="true"
+			  Condition="'@(FFmpegDll)' != ''" />
+		<!-- 发布输出（dotnet publish / AOT）：显式补复制到 $(PublishDir) -->
+		<Copy SourceFiles="@(FFmpegDll)"
+			  DestinationFolder="$(PublishDir)"
+			  SkipUnchangedFiles="true"
+			  Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)"
+			  DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')"
+			  SkipUnchangedFiles="true"
+			  Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll->Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
+	</Target>
 
 </Project>

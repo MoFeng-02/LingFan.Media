@@ -119,7 +119,7 @@ internal delegate int IMFAttributes_SetUINT64(IntPtr self, ref Guid guidKey, ulo
 internal delegate int IMFAttributes_SetGUID(IntPtr self, ref Guid guidKey, ref Guid guidValue);
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-internal delegate int IMFAttributes_SetBlob(IntPtr self, ref Guid guidKey, IntPtr pbBuf, uint cbBufSize);
+internal delegate int IMFAttributes_SetBlob(IntPtr self, IntPtr guidKey, IntPtr pbBuf, uint cbBufSize);
 
 /// <summary>IMFAttributes::DeleteItem（slotIndex 16）。用于协商失败后剔除过度约束的属性再重试。</summary>
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -140,11 +140,11 @@ internal delegate int IMFAttributes_GetGUID(IntPtr self, ref Guid guidKey, out G
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFActivate_ActivateObject(IntPtr self, ref Guid riid, out IntPtr ppv);
 
+/// <summary>IMFAttributes::GetAllocatedBlob（slotIndex 13）。AOT 安全版：原生自分配 buffer 并返回指针+长度，
+/// 与已工作的 GetBlobSize 同形（ref Guid 改为 IntPtr + 两个 out 参数），彻底绕开 GetBlob 在 AOT 下
+/// 「原生向调用方传入 buffer 大块写入（如 42 字节 SEQ_HEADER）静默 AV 退出」的路径。调用方须 Marshal.FreeCoTaskMem 释放。</summary>
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-internal delegate int IMFAttributes_GetBlobSize(IntPtr self, ref Guid guidKey, out uint pcbBlobSize);
-
-[UnmanagedFunctionPointer(CallingConvention.Winapi)]
-internal delegate int IMFAttributes_GetBlob(IntPtr self, ref Guid guidKey, IntPtr pBuf, uint cbBufSize);
+internal delegate int IMFAttributes_GetAllocatedBlob(IntPtr self, IntPtr guidKey, out IntPtr ppBuf, out uint pcbSize);
 
 // ── IMFTransform（IUnknown 之后，vtable 顺序见 Windows SDK mftransform.h；下列数字为 MfVTable.Get 的 slotIndex）。
 //    注意含 GetStreamIDs(2) 与 AddInputStreams(9) 两个方法（早期头注漏数其中之一，致从 SetInputType 起全体 −1，已据 mftransform.h 校正）：

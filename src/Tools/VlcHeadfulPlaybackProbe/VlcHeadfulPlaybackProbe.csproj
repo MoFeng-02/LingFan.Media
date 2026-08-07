@@ -5,13 +5,16 @@
 		<TargetFramework>net10.0</TargetFramework>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<RootNamespace>HeadfulPlaybackProbe</RootNamespace>
-		<AssemblyName>HeadfulPlaybackProbe</AssemblyName>
+		<RootNamespace>VlcHeadfulPlaybackProbe</RootNamespace>
+		<AssemblyName>VlcHeadfulPlaybackProbe</AssemblyName>
 		<IsPackable>false</IsPackable>
-		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-		<!-- Vortice/SharpGen 经反射构建 COM vtable，NativeAOT 下 trim 标注不全，整族 IL2xxx 均为第三方缺陷；
+		<!-- VLC 后端经托管层 LibVLCSharp 驱动 VLC 引擎（零原生依赖、AOT 合规）；
+		     D3D11 渲染器走 Vortice/SharpGen（Windows-only，抑制 CA1416）；
+		     Vortice/SharpGen 经反射构建 COM vtable，NativeAOT 下 trim 标注不全，整族 IL2xxx 均为第三方缺陷；
 		     已用 TrimmerRootAssembly 根留这些程序集保证运行时存在，此处仅静默分析器级告警。 -->
 		<NoWarn>CA1416;IL2067;IL2070;IL2072;IL2075;IL2080;IL2087;IL2091</NoWarn>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
 		<PublishAot>true</PublishAot>
 	</PropertyGroup>
 
@@ -19,31 +22,37 @@
 	     IL2067/IL2072（被 Directory.Build.props 的 TreatWarningsAsErrors 提升为 error）。该库本身 AOT 运行时兼容，
 	     属第三方标注缺陷，非本库问题。做法（Vortice + NativeAOT 已知配方）：
 	     ① 根留 SharpGen.Runtime / Vortice.*，防运行时反射读取 vtable 成员被裁掉（否则 MissingMethodException）；
-	     ② 抑制该第三方库的 trim 分析告警。本库自有 COM 互操作走手搓 vtable P/Invoke 且标注合规，不会触发 IL2xxx。 -->
+	     ② 抑制该第三方库的 trim 分析告警。本库自有 COM 互操作走手搓 vtable P/Invoke 且标注合规，不会触发 IL2xxx。
+	     LibVLCSharp 托管层在 AOT 下同样需根留（其内部动态加载 libvlc 依赖反射/动态路径），避免被裁。 -->
 	<ItemGroup>
 		<TrimmerRootAssembly Include="SharpGen.Runtime" />
 		<TrimmerRootAssembly Include="Vortice.Direct3D11" />
 		<TrimmerRootAssembly Include="Vortice.DXGI" />
 		<TrimmerRootAssembly Include="Vortice.D3DCompiler" />
+		<TrimmerRootAssembly Include="LibVLCSharp" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<!-- 原生 libvlc 运行时分发包（LGPL）。仅探针携带，用于独立分发；库本体不含原生运行时。 -->
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
 	</ItemGroup>
 
 	<ItemGroup>
-		<!-- 有头全链路：MF 解码 + D3D11 上屏（渲染器） + WASAPI 出声（输出）。 -->
-		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
+		<!-- 有头全链路：VLC 后端（解封装+解码经 SetVideoCallbacks 内存捕获 BGRA32 帧） + D3D11 上屏（渲染器） + WASAPI 出声（输出）。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
+		<!-- VLC 帧为 BGRA32 软件帧，D3D11Renderer 上传纹理上屏（VLC 无零拷贝路径，与 ffmpeg D3D11VA 零拷贝不同）。 -->
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
-		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>
+		<!-- 真实媒体资源（与其它探针同源） -->
 		<None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>
 
