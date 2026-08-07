@@ -84,6 +84,13 @@ public sealed class MediaPipelineHost
         // ③ 在主时钟≈0（音频设备即将启动的瞬态期）先行放开视频门控。
         _videoPipeline?.SignalAudioReady();
 
+        // ③.5 🔴 等视频首帧真正上屏后再启动音频（§33 补强）：视频首帧经 D3D11 上传 + vsync 上屏
+        // 比音频 WASAPI preroll 出声慢；若不在 ④ 前等待，音频会早于视频首帧出声（用户感知「声音比视频先出」）。
+        // 等待期间视频首帧(PTS≈0)在「主时钟≈0 瞬态期」已先行呈现，④ 启动音频时主时钟仍≈0 → 音画同源对齐。
+        // 带超时兜底(1.5s)，绝不阻塞播放（超时则照常启动音频）。
+        if (_videoPipeline != null)
+            await _videoPipeline.WaitForFirstFramePresentedAsync(TimeSpan.FromMilliseconds(1500));
+
         // ④ 启动音频设备；主时钟随其从 0 起跑。音频失败也保留已放行的视频门控（画面仍能播）。
         if (_audioPipeline != null)
             await _audioPipeline.StartAsync();

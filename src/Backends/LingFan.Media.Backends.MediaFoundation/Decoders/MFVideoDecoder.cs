@@ -131,6 +131,17 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private bool _frameSummaryLogged; // 收尾帧路径统计仅打印一次
     private bool _loggedDxvaDiagOnce; // DXVA 纹理提取失败诊断仅打印一次（专用标志，勿复用软解布局标志）
 
+    // ── A 方案：SourceReader 自带硬解「直通包」路径（2026-08-07）──────────────────
+    // MFDemuxer 建 SourceReader 时挂 MF_SOURCE_READER_D3D_MANAGER + ENABLE_HARDWARE_TRANSFORMS，
+    // 并把视频流输出协商为 NV12 ⇒ ReadSample 直接吐【已解码】样本。此时 packet 携带：
+    //   ① DecodedFrameResource（DXGI 纹理）  → 真·零拷贝，本类只做所有权移交，绝不再过 MFT；
+    //   ② Width/Height/Stride + NV12 字节    → 「半 DXVA」回落，本类只做去 stride 紧凑化，仍省掉二次解码。
+    // 🔴 未命中直通（属性挂载失败/流未协商成功）时 packet 仍是压缩裸流，走原 MFT 路径 —— 行为完全不变。
+    private long _passthroughGpuFrames;   // 直通 GPU 纹理帧（零拷贝铁证）
+    private long _passthroughCpuFrames;   // 直通 NV12 CPU 帧（半 DXVA 回落）
+    private bool _loggedPassthroughOnce;  // 直通路径首帧诊断仅打印一次
+    private bool _loggedPassthroughLayoutWarnOnce; // 直通 NV12 布局异常告警仅打印一次
+
     // 输出 sample 分配策略（GetOutputStreamInfo）
     private bool _mftProvidesSamples;
     private uint _outputBufferSize;
@@ -267,11 +278,11 @@ internal sealed class MFVideoDecoder : IVideoDecoder
 
             // ── DXVA 硬件解码零拷贝接入（V2-15 扩展，选项 B）────────────────────────
             // 依赖契约层 IGpuDeviceContext（共享 D3D11 设备），不引用渲染器，严守依赖倒置。
-            // ⚠️ R49 时序修正：SET_D3D_MANAGER 必须在 SetInputType/SetOutputType **之后**发送
-            // （MSDN「H.264 解码 MFT / IMFTransform DXVA2」规范：类型协商先于 D3D 管理器消息，
-            // 解码器据此在 ProcessOutput 首调用前创建 DXVA 解码配置）。早期版本臆造「须在类型协商前发送」
-            // 并据此把消息上移，导致 MFT 在 SetInputType 即锁定软件路径 → 虽 PROVIDES_SAMPLES=True，
-            // 运行时却静默回落 CPU（半 DXVA）。失败一律回退软件解码，绝不抛异常阻断播放。
+            // 🔴 时序铁律（§9.8/R39 + §9.9 SDK 实物）：SET_D3D_MANAGER 必须在 SetInputType **之前**发送
+            // （mftransform.h 权威值 0x2，MSDN 原文「必须在 SetInputType / SetOutputType 之前调用」）。MFT 在 SetInputType
+            // 内部即查询 DXGI 管理器选 DXVA 配置；若此刻未收到，MFT 锁定软件路径 → 输出恒为系统内存
+            // （半 DXVA：硬解激活=True 但 GPU零拷贝=0）。R49 曾误改到「类型协商之后」，当前已订正回「之前」。
+            // 失败一律回退软件解码，绝不抛异常阻断播放。
             _dxvaActive = false;
             if (settings.EnableHardwareAcceleration && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
             {
@@ -329,13 +340,11 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                         _logger.LogInformation("{Diag}", adapterDiag);
 
                     // ③ MF DXGI 设备管理器已于上方创建并绑定（MFCreateDXGIDeviceManager + ResetDevice）。
-                    //    发送 MFT_MESSAGE_SET_D3D_MANAGER(=0x2) 的时机移到下方「类型协商之后」（见 R49 时序修正）。
+                    //    发送 MFT_MESSAGE_SET_D3D_MANAGER(=0x2) 的时机在下方「SetInputType 之前」（§9.8/R39 订正，
+                    //    非 R49 的「类型协商之后」）。
                     // 🔴 消息号必须是 0x2：SDK mftransform.h 中根本不存在 SET_D3D11_MANAGER；D3D9/D3D11
                     //    共用本消息，只靠 ulParam 接口类型区分。旧代码臆造 0x80000013 被 MFT 当未知消息
                     //    返回 S_OK 忽略 = 假激活真根因（R40）。
-                    // ⚠️ R49：SET_D3D_MANAGER 必须**在 SetInputType/SetOutputType 之后**发送（MSDN H.264 解码
-                    //    MFT / IMFTransform DXVA2 规范）。早于类型协商发送会令 MFT 在 SetInputType 锁定软件路径
-                    //    → 虽 PROVIDES_SAMPLES=True 却运行时静默回落 CPU（半 DXVA）。
                 }
                 catch (Exception ex)
                 {
@@ -348,6 +357,32 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             else if (settings.EnableHardwareAcceleration)
             {
                 _logger.LogWarning("未提供 D3D11 设备上下文（IGpuDeviceContext），MF 无法启用 DXVA，回退软件解码");
+            }
+
+            // ── DXVA：SET_D3D_MANAGER 必须在 SetInputType 之前发送（§9.8/R39 + §9.9 SDK 实物权威）──
+            // mftransform.h：MFT_MESSAGE_SET_D3D_MANAGER = 0x2，MSDN 明文「必须在 SetInputType /
+            // SetOutputType 之前调用」。MFT 在 SetInputType 内部即查询 DXGI 设备管理器选择 DXVA 配置；
+            // 若此刻尚未收到 manager，MFT 锁定软件路径 → 输出 buffer 恒为系统内存（半 DXVA：
+            // 硬解激活=True 但 GPU零拷贝=0）。R49 曾把它移到类型协商之后，正是当前「半 DXVA」的真因；
+            // 现按 SDK 订正回「之前」。消息号 0x2 已在 R40 修正，本组合（0x2 + SetInputType 前）此前从未被测。
+            if (_dxvaManager != IntPtr.Zero)
+            {
+                try
+                {
+                    int setHr = _processMessage!(_transform, MFConstants.MFT_MESSAGE_SET_D3D_MANAGER, (nuint)_dxvaManager);
+                    Marshal.ThrowExceptionForHR(setHr);
+                    _dxvaActive = true;
+                    IsHardwareAccelerated = true;
+                    _logger.LogInformation("MF DXVA 硬解已激活（SET_D3D_MANAGER 已于 SetInputType 前发送，共享 D3D11 设备）");
+                }
+                catch (Exception ex)
+                {
+                    _dxvaActive = false;
+                    IsHardwareAccelerated = false;
+                    Marshal.Release(_dxvaManager);
+                    _dxvaManager = IntPtr.Zero;
+                    _logger.LogWarning(ex, "MF DXVA 硬解激活失败（SET_D3D_MANAGER 被拒），回退软件解码");
+                }
             }
 
             hr = _setInputType!(_transform, 0, _inputTypePtr, 0);
@@ -368,30 +403,6 @@ internal sealed class MFVideoDecoder : IVideoDecoder
 
             hr = _setOutputType!(_transform, 0, _outputTypePtr, 0);
             Marshal.ThrowExceptionForHR(hr);
-
-            // ── R49：SET_D3D_MANAGER 时序修正 ────────────────────────────────────────
-            // 设备管理器已创建+绑定于上方早期探测块；此处（类型协商之后）才通知 MFT 使用它做 DXVA。
-            // 若 _dxvaManager 非零说明早期探测（MF_SA_D3D11_AWARE/设备能力/绑定/适配器/profile）全通过，
-            // 但仍需 MFT 真正接受消息才激活；被拒则回落软解，绝不「假激活」。
-            if (_dxvaManager != IntPtr.Zero)
-            {
-                try
-                {
-                    int setHr = _processMessage!(_transform, MFConstants.MFT_MESSAGE_SET_D3D_MANAGER, (nuint)_dxvaManager);
-                    Marshal.ThrowExceptionForHR(setHr);
-                    _dxvaActive = true;
-                    IsHardwareAccelerated = true;
-                    _logger.LogInformation("MF DXVA 硬解已激活（MF_SA_D3D11_AWARE=1，SET_D3D_MANAGER 类型协商后已接受，共享 D3D11 设备）");
-                }
-                catch (Exception ex)
-                {
-                    _dxvaActive = false;
-                    IsHardwareAccelerated = false;
-                    Marshal.Release(_dxvaManager);
-                    _dxvaManager = IntPtr.Zero;
-                    _logger.LogWarning(ex, "MF DXVA 硬解激活失败（SET_D3D_MANAGER 被拒），回退软件解码");
-                }
-            }
 
             // 查询输出 sample 分配策略与所需大小
             QueryOutputStreamInfo();
@@ -462,6 +473,15 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             return new ValueTask<VideoFrame?>((VideoFrame?)null);
         try
         {
+            // 0. 【A 方案 · 直通分支】SourceReader 已在 demuxer 内完成硬解 ⇒ 本类不得再过一遍 MFT。
+            //    🔴 必须置于下方 `packet.Data.Length == 0` 守卫【之前】：GPU 纹理直通包的 Data 恰是
+            //       ReadOnlyMemory<byte>.Empty（帧全程在显存，没有系统内存副本），落到那条守卫上会被
+            //       整帧静默丢弃 ⇒ 画面全黑而日志无任何异常（正是宪法明令禁止的静默失效）。
+            //    未命中直通的压缩包（Width<=0 且无 DecodedFrameResource）原样落到下方 MFT 路径。
+            var passthrough = TryBuildPassthroughFrame(packet);
+            if (passthrough is not null)
+                return new ValueTask<VideoFrame?>(passthrough);
+
             if (!_initialized || _transform == IntPtr.Zero)
                 return new ValueTask<VideoFrame?>((VideoFrame?)null);
             if (packet.Data.Length == 0)
@@ -514,6 +534,139 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             return new ValueTask<VideoFrame?>(DequeuePendingOutput());
         }
         finally { _transformGate.Exit(); }
+    }
+
+    /// <summary>
+    /// 【A 方案】尝试把 <see cref="MFDemuxer"/> 的「已解码直通包」直接包成 <see cref="VideoFrame"/>，跳过本类 MFT。
+    /// </summary>
+    /// <param name="packet">待判定的包。</param>
+    /// <returns>直通帧；非直通包（压缩裸流）返回 <see langword="null"/>，由调用方走原 MFT 路径。</returns>
+    /// <remarks>
+    /// <para><b>路径①（目标·零拷贝）</b>：<see cref="MediaPacket.HasDecodedFrameResource"/> 为真 ⇒ demuxer 已从
+    /// <c>IMFDXGIBuffer</c> 取到 <c>ID3D11Texture2D</c>。此处仅调用 <see cref="MediaPacket.TakeDecodedFrameResource"/>
+    /// <b>移交所有权</b>给 <see cref="VideoFrame"/>，全程无一字节内存拷贝。
+    /// 🔴 必须 Take 而非读 <see cref="MediaPacket.DecodedFrameResource"/>：否则 packet 释放时会销毁仍在渲染管线中的纹理。</para>
+    /// <para><b>路径②（半 DXVA 回落）</b>：无 GPU 资源但带 <c>Width/Height</c> + NV12 字节 ⇒ 去 stride 紧凑化后
+    /// 包成 <see cref="SoftwareFrameResource"/>。仍比改造前好：省掉 MFT 的二次解码。</para>
+    /// <para><b>硬解自报</b>：仅在拿到 <see cref="IGpuTextureResource"/> 时才把 <see cref="IsHardwareAccelerated"/>
+    /// 置真——CPU 直通帧无法证明其是否由硬件解出（驱动可能内部读回），遵守「S_OK≠被接受，须行为副作用双判据」。</para>
+    /// </remarks>
+    private VideoFrame? TryBuildPassthroughFrame(MediaPacket packet)
+    {
+        // ── 路径①：GPU 纹理零拷贝直通 ───────────────────────────────────────────
+        if (packet.HasDecodedFrameResource)
+        {
+            var resource = packet.TakeDecodedFrameResource();
+            if (resource is not null)
+            {
+                int w = packet.Width > 0 ? packet.Width : _width;
+                int h = packet.Height > 0 ? packet.Height : _height;
+                if (w <= 0 || h <= 0)
+                {
+                    // 尺寸不明无法构帧：资源已被 Take 走，必须由本方法负责释放，绝不泄漏纹理。
+                    resource.Dispose();
+                    if (!_loggedPassthroughLayoutWarnOnce)
+                    {
+                        _loggedPassthroughLayoutWarnOnce = true;
+                        _logger.LogWarning("[MF-PASSTHRU] 直通 GPU 帧尺寸未知（{W}x{H}），已释放纹理并丢弃该帧", w, h);
+                    }
+                    return null;
+                }
+
+                Interlocked.Increment(ref _passthroughGpuFrames);
+                if (resource is IGpuTextureResource)
+                    IsHardwareAccelerated = true;   // 真检测：拿到显存纹理才算硬解生效
+
+                if (!_loggedPassthroughOnce)
+                {
+                    _loggedPassthroughOnce = true;
+                    _logger.LogInformation(
+                        "[MF-PASSTHRU] ✅ 解码器直通模式：SourceReader 已硬解出 GPU 纹理 {W}x{H} NV12，MFT 完全旁路 —— 全程零拷贝",
+                        w, h);
+                }
+                return new VideoFrame(w, h, PixelFormat.NV12, resource,
+                    packet.Timestamp, packet.Duration, packet.KeyFrame);
+            }
+        }
+
+        // ── 路径②：NV12 CPU 直通（半 DXVA 回落）─────────────────────────────────
+        // 判据：带解码尺寸即为直通包（压缩裸流包的 Width/Height 恒为 0，见 MFDemuxer.ExtractPacket）。
+        if (packet.Width > 0 && packet.Height > 0 && packet.Data.Length > 0)
+            return BuildCpuPassthroughFrame(packet);
+
+        return null;
+    }
+
+    /// <summary>把直通包中的 NV12 字节去 stride 紧凑化，包成 <see cref="VideoFrame"/>。</summary>
+    /// <remarks>
+    /// <para><b>NV12 源布局</b>：Y 平面 <c>stride × codedH</c> 行 + UV 交错平面 <c>stride × (codedH/2)</c> 行。
+    /// 目标为紧凑布局（stride == width），与本类软解路径产出的帧格式完全一致，下游渲染器无需分支。</para>
+    /// <para><b>codedH 反推</b>：MF 输出 buffer 的行数按【编码高】（宏块 16 对齐）计，可能 &gt; FRAME_SIZE 的高；
+    /// 若按 display 高算 UV 平面偏移会整体错位（画面下半段出现色度错行/绿边）。故用
+    /// <c>totalRows = len/stride</c>、<c>codedH = totalRows*2/3</c> 反推真实 Y 平面行数。</para>
+    /// <para><b>越界即弃</b>：任一平面所需字节超出 buffer 实长，一律打印一次告警并丢帧，
+    /// 绝不「尽力拷贝」——错位画面比丢帧更难定位，且违反「不得静默失效」。</para>
+    /// </remarks>
+    private VideoFrame? BuildCpuPassthroughFrame(MediaPacket packet)
+    {
+        int width = packet.Width;
+        int height = packet.Height;
+        int stride = packet.Stride > 0 ? packet.Stride : width;
+        var src = packet.Data.Span;
+
+        int totalRows = src.Length / stride;
+        int codedHeight = totalRows * 2 / 3;
+        if (codedHeight < height) codedHeight = height;   // 反推失真时退回 display 高，由下方越界检查兜底
+
+        int uvRows = height / 2;
+        long needY = (long)(height - 1) * stride + width;
+        long uvOffset = (long)stride * codedHeight;
+        long needUv = uvRows > 0 ? uvOffset + (long)(uvRows - 1) * stride + width : uvOffset;
+
+        if (src.Length < needY || src.Length < needUv)
+        {
+            if (!_loggedPassthroughLayoutWarnOnce)
+            {
+                _loggedPassthroughLayoutWarnOnce = true;
+                _logger.LogWarning(
+                    "[MF-PASSTHRU] ⚠️ NV12 直通布局校验失败：buffer={Len}B 但 display={W}x{H} stride={S} 推导 codedH={CH} " +
+                    "需要 Y≥{NeedY}B / UV尾≥{NeedUv}B ⇒ 布局假定破产，丢弃该帧（绝不按错误 stride 拷贝出错位画面）",
+                    src.Length, width, height, stride, codedHeight, needY, needUv);
+            }
+            return null;
+        }
+
+        int dstLen = width * height * 3 / 2;
+        var resource = new SoftwareFrameResource(width, height, PixelFormat.NV12, dstLen);
+        var dst = resource.Data.Span;
+
+        if (stride == width && codedHeight == height)
+        {
+            // 紧凑源：整块拷贝（最快路径）
+            src.Slice(0, dstLen).CopyTo(dst);
+        }
+        else
+        {
+            for (int y = 0; y < height; y++)
+                src.Slice(y * stride, width).CopyTo(dst.Slice(y * width, width));
+
+            int srcUv = (int)uvOffset;
+            int dstUv = width * height;
+            for (int y = 0; y < uvRows; y++)
+                src.Slice(srcUv + y * stride, width).CopyTo(dst.Slice(dstUv + y * width, width));
+        }
+
+        Interlocked.Increment(ref _passthroughCpuFrames);
+        if (!_loggedPassthroughOnce)
+        {
+            _loggedPassthroughOnce = true;
+            _logger.LogInformation(
+                "[MF-PASSTHRU] 解码器直通模式（CPU）：SourceReader 已解码但样本落在系统内存（半 DXVA）—— " +
+                "{W}x{H} NV12 stride={S} codedH={CH}，MFT 旁路但仍有一次内存拷贝",
+                width, height, stride, codedHeight);
+        }
+        return new VideoFrame(width, height, PixelFormat.NV12, resource,
+            packet.Timestamp, packet.Duration, packet.KeyFrame);
     }
 
     /// <summary>创建携带 packet 压缩数据的 IMFSample（buffer 所有权移交 sample）。</summary>
@@ -1352,11 +1505,16 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         if (!_frameSummaryLogged)
         {
             _frameSummaryLogged = true;
-            if (_gpuZeroCopyFrames > 0 || _cpuFallbackFrames > 0)
+            long totalZeroCopy = _gpuZeroCopyFrames + _passthroughGpuFrames;
+            long totalCpu = _cpuFallbackFrames + _passthroughCpuFrames;
+            if (totalZeroCopy > 0 || totalCpu > 0)
                 _logger.LogInformation(
-                    "[DXVA-FRAMEPATH] 解码帧路径统计：GPU零拷贝={Gpu} 帧 / CPU软解拷贝={Cpu} 帧 | 硬解激活={Hw} | 零拷贝生效={Verdict}",
-                    _gpuZeroCopyFrames, _cpuFallbackFrames, IsHardwareAccelerated,
-                    _dxvaActive && _gpuZeroCopyFrames > 0 ? "是" : "否(全程回落软解)");
+                    "[DXVA-FRAMEPATH] 解码帧路径统计：GPU零拷贝={Gpu} 帧（MFT自解={MftGpu} / SourceReader直通={PtGpu}） / " +
+                    "CPU拷贝={Cpu} 帧（MFT软解={MftCpu} / 直通半DXVA={PtCpu}） | 硬解激活={Hw} | 零拷贝生效={Verdict}",
+                    totalZeroCopy, _gpuZeroCopyFrames, _passthroughGpuFrames,
+                    totalCpu, _cpuFallbackFrames, _passthroughCpuFrames,
+                    IsHardwareAccelerated,
+                    totalZeroCopy > 0 ? "是" : "否(全程回落CPU拷贝)");
         }
 
         if (_transform != IntPtr.Zero)

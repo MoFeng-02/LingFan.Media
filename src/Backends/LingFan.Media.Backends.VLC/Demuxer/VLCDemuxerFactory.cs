@@ -15,17 +15,23 @@ namespace LingFan.Media.Backends.VLC.Demuxer;
 /// </remarks>
 public sealed class VLCDemuxerFactory : IMediaDemuxerFactory
 {
-    private readonly VLCBackend _backend;
+    // 🔴 延迟原生：持有 Lazy<VLCBackend> 而非 VLCBackend 实例。VLCBackend 构造会 new LibVLC（原生加载），
+    // 若在此 Singleton 工厂构造期解析，则访问 IBackendRegistry.Backends 或注册 VLC 即触发原生加载
+    // （且要求 libvlc.dll 在场）——违背“注册一个后端 ≠ 马上要它的 native 库”。注意 MS DI 默认【不】自动
+    // 解析 Lazy<T>（仅自动支持集合类型），须由 AddLingFanMedia→AddLazySupport 注册通用 Lazy<> 解析；
+    // 注册后 Lazy 仅在 .Value 首次访问时才从容器解析 VLCBackend（=> new LibVLC 延迟到
+    // 真正 Open 用到 VLC 时）；与 FFmpeg 工厂保持同一延迟语义。
+    private readonly Lazy<VLCBackend> _backendFactory;
     private readonly ILoggerFactory _loggerFactory;
 
     /// <summary>
     /// 初始化 <see cref="VLCDemuxerFactory"/> 的新实例。
     /// </summary>
-    /// <param name="backend">VLC 后端入口（Singleton）。</param>
+    /// <param name="backendFactory">VLC 后端入口的延迟工厂（Singleton，首次访问 .Value 才构造 LibVLC）。</param>
     /// <param name="loggerFactory">日志工厂。</param>
-    public VLCDemuxerFactory(VLCBackend backend, ILoggerFactory loggerFactory)
+    public VLCDemuxerFactory(Lazy<VLCBackend> backendFactory, ILoggerFactory loggerFactory)
     {
-        _backend = backend ?? throw new ArgumentNullException(nameof(backend));
+        _backendFactory = backendFactory ?? throw new ArgumentNullException(nameof(backendFactory));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
     }
 
@@ -34,7 +40,7 @@ public sealed class VLCDemuxerFactory : IMediaDemuxerFactory
     public IMediaDemuxer Create(IMediaStream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        return new VLCDemuxer(_backend, _loggerFactory.CreateLogger<VLCDemuxer>());
+        return new VLCDemuxer(_backendFactory.Value, _loggerFactory.CreateLogger<VLCDemuxer>());
     }
 
     /// <inheritdoc/>
@@ -46,6 +52,6 @@ public sealed class VLCDemuxerFactory : IMediaDemuxerFactory
     {
         ArgumentNullException.ThrowIfNull(stream);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult<IMediaDemuxer>(new VLCDemuxer(_backend, _loggerFactory.CreateLogger<VLCDemuxer>()));
+        return Task.FromResult<IMediaDemuxer>(new VLCDemuxer(_backendFactory.Value, _loggerFactory.CreateLogger<VLCDemuxer>()));
     }
 }

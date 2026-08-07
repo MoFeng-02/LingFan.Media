@@ -1,6 +1,6 @@
 # 第三方组件与许可证声明（Third-Party Notices）
 
-本仓库（**LingFan.Media**，以 MIT 许可证分发）在 Windows 上通过 **FFmpeg** 提供媒体解封装与解码能力。
+本仓库（**LingFan.Media**，以 Apache2.0 许可证分发）在 Windows 上通过 **FFmpeg** 提供媒体解封装与解码能力。
 为遵守 **LGPL**，本项目**仅以动态链接方式**使用 FFmpeg 的共享库（`.dll`），**绝不**将 FFmpeg 的
 源码或静态库合并进本项目的任何程序集。
 
@@ -43,9 +43,9 @@
 
 ## 3. 本项目（LingFan.Media）
 
-- **许可证**：MIT。
-- **组合方式**：本项目自身的源码以 MIT 许可证发布；对 FFmpeg 仅作动态链接调用，
-  未修改 FFmpeg 源码、未将其合并进本项目程序集，因此本项目整体可按 MIT 分发，
+- **许可证**：Apache2.0。
+- **组合方式**：本项目自身的源码以 Apache2.0 许可证发布；对 FFmpeg 仅作动态链接调用，
+  未修改 FFmpeg 源码、未将其合并进本项目程序集，因此本项目整体可按 Apache2.0 分发，
   同时保持对 FFmpeg 部分的 LGPL 义务（提供 FFmpeg 源码获取途径、允许替换 DLL）。
 
 ---

@@ -18,21 +18,36 @@ public sealed class FFmpegBackend : IDisposable
     /// <summary>
     /// 初始化 <see cref="FFmpegBackend"/> 的新实例。
     /// </summary>
+    /// <remarks>
+    /// <para>🔴 原生初始化刻意放在此处（Singleton 首次被 FFmpeg 工厂解析时构造），而非 <c>AddFFmpeg()</c> 注册期。
+    /// 这样注册阶段保持纯 DI、绝不触碰原生库；只有真正用到 FFmpeg 后端（如其他后端不支持某源而回退）时才需要
+    /// ffmpeg 原生 DLL 在场。注册一个后端 ≠ 马上要它的 native 库——这是“开箱即用 + 不侵入”的硬约束。</para>
+    /// </remarks>
     /// <param name="logger">日志器。</param>
-    public FFmpegBackend(ILogger<FFmpegBackend> logger)
+    /// <param name="options">FFmpeg 配置（含库路径与日志级别）。</param>
+    public FFmpegBackend(ILogger<FFmpegBackend> logger, FFmpegOptions options)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         try
         {
+            // 设置原生库搜索路径（若宿主显式指定）。须在首个 ffmpeg.* 调用前设置，使 AutoGen 按 RootPath 加载 DLL。
+            if (!string.IsNullOrEmpty(options.FFmpegLibraryPath))
+            {
+                SetLibraryPath(options.FFmpegLibraryPath!);
+            }
+
+            // 设置 FFmpeg 日志级别（首个 ffmpeg.* 调用，触发原生绑定加载；此时 RootPath 已就绪）
+            ffmpeg.av_log_set_level(options.LogLevel);
+
             // FFmpeg 全局网络初始化（幂等调用，多次调用安全）
             ffmpeg.avformat_network_init();
             _initialized = true;
-            _logger.LogDebug("FFmpeg 全局网络初始化完成");
+            _logger.LogDebug("FFmpeg 全局初始化完成（日志级别={LogLevel}）", options.LogLevel);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogError(ex, "FFmpeg 全局网络初始化失败");
+            _logger.LogError(ex, "FFmpeg 全局初始化失败");
             throw;
         }
     }

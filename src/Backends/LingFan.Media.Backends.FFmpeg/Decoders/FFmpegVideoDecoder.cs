@@ -63,6 +63,14 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private readonly Queue<IntPtr> _pendingConv = new();
     private readonly Queue<VideoFrame> _pendingFrames = new();
 
+    // 🔴 帧路径统计（与 MFVideoDecoder 的 [DXVA-FRAMEPATH] 对称）：
+    // 「硬解激活=True」只证明解码器跑在 GPU 上，不证明**出餐**也是 GPU 纹理。
+    // 若硬件帧被下载回系统内存（hwframe transfer / sws 转换），硬件就成了摆设。
+    // 这两个计数器在 Dispose 时打印，作为「全程零拷贝」的日志铁证。
+    private long _gpuZeroCopyFrames;  // D3D11VA / MediaCodec Surface 零拷贝帧（GPU 纹理直出）
+    private long _cpuFallbackFrames;  // 软解 / CPU 内存帧
+    private bool _frameSummaryLogged;
+
     /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 ffmpeg.AVERROR(ffmpeg.EAGAIN) 计算，
     /// 禁止硬编码 -11（Windows 正确，但 macOS/iOS 的 EAGAIN=35，会误判"需要更多数据"为解码失败）。</summary>
     private static readonly int EAGAIN = ffmpeg.AVERROR(ffmpeg.EAGAIN);
@@ -198,8 +206,21 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
         else if (hwEnabled)
         {
-            // 硬解启用但无 GPU 设备上下文——保持软件解码
+            // 🔴 硬解已请求但拿不到可用 GPU 设备上下文 → 只能软解。
+            // 此处**必须出声**：静默回落会让宿主以为「硬解优先」已生效，实则全程 CPU 解码 + CPU 拷贝，
+            // 硬件彻底成摆设，且日志上毫无痕迹（与 §29「带默认实现的接口成员漏转发=静默失效」同类反模式）。
+            // 典型成因：只注册了 AddFFmpeg() + AddHeadlessRenderer()，而 IGpuDeviceContext 由
+            // AddD3D11Renderer() 或 AddMediaFoundation()（自备窗口无关设备）注册——两者都没注册即为 null。
             IsHardwareAccelerated = false;
+            if (_gpuContext is null)
+                _logger.LogWarning(
+                    "已请求硬件解码，但容器中没有 IGpuDeviceContext → D3D11VA 无法启用，本次{Codec}将全程软件解码（CPU 拷贝）。" +
+                    "修法：注册 AddD3D11Renderer()（有头，与渲染器共享设备=零拷贝）或 AddMediaFoundation()（无头自备 D3D11 设备）。",
+                    codec);
+            else
+                _logger.LogWarning(
+                    "已请求硬件解码，但 IGpuDeviceContext.ApiType={Api} 非 D3D11 → D3D11VA 无法启用，本次{Codec}将全程软件解码（CPU 拷贝）。",
+                    _gpuContext.ApiType, codec);
         }
 
         // 打开解码器
@@ -414,14 +435,28 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     }
 
     /// <summary>由已接收的 AVFrame 构造 <see cref="VideoFrame"/>（区分 D3D11VA/MediaCodec/软件路径）。</summary>
+    /// <remarks>
+    /// 🔴 唯一帧路径分流点：三条支路各自计数（GPU 零拷贝 / CPU 拷贝），构造成功后才计数，
+    /// 避免异常路径污染统计。计数结果由 <see cref="Dispose"/> 打印 <c>[FFMPEG-FRAMEPATH]</c>。
+    /// </remarks>
     private unsafe VideoFrame? MakeFrame(AVFrame* avFrame)
     {
         var hwFmt = (AVPixelFormat)avFrame->format;
         if (hwFmt is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
-            return CreateHardwareFrameFromAVFrame(avFrame);
+        {
+            VideoFrame gpuFrame = CreateHardwareFrameFromAVFrame(avFrame);
+            System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
+            return gpuFrame;
+        }
         if (hwFmt == AVPixelFormat.AV_PIX_FMT_MEDIACODEC)
-            return CreateMediaCodecSurfaceFrame(avFrame);
-        return CreateVideoFrameFromAVFrame(avFrame);
+        {
+            VideoFrame surfaceFrame = CreateMediaCodecSurfaceFrame(avFrame);
+            System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
+            return surfaceFrame;
+        }
+        VideoFrame cpuFrame = CreateVideoFrameFromAVFrame(avFrame);
+        System.Threading.Interlocked.Increment(ref _cpuFallbackFrames);
+        return cpuFrame;
     }
 
     /// <inheritdoc/>
@@ -646,6 +681,20 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     {
         if (_disposed) return;
         _disposed = true;
+
+        // 收尾帧路径统计（零拷贝验证铁证）：与 MFVideoDecoder 的 [DXVA-FRAMEPATH] 对称。
+        // 判据：硬解激活(IsHardwareAccelerated) 且 GPU 零拷贝帧 > 0 才算「硬件没白用」；
+        // 若硬解激活但 GPU=0，说明帧被下载回系统内存 —— 属于「半硬解」缺陷，必须暴露而非静默。
+        if (!_frameSummaryLogged)
+        {
+            _frameSummaryLogged = true;
+            if (_gpuZeroCopyFrames > 0 || _cpuFallbackFrames > 0)
+                _logger.LogInformation(
+                    "[FFMPEG-FRAMEPATH] 解码帧路径统计：GPU零拷贝={Gpu} 帧 / CPU拷贝={Cpu} 帧 | 硬解激活={Hw} | 零拷贝生效={Verdict}",
+                    _gpuZeroCopyFrames, _cpuFallbackFrames, IsHardwareAccelerated,
+                    IsHardwareAccelerated && _gpuZeroCopyFrames > 0 ? "是" : "否(全程 CPU 帧)");
+        }
+
         ClearPendingQueues();
         _hwDeviceCtx?.Dispose();
         _hwDeviceCtx = null;

@@ -29,6 +29,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Demuxer;
 internal sealed class MFDemuxer : IMediaDemuxer
 {
     private readonly MFBackend _backend;
+    private readonly MfDxgiDeviceManagerProvider? _dxgiManagerProvider;
     private readonly ILogger<MFDemuxer> _logger;
 
     private IntPtr _sourceReader; // IMFSourceReader*（原始 vtable P/Invoke，非 [ComImport]）
@@ -73,15 +74,47 @@ internal sealed class MFDemuxer : IMediaDemuxer
     private readonly Dictionary<int, MediaPacket> _pendingPackets = new();
     private readonly HashSet<int> _exhaustedStreams = new();
 
+    // ── A 方案：SourceReader 自带硬解 + DXGI 出样（零拷贝直通）状态 ──
+    // 命中时本 demuxer 变成「解封装 + 解码一体」：ReadSample 直接吐已解码帧
+    // （GPU 纹理 → MediaPacket.DecodedFrameResource；退化时 NV12 CPU 字节 → Data+Width/Height/Stride），
+    // 下游 MFVideoDecoder 退化为直通适配器，不再跑自己的 MFT。
+    // -1 = 未启用（视频流仍输出压缩裸流，走原 MFVideoDecoder MFT 路径，行为与改造前完全一致）。
+    private int _decodedVideoStreamIndex = -1;
+    private int _decodedVideoWidth;
+    private int _decodedVideoHeight;
+    private int _decodedVideoStride;     // NV12 CPU 回落时的行跨度（<=0 表示按紧凑 width 处理）
+    private bool _loggedVideoPathOnce;   // 首帧一次性诊断：真零拷贝 vs 半 DXVA 回落
+    // 🔴 路径①-A（IMF2DBuffer2）必须用**独立**闸门：半 DXVA 回落的 warning 会先把 _loggedVideoPathOnce
+    //    置位，若共用则「Lock2D 治本成功」的日志永远打不出来 —— 表现为「代码在跑但看不见证据」，
+    //    极易被误判为改动未生效（2026-08-07 实测踩中）。诊断闸门与它守护的分支必须一一对应。
+    private bool _loggedVideo2DPathOnce; // 首帧一次性诊断：IMF2DBuffer2 真值 pitch 紧凑化路径
+    private long _videoZeroCopyFrames;
+    private long _videoCpuFrames;
+    private bool _hardwareReaderRequested; // SourceReader 创建时是否成功挂上了 D3D 管理器
+    private readonly MediaFoundationOptions _options;
+
     /// <summary>
     /// 初始化 <see cref="MFDemuxer"/> 的新实例。
     /// </summary>
     /// <param name="backend">MF 后端入口（Singleton）。</param>
+    /// <param name="dxgiManagerProvider">
+    /// DXGI 设备管理器提供者（Singleton）。用于在 SourceReader 上挂 <c>MF_SOURCE_READER_D3D_MANAGER</c>，
+    /// 令其内部解码 MFT 在共享 D3D11 设备上分配输出表面 ⇒ ReadSample 直接吐 GPU 纹理。
+    /// 传 <see langword="null"/> 或其返回 <see cref="IntPtr.Zero"/> 时静默回落「压缩裸流 + MFVideoDecoder 自解码」老路径。
+    /// </param>
     /// <param name="logger">日志器。</param>
-    public MFDemuxer(MFBackend backend, ILogger<MFDemuxer> logger)
+    /// <param name="options">
+    /// MF 后端选项。传 <see langword="null"/> 时取默认值（全部启用）。当前仅用到
+    /// <see cref="MediaFoundationOptions.EnableReaderDecodeFusion"/>——关闭后跳过 NV12 协商，
+    /// 该流继续输出压缩裸流，交由 MFVideoDecoder 自管 MFT 解码（零拷贝根因定界用）。
+    /// </param>
+    public MFDemuxer(MFBackend backend, MfDxgiDeviceManagerProvider? dxgiManagerProvider, ILogger<MFDemuxer> logger,
+        MediaFoundationOptions? options = null)
     {
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
+        _dxgiManagerProvider = dxgiManagerProvider;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _options = options ?? new MediaFoundationOptions();
     }
 
     /// <inheritdoc/>
@@ -197,7 +230,25 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 _mfStartupAcquired = true;
             }
 
-            int hr = MFInterop.MFCreateSourceReaderFromURL(url, IntPtr.Zero, out IntPtr readerPtr);
+            // ── A 方案：把 IMFDXGIDeviceManager 挂到 SourceReader 的创建属性上 ──
+            // SourceReader 拿到管理器后会自行完成「选硬件 MFT → 发 MFT_MESSAGE_SET_D3D_MANAGER →
+            // 分配 DXGI 输出表面池」的全套编排（这正是直连 MFT 时会静默回落软件的那一段）。
+            // 🔴 失败语义：任何一步不成都返回 IntPtr.Zero，等价改造前的「无属性」行为 ⇒ 压缩裸流 + MFVideoDecoder 自解码。
+            IntPtr readerAttributes = TryCreateHardwareReaderAttributes(out bool hardwareRequested);
+            _hardwareReaderRequested = hardwareRequested;
+
+            int hr;
+            IntPtr readerPtr;
+            try
+            {
+                hr = MFInterop.MFCreateSourceReaderFromURL(url, readerAttributes, out readerPtr);
+            }
+            finally
+            {
+                // R5 配对：属性 store 的内容在创建时已被 SourceReader 复制（IUnknown 项自行 AddRef），
+                // 我们持有的这一份引用用完即释放；管理器本体的生命周期归 MfDxgiDeviceManagerProvider。
+                if (readerAttributes != IntPtr.Zero) Marshal.Release(readerAttributes);
+            }
             if (hr < 0 || readerPtr == IntPtr.Zero)
             {
                 throw new InvalidOperationException($"MFCreateSourceReaderFromURL 失败: HRESULT=0x{hr:X8}");
@@ -258,6 +309,266 @@ internal sealed class MFDemuxer : IMediaDemuxer
             _exhaustedStreams.Clear();
         }
         finally { _readerGate.Exit(); }
+    }
+
+    /// <summary>
+    /// 构造带「D3D 设备管理器 + 允许硬件 MFT」的 SourceReader 创建属性（A 方案零拷贝前置）。
+    /// </summary>
+    /// <param name="hardwareRequested">是否成功表达了硬解意图（决定后续是否协商 NV12 直通）。</param>
+    /// <returns>IMFAttributes*（调用方用后 <see cref="Marshal.Release"/>）；不可用返回 <see cref="IntPtr.Zero"/>。</returns>
+    /// <remarks>
+    /// <para>🔴 失败绝不抛异常：任一步不成即返回 <see cref="IntPtr.Zero"/>，
+    /// <c>MFCreateSourceReaderFromURL</c> 以空属性创建 ⇒ 完全等价改造前行为（压缩裸流 + MFT 自解码）。
+    /// 这是「硬解优先、软解兜底」宪法在打开阶段的落点。</para>
+    /// <para><b>刻意不设</b> <c>MF_SOURCE_READER_ENABLE_(ADVANCED_)VIDEO_PROCESSING</c>：
+    /// 插入 Video Processor MFT 会把样本落回系统内存，直接毁掉零拷贝。</para>
+    /// <para><b>刻意不设</b> <c>MF_SOURCE_READER_PASSTHROUGH_MODE</c>：该模式强制系统内存样本语义，同样破坏零拷贝。</para>
+    /// <para>同步（native 分类）：全为 COM 调用，无 I/O。</para>
+    /// </remarks>
+    private IntPtr TryCreateHardwareReaderAttributes(out bool hardwareRequested)
+    {
+        hardwareRequested = false;
+
+        var provider = _dxgiManagerProvider;
+        if (provider is null)
+        {
+            _logger.LogDebug("[MF-D3D] 未注入 DXGI 设备管理器提供者 → SourceReader 走默认（软解）路径");
+            return IntPtr.Zero;
+        }
+
+        // provider 内部已做一次性闸门 + 全部失败告警；此处只判可用性
+        IntPtr manager = provider.TryGetManager();
+        if (manager == IntPtr.Zero)
+            return IntPtr.Zero;
+
+        if (MFInterop.MFCreateAttributes(out IntPtr attrs, 4) < 0 || attrs == IntPtr.Zero)
+        {
+            _logger.LogWarning("[MF-D3D] MFCreateAttributes 失败 → SourceReader 不挂 D3D 管理器，回落软解");
+            return IntPtr.Zero;
+        }
+
+        try
+        {
+            // ① MF_SOURCE_READER_D3D_MANAGER：IUnknown 属性，必须用 SetUnknown（slotIndex 24，mfobjects.h vtable 实物核验）
+            var setUnknown = MfVTable.Get<IMFAttributes_SetUnknown>(attrs, 24);
+            Guid d3dKey = MFConstants.MF_SOURCE_READER_D3D_MANAGER;
+            int hr = setUnknown(attrs, ref d3dKey, manager);
+            if (hr < 0)
+            {
+                _logger.LogWarning("[MF-D3D] SetUnknown(MF_SOURCE_READER_D3D_MANAGER) 失败 HRESULT=0x{HR:X8} → 回落软解", hr);
+                Marshal.Release(attrs);
+                return IntPtr.Zero;
+            }
+
+            // ② MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS=1：不开则只用软件 MFT，挂了管理器也拿不到 DXGI 表面
+            var setUInt32 = MfVTable.Get<IMFAttributes_SetUINT32>(attrs, 18);
+            Guid hwKey = MFConstants.MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS;
+            hr = setUInt32(attrs, ref hwKey, 1);
+            if (hr < 0)
+            {
+                // 非致命：管理器已挂上，部分实现仍可能给出 DXVA 表面。记录后继续。
+                _logger.LogWarning("[MF-D3D] SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS) 失败 HRESULT=0x{HR:X8}，继续尝试", hr);
+            }
+
+            // ③ MF_SOURCE_READER_DISABLE_DXVA=0：默认即 0，显式写入表达意图（防某些环境的策略默认值反转）
+            Guid disableDxvaKey = MFConstants.MF_SOURCE_READER_DISABLE_DXVA;
+            setUInt32(attrs, ref disableDxvaKey, 0);
+
+            hardwareRequested = true;
+            _logger.LogInformation("[MF-D3D] SourceReader 创建属性已就绪：D3D_MANAGER + ENABLE_HARDWARE_TRANSFORMS（目标：ReadSample 直出 DXGI 纹理）");
+            return attrs;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MF-D3D] 构造 SourceReader 硬解属性异常 → 回落软解");
+            Marshal.Release(attrs);
+            hardwareRequested = false;
+            return IntPtr.Zero;
+        }
+    }
+
+    /// <summary>MFT_OUTPUT_STREAM_INFO.dwFlags：MFT 自行分配输出 sample（零拷贝必要条件）。</summary>
+    private const uint MFT_OUTPUT_STREAM_PROVIDES_SAMPLES = 0x00000100;
+
+    /// <summary>
+    /// 取证 SourceReader 为指定流实际建立的 <b>MFT 链</b>（零拷贝失效根因定位，2026-08-07）。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>为什么必须做</b>：我们已把 <c>MF_SOURCE_READER_D3D_MANAGER</c> +
+    /// <c>ENABLE_HARDWARE_TRANSFORMS</c> 挂上且全部返回 <c>S_OK</c>，但 ReadSample 出来的样本
+    /// QI <c>IMFDXGIBuffer</c> 仍返 <c>E_NOINTERFACE</c>。宪法「S_OK≠被接受：能力自报+行为副作用双判据」
+    /// 要求此时<b>直接查证拓扑</b>而非继续猜。<c>IMFSourceReaderEx::GetTransformForStream</c>
+    /// 是唯一能看穿 SourceReader 黑盒的官方接口。</para>
+    /// <para><b>三种判决</b>：
+    /// ① 链上出现 <c>MFT_CATEGORY_VIDEO_PROCESSOR</c> ⇒ SourceReader 偷插了 VP 做转换，
+    ///    它会把 DXGI 表面拉回系统内存 —— 零拷贝头号杀手，须调整输出类型协商避免触发；
+    /// ② 解码 MFT 的 <c>MF_SA_D3D11_AWARE</c>=0 ⇒ SourceReader 选中的是纯软件 MFT，D3D 管理器根本无处可用；
+    /// ③ 解码 MFT aware=1 但 <c>PROVIDES_SAMPLES</c>=0 ⇒ MFT 没进 DXVA 分配模式
+    ///    （即收到了 SET_D3D_MANAGER 却拒绝/回落），问题在驱动或 profile 协商。</para>
+    /// <para>🔴 纯诊断、零副作用：只读属性、不发消息、不改类型。任何一步失败都只记 Debug 后静默返回，
+    /// 绝不影响播放（诊断代码永远不该成为故障源）。所有 COM 引用 R5 配对释放。</para>
+    /// <para>同步（native 分类）：全为 COM 调用，无 I/O。</para>
+    /// </remarks>
+    private void DiagnoseStreamTransformChain(IntPtr readerPtr, int streamIndex)
+    {
+        IntPtr readerEx = IntPtr.Zero;
+        try
+        {
+            int hrQi = Marshal.QueryInterface(readerPtr, in MFConstants.IID_IMFSourceReaderEx, out readerEx);
+            if (hrQi < 0 || readerEx == IntPtr.Zero)
+            {
+                _logger.LogDebug("[MFT-CHAIN] SourceReader 不支持 IMFSourceReaderEx（hr=0x{HR:X8}），跳过链路取证", hrQi);
+                return;
+            }
+
+            var getTransform = MfVTable.Get<IMFSourceReaderEx_GetTransformForStream>(readerEx, 13); // 绝对槽 16
+            int found = 0;
+            bool sawVideoProcessor = false;
+            bool sawVideoDecoder = false;
+            bool decoderIsHardwareMft = false;
+
+            // dwTransformIndex 从 0 递增枚举，越界返回 MF_E_INVALIDINDEX(0xC00D36B3)。上限 8 防御异常实现死循环。
+            for (uint i = 0; i < 8; i++)
+            {
+                int hr = getTransform(readerEx, (uint)streamIndex, i, out Guid category, out IntPtr transform);
+                if (hr < 0 || transform == IntPtr.Zero)
+                    break;
+
+                found++;
+                try
+                {
+                    string categoryName =
+                        category == MFConstants.MFT_CATEGORY_VIDEO_DECODER ? "视频解码器"
+                        : category == MFConstants.MFT_CATEGORY_VIDEO_PROCESSOR ? "视频处理器(VP)"
+                        : category == MFConstants.MFT_CATEGORY_VIDEO_EFFECT ? "视频特效"
+                        : $"其他({category:B})";
+                    if (category == MFConstants.MFT_CATEGORY_VIDEO_PROCESSOR)
+                        sawVideoProcessor = true;
+
+                    // ① MF_SA_D3D11_AWARE：该 MFT 是否具备 D3D11 视频解码能力（GetAttributes = 绝对槽 8 → slotIndex 5）
+                    //    ② 同时取 MFT 身份（友好名 / HARDWARE_URL / CLSID）——区分「厂商硬件 MFT」与「微软软件 MFT」。
+                    string awareText = "属性不可读";
+                    string identityText = "身份不可读";
+                    if (MfVTable.Get<IMFTransform_GetAttributes>(transform, 5)(transform, out IntPtr mftAttrs) >= 0
+                        && mftAttrs != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            Guid awareKey = MFConstants.MF_SA_D3D11_AWARE;
+                            awareText = MfVTable.Get<IMFAttributes_GetUINT32>(mftAttrs, 4)(mftAttrs, ref awareKey, out uint aware) >= 0
+                                ? (aware != 0 ? "D3D11_AWARE=1" : "D3D11_AWARE=0(纯软件)")
+                                : "无 D3D11_AWARE 属性(纯软件)";
+
+                            // 🔴 官方判据：MFT_ENUM_HARDWARE_URL_Attribute【存在即硬件 MFT】。
+                            //    微软内置解码器（如 CMSH264DecoderMFT）同样 D3D11_AWARE=1、也会用 DXVA 硬解，
+                            //    但它属于软件 MFT，输出统一落系统内存 —— 这正是「半 DXVA」最常见的成因。
+                            string? hwUrl = TryGetAllocatedString(mftAttrs, MFConstants.MFT_ENUM_HARDWARE_URL_Attribute);
+                            string? friendly = TryGetAllocatedString(mftAttrs, MFConstants.MFT_FRIENDLY_NAME_Attribute);
+                            bool isHardwareMft = !string.IsNullOrEmpty(hwUrl);
+                            if (category == MFConstants.MFT_CATEGORY_VIDEO_DECODER)
+                            {
+                                sawVideoDecoder = true;
+                                decoderIsHardwareMft = isHardwareMft;
+                            }
+
+                            Guid clsidKey = MFConstants.MFT_TRANSFORM_CLSID_Attribute;
+                            string clsidText =
+                                MfVTable.Get<IMFAttributes_GetGUID>(mftAttrs, 7)(mftAttrs, ref clsidKey, out Guid mftClsid) >= 0
+                                    ? mftClsid.ToString("B")
+                                    : "(未暴露)";
+
+                            identityText = $"{(isHardwareMft ? "【厂商硬件MFT】" : "【微软软件MFT】")}名称=\"{friendly ?? "-"}\" CLSID={clsidText}"
+                                + (isHardwareMft ? $" HW_URL={hwUrl}" : string.Empty);
+                        }
+                        finally { Marshal.Release(mftAttrs); }
+                    }
+
+                    // ② PROVIDES_SAMPLES：MFT 是否自分配输出 sample —— DXVA 纹理输出的必要条件
+                    //    （GetOutputStreamInfo = 绝对槽 7 → slotIndex 4）
+                    string allocText = "输出流信息不可读";
+                    if (MfVTable.Get<IMFTransform_GetOutputStreamInfo>(transform, 4)(transform, 0, out MftOutputStreamInfo info) >= 0)
+                    {
+                        bool providesSamples = (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
+                        allocText = providesSamples
+                            ? $"MFT自分配输出sample=True(cbSize={info.cbSize})"
+                            : $"MFT自分配输出sample=False ⇒ 由SourceReader分配【系统内存】(cbSize={info.cbSize})";
+                    }
+
+                    _logger.LogInformation("[MFT-CHAIN] 流 {Index} · MFT[{I}] 分类={Cat} | {Identity} | {Aware} | {Alloc}",
+                        streamIndex, i, categoryName, identityText, awareText, allocText);
+                }
+                finally
+                {
+                    Marshal.Release(transform);
+                }
+            }
+
+            if (found == 0)
+            {
+                _logger.LogWarning("[MFT-CHAIN] 流 {Index} 未枚举到任何 MFT —— SourceReader 可能直通未解码（协商未真正生效）", streamIndex);
+            }
+            else if (sawVideoProcessor)
+            {
+                _logger.LogWarning(
+                    "[MFT-CHAIN] 🔴 流 {Index} 链上存在【视频处理器 VP】—— 零拷贝头号杀手：" +
+                    "VP 会把解码器产出的 DXGI 表面拉回系统内存做格式/尺寸转换。" +
+                    "根因=输出类型协商触发了转换，须让请求类型与解码器原生输出完全一致。", streamIndex);
+            }
+            else if (sawVideoDecoder && !decoderIsHardwareMft)
+            {
+                _logger.LogWarning(
+                    "[MFT-CHAIN] 🔴 流 {Index} 链上无 VP，但解码器是【微软软件 MFT】（缺 MFT_ENUM_HARDWARE_URL）—— " +
+                    "这就是「半 DXVA」的直接根因：软件 MFT 即便 MF_SA_D3D11_AWARE=1、也确实用 DXVA 在 GPU 上完成解码" +
+                    "（故 Lock2D 的 pitch 带 GPU 对齐痕迹），但其输出 sample 一律回落系统内存，永远 QI 不到 IMFDXGIBuffer。" +
+                    "真零拷贝要求 SourceReader 选中【厂商硬件 MFT】；若本机该 codec 未注册硬件 MFT，MF 路径无解，应让位 FFmpeg D3D11VA。",
+                    streamIndex);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "[MFT-CHAIN] 流 {Index} 链上共 {N} 个 MFT，未插入 VP，解码器={Kind} —— 若样本仍非 DXGI，嫌疑转向 SourceReader 封装层读回，" +
+                    "可用 --no-fusion 关闭「解封装+解码一体」改走自管 MFT 对照",
+                    streamIndex, found, decoderIsHardwareMft ? "厂商硬件MFT" : "非解码器/未知");
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // 诊断代码绝不能成为故障源
+            _logger.LogDebug(ex, "[MFT-CHAIN] 链路取证异常（不影响播放）");
+        }
+        finally
+        {
+            if (readerEx != IntPtr.Zero)
+                Marshal.Release(readerEx);
+        }
+    }
+
+    /// <summary>
+    /// 从 IMFAttributes 读一个原生自分配的宽字符串（GetAllocatedString，slotIndex 10）。仅用于 MFT 身份取证，非热路径。
+    /// </summary>
+    /// <remarks>
+    /// 属性不存在时返回 <see langword="null"/>（MF_E_ATTRIBUTENOTFOUND）——对 MFT_ENUM_HARDWARE_URL_Attribute 而言，
+    /// 「不存在」本身就是有效信息：该 MFT 为软件 MFT。原生 buffer 由 CoTaskMemAlloc 分配，必须 FreeCoTaskMem 配对释放。
+    /// </remarks>
+    private static string? TryGetAllocatedString(IntPtr attrs, Guid key)
+    {
+        IntPtr pStr = IntPtr.Zero;
+        try
+        {
+            int hr = MfVTable.Get<IMFAttributes_GetAllocatedString>(attrs, 10)(attrs, ref key, out pStr, out _);
+            if (hr < 0 || pStr == IntPtr.Zero)
+                return null;
+            return Marshal.PtrToStringUni(pStr);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (pStr != IntPtr.Zero)
+                Marshal.FreeCoTaskMem(pStr);
+        }
     }
 
     /// <inheritdoc/>
@@ -436,6 +747,12 @@ internal sealed class MFDemuxer : IMediaDemuxer
         // 自此 samplePtr 持有一份引用，所有退出路径（含异常）恰好释放一次。
         try
         {
+            // ── A 方案：该流已协商为 NV12 解码输出 ⇒ 走「已解码直通」打包（优先 GPU 纹理零拷贝）──
+            // 只有 TryConfigureVideoStreamToNv12 成功的那一条视频流会命中；其余流（音频 PCM、
+            // 未协商成功的视频压缩裸流）继续走下方通用字节拷贝路径，行为与改造前一致。
+            if (_decodedVideoStreamIndex >= 0 && actualStreamIndex == _decodedVideoStreamIndex)
+                return ExtractDecodedVideoPacket(samplePtr, actualStreamIndex, timestamp);
+
             // 提取采样数据：ConvertToContiguousBuffer = 绝对槽 41 → index 38
             // （IMFAttributes 恰 30 方法，IMFSample 第 9 方法；运行时已验证 slot38 返回有效 buffer）
             hr = MfVTable.Get<IMFSample_ConvertToContiguousBuffer>(samplePtr, 38)(samplePtr, out IntPtr bufferPtr);
@@ -514,6 +831,242 @@ internal sealed class MFDemuxer : IMediaDemuxer
         {
             InteropTrace.ReleaseComPtr(samplePtr, "ExtractPacket:samplePtr");
         }
+    }
+
+    /// <summary>
+    /// 把「SourceReader 已解码」的视频样本打包为直通 <see cref="MediaPacket"/>（优先 GPU 纹理零拷贝）。
+    /// </summary>
+    /// <param name="samplePtr">IMFSample*（<b>引用归调用方</b>，本方法不释放）。</param>
+    /// <param name="streamIndex">MF 流索引。</param>
+    /// <param name="sampleTimeTicks">ReadSample 回填的样本时间（100ns）。</param>
+    /// <returns>直通包；提取失败返回 <see langword="null"/>（按流 tick 处理，交由上层重试）。</returns>
+    /// <remarks>
+    /// <para><b>路径①（目标）</b>：<c>GetBufferByIndex(0)</c> → QI <c>IMFDXGIBuffer</c> → <c>ID3D11Texture2D</c>
+    /// ⇒ 帧全程留在显存，<see cref="MediaPacket.DecodedFrameResource"/> 承载纹理所有权，
+    /// 一路交到 <c>D3D11Renderer.PresentGpuTexture</c> 做 <c>CopySubresourceRegion</c> 上屏。真·零拷贝。</para>
+    /// <para>🔴 <b>绝不能</b>用 <c>ConvertToContiguousBuffer</c> 取 DXVA buffer：其契约就是「合并并读回连续系统内存」，
+    /// 永远返回 CPU buffer，用它做零拷贝在原理上注定失败（R41 已证伪）。</para>
+    /// <para><b>路径②（回落）</b>：样本不是 DXGI buffer（=「半 DXVA」：驱动内部把帧读回了系统内存）时，
+    /// 走 <c>ConvertToContiguousBuffer</c> 取 NV12 字节，配 <c>Width/Height/Stride</c> 交给下游直通成 <c>VideoFrame</c>。
+    /// 仍比改造前好——至少省掉了 MFVideoDecoder 的第二次 MFT 解码。</para>
+    /// <para><b>诊断</b>：首帧一次性打印命中的是哪条路径 + 失败 HRESULT，避免逐帧刷屏又不至于静默失效。</para>
+    /// </remarks>
+    private MediaPacket? ExtractDecodedVideoPacket(IntPtr samplePtr, int streamIndex, long sampleTimeTicks)
+    {
+        // 时间戳：ReadSample 已回填（100ns）。时长优先读 sample 自带（IMFSample.GetSampleDuration = 绝对槽 34 → 同 MFVideoDecoder）。
+        TimeSpan ts = sampleTimeTicks > 0 ? TimeSpan.FromTicks(sampleTimeTicks) : TimeSpan.Zero;
+        TimeSpan dur = TimeSpan.Zero;
+        if (MfVTable.Get<IMFSample_GetSampleDuration>(samplePtr, 34)(samplePtr, out long rawDur) >= 0 && rawDur > 0)
+            dur = TimeSpan.FromTicks(rawDur);
+
+        // 关键帧标记（IMFSample 继承 IMFAttributes，GetUINT32 = slotIndex 4）
+        Guid cleanPointKey = MFConstants.MFSampleExtension_CleanPoint;
+        bool keyFrame = MfVTable.Get<IMFMediaType_GetUINT32>(samplePtr, 4)(samplePtr, ref cleanPointKey, out uint cleanPoint) >= 0
+                        && cleanPoint != 0;
+
+        int width = _decodedVideoWidth;
+        int height = _decodedVideoHeight;
+        if (width <= 0 || height <= 0)
+        {
+            if (!_loggedVideoPathOnce)
+            {
+                _loggedVideoPathOnce = true;
+                _logger.LogWarning("[MF-D3D] 视频流 {Index} 解码输出尺寸未知（{W}x{H}），无法打包直通帧", streamIndex, width, height);
+            }
+            return null;
+        }
+
+        // ── 路径①：DXGI 纹理零拷贝（GetBufferByIndex = 绝对槽 40 → slotIndex 37）──
+        int hr = MfVTable.Get<IMFSample_GetBufferByIndex>(samplePtr, 37)(samplePtr, 0, out IntPtr rawBuffer);
+        if (hr >= 0 && rawBuffer != IntPtr.Zero)
+        {
+            InteropTrace.OnAlloc(rawBuffer, "ExtractDecodedVideoPacket:rawBuffer");
+            try
+            {
+                var gpu = MfDxgiTextureExtractor.TryExtract(rawBuffer, width, height, PixelFormat.NV12, out int exHr);
+                if (gpu is not null)
+                {
+                    _videoZeroCopyFrames++;
+                    if (!_loggedVideoPathOnce)
+                    {
+                        _loggedVideoPathOnce = true;
+                        _logger.LogInformation(
+                            "[MF-D3D] ✅ 零拷贝命中：SourceReader 直出 DXGI 纹理 {W}x{H} NV12 —— 解码→上屏全程显存，无系统内存往返",
+                            width, height);
+                    }
+                    // 纹理所有权交给 packet（下游 MFVideoDecoder 用 TakeDecodedFrameResource 移交给 VideoFrame）
+                    return new MediaPacket(streamIndex, ReadOnlyMemory<byte>.Empty, ts, dur, keyFrame,
+                        width: width, height: height, decodedFrameResource: gpu);
+                }
+
+                if (!_loggedVideoPathOnce)
+                {
+                    _loggedVideoPathOnce = true;
+                    _logger.LogWarning(
+                        "[MF-D3D] ⚠️ 样本 buffer 非 DXGI（QI/GetResource HRESULT=0x{HR:X8}）——即「半 DXVA」：" +
+                        "驱动内部把帧读回了系统内存。回落 NV12 CPU 直通（仍省掉一次 MFT 解码）。", exHr);
+                }
+
+                // ── 路径①-A：IMF2DBuffer2 真值行跨度紧凑化（半 DXVA 治本，2026-08-07）────────────
+                //   IMFDXGIBuffer 失败后，MS H264 MFT 内部把帧读回 Direct3DSurface9-backed 2D 内存，
+                //   实际 pitch 是 16 字节对齐（典型 1080→1088）。ConvertToContiguousBuffer 把整段当 1D 摊平，
+                //   但 IMFMediaBuffer.GetCurrentLength 返回的是 MFT 内部 allocate 的整段长度（含尾部对齐 padding），
+                //   反推 stride/codedH 必错 → 紧凑拷贝时 UV 平面偏移错位 → 画面下半段色度错行/横纹。
+                //   🔴 治本：QI IMF2DBuffer2，Lock2D 取真值 pitch + scanline0，逐行拷成紧凑布局。
+                //   若 Lock2D 失败（极少见：旧版 MFT 不实现 2D 路径），再走路径② ConvertToContiguousBuffer 兜底。
+                int hr2d = Marshal.QueryInterface(rawBuffer, in MFConstants.IID_IMF2DBuffer2, out IntPtr b2d);
+                if (hr2d >= 0 && b2d != IntPtr.Zero)
+                {
+                    InteropTrace.OnAlloc(b2d, "ExtractDecodedVideoPacket:b2d");
+                    try
+                    {
+                        var lock2d = MfVTable.Get<IMF2DBuffer2_Lock2D>(b2d, 0);  // 槽 3 → slotIndex 0（mfobjects.h:1687）
+                        var unlock2d = MfVTable.Get<IMF2DBuffer2_Unlock2D>(b2d, 1);  // 槽 4 → slotIndex 1（mfobjects.h:1694）
+                        int hrLock = lock2d(b2d, out IntPtr scanline0, out int rawPitch);
+                        if (hrLock >= 0 && scanline0 != IntPtr.Zero && rawPitch != 0)
+                        {
+                            try
+                            {
+                                int pitch = rawPitch < 0 ? -rawPitch : rawPitch;   // NV12 顶到底，pitch 应正；防御性取绝对值
+                                if (pitch < width)
+                                {
+                                    // 异常：pitch < display width ⇒ 越界读，必丢帧
+                                    if (!_loggedVideo2DPathOnce)
+                                    {
+                                        _loggedVideo2DPathOnce = true;
+                                        _logger.LogWarning(
+                                            "[MF-D3D] IMF2DBuffer2.Lock2D 返回 pitch={P} < display={W}，布局异常 ⇒ 丢帧、走路径②兜底",
+                                            pitch, width);
+                                    }
+                                }
+                                else
+                                {
+                                    int dstLen = width * height * 3 / 2;
+                                    byte[] data2d = new byte[dstLen];
+
+                                    // Y 平面：height 行，每行 width 字节，按真值 pitch 步进取
+                                    //   用 IntPtr.Add 替代 IntPtr+long（.NET 10 IntPtr 无 operator+(IntPtr, long)）
+                                    //   所有偏移对 1080×1920 NV12（pitch≤1088）都在 int 范围内，绝不上溢。
+                                    for (int y = 0; y < height; y++)
+                                        Marshal.Copy(IntPtr.Add(scanline0, y * pitch), data2d, y * width, width);
+
+                                    // UV 平面：紧接 Y 平面之后；UV 高 = displayHeight/2；每行 width 字节（U/V 交错）
+                                    int uvRows = height / 2;
+                                    int srcUvStart = height * pitch;
+                                    for (int y = 0; y < uvRows; y++)
+                                        Marshal.Copy(IntPtr.Add(scanline0, srcUvStart + y * pitch),
+                                            data2d, width * height + y * width, width);
+
+                                    if (!_loggedVideo2DPathOnce)
+                                    {
+                                        _loggedVideo2DPathOnce = true;
+                                        // 🔴 对齐值必须实测推断，不可硬编「16 对齐」：AMD 实测 pitch=1280（256B 对齐），
+                                        //    远大于软件 MFT 惯用的 16B 对齐（1080→1088）。pitch 带 GPU 行距对齐痕迹，
+                                        //    本身就是「硬解确已发生、只是最后一步被读回系统内存」的物证。
+                                        int alignGuess =
+                                            pitch % 256 == 0 ? 256 : pitch % 128 == 0 ? 128 :
+                                            pitch % 64 == 0 ? 64 : pitch % 32 == 0 ? 32 :
+                                            pitch % 16 == 0 ? 16 : 1;
+                                        _logger.LogInformation(
+                                            "[MF-D3D] ✅ 半 DXVA 治本：IMF2DBuffer2.Lock2D 拿到真值 pitch={P}（display={W}，驱动行距对齐≈{Align}B，填充 {Pad}B/行）" +
+                                            " → 逐行拷成紧凑 {Total}B，路径② ConvertToContiguousBuffer 跳过（治本，不再依赖 curLen 反推）。" +
+                                            "pitch 带 GPU 对齐痕迹 ⇒ 硬解确已发生，仅最后一步被读回系统内存",
+                                            pitch, width, alignGuess, pitch - width, dstLen);
+                                    }
+
+                                    _videoCpuFrames++;
+                                    return new MediaPacket(streamIndex, data2d, ts, dur, keyFrame,
+                                        width: width, height: height, stride: width);
+                                }
+                            }
+                            finally
+                            {
+                                int hrUn = unlock2d(b2d);
+                                if (hrUn < 0)
+                                    _logger.LogWarning("[MF-D3D] IMF2DBuffer2.Unlock2D 失败 HRESULT=0x{HR:X8}", hrUn);
+                            }
+                        }
+                        else if (!_loggedVideo2DPathOnce)
+                        {
+                            _loggedVideo2DPathOnce = true;
+                            _logger.LogWarning(
+                                "[MF-D3D] IMF2DBuffer2 QI 成功但 Lock2D 失败 hr=0x{HR:X8} scanline0={Sl} pitch={P} → 路径②兜底",
+                                hrLock, scanline0, rawPitch);
+                        }
+                    }
+                    finally
+                    {
+                        InteropTrace.ReleaseComPtr(b2d, "ExtractDecodedVideoPacket:b2d");
+                    }
+                }
+            }
+            finally
+            {
+                InteropTrace.ReleaseComPtr(rawBuffer, "ExtractDecodedVideoPacket:rawBuffer");
+            }
+        }
+        else if (!_loggedVideoPathOnce)
+        {
+            _loggedVideoPathOnce = true;
+            _logger.LogWarning("[MF-D3D] GetBufferByIndex(0) 失败 HRESULT=0x{HR:X8}，回落 ConvertToContiguousBuffer", hr);
+        }
+
+        // ── 路径②：NV12 CPU 直通（ConvertToContiguousBuffer = 绝对槽 41 → slotIndex 38）──
+        hr = MfVTable.Get<IMFSample_ConvertToContiguousBuffer>(samplePtr, 38)(samplePtr, out IntPtr bufferPtr);
+        if (hr < 0 || bufferPtr == IntPtr.Zero)
+        {
+            _logger.LogWarning("[MF-D3D] 已解码视频样本 ConvertToContiguousBuffer 失败: HRESULT=0x{HR:X8}", hr);
+            return null;
+        }
+
+        InteropTrace.OnAlloc(bufferPtr, "ExtractDecodedVideoPacket:bufferPtr");
+        byte[] data;
+        try
+        {
+            var lockDel = MfVTable.Get<IMFMediaBuffer_Lock>(bufferPtr, 0);
+            var unlockDel = MfVTable.Get<IMFMediaBuffer_Unlock>(bufferPtr, 1);
+            hr = InteropTrace.LockBuffer(bufferPtr, lockDel, out IntPtr dataPtr, out _, out uint curLen,
+                "ExtractDecodedVideoPacket:IMFMediaBuffer.Lock");
+
+            // 🔴 R5 配对铁律：Unlock 只能与【成功的】Lock 配对，且恰好一次。Lock 失败绝不 Unlock
+            //    （2D/DXGI 临时拷贝实现的 Unlock 会回拷+释放临时区 ⇒ 未 Lock 即调用 = 野指针写）。
+            if (hr < 0)
+            {
+                _logger.LogWarning("[MF-D3D] 已解码视频样本 Lock 失败: HRESULT=0x{HR:X8}（未 Unlock，符合配对规范）", hr);
+                return null;
+            }
+
+            try
+            {
+                if (curLen == 0 || dataPtr == IntPtr.Zero)
+                    return null; // 空缓冲：按流 tick 处理
+
+                data = new byte[curLen];
+                Marshal.Copy(dataPtr, data, 0, (int)curLen);
+            }
+            finally
+            {
+                InteropTrace.UnlockBuffer(bufferPtr, unlockDel, "ExtractDecodedVideoPacket:IMFMediaBuffer.Unlock");
+            }
+        }
+        finally
+        {
+            InteropTrace.ReleaseComPtr(bufferPtr, "ExtractDecodedVideoPacket:bufferPtr");
+        }
+
+        // 行跨度：优先协商期回读的 MF_MT_DEFAULT_STRIDE；缺失时按 buffer 实长反推（NV12 总行数 = height*3/2）。
+        // 反推值 < width 说明布局假定破产 ⇒ 置 0 交由下游按紧凑处理并留证，绝不静默按错误 stride 逐行拷贝。
+        int stride = _decodedVideoStride;
+        if (stride <= 0)
+        {
+            int totalRows = height * 3 / 2;
+            int derived = totalRows > 0 ? data.Length / totalRows : 0;
+            stride = derived >= width ? derived : 0;
+        }
+
+        _videoCpuFrames++;
+        return new MediaPacket(streamIndex, data, ts, dur, keyFrame,
+            width: width, height: height, stride: stride);
     }
 
     /// <inheritdoc/>
@@ -857,6 +1410,34 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 if (vcodec == VideoCodec.Unknown)
                     _logger.LogWarning("[OPEN-DIAG] 未识别视频子类型 {Subtype} → 标记 Unknown（后端仅支持 H264/H265；AV1/VP9/MPEG 等需扩 codec 路由）", subtype);
 
+                // ── A 方案：把该视频流协商为 NV12【解码后】输出 ──
+                // 仅在创建期成功挂上 D3D 管理器时才尝试；成功后 SourceReader 会自行加载硬件解码 MFT
+                // 并在共享 D3D11 设备上分配输出表面 ⇒ ReadSample 直出可 QI 成 IMFDXGIBuffer 的样本。
+                // 必须在构造 MediaTrack **之前**完成：VideoTrackInfo 为 init-only，尺寸须一次性写定
+                // （硬件 MFT 可能把显示尺寸对齐到编码尺寸，回读实测值比沿用原生类型更可靠）。
+                // 失败/未启用 ⇒ _decodedVideoStreamIndex 保持 -1，该流继续输出压缩裸流，走原 MFVideoDecoder MFT 路径。
+                // 🔴 EnableReaderDecodeFusion=false 是零拷贝根因定界开关：主动放弃一体化，把解码交回自管 MFT，
+                //    用两条路径的帧落点差异判定「读回」发生在 SourceReader 封装层还是 MFT/驱动层。
+                if (!_options.EnableReaderDecodeFusion && _decodedVideoStreamIndex < 0)
+                {
+                    _logger.LogWarning(
+                        "[MF-D3D] ⚠️ 诊断开关 EnableReaderDecodeFusion=false —— 跳过 NV12 一体化协商，"
+                        + "视频流 {Index} 继续输出压缩裸流，改由 MFVideoDecoder 自管 MFT 解码（用于零拷贝根因定界）", index);
+                }
+                else if (_hardwareReaderRequested && _decodedVideoStreamIndex < 0)
+                {
+                    if (TryConfigureVideoStreamToNv12(readerPtr, index, ref width, ref height, out int decodedStride))
+                    {
+                        _decodedVideoStreamIndex = index;
+                        _decodedVideoWidth = width;
+                        _decodedVideoHeight = height;
+                        _decodedVideoStride = decodedStride;
+
+                        // 拓扑既已成型，立刻取证 SourceReader 真实建了什么 MFT 链（零拷贝失效根因定位）。
+                        DiagnoseStreamTransformChain(readerPtr, index);
+                    }
+                }
+
                 track = new MediaTrack
                 {
                     Index = index,
@@ -1130,6 +1711,121 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 return TimeSpan.Zero;
             }
         }
+
+    /// <summary>
+    /// 把指定视频流协商为**解码后 NV12** 输出（A 方案：SourceReader 自带硬解 + DXGI 出样）。
+    /// </summary>
+    /// <param name="readerPtr">IMFSourceReader*。</param>
+    /// <param name="streamIndex">MF 流索引。</param>
+    /// <param name="width">进：原生宽；出：MF 实测采纳的输出宽。</param>
+    /// <param name="height">进：原生高；出：MF 实测采纳的输出高。</param>
+    /// <param name="stride">回读的行跨度（字节）；缺失时为 0，调用方按紧凑 <paramref name="width"/> 处理。</param>
+    /// <returns>协商成功（该流自此输出已解码 NV12）返回 <see langword="true"/>；失败返回 <see langword="false"/> 且不改变原有行为。</returns>
+    /// <remarks>
+    /// <para>与 <see cref="ConfigureAudioStreamToPcm"/> 完全同构（MF 音频早已是这套「demuxer 内解码 + decoder 直通」模式），
+    /// 差别只在目标子类型是 NV12 而非 PCM。走已验证的成熟路子，风险最低。</para>
+    /// <para>只设 MAJOR_TYPE + SUBTYPE 的<b>部分类型</b>，其余字段留空由 SourceReader 按源填充——
+    /// 显式写死尺寸/帧率反而会让硬件 MFT 拒绝协商（MF_E_INVALIDMEDIATYPE）。</para>
+    /// <para>🔴 协商失败绝不抛异常：返回 false 后该流继续输出压缩裸流，下游 <c>MFVideoDecoder</c> 按老路自解码，
+    /// 与改造前行为逐字节一致（硬解优先、软解兜底）。</para>
+    /// <para>同步（native 分类）：全为 COM 调用，无 I/O。</para>
+    /// </remarks>
+    private bool TryConfigureVideoStreamToNv12(IntPtr readerPtr, int streamIndex, ref int width, ref int height, out int stride)
+    {
+        stride = 0;
+
+        // 未选中的流不会被建管线，SetCurrentMediaType 无从协商（与音频同）。SetStreamSelection = 绝对槽 4 → slotIndex 1。
+        int hr = MfVTable.Get<IMFSourceReader_SetStreamSelection>(readerPtr, 1)(readerPtr, (uint)streamIndex, true);
+        if (hr < 0)
+        {
+            _logger.LogWarning("[MF-D3D] 视频流 {Index} SetStreamSelection 失败 HRESULT=0x{HR:X8}，跳过 NV12 协商", streamIndex, hr);
+            return false;
+        }
+
+        if (MFInterop.MFCreateMediaType(out IntPtr nv12Type) < 0 || nv12Type == IntPtr.Zero)
+        {
+            _logger.LogWarning("[MF-D3D] 视频流 {Index} MFCreateMediaType 失败，跳过 NV12 协商", streamIndex);
+            return false;
+        }
+
+        try
+        {
+            var setGuid = MfVTable.Get<IMFAttributes_SetGUID>(nv12Type, 21); // SetGUID = slotIndex 21
+            Guid majorKey = MFConstants.MF_MT_MAJOR_TYPE;
+            Guid majorVal = MFConstants.MFMediaType_Video;
+            Guid subKey = MFConstants.MF_MT_SUBTYPE;
+            Guid subVal = MFConstants.MFVideoFormat_NV12;
+            if (setGuid(nv12Type, ref majorKey, ref majorVal) < 0 || setGuid(nv12Type, ref subKey, ref subVal) < 0)
+            {
+                _logger.LogWarning("[MF-D3D] 视频流 {Index} 构造 NV12 媒体类型失败，跳过协商", streamIndex);
+                return false;
+            }
+
+            // SetCurrentMediaType = 绝对槽 7 → slotIndex 4；第二参数为保留 DWORD*，必须 NULL。
+            hr = MfVTable.Get<IMFSourceReader_SetCurrentMediaType>(readerPtr, 4)(readerPtr, (uint)streamIndex, IntPtr.Zero, nv12Type);
+            if (hr < 0)
+            {
+                // 常见于 SourceReader 找不到能吃该编码的解码 MFT（如桌面版 HEVC 未装扩展）。
+                // 这不是错误路径——回落压缩裸流后仍可由 MFVideoDecoder / 回退中间件的 FFmpeg 接手。
+                _logger.LogWarning("[MF-D3D] 视频流 {Index} SetCurrentMediaType(NV12) 失败 HRESULT=0x{HR:X8} → " +
+                    "回落「压缩裸流 + MFVideoDecoder 自解码」路径", streamIndex, hr);
+                return false;
+            }
+        }
+        finally
+        {
+            Marshal.Release(nv12Type);
+        }
+
+        // 回读 MF 实际采纳的输出类型：硬件 MFT 常把显示尺寸对齐到编码尺寸（如 1080→1088），
+        // 且会填 MF_MT_DEFAULT_STRIDE。这两项直接决定 CPU 回落路径的逐行拷贝是否错位。
+        // GetCurrentMediaType = 绝对槽 6 → slotIndex 3。
+        hr = MfVTable.Get<IMFSourceReader_GetCurrentMediaType>(readerPtr, 3)(readerPtr, (uint)streamIndex, out IntPtr actualType);
+        if (hr < 0 || actualType == IntPtr.Zero)
+        {
+            // 协商本身已成功，只是回读失败：沿用原生尺寸继续（stride=0 ⇒ 按紧凑处理）
+            _logger.LogWarning("[MF-D3D] 视频流 {Index} GetCurrentMediaType 失败 HRESULT=0x{HR:X8}，沿用原生尺寸 {W}x{H}",
+                streamIndex, hr, width, height);
+            return true;
+        }
+
+        try
+        {
+            var getUINT64 = MfVTable.Get<IMFMediaType_GetUINT64>(actualType, 5);
+            var getUINT32 = MfVTable.Get<IMFMediaType_GetUINT32>(actualType, 4);
+
+            Guid frameSizeKey = MFConstants.MF_MT_FRAME_SIZE;
+            if (getUINT64(actualType, ref frameSizeKey, out ulong frameSize) >= 0 && frameSize != 0)
+            {
+                int w = (int)(frameSize >> 32);
+                int h = (int)(frameSize & 0xFFFFFFFF);
+                if (w > 0 && h > 0) { width = w; height = h; }
+            }
+
+            Guid strideKey = MFConstants.MF_MT_DEFAULT_STRIDE;
+            if (getUINT32(actualType, ref strideKey, out uint rawStride) >= 0)
+            {
+                // UINT32 里存的是 INT32：负值表示 bottom-up 布局。NV12 下罕见，取绝对值并留证。
+                int s = (int)rawStride;
+                if (s < 0)
+                {
+                    _logger.LogWarning("[MF-D3D] 视频流 {Index} DefaultStride={S}（负=bottom-up），按绝对值处理", streamIndex, s);
+                    s = -s;
+                }
+                stride = s;
+            }
+
+            _logger.LogInformation(
+                "[MF-D3D] 视频流 {Index} 已协商为 NV12 解码输出：{W}x{H} stride={Stride}（0=紧凑）" +
+                " → 本 demuxer 进入「解封装+解码一体」模式，MFVideoDecoder 转直通",
+                streamIndex, width, height, stride);
+            return true;
+        }
+        finally
+        {
+            Marshal.Release(actualType);
+        }
+    }
 
     /// <summary>
     /// 把指定音频流协商为**解码后 PCM** 输出，并回读 MF 实测采纳的格式。

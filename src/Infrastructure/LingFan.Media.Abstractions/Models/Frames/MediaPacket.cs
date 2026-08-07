@@ -51,7 +51,27 @@ public sealed class MediaPacket : IDisposable
     public SampleFormat Format { get; }
 
     private IDisposable? _dataOwner;
+    private IFrameResource? _decodedFrameResource;
     private bool _disposed;
+
+    /// <summary>
+    /// 已解码帧资源（可选）。仅"解封装 + 解码一体"的直通后端（如 MF SourceReader 自带硬解、VLC）会携带；
+    /// 纯解封装后端（FFmpeg 压缩 packet）恒为 <see langword="null"/>。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>零拷贝语义</b>：该资源通常是 GPU 纹理（<see cref="IGpuTextureResource"/>），
+    /// 由 demuxer 在读样阶段直接从原生 DXGI/硬件表面提取，无系统内存往返。</para>
+    /// <para><b>所有权</b>：默认由本 packet 拥有，<see cref="Dispose"/> 时级联释放。
+    /// 解码器若要把资源转交给 <c>VideoFrame</c>，必须调用 <see cref="TakeDecodedFrameResource"/>
+    /// 显式移交所有权，避免 packet 释放时提前销毁仍在渲染管线中的纹理。</para>
+    /// </remarks>
+    public IFrameResource? DecodedFrameResource => _decodedFrameResource;
+
+    /// <summary>
+    /// 是否为"已解码直通" packet（携带 <see cref="DecodedFrameResource"/>）。
+    /// 解码器据此走零拷贝直通分支，跳过自身解码。
+    /// </summary>
+    public bool HasDecodedFrameResource => _decodedFrameResource != null;
 
     /// <summary>是否已释放。</summary>
     public bool IsDisposed => _disposed;
@@ -74,11 +94,16 @@ public sealed class MediaPacket : IDisposable
     /// <param name="sampleRate">音频采样率（直通 packet 用，默认 0）。</param>
     /// <param name="channels">音频声道数（直通 packet 用，默认 0）。</param>
     /// <param name="format">音频采样格式（直通 packet 用，默认 default）。</param>
+    /// <param name="decodedFrameResource">
+    /// 已解码帧资源（可选）。解封装+解码一体后端（MF SourceReader 硬解 / VLC）传入 GPU 纹理或软件帧资源，
+    /// 由本 packet 拥有，除非解码器调用 <see cref="TakeDecodedFrameResource"/> 移交所有权。
+    /// </param>
     public MediaPacket(int trackIndex, ReadOnlyMemory<byte> data,
         TimeSpan timestamp, TimeSpan duration, bool keyFrame,
         IDisposable? dataOwner = null,
         int width = 0, int height = 0, int stride = 0,
-        int sampleRate = 0, int channels = 0, SampleFormat format = default)
+        int sampleRate = 0, int channels = 0, SampleFormat format = default,
+        IFrameResource? decodedFrameResource = null)
     {
         TrackIndex = trackIndex;
         Data = data;
@@ -92,13 +117,27 @@ public sealed class MediaPacket : IDisposable
         SampleRate = sampleRate;
         Channels = channels;
         Format = format;
+        _decodedFrameResource = decodedFrameResource;
     }
 
-    /// <summary>释放底层 buffer（零拷贝路径：原生引用计数减一）。</summary>
+    /// <summary>
+    /// 取走 <see cref="DecodedFrameResource"/> 并移交所有权：调用后本 packet 不再持有该资源，
+    /// <see cref="Dispose"/> 也不会释放它，调用方负责最终释放（通常交由 <c>VideoFrame</c> 持有）。
+    /// </summary>
+    /// <returns>原资源；若本 packet 未携带解码帧资源或已被取走，返回 <see langword="null"/>。</returns>
+    /// <remarks>线程安全：使用 <see cref="Interlocked"/> 交换，重复调用只有首次返回非 null。</remarks>
+    public IFrameResource? TakeDecodedFrameResource()
+        => Interlocked.Exchange(ref _decodedFrameResource, null);
+
+    /// <summary>释放底层 buffer（零拷贝路径：原生引用计数减一）与未被取走的解码帧资源。</summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+
+        // 解码帧资源：若解码器已 TakeDecodedFrameResource 移交，此处为 null 不重复释放
+        var decoded = Interlocked.Exchange(ref _decodedFrameResource, null);
+        decoded?.Dispose();
 
         if (_dataOwner != null)
         {

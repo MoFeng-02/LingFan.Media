@@ -72,6 +72,24 @@ internal delegate int IMFSourceReader_ReadSample(IntPtr self, uint dwStreamIndex
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFSourceReader_GetPresentationAttribute(IntPtr self, uint dwStreamIndex, ref Guid guidAttribute, ref MfPropVariant pvarAttribute);
 
+/// <summary>
+/// IMFSourceReaderEx::GetTransformForStream（<b>绝对槽 16 → slotIndex 13</b>）。
+/// </summary>
+/// <remarks>
+/// <para><b>槽位推导</b>（mfreadwrite.h:681-833 <c>IMFSourceReaderExVtbl</c> 实物顺序，逐条核对）：
+/// IUnknown 0~2；IMFSourceReader 部分 GetStreamSelection=3, SetStreamSelection=4, GetNativeMediaType=5,
+/// GetCurrentMediaType=6, SetCurrentMediaType=7, SetCurrentPosition=8, ReadSample=9, Flush=10,
+/// GetServiceForStream=11, GetPresentationAttribute=12；Ex 自有 SetNativeMediaType=13,
+/// AddTransformForStream=14, RemoveAllTransformsForStream=15, <b>GetTransformForStream=16</b>。
+/// <c>MfVTable.Get</c> 的 slotIndex = 绝对槽 − 3 ⇒ 13。</para>
+/// <para><b>用途</b>：枚举 SourceReader 为某条流实际建立的 MFT 链（dwTransformIndex 从 0 递增，
+/// 越界返回 <c>MF_E_INVALIDINDEX</c>）。这是唯一能证伪「D3D_MANAGER 设了但没被采纳」的手段。</para>
+/// <para>🔴 <c>ppTransform</c> 为 out 引用，调用方必须 <see cref="Marshal.Release"/> 配对（R5 COM 配对铁律）。</para>
+/// </remarks>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFSourceReaderEx_GetTransformForStream(IntPtr self, uint dwStreamIndex, uint dwTransformIndex,
+    out Guid pGuidCategory, out IntPtr ppTransform);
+
 // ── IMFMediaType（继承 IMFAttributes 30 方法（slotIndex 0~29，其中 GetUINT32=4, GetUINT64=5, GetGUID=7）；
 //     自有方法：GetMajorType=30, IsCompressedFormat=31, IsEqual=32, GetRepresentation=33, FreeRepresentation=34）──
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -103,6 +121,18 @@ internal delegate int IMFMediaBuffer_GetCurrentLength(IntPtr self, out uint pcbC
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFMediaBuffer_SetCurrentLength(IntPtr self, uint cbCurrentLength);
 
+// ── IMF2DBuffer2（mfobjects.h:1667 vtable 顺序：QI/AddRef/Release + Lock2D(3)/Unlock2D(4)/GetScanline0AndPitch(5)/
+//     IsContiguousFormat(6)/GetContiguousLength(7)/ContiguousCopyTo(8)/ContiguousCopyFrom(9)/Lock2DSize(10)/Copy2DTo(11)）
+//   注：IMF2DBuffer 自身继承 IUnknown（不继承 IMFMediaBuffer！），故 vtable 头 3 槽仍是 IUnknown 自身方法。
+//   Lock2D 是 IMF2DBuffer 第一方法（槽 3 → slotIndex 0），Unlock2D 第二（槽 4 → slotIndex 1）。
+//   🔴 2026-08-07 A 方案半 DXVA 治本：MS H264 MFT 把帧读回 Direct3DSurface9-backed 2D 内存（实际 pitch 16 对齐），
+//   必须 Lock2D 取真值 pitch + scanline0 逐行拷贝，否则按紧凑 stride 拷贝出现横纹错位（已实测 AMD VendorId=0x1002）。
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMF2DBuffer2_Lock2D(IntPtr self, out IntPtr ppbScanline0, out int plPitch);
+
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMF2DBuffer2_Unlock2D(IntPtr self);
+
 // ── IMFAttributes（继承 IUnknown；slotIndex 按 mfobjects.idl 声明顺序：GetItem=0, GetItemType=1, CompareItem=2, Compare=3,
 //     GetUINT32=4, GetUINT64=5, GetDouble=6, GetGUID=7, GetStringLength=8, GetString=9, GetAllocatedString=10,
 //     GetBlobSize=11, GetBlob=12, GetAllocatedBlob=13, GetUnknown=14, SetItem=15, DeleteItem=16, DeleteAllItems=17,
@@ -120,6 +150,14 @@ internal delegate int IMFAttributes_SetGUID(IntPtr self, ref Guid guidKey, ref G
 
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_SetBlob(IntPtr self, IntPtr guidKey, IntPtr pbBuf, uint cbBufSize);
+
+/// <summary>IMFAttributes::SetUnknown（slotIndex 24）。
+/// SDK 实物 mfobjects.h：<c>HRESULT SetUnknown(THIS, _In_ REFGUID guidKey, _In_opt_ IUnknown *pUnknown)</c>。
+/// 用于把 COM 接口指针存入属性 store —— 本项目用于向 SourceReader 的创建 attributes 挂
+/// <c>MF_SOURCE_READER_D3D_MANAGER = IMFDXGIDeviceManager*</c>（A 方案零拷贝关键）。
+/// 🔴 属性 store 会对传入接口 AddRef（内部持有），调用方仍需释放自己那份引用，切勿因「已交给 MF」就不 Release。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFAttributes_SetUnknown(IntPtr self, ref Guid guidKey, IntPtr pUnknown);
 
 /// <summary>IMFAttributes::DeleteItem（slotIndex 16）。用于协商失败后剔除过度约束的属性再重试。</summary>
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -145,6 +183,12 @@ internal delegate int IMFActivate_ActivateObject(IntPtr self, ref Guid riid, out
 /// 「原生向调用方传入 buffer 大块写入（如 42 字节 SEQ_HEADER）静默 AV 退出」的路径。调用方须 Marshal.FreeCoTaskMem 释放。</summary>
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMFAttributes_GetAllocatedBlob(IntPtr self, IntPtr guidKey, out IntPtr ppBuf, out uint pcbSize);
+
+/// <summary>IMFAttributes::GetAllocatedString（slotIndex 10）。AOT 安全版：原生 CoTaskMemAlloc 出 WCHAR* 并回传指针+字符数，
+/// 避免 GetString 由调用方递 buffer（与 GetBlob 同类的 AOT 静默 AV 风险）。调用方须 Marshal.FreeCoTaskMem 释放。
+/// 仅用于 MFT 身份取证（FRIENDLY_NAME / HARDWARE_URL），非热路径。</summary>
+[UnmanagedFunctionPointer(CallingConvention.Winapi)]
+internal delegate int IMFAttributes_GetAllocatedString(IntPtr self, ref Guid guidKey, out IntPtr ppwszValue, out uint pcchLength);
 
 // ── IMFTransform（IUnknown 之后，vtable 顺序见 Windows SDK mftransform.h；下列数字为 MfVTable.Get 的 slotIndex）。
 //    注意含 GetStreamIDs(2) 与 AddInputStreams(9) 两个方法（早期头注漏数其中之一，致从 SetInputType 起全体 −1，已据 mftransform.h 校正）：

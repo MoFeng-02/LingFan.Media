@@ -8,6 +8,7 @@ using LingFan.Media.Formats;
 using LingFan.Media.Sources;
 using LingFan.Media.Sources.Security;
 using LingFan.Media.Video;
+using LingFan.Media.Playback;
 using Microsoft.Extensions.Options;
 
 namespace LingFan.Media.Extensions;
@@ -20,12 +21,12 @@ namespace LingFan.Media.Extensions;
 /// <para><b>生命周期模型</b>：</para>
 /// <para>Infrastructure（Singleton）：无状态工厂 / 共享资源。</para>
 /// <para>- <see cref="IMediaStreamFactory"/> → <see cref="MediaStreamFactory"/>（持有 <c>IHttpClientFactory</c>）</para>
-/// <para>- <see cref="IMediaDemuxerFactory"/> → <see cref="Formats.DemuxerFactory"/>（被 <c>AddFFmpeg()</c> 覆盖）</para>
+/// <para>- <see cref="IMediaDemuxerFactory"/> → 由各后端 <c>AddXxx()</c> 经 TryAddEnumerable 集合注册（不再默认注册，支持多后端并存回退）</para>
 /// <para>- <see cref="IMediaPlayerFactory"/> → <see cref="MediaPlayerFactory"/></para>
 /// <para>Session（Transient）：仅注册 <see cref="IMediaPlayer"/>，内部组件由 Factory 手动 new 不走 DI。</para>
 /// <para><b>以下工厂由各子模块扩展方法注册（不在 AddLingFanMedia 中）</b>：</para>
-/// <para>- <c>AddFFmpeg()</c> → <see cref="IVideoDecoderFactory"/> / <see cref="IAudioDecoderFactory"/> /
-/// <see cref="ISubtitleDecoderFactory"/> / <see cref="IMediaDemuxerFactory"/>（覆盖默认）</para>
+/// <para>- <c>AddFFmpeg()</c> / <c>AddMediaFoundation()</c> / <c>AddVLC()</c> → 各以 TryAddEnumerable 集合注册
+/// <see cref="IMediaDemuxerFactory"/> / <see cref="IVideoDecoderFactory"/> / <see cref="IAudioDecoderFactory"/> / <see cref="ISubtitleDecoderFactory"/>（可多后端并存，按注册顺序回退）</para>
 /// <para>- <c>AddD3D11Renderer()</c> → <see cref="IVideoRendererFactory"/></para>
 /// <para>- <c>AddWasapiOutput()</c> → <see cref="IAudioOutputFactory"/></para>
 /// <para>此方法为同步配置（config 分类），无 I/O、无异步。</para>
@@ -54,6 +55,10 @@ public static class ServiceCollectionExtensions
         Action<MediaOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        // 通用 Lazy<T> 解析支持：MS DI 默认不自动解析 Lazy<T>（仅集合类型）。
+        // 注册后 Lazy<T>.Value 才延迟解析 T，用于把后端原生初始化延迟到 Open（宪法纪律）。
+        services.AddLazySupport();
 
         var options = new MediaOptions();
         configure?.Invoke(options);
@@ -97,8 +102,8 @@ public static class ServiceCollectionExtensions
         // 媒体流工厂（Singleton，持有 IHttpClientFactory 引用）
         services.AddSingleton<IMediaStreamFactory, MediaStreamFactory>();
 
-        // 解封装工厂（Singleton，被 AddFFmpeg() 覆盖为 FFmpegDemuxerFactory）
-        services.AddSingleton<IMediaDemuxerFactory, DemuxerFactory>();
+        // 解封装工厂不再在此默认注册：由各后端 AddXxx() 经 TryAddEnumerable 集合注册，
+        // 中间件按 DI 注册顺序做运行时回退。未注册任何后端时 Create 会在 Open 时抛 MediaBackendUnsupportedException。
 
         // 播放器工厂注册见下方（在构建器创建后，透传宿主配置的后处理链与重置钩子）。
 
@@ -132,13 +137,14 @@ public static class ServiceCollectionExtensions
         // （V2-06 C5/C6 / V2-07 / V2-08.1）。未配置时 transforms/reset 为 null → V1 完全兼容。
         // 工厂委托在首次解析 IMediaPlayerFactory 时执行，此时所有 AddXxx 链式调用（含 WithAudioPipeline/WithVideoPipeline）已完成，
         // 故可安全读取 builder 中的宿主配置。
-        services.AddSingleton<IMediaPlayerFactory>(sp =>
+        // 核心 composer（keyed "composer"）：保留原构造逻辑，供回退中间件在选定后端组后调用其 Create(...) 重载建 Session。
+        services.AddKeyedSingleton<IMediaPlayerFactory>("composer", (sp, key) =>
         {
             var streamFactory = sp.GetRequiredService<IMediaStreamFactory>();
-            var demuxerFactory = sp.GetRequiredService<IMediaDemuxerFactory>();
-            var videoDecoderFactory = sp.GetRequiredService<IVideoDecoderFactory>();
-            var audioDecoderFactory = sp.GetRequiredService<IAudioDecoderFactory>();
-            var subtitleDecoderFactory = sp.GetService<ISubtitleDecoderFactory>();
+            var demuxerFactories = sp.GetServices<IMediaDemuxerFactory>();
+            var videoDecoderFactories = sp.GetServices<IVideoDecoderFactory>();
+            var audioDecoderFactories = sp.GetServices<IAudioDecoderFactory>();
+            var subtitleDecoderFactories = sp.GetServices<ISubtitleDecoderFactory>();
             var videoRendererFactory = sp.GetRequiredService<IVideoRendererFactory>();
             var audioOutputFactory = sp.GetRequiredService<IAudioOutputFactory>();
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
@@ -152,11 +158,18 @@ public static class ServiceCollectionExtensions
             var audioTransformsReset = builder.AudioTransformsReset;
 
             return new MediaPlayerFactory(
-                streamFactory, demuxerFactory, videoDecoderFactory, audioDecoderFactory,
-                subtitleDecoderFactory, videoRendererFactory, audioOutputFactory, loggerFactory,
+                streamFactory, demuxerFactories, videoDecoderFactories, audioDecoderFactories,
+                subtitleDecoderFactories, videoRendererFactory, audioOutputFactory, loggerFactory,
                 playerOptions,
                 videoTransforms, audioTransforms, videoTransformsReset, audioTransformsReset);
         });
+
+        // 回退中间件（契约纯净，仅依赖 Abstractions + DI.Abstractions）：同时以 IMediaPlayerFactory（对外调度）
+        // 与 IBackendRegistry（只读检视后端组）两个契约对外。两者必须指向同一 Singleton 实例——
+        // 否则会解析出两个对象图、各持一份回退 Cache，导致「命中缓存」语义失效。
+        services.AddSingleton<BackendFallbackMediaPlayerFactory>();
+        services.AddSingleton<IMediaPlayerFactory>(sp => sp.GetRequiredService<BackendFallbackMediaPlayerFactory>());
+        services.AddSingleton<IBackendRegistry>(sp => sp.GetRequiredService<BackendFallbackMediaPlayerFactory>());
 
         return builder;
     }

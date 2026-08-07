@@ -14,6 +14,7 @@
     <ProjectReference Include="..\LingFan.Media.Formats\LingFan.Media.Formats.csproj" />
     <ProjectReference Include="..\LingFan.Media.Video\LingFan.Media.Video.csproj" />
     <ProjectReference Include="..\LingFan.Media.Audio\LingFan.Media.Audio.csproj" />
+    <ProjectReference Include="..\LingFan.Media.Playback\LingFan.Media.Playback.csproj" />
   </ItemGroup>
 
 </Project>

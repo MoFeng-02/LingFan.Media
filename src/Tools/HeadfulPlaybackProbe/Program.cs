@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using LingFan.Media.Abstractions;
+using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.MediaFoundation;
 using LingFan.Media.Consumers;
 using LingFan.Media.Extensions;
@@ -164,6 +165,12 @@ internal static class Program
         services.AddSingleton<ILoggerFactory>(loggerFactory);
         // 🔴 AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
         // 必须接在 builder 链上调，不能对 ServiceCollection 直接调。捕获 builder 以便后续手动注册 + 扩展调用。
+        // 🔴 后端注册顺序 = 运行时回退优先级：MF → FFmpeg。
+        //    MF 只经系统 MFT 支持 H264/H265，遇 VP9/AV1（.webm）会在 OpenAsync 判定 Unknown 直接失败；
+        //    没有下家时整条链就是「没有已注册的后端能够打开该媒体源」——这正是有头探针放 webm 会 FAIL 的原因。
+        //    补 FFmpeg 作下家后，MP4/H264 仍由 MF 命中（继续用于 DXVA 零拷贝取证），WebM 自动落到 FFmpeg。
+        //    VLC 不在此注册：它需要 libvlc 原生（VideoLAN.LibVLC.Windows，百 MB 级）且要在 Main 里前置 PATH，
+        //    会把这个「MF 零拷贝诊断探针」拖重；VLC 有头验证走专用的 VlcHeadfulPlaybackProbe。
         var builder = services.AddLingFanMedia().AddMediaFoundation(o =>
         {
             // 🔴 诊断开关：强制软件解码，使帧为 CPU SoftwareFrameResource（NV12），
@@ -173,6 +180,12 @@ internal static class Program
                 o.EnableHardwareDecoding = false;
                 o.EnableDxva = false;
             }
+        })
+        .AddFFmpeg(o =>
+        {
+            // --software 同样传导给回退后端，保证「强制软解」在哪个后端命中都成立。
+            if (softwareDecode)
+                o.HardwareAcceleration = false;
         });
 
         // —— 视频侧 ——

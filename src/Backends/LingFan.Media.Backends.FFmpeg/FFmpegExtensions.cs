@@ -1,6 +1,7 @@
 using LingFan.Media.Backends.FFmpeg.Decoders;
 using LingFan.Media.Backends.FFmpeg.Demuxer;
 using LingFan.Media.Extensions;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LingFan.Media.Backends.FFmpeg;
 
@@ -30,29 +31,21 @@ public static class FFmpegExtensions
         var options = new FFmpegOptions();
         configure?.Invoke(options);
 
-        // 设置原生库路径（如果指定）
-        if (!string.IsNullOrEmpty(options.FFmpegLibraryPath))
-        {
-            FFmpegBackend.SetLibraryPath(options.FFmpegLibraryPath!);
-        }
-
-        // 设置 FFmpeg 日志级别
-        unsafe
-        {
-            ffmpeg.av_log_set_level(options.LogLevel);
-        }
-
         // 注册 FFmpegOptions（Singleton）：宿主可在运行时解析并设置 MediaCodecSurface（V2-17 B9 注入点）
         builder.Services.AddSingleton(options);
 
-        // 注册 FFmpeg 后端入口（Singleton，持有全局初始化状态）
+        // 注册 FFmpeg 后端入口（Singleton，持有全局初始化状态）。
+        // 🔴 此处【不】调用任何 ffmpeg.* 原生 API——原生初始化延迟到 FFmpegBackend 首次构造时执行，
+        // 以保持 AddFFmpeg() 注册阶段是纯 DI、不要求 ffmpeg 原生 DLL 在注册期就位。
+        // 只有真正回退用到 FFmpeg 后端（首次解析 FFmpegBackend）时才需要原生 DLL 在场，
+        // 符合“开箱即用 + 不侵入”：注册一个后端 ≠ 马上要它的 native 库（MF 直接支持的源绝不触碰 ffmpeg）。
         builder.Services.AddSingleton<FFmpegBackend>();
 
-        // 注册工厂（Singleton，无状态）
-        builder.Services.AddSingleton<IMediaDemuxerFactory, FFmpegDemuxerFactory>();
-        builder.Services.AddSingleton<IVideoDecoderFactory, FFmpegVideoDecoderFactory>();
-        builder.Services.AddSingleton<IAudioDecoderFactory, FFmpegAudioDecoderFactory>();
-        builder.Services.AddSingleton<ISubtitleDecoderFactory, FFmpegSubtitleDecoderFactory>();
+        // 注册工厂（集合注册 TryAddEnumerable：支持多后端并存、按 DI 注册顺序参与运行时回退）
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IMediaDemuxerFactory, FFmpegDemuxerFactory>());
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IVideoDecoderFactory, FFmpegVideoDecoderFactory>());
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IAudioDecoderFactory, FFmpegAudioDecoderFactory>());
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ISubtitleDecoderFactory, FFmpegSubtitleDecoderFactory>());
 
         return builder;
     }

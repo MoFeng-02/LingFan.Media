@@ -119,6 +119,14 @@ internal static class MFConstants
     // MFTEnumEx 返回的 IMFActivate 上取 CLSID 的属性键（mftransform.h:1644 权威值）
     internal static readonly Guid MFT_TRANSFORM_CLSID_Attribute = new(0x6821c42b, 0x65a4, 0x4e82, 0x99, 0xbc, 0x9a, 0x88, 0x20, 0x5e, 0xcd, 0xc);
 
+    // MFT 身份取证（用于判定 SourceReader 内部到底选了「厂商硬件 MFT」还是「微软软件 MFT」）：
+    // MFT_FRIENDLY_NAME_Attribute（mftransform.h 权威值 {314FFBAE-5B41-4C95-9C19-4E7D586FACE3}）—— 人类可读名，WCHAR*
+    internal static readonly Guid MFT_FRIENDLY_NAME_Attribute = new(0x314ffbae, 0x5b41, 0x4c95, 0x9c, 0x19, 0x4e, 0x7d, 0x58, 0x6f, 0xac, 0xe3);
+    // MFT_ENUM_HARDWARE_URL_Attribute（mftransform.h 权威值 {2FB866AC-B078-4942-AB6C-003D05CDA674}）
+    // 🔴 官方判据：该属性【存在即为硬件 MFT（MFT_ENUM_FLAG_HARDWARE）】，不存在即软件 MFT。
+    //    这是区分「AMD/NV 厂商硬件 MFT」与「微软内置软件 MFT（虽 D3D11_AWARE=1 但走 DXVA 后读回）」的唯一可靠依据。
+    internal static readonly Guid MFT_ENUM_HARDWARE_URL_Attribute = new(0x2fb866ac, 0xb078, 0x4942, 0xab, 0x6c, 0x00, 0x3d, 0x05, 0xcd, 0xa6, 0x74);
+
     // IMFTransform IID（mftransform.h 权威值 {bf94c121-5b05-4e6f-8000-ba598961414d}；
     // 本机运行时验证（2026-07-29）：CoCreateInstance + 全 vtable 槽位 S_OK。⚠️ 早期误写 ...8009-456E31185733（臆测值），勿回退）
     internal static readonly Guid IID_IMFTransform = new(0xbf94c121, 0x5b05, 0x4e6f, 0x80, 0x00, 0xba, 0x59, 0x89, 0x61, 0x41, 0x4d);
@@ -142,10 +150,34 @@ internal static class MFConstants
     internal static readonly Guid IID_IMFMediaBuffer = new(0x045fa593, 0x8799, 0x42b8, 0xbc, 0x8d, 0x89, 0x68, 0xc6, 0x45, 0x35, 0x07);
     // IMF2DBuffer（mfobjects.h 权威值 {7DC9D5F9-9ED9-44EC-9BBF-0600BB589F56}）
     internal static readonly Guid IID_IMF2DBuffer = new(0x7dc9d5f9, 0x9ed9, 0x44ec, 0x9b, 0xbf, 0x06, 0x00, 0xbb, 0x58, 0x9f, 0x56);
+
+    // ── SourceReader 内部 MFT 链取证（2026-08-07，零拷贝失效根因定位）────────────────────────
+    // IMFSourceReaderEx（mfreadwrite.h:644 MIDL_INTERFACE 权威值 {7B981CF0-560E-4116-9875-B099895F23D7}）
+    // 🔴 唯一能看穿 SourceReader「黑盒」的接口：GetTransformForStream 可枚举它为某条流实际插入的 MFT 链。
+    //    宪法「S_OK≠被接受：能力自报+行为副作用双判据」在此落地——我们设了 D3D_MANAGER 且全部返回 S_OK，
+    //    但样本仍非 DXGI，必须直接查证 SourceReader 到底建了什么拓扑（是否偷插 Video Processor 把帧拉回内存）。
+    internal static readonly Guid IID_IMFSourceReaderEx = new(0x7b981cf0, 0x560e, 0x4116, 0x98, 0x75, 0xb0, 0x99, 0x89, 0x5f, 0x23, 0xd7);
+    // MFT_CATEGORY_VIDEO_DECODER 已在上方（第 104 行附近，MFTEnum 用）定义，此处直接复用，勿重复声明。
+    // MFT_CATEGORY_VIDEO_PROCESSOR（mfapi.h:1907 权威值 {302EA3FC-AA5F-47F9-9F7A-C2188BB16302}）
+    // 🔴 出现在链上即为零拷贝头号杀手：VP 会把 DXGI 表面拉回系统内存做格式/尺寸转换。
+    internal static readonly Guid MFT_CATEGORY_VIDEO_PROCESSOR = new(0x302ea3fc, 0xaa5f, 0x47f9, 0x9f, 0x7a, 0xc2, 0x18, 0x8b, 0xb1, 0x63, 0x02);
+    // MFT_CATEGORY_VIDEO_EFFECT（mfapi.h:1882 权威值 {12E17C21-532C-4A6E-8A1C-40825A736397}）
+    internal static readonly Guid MFT_CATEGORY_VIDEO_EFFECT = new(0x12e17c21, 0x532c, 0x4a6e, 0x8a, 0x1c, 0x40, 0x82, 0x5a, 0x73, 0x63, 0x97);
+    // IMF2DBuffer2（mfobjects.h:1642 MIDL_INTERFACE 权威值 {33AE5EA6-4316-436F-8DDD-D73D22F829EC}）
+    // 🔴 2026-08-07 A 方案半 DXVA 治本：MS H264 MFT 半 DXVA 时把帧读回 Direct3DSurface9-backed 2D 内存，
+    //    实际 pitch 是 16 字节对齐（如 1080→1088），用 ConvertToContiguousBuffer 拿不到真值→按紧凑 stride 拷贝→画面横纹错位。
+    //    必须 QI 此 IID 后 Lock2D 取真值 stride 与 scanline0，逐行拷贝到紧凑布局，下游渲染器零分支。
+    internal static readonly Guid IID_IMF2DBuffer2 = new(0x33ae5ea6, 0x4316, 0x436f, 0x8d, 0xdd, 0xd7, 0x3d, 0x22, 0xf8, 0x29, 0xec);
     // MF_MT_VIDEO_NOMINAL_RANGE（mfapi.h 权威值 {C21B8EE5-B956-4071-917B-3894AA8DB48B}）
     internal static readonly Guid MF_MT_VIDEO_NOMINAL_RANGE = new(0xc21b8ee5, 0xb956, 0x4071, 0x91, 0x7b, 0x38, 0x94, 0xaa, 0x8d, 0xb4, 0x8b);
-    // MF_MT_DEFAULT_STRIDE（mfapi.h 权威值 {644B4424-1063-42B4-B200-E6970237AD6B}）
-    internal static readonly Guid MF_MT_DEFAULT_STRIDE = new(0x644b4424, 0x1063, 0x42b4, 0xb2, 0x00, 0xe6, 0x97, 0x02, 0x37, 0xad, 0x6b);
+    // MF_MT_DEFAULT_STRIDE {644B4E48-1E02-4516-B0EB-C01CA9D49AC6}（UINT32 存 INT32，可为负=bottom-up；单位字节）
+    // 🔴 2026-08-07 逐字节核对修正：原值写作 {644B4424-1063-42B4-B200-E6970237AD6B}（注释还标着"mfapi.h 权威值"），
+    //    但该 GUID 在整个 Windows SDK 头文件里【根本不存在】——属臆造。以本机实物为准：
+    //    E:\Windows Kits\10\Include\10.0.26100.0\um\mfapi.h:3276 DEFINE_GUID(MF_MT_DEFAULT_STRIDE,
+    //    0x644b4e48, 0x1e02, 0x4516, 0xb0, 0xeb, 0xc0, 0x1c, 0xa9, 0xd4, 0x9a, 0xc6);
+    //    旧值只被 DXVA 深度诊断字符串引用 ⇒ 表现为 "DefaultStride=缺失" 恒真（静默失效，非崩溃），
+    //    但 A 方案的 NV12 CPU 回落要靠它算行跨度，写错会直接花屏，故必须修。
+    internal static readonly Guid MF_MT_DEFAULT_STRIDE = new(0x644b4e48, 0x1e02, 0x4516, 0xb0, 0xeb, 0xc0, 0x1c, 0xa9, 0xd4, 0x9a, 0xc6);
 
     // ── H264 DXVA 设备能力真值探测（决定性判据：区分「半 DXVA 读回」与「真 DXGI 零拷贝」）──
     // ID3D11VideoDevice（d3d11.h:13727 MIDL_INTERFACE 权威值 {10EC4D5B-975A-4689-B9E4-D0AAC30FE333}）
@@ -182,6 +214,45 @@ internal static class MFConstants
 
     // MFT 设置类型标志
     internal const int MFT_SET_TYPE_TEST_ONLY = 0x00000001;
+
+    // ══════════════════════════════════════════════════════════════════════════════════
+    // ── SourceReader 自带硬解 + DXGI 出样（A 方案：官方验证的 MF 零拷贝正路）所需属性键 ──
+    //
+    // 背景：直连 MFT（MFTEnumEx → ActivateObject → SET_D3D_MANAGER → ProcessInput/Output）在部分
+    // GPU/驱动组合上会在内部 CreateVideoDecoder 阶段静默回落软件解码 —— MFT 仍报 PROVIDES_SAMPLES=True，
+    // 但每帧 buffer QI(IMFDXGIBuffer) 得 E_NOINTERFACE（本机 mp4/H264 实测「第二层半 DXVA」）。
+    // 官方推荐路径是让 IMFSourceReader 自己承载解码 MFT：在 MFCreateSourceReaderFromURL 的 attributes 上
+    // 挂 MF_SOURCE_READER_D3D_MANAGER + MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS，SourceReader 会替我们
+    // 完成「选 MFT → 发 SET_D3D_MANAGER → 分配 DXGI 表面池」的全套编排，ReadSample 直接吐 DXGI 纹理样本。
+    //
+    // 🔴 全部 GUID 已逐字节比对本机 SDK 实物：E:\Windows Kits\10\Include\10.0.26100.0\um\mfreadwrite.h
+    //    （行号见各条注释）。手写 GUID 一律以 SDK 头文件为准，勿凭记忆/臆测。
+    // ══════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>MF_SOURCE_READER_D3D_MANAGER {EC822DA2-E1E9-4B29-A0D8-563C719F5269}（mfreadwrite.h:290）。
+    /// IUnknown 属性：把 <c>IMFDXGIDeviceManager*</c> 交给 SourceReader，令其内部解码 MFT 在该 D3D11 设备上
+    /// 分配输出表面 ⇒ ReadSample 返回的 IMFSample 其 buffer 可 QI 出 IMFDXGIBuffer（真 GPU 纹理，零拷贝）。
+    /// 必须用 <c>IMFAttributes::SetUnknown</c>（slotIndex 24）写入，不能用 SetUINT64 传裸指针。</summary>
+    internal static readonly Guid MF_SOURCE_READER_D3D_MANAGER = new(0xec822da2, 0xe1e9, 0x4b29, 0xa0, 0xd8, 0x56, 0x3c, 0x71, 0x9f, 0x52, 0x69);
+
+    /// <summary>MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS {A634A91C-822B-41B9-A494-4DE4643612B0}（mfreadwrite.h:2071）。
+    /// UINT32：非 0 允许 SourceReader/SinkWriter 使用硬件 MFT（GPU 厂商解码器）。
+    /// 不设时只用软件 MFT ⇒ 即便挂了 D3D manager 也拿不到 DXGI 表面。</summary>
+    internal static readonly Guid MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS = new(0xa634a91c, 0x822b, 0x41b9, 0xa4, 0x94, 0x4d, 0xe4, 0x64, 0x36, 0x12, 0xb0);
+
+    /// <summary>MF_SOURCE_READER_DISABLE_DXVA {AA456CFD-3943-4A1E-A77D-1838C0EA2E35}（mfreadwrite.h:291）。
+    /// UINT32：1 = 禁用 DXVA（强制软解）。零拷贝路径显式写 0 表达意图（默认亦为 0），
+    /// 软解兜底重开 SourceReader 时写 1 彻底关掉硬件路径，避免驱动半吊子回落。</summary>
+    internal static readonly Guid MF_SOURCE_READER_DISABLE_DXVA = new(0xaa456cfd, 0x3943, 0x4a1e, 0xa7, 0x7d, 0x18, 0x38, 0xc0, 0xea, 0x2e, 0x35);
+
+    /// <summary>MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING {0F81DA2C-B537-4672-A8B2-A681B17307A3}（mfreadwrite.h:296）。
+    /// UINT32：允许 SourceReader 插入 Video Processor MFT 做格式/尺寸转换。
+    /// ⚠️ 零拷贝路径**不要**开启：VPU 转换会把样本落到系统内存，破坏 DXGI 直通（仅软解兜底路径才考虑）。</summary>
+    internal static readonly Guid MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING = new(0x0f81da2c, 0xb537, 0x4672, 0xa8, 0xb2, 0xa6, 0x81, 0xb1, 0x73, 0x07, 0xa3);
+
+    /// <summary>MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING {FB394F3D-CCF1-42EE-BBB3-F9B845D5681D}（mfreadwrite.h:294）。
+    /// UINT32：基础色彩转换开关。同样会破坏零拷贝，仅软解兜底路径可用。</summary>
+    internal static readonly Guid MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING = new(0xfb394f3d, 0xccf1, 0x42ee, 0xbb, 0xb3, 0xf9, 0xb8, 0x45, 0xd5, 0x68, 0x1d);
 
     // MF_MT_FRAME_SIZE 编码：(width << 32) | height（UINT64）
     internal static ulong MakeFrameSize(int width, int height) => ((ulong)(uint)width << 32) | (uint)height;

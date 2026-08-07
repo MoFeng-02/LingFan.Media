@@ -71,6 +71,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // 音频就绪后首帧与音频同刻出现 → 无缝。首播时预滚动瞬时满足，零回归。
     private volatile bool _audioReadySignaled;   // 由 MediaPipelineHost 在音频设备启动后置位（跨线程写）
     private volatile bool _audioGateOpened;      // 呈现线程已通过门控（Start 复位，之后仅呈现线程读写）
+    private volatile bool _firstFramePresented;  // 首帧已真正上屏（ProcessFrame 首次 Present 后置位，供 A/V 启动对齐）
+    private TaskCompletionSource<bool>? _firstFramePresentedTcs;  // 音频编排等待点（§33 补强，Start 重建）
     // 预滚动帧数下限：等帧队列预热到该深度再启动音频设备（吸收重播的重定位+解码开销）。
     // 取 2 而非 TargetDepth(6)：够消除首帧空窗即可，等太久会让「点播放到出声」的体感延迟变长。
     private const int VideoPrerollFrames = 2;
@@ -202,6 +204,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         // 🔴 首帧门控复位（§33，仅全新启动/重播路径）：恢复暂停时上方已早退，门控保持已开启不受影响。
         _audioReadySignaled = false;
         _audioGateOpened = false;
+        // 🔴 首帧上屏信号复位（§33 补强）：每次全新启动/重播重建 TCS（TCS 不可重置），
+        // 供 MediaPipelineHost 在启动音频前等待「视频首帧已真正上屏」。
+        _firstFramePresented = false;
+        _firstFramePresentedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _decodeDone = false;
         _eosReached = false;
         // 🔴 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
@@ -282,6 +288,21 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// 幂等：重复调用无副作用；<see cref="Start"/> 会在下一轮全新启动时复位。
     /// </remarks>
     public void SignalAudioReady() => _audioReadySignaled = true;
+
+    /// <summary>
+    /// 等待视频首帧真正上屏（<see cref="ProcessFrame"/> 首次 Present 调用返回）。供
+    /// <see cref="MediaPipelineHost.StartAsync"/> 在启动音频前 await，使音频 WASAPI 出声不早于
+    /// 视频首帧上屏（A/V 启动对齐，§33 补强）。带超时兜底，绝不阻塞播放。
+    /// </summary>
+    /// <remarks>无视频轨（<c>VideoPipeline</c> 为 null）或被提前释放时，调用方判空不会走到这里。</remarks>
+    public async Task WaitForFirstFramePresentedAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        if (_firstFramePresented) return;
+        var tcs = _firstFramePresentedTcs;
+        if (tcs == null) return;
+        try { await Task.WhenAny(tcs.Task, Task.Delay(timeout, cancellationToken)); }
+        catch (OperationCanceledException) { }
+    }
 
     /// <summary>
     /// 暂停管线（阻塞读取）。
@@ -784,6 +805,13 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 _videoFrameSink(frame);
             else
                 _renderer.Present(frame);
+            // 🔴 首帧已真正提交上屏：通知 A/V 启动编排等待点（§33 补强），
+            // 使音频 WASAPI 启动不早于视频首帧上屏 → 根治「声音比视频先出」。
+            if (!_firstFramePresented)
+            {
+                _firstFramePresented = true;
+                _firstFramePresentedTcs?.TrySetResult(true);
+            }
         }
         finally { ReturnFrame(frame); } // V2: Present 后归还到池
     }

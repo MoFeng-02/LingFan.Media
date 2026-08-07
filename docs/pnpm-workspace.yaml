@@ -1,0 +1,4 @@
+# pnpm 11 默认拦截依赖的 build 脚本（esbuild 的 postinstall）。
+# VitePress 依赖 esbuild，必须放行，否则 `pnpm run build/dev` 会被门禁拒绝。
+allowBuilds:
+  esbuild: true

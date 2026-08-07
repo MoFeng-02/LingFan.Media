@@ -110,12 +110,12 @@ internal static class Program
         bool exclusiveMode = HasFlag(args, "--exclusive");
         bool pollingMode = HasFlag(args, "--polling");
         bool audioWarmup = HasFlag(args, "--audio-warmup");
-        bool fullPlayback = HasFlag(args, "--full");
-        // 🔴 重播验证：headful 下默认启用（需先到达 Ended 才能重播）；--no-replay 可关闭。
-        bool replayTest = fullPlayback && !HasFlag(args, "--no-replay");
+        bool fullPlayback = !HasFlag(args, "--no-full");   // 默认放满全程（--no-full 才截断 12s 采样窗口）
+        // 🔴 重播验证：需显式 --replay 才启用（默认只放满一次，避免默认跑两次让用户困惑）。
+        bool replayTest = fullPlayback && HasFlag(args, "--replay");
         Console.WriteLine($"[VLC-HEADFUL] 测试形态 = {(useHw ? "VLC 内部硬解(D3D11VA)有头(--hw，仍 CPU BGRA32 交付)" : "VLC 软件解码有头(默认)")}");
         Console.WriteLine($"[VLC-HEADFUL] 视频上屏={doVideo} 音频出声={doAudio} " +
-                          $"时钟={((doAudio && !fullPlayback) || (doAudio) ? "真实WASAPI硬件游标(LINGFAN_CLOCK_AUDIO_POS=1)" : "无头软件主时钟")}");
+                          $"时钟={(doAudio ? "真实WASAPI硬件游标(LINGFAN_CLOCK_AUDIO_POS=1)" : "无头软件主时钟")}");
         Console.WriteLine($"[VLC-HEADFUL] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup} Full={fullPlayback} Replay={replayTest}");
         // 🔴 音画同步主时钟（严格锚定根治路径）：接真实 WASAPI 设备时打开 LINGFAN_CLOCK_AUDIO_POS=1，
         // 使 MediaPlayer.cs 的 SetMasterClockProvider 生效 → 主时钟直接读音频设备硬件游标（GetPlaybackPositionDirect），

@@ -1,6 +1,7 @@
 using LingFan.Media.Backends.VLC.Decoders;
 using LingFan.Media.Backends.VLC.Demuxer;
 using LingFan.Media.Extensions;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LingFan.Media.Backends.VLC;
 
@@ -35,10 +36,10 @@ public static class VLCExtensions
         builder.Services.AddSingleton<VLCBackend>();
         builder.Services.AddSingleton(options);
 
-        // 注册工厂（Singleton，无状态）
-        builder.Services.AddSingleton<IMediaDemuxerFactory, VLCDemuxerFactory>();
-        builder.Services.AddSingleton<IVideoDecoderFactory, VLCVideoDecoderFactory>();
-        builder.Services.AddSingleton<IAudioDecoderFactory, VLCAudioDecoderFactory>();
+        // 注册工厂（集合注册 TryAddEnumerable：支持多后端并存、按 DI 注册顺序参与运行时回退）
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IMediaDemuxerFactory, VLCDemuxerFactory>());
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IVideoDecoderFactory, VLCVideoDecoderFactory>());
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IAudioDecoderFactory, VLCAudioDecoderFactory>());
 
         return builder;
     }
