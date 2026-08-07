@@ -96,6 +96,11 @@ internal sealed class WasapiRenderLoop
     private System.Diagnostics.Stopwatch? _startStopwatch;
     private double _calibratedBias;
     private bool _biasLatched;
+    // 🔴 重播（Ended→Playing）主时钟武装标志：音频尚未为本遍播放 Start 前，GetPlaybackPositionDirect 须返回 0
+    // （设备尚未起跑，此时读出的游标是上一遍播放残留的陈旧值）。Resume/BeginStreaming 自动 Start 时经
+    // CaptureStartAnchor 置 true；重播起点经 ResetPlaybackClock 置 false。缺此标志时，重播预滚动/门控窗口
+    // 会沿用第一遍播放的 Start 锚点返回 ~34s，导致重播 PTS=0 首帧被错判「落后 34s → Drop」，画面冻结到 ~10s 才切入。
+    private volatile bool _clockArmed;
     // 注：LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
     // 本音频时钟只暴露纯可闻位置，不再做任何前移补偿。
     private int _sampleRate;
@@ -442,6 +447,11 @@ internal sealed class WasapiRenderLoop
         if (clockPtr == IntPtr.Zero || freq == 0 || getPos is null)
             return TimeSpan.Zero;
 
+        // 🔴 重播（Ended→Playing）主时钟武装：音频尚未为本遍播放 Start 时返回 0，使视频门控窗口内主时钟恒定=0，
+        // 重播 PTS=0 首帧得以立即呈现（否则沿用上一遍锚点 → 返回 ~34s → 首帧被错判落后 → 整段 Drop 直到 ~10s 才追上）。
+        if (!_clockArmed)
+            return TimeSpan.Zero;
+
         // WASAPI 回传 pu64QPCPosition（QPC 计数，100ns ticks），是本次 devicePosition 读数时刻的高精度
         // 时间锚点。用 QPC 插值出「现在」的平滑播放位置，消除音频引擎周期(~10ms)的离散量化阶梯——
         // 之前丢弃该值(out _)导致主时钟按 ~10ms 跳变，直接钉死 WaitUntilDue 的呈现时刻相位（残留墙钟抖动根因）。
@@ -519,9 +529,29 @@ internal sealed class WasapiRenderLoop
         _startStopwatch = System.Diagnostics.Stopwatch.StartNew();
         Volatile.Write(ref _biasLatched, false);
         Volatile.Write(ref _calibratedBias, 0.0);
+        // 🔴 主时钟武装：本遍播放音频已 Start，GetPlaybackPositionDirect 自此返回真实可闻位置。
+        // （重播起点经 ResetPlaybackClock 置 false，确保预滚动/门控窗口内主时钟恒定=0。）
+        _clockArmed = true;
         // 🔴 LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
         // 此处音频时钟保持纯可闻位置，不再做任何前移补偿。
         _logger.LogInformation("[WASAPI-ANCHOR] 启动墙钟基准已记录（用于校准引擎领先偏移）");
+    }
+
+    /// <summary>
+    /// 重播（Ended→Playing）主时钟归零：解除武装并清校准，使 <see cref="GetPlaybackPositionDirect"/>
+    /// 在音频重新 Start 之前恒定返回 0。
+    /// <para><b>根因</b>：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），<c>_startStopwatch</c>
+    /// 持续累计到 ~34s；而重播的视频门控（MediaPipelineHost.StartAsync 第③步 SignalAudioReady）早于音频
+    /// Start（第⑤步），预滚动窗口内同步器据此读到的主时钟是 ~34s 陈旧值，把 PTS=0 重播首帧判为「落后 34s → Drop」，
+    /// 直到解码器把流推进到 ~10s、首帧追上主时钟才切入（日志 present 卡到 10.267 才解冻）。</para>
+    /// <para>本方法在 MediaPlayer 重播分支（SeekAsync 后、StartAsync 前）调用，使该窗口主时钟=0，首帧立即呈现，无缝重播。</para>
+    /// </summary>
+    internal void ResetPlaybackClock()
+    {
+        _clockArmed = false;
+        Volatile.Write(ref _biasLatched, false);
+        Volatile.Write(ref _calibratedBias, 0.0);
+        _startStopwatch?.Stop();
     }
 
     /// <inheritdoc cref="WasapiOutput.Latency"/>

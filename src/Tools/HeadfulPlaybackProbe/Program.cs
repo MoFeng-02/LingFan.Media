@@ -92,10 +92,10 @@ internal static class Program
         bool pollingMode = HasFlag(args, "--polling");
         bool audioWarmup = HasFlag(args, "--audio-warmup");
         bool fullPlayback = HasFlag(args, "--full");
-        // 🔴 边界①重播验证：仅 --full 默认启用（必须先到达 Ended 才能重播），--no-replay 可关闭。
-        // 🔴 临时禁用：同步诊断期间注释掉第二次自动重播（2026-08-04）。
-        //    恢复重播验证时改回：fullPlayback && !HasFlag(args, "--no-replay")
-        bool replayTest = false;
+        bool repeat = HasFlag(args, "--repeat");
+        // 🔴 边界①重播验证：--full 或 --repeat 时默认启用（必须先到达 Ended 才能重播），--no-replay 可关闭。
+        if (repeat) fullPlayback = true;   // --repeat 隐含 --full（重播要求先自然结束）
+        bool replayTest = (fullPlayback || repeat) && !HasFlag(args, "--no-replay");
         Console.WriteLine($"[HEADFUL-WASAPI-MODE] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup} Full={fullPlayback} Replay={replayTest}");
         // 🔴 音频相位诊断：--full 时打开 LINGFAN_AUDIO_DIAG，让 AudioPipeline 打点 ReadAsync/Decode/解码间隙，
         // 定位 headful 断音根因（纯诊断、零架构风险）。须在构建播放器前设置（静态字段只读一次）。
@@ -436,8 +436,8 @@ internal static class Program
             //   (b) 时钟归零、位置回绕到 0（MediaPlayer.PlayAsync 在 Ended 态走 SeekAsync(0)+_clock.Reset/Start 分支）；
             //   (c) 双管线从排干态(_isRunning==false)重启，present 从 0 重新开始累计。
             // 仅 --full 默认启用（需先到达 Ended），可用 --no-replay 关闭。
-            /* [TEMP-DISABLED 2026-08-04] 同步诊断期间注释掉第二次自动重播——
-               恢复时删除本注释块，并把上面 replayTest 改回 fullPlayback && !HasFlag(args, "--no-replay")
+            // 🔴 边界①：重播 Ended→Playing 无缝从头（--repeat/--full 启用）。
+            // 第一次自然结束后立即二次 PlayAsync，验证状态机合法转换、时钟归零、双管线从排干态重启。
             if (replayTest)
             {
                 Console.WriteLine();
@@ -477,7 +477,7 @@ internal static class Program
                                   $"present 增量={replayPresentDelta} Duration={player.Duration:g}");
                 Console.WriteLine($"  [HEADFUL-REPLAY] => {(replayPass ? "PASS" : "FAIL")} " +
                                   $"(state重启={replayStateOk}, 二次呈现≈{replayPresentDelta}{(doVideo ? "" : "[无视频跳过计数]")})");
-            } */
+            }
 
             await player.StopAsync(CancellationToken.None);
         }

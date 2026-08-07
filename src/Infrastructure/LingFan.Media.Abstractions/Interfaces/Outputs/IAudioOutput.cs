@@ -56,6 +56,13 @@ public interface IAudioOutput : IMediaComponent
     /// </summary>
     TimeSpan GetPlaybackPositionDirect() => GetPlaybackPosition();
 
+    /// <summary>
+    /// 重播（Ended→Playing）主时钟归零：音频尚未为本遍播放 Start 前，<see cref="GetPlaybackPositionDirect"/>
+    /// 应返回 0，避免沿用上一遍播放的时钟锚点导致重播首帧被错判为过期而丢弃。
+    /// 默认空实现（无主时钟后端无需处理）；WASAPI 重写为真正的去武装逻辑。
+    /// </summary>
+    void ResetPlaybackClock() { }
+
     /// <summary>当前输出延迟。</summary>
     TimeSpan Latency { get; }
 

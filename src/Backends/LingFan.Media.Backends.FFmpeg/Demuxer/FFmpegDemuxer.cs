@@ -46,6 +46,13 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     private IReadOnlyList<MediaTrack> _tracks = Array.Empty<MediaTrack>();
     private MediaMetadata _metadata = new();
 
+    // 🔴 重播归零诊断（2026-08-07）：SeekAsync 设 _logFirstPacketAfterSeek=true，
+    // ReadPacketCore 在 seek 后首包打印其时间戳，用于确证「回到起点」seek 落点是否已回到 ≈0
+    // （此前 matroska/webm 在 EOF 后 AVSEEK_FLAG_BACKWARD 到 ts=0 会回绕到末关键帧，
+    // 实测 m1.webm 落点≈10.267s → 重播视频冻结 ~10s）。一次性、零架构风险。
+    private bool _logFirstPacketAfterSeek;
+    private long _lastSeekTargetTs;
+
     /// <summary>AVIO 缓冲区大小（字节）。</summary>
     private const int AvioBufferSize = 32768;
 
@@ -292,6 +299,22 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 : TimeSpan.Zero;
             bool keyFrame = (pkt->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
 
+            // 🔴 重播归零诊断（2026-08-07）：SeekAsync 设 _logFirstPacketAfterSeek=true 后，
+            // 这里打印 seek 后首包的时间戳，确证「回到起点」落点已回到 ≈0（而非回绕到末关键帧）。
+            // 一次性消费：打印后即刻复位，不影响后续读取性能。
+            if (_logFirstPacketAfterSeek)
+            {
+                _logFirstPacketAfterSeek = false;
+                _logger.LogInformation(
+                    "[SEEK-DIAG] seek 后首包: stream={Stream} pts={Pts} dts={Dts} key={Key} targetTs={TargetTs} " +
+                    "(pts≈0 表示已正确回到起点；pts≠0 表示回绕到末关键帧)",
+                    pkt->stream_index, timestamp,
+                    pkt->dts != ffmpeg.AV_NOPTS_VALUE
+                        ? TimeSpan.FromTicks((long)(pkt->dts * timeBase * TimeSpan.TicksPerSecond))
+                        : TimeSpan.Zero,
+                    keyFrame, _lastSeekTargetTs);
+            }
+
             return new MediaPacket(pkt->stream_index, data, timestamp, duration, keyFrame, owner);
         }
         finally
@@ -315,6 +338,10 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         ct.ThrowIfCancellationRequested();
 
         // 伪异步：av_seek_frame 为同步 C 调用，Task.Run 仅卸载到线程池。
+        // 标记诊断：下个首包打印时间戳，确证回到起点的落点。
+        long reqTs = (long)(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
+        _lastSeekTargetTs = reqTs;
+        _logFirstPacketAfterSeek = true;
         return await Task.Run(() => SeekCore(position, ct), ct).ConfigureAwait(false);
     }
 
@@ -330,14 +357,29 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         // 转换为 FFmpeg 时间戳（AV_TIME_BASE = 微秒）
         long targetTs = (long)(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
 
-        int ret = ffmpeg.av_seek_frame(fmtCtx, -1, targetTs, ffmpeg.AVSEEK_FLAG_BACKWARD);
+        int ret;
+        if (targetTs <= 0)
+        {
+            // 🔴 重播归零修正（2026-08-07）：matroska/webm 在流末 EOF 后对「ts=0 + AVSEEK_FLAG_BACKWARD」
+            // 会回绕到**末关键帧**（实测 m1.webm 落点≈10.267s 而非 0）→ 重播时解码器从 ~10s 处产出首帧，
+            // 视频比音频(主时钟=0)超前 ~10s，同步器令呈现线程 WaitUntilDue 休眠等主时钟追上 → 画面冻结。
+            // 改用 nearest（flags=0）：落点=最接近 0 的关键帧 = 文件首关键帧@0，杜绝回绕到末关键帧。
+            // 兜底：nearest 仍失败则回退 BACKWARD（至少保证能 seek，由诊断日志暴露落点异常）。
+            ret = ffmpeg.av_seek_frame(fmtCtx, -1, 0, 0);
+            if (ret < 0)
+                ret = ffmpeg.av_seek_frame(fmtCtx, -1, 0, ffmpeg.AVSEEK_FLAG_BACKWARD);
+        }
+        else
+        {
+            ret = ffmpeg.av_seek_frame(fmtCtx, -1, targetTs, ffmpeg.AVSEEK_FLAG_BACKWARD);
+        }
         if (ret < 0)
         {
             _logger.LogWarning("av_seek_frame 失败: {Error} (code={Ret})", GetErrorString(ret), ret);
             return false;
         }
 
-        _logger.LogDebug("Seek 到 {Position}", position);
+        _logger.LogDebug("Seek 到 {Position}（归零修正={IsRewind}）", position, targetTs <= 0);
         return true;
     }
 

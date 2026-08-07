@@ -5,6 +5,7 @@ using System.Net.Security;
 using LingFan.Media.Audio;
 using LingFan.Media.Core;
 using LingFan.Media.Formats;
+using LingFan.Media.Formats.Detection;
 using LingFan.Media.Sources;
 using LingFan.Media.Sources.Security;
 using LingFan.Media.Video;
@@ -101,6 +102,11 @@ public static class ServiceCollectionExtensions
 
         // 媒体流工厂（Singleton，持有 IHttpClientFactory 引用）
         services.AddSingleton<IMediaStreamFactory, MediaStreamFactory>();
+
+        // 格式探测器（契约 IFormatDetector → 具体 FormatDetector，位于 LingFan.Media.Formats）：
+        // 供回退调度器在 Open 前轻量探测 (容器, 视频编码) 以提前命中「格式级记忆」、跳过已知坏后端。
+        // 高层中间件（LingFan.Media.Playback）仅依赖 IFormatDetector 契约，不引用具体实现，严守依赖倒置。
+        services.AddSingleton<IFormatDetector, FormatDetector>();
 
         // 解封装工厂不再在此默认注册：由各后端 AddXxx() 经 TryAddEnumerable 集合注册，
         // 中间件按 DI 注册顺序做运行时回退。未注册任何后端时 Create 会在 Open 时抛 MediaBackendUnsupportedException。

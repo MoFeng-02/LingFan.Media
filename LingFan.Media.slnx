@@ -39,6 +39,7 @@
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Tools/VlcPlaybackProbe/VlcPlaybackProbe.csproj" />
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Tools/WasapiDriverProbe/WasapiDriverProbe.csproj" />
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
+    <Project Path="src/Tools/PlaybackProbe/PlaybackProbe.csproj" />
   </Folder>
   <Folder Name="/UI/">
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />

@@ -446,6 +446,12 @@ public sealed class MediaPlayer : IMediaPlayer
                 //   3) _pipelineHost.Start() 因 _isRunning==false 会重建 CTS 并重启双管线循环
                 //      （VideoPipeline/AudioPipeline 的 Start 已支持从排干态重启）。
                 await SeekAsync(TimeSpan.Zero);
+                // 🔴 重播（Ended→Playing）主时钟武装归零：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），
+                // _startStopwatch 持续累计到 ~34s；而重播视频门控（MediaPipelineHost.StartAsync 第③步 SignalAudioReady）
+                // 早于音频 Start（第⑤步），若不在此解除武装，预滚动/门控窗口内同步器读到的主时钟是上一遍的 ~34s 陈旧值，
+                // 会把 PTS=0 重播首帧判为「落后 34s → Drop」，画面冻结到 ~10s 才切入。此处解除武装后，该窗口主时钟恒为 0，
+                // 首帧立即呈现；音频 Start（CaptureStartAnchor）会重新武装。此为「present 卡 10s 才解冻」真根因修复。
+                _audioOutput?.ResetPlaybackClock();
                 // 🔴 归零必须先于 StartAsync（§33）：新启动编排会在 StartAsync 内部等视频预滚动，
                 // 门控放行瞬间就已有帧可判定。若此时 _clock 仍停在上一轮的结束位置（如 32s），
                 // 无音频轨场景（主时钟回退到 _clock.Position）会把 PTS=0 的首帧判成落后 32s → 全部 Drop。

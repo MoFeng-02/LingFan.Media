@@ -56,6 +56,15 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private bool _disposed;
     private bool _initialized;
 
+    // 🔴 完整重建所需参数（2026-08-07）：Reset() 在重播/seek 时关闭旧 AVCodecContext 并复用原 settings 重建，
+    // 解决 D3D11VA/VP9 硬件解码器 EOF 排干后 avcodec_flush_buffers 无法重新对齐新流首关键帧的问题。
+    private VideoCodec _lastCodec;
+    private VideoSettings? _lastSettings;
+
+    // 🔴 复位后输出帧诊断计数（2026-08-07）：Reset() 置 4，DecodeCore 输出前 4 帧时打印 pts，
+    // 用于确证「重播首帧已回到 ≈0」（而非跳到 10.267s 末关键帧）。仅诊断，零架构风险。
+    private int _decodeDiagCount;
+
     // 🔴 解码器内部缓冲：修复 avcodec_send_packet 返回 EAGAIN（解码器输入满）时「放包」导致关键参考帧
     // 缺失、HEVC 重播整段 RPS 崩的问题。改为 FFmpeg 标准 send/receive 循环：待发送包入队、EAGAIN 时
     // 持有并重试，绝不丢弃；HEVC B 帧重排可能一包多帧时，多产出的帧也入队待返回，绝不丢弃。
@@ -111,6 +120,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             throw new InvalidOperationException("视频解码器已初始化");
 
         Codec = codec;
+        _lastCodec = codec;
+        _lastSettings = settings;
         AVCodecID codecId = MapVideoCodecToFFmpeg(codec);
 
         // 🔴 硬解开关是「两级与」：会话级 VideoSettings.EnableHardwareAcceleration
@@ -536,7 +547,21 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 }
                 VideoFrame? f = MakeFrame(avFrame);
                 if (f != null)
+                {
+                    // 🔴 复位后输出帧诊断（2026-08-07）：前 4 帧打印 pts，确证重播首帧已回到 ≈0。
+                    if (_decodeDiagCount > 0)
+                    {
+                        --_decodeDiagCount;
+                        try
+                        {
+                            _logger.LogInformation(
+                                "[DECODE-DIAG] 复位后输出帧#{Seq}: pts={Pts} key={Key} (pts≈0 表示已正确回到起点)",
+                                4 - _decodeDiagCount, f.Timestamp, f.KeyFrame);
+                        }
+                        catch { }
+                    }
                     _pendingFrames.Enqueue(f);
+                }
                 ffmpeg.av_frame_unref(avFrame);
             }
         }
@@ -655,25 +680,45 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <inheritdoc/>
     public unsafe void Reset()
     {
-        if (!_initialized || _codecContextHandle == null) return;
-        AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle.DangerousGetHandle();
+        if (_codecContextHandle == null) return;
 
-        // ★ 先丢弃旧时间线的残留包/帧，再重建 BSF 与冲刷解码器
+        // ★ 先丢弃旧时间线的残留包/帧，避免混入新流造成参考帧错乱或 D3D11VA 硬件帧池枯竭。
         ClearPendingQueues();
 
-        // ★ 重播/seek 必须**重建** BSF 状态机（不能只 av_bsf_flush）：
-        // hevc/h264_mp4toannexb 在 av_bsf_flush 下不保证重新注入 VPS/SPS/PPS 参数集
-        // （实证：仅 flush 时重播首帧即报「Could not find ref with POC N / Error constructing the frame RPS」
-        //  → 0 帧上屏）。从原始 HVCC/avcC extradata 重新创建 BSF 上下文，确保新流参数集被重新注入。
-        if (_bsfContext != null)
+        // 🔴 重播/seek 全量重建（2026-08-07）：D3D11VA/VP9 硬件解码器在流末 EOF 排干后，
+        // 仅 avcodec_flush_buffers 无法让其重新对齐到新流首关键帧——它会把重播首帧当旧流续帧
+        // 一路丢帧直到下一个真关键帧（实测 m1.webm 跳到 10.267s）→ 视频冻结 ~10s。
+        // 根因：硬件解码器内部参考帧/序列状态在 EOF 后未干净复位。
+        // 唯一稳妥修复=关闭旧 AVCodecContext 并完整重建（同 Initialize 路径，复用原 settings）。
+        // ★ 引用计数配对（不泄漏共享 D3D11 设备）：先 Dispose 旧 _hwDeviceCtx（av_buffer_unref 释放时
+        //   ffmpeg 内部 Release 掉 InitializeD3D11VA 时对共享设备加的 2 个引用），再 avcodec_free_context，
+        //   最后 Initialize 重新 AddRef + 重建 hw_device_ctx。旧解码器仍被在途帧(D3D11HardwareFrameResource
+        //   持有的 av_frame_clone 引用)保活的纹理，待那些帧归还池后由 ffmpeg 引用计数自动释放，安全。
+        try
         {
-            AVBSFContext* local = _bsfContext;
-            _bsfContext = null;
-            ffmpeg.av_bsf_free(&local);
-            ApplyCodecConfiguration(ctx, _bsfCodec, _bsfCodecId, _bsfCfg);
+            _hwDeviceCtx?.Dispose();
+            _hwDeviceCtx = null;
+            if (_bsfContext != null)
+            {
+                AVBSFContext* local = _bsfContext;
+                _bsfContext = null;
+                ffmpeg.av_bsf_free(&local);
+            }
+            _codecContextHandle.Dispose();
+            _codecContextHandle = null;
+            _initialized = false;
+
+            // 复用原 settings 完整重建（重新分配 ctx + 挂共享 D3D11 设备 + 重建 BSF/extradata + open）
+            Initialize(_lastCodec, _lastSettings!);
         }
-        ffmpeg.avcodec_flush_buffers(ctx);
-        _logger.LogDebug("视频解码器已重置(bsfAfter={BsfAfter},edSize={Ed})", (IntPtr)_bsfContext, ctx->extradata_size);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "视频解码器重播全量重建失败");
+            throw;
+        }
+
+        _decodeDiagCount = 4; // 诊断：下一个 DecodeCore 输出前 4 帧打印 pts
+        _logger.LogDebug("视频解码器已全量重建(重播/seek 复位)");
     }
 
     /// <inheritdoc/>

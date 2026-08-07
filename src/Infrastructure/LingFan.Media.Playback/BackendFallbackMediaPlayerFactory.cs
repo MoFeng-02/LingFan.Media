@@ -8,6 +8,10 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Playback;
 
+/// <summary>格式级记忆键：(容器格式, 主视频编码)。用于跨文件复用回退结果，避免每次同格式重走回退。</summary>
+/// <remarks>不含任何后端硬编码，全部由实测回退结果填充——对所有后端与 (容器,编解码) 组合一视同仁。</remarks>
+internal readonly record struct FormatKey(ContainerFormat Container, VideoCodec Video);
+
 /// <summary>
 /// 后端回退调度器 / 中间件（契约纯净：仅依赖 Abstractions + DI.Abstractions，不引用任何具体后端）。
 /// 同时实现 <see cref="IMediaPlayerFactory"/>（对外公开的播放器工厂）与 <see cref="IBackendRegistry"/>（只读后端检视）。
@@ -24,15 +28,27 @@ public sealed class BackendFallbackMediaPlayerFactory : IMediaPlayerFactory, IBa
     private readonly IServiceProvider _sp;
     private readonly ILogger? _logger;
     private readonly IMediaPlayerFactory _composer;
+    internal readonly IMediaStreamFactory? _streamFactory;
+    internal readonly IFormatDetector? _formatDetector;
     private IReadOnlyList<BackendDescriptor>? _backends;
 
     /// <summary>source 标识 → 命中后端索引（单次标记，后续直接命中）。跨所有 FallbackMediaPlayer 实例共享。</summary>
     internal readonly ConcurrentDictionary<string, int> Cache = new();
 
-    public BackendFallbackMediaPlayerFactory(IServiceProvider sp, ILoggerFactory? loggerFactory = null)
+    /// <summary>格式级记忆：(容器, 视频编码) → 命中后端索引。跨所有播放共享，避免同格式重复回退开销。</summary>
+    /// <remarks>key 由实测回退结果填充，无硬编码规则；mp4/H264 与 mp4/H265 各自独立记忆，互不污染。</remarks>
+    internal readonly ConcurrentDictionary<FormatKey, int> FormatCache = new();
+
+    public BackendFallbackMediaPlayerFactory(
+        IServiceProvider sp,
+        ILoggerFactory? loggerFactory = null,
+        IMediaStreamFactory? streamFactory = null,
+        IFormatDetector? formatDetector = null)
     {
         _sp = sp;
         _logger = loggerFactory?.CreateLogger<BackendFallbackMediaPlayerFactory>();
+        _streamFactory = streamFactory;
+        _formatDetector = formatDetector;
         _composer = sp.GetKeyedService<IMediaPlayerFactory>("composer")
                     ?? throw new InvalidOperationException(
                         "未找到 keyed \"composer\" 的 IMediaPlayerFactory（AddLingFanMedia 未注册核心 composer）。");
