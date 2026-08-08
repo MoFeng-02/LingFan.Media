@@ -152,16 +152,18 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
         {
             if (srcGpu is not null)
             {
+                // flipY=true：D3D11 RTV 原点在左上，Avalonia Composition 合成器按 OpenGL 风格
+                //（原点在左下）采样共享纹理，写入时预翻转 Y 才能保证最终正向。
                 if (fmt is PixelFormat.NV12 or PixelFormat.NV21)
-                    _pipeline.PresentFromGpuTexture(srcGpu, subresource, w, h, _renderTargetView!, w, h);
+                    _pipeline.PresentFromGpuTexture(srcGpu, subresource, w, h, _renderTargetView!, w, h, flipY: true);
                 else if (fmt is PixelFormat.BGRA32 or PixelFormat.RGBA32)
-                    _pipeline.PresentFromBgraGpuTexture(srcGpu, subresource, w, h, fmt, _renderTargetView!, w, h);
+                    _pipeline.PresentFromBgraGpuTexture(srcGpu, subresource, w, h, fmt, _renderTargetView!, w, h, flipY: true);
                 else
                     return false; // 不支持的 GPU 格式 → 交回回退
             }
             else // SoftwareFrameResource
             {
-                _pipeline.Present((SoftwareFrameResource)frame.Resource, _renderTargetView!, w, h);
+                _pipeline.Present((SoftwareFrameResource)frame.Resource, _renderTargetView!, w, h, flipY: true);
             }
 
             written = true;

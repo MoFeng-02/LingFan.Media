@@ -1,4 +1,5 @@
-﻿using Avalonia;
+using System.Runtime.InteropServices;
+using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using LingFan.Media.Abstractions;
@@ -13,8 +14,6 @@ using LingFan.Media.Outputs.Wasapi;
 using LingFan.Media.Renderers.D3D11;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Threading.Tasks;
 
 namespace LingFan.Media.AvaloniaTools;
 
@@ -33,6 +32,12 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+#if DEBUG
+        // 诊断期：WinExe 默认无控制台窗口，分配一个以便实时看到 DI/回退链日志。
+        if (OperatingSystem.IsWindows())
+            AttachDebugConsole();
+#endif
+
         // ── 构建 DI：三后端（FFmpeg/VLC/MF）+ D3D11 渲染器 + WASAPI 音频 + Avalonia 控件 ──
         // Windows 专属扩展用 OperatingSystem.IsWindows 守卫，保证同一份代码在 Android/iOS 也能编译/运行。
         // VideoView 通过已注册的 IVideoRendererFactory 集合自动回退：
@@ -41,8 +46,7 @@ public partial class App : Application
         var services = new ServiceCollection();
         var builder = services
             .AddLingFanMedia()
-            .AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
-            .AddVLC()
+            
             .AddAvaloniaControls()
             .AddSkiaPresenter();
 
@@ -53,17 +57,26 @@ public partial class App : Application
             // AddCompositionRenderer 注册 CompositionVideoRendererFactory：解码侧 GPU 纹理经共享 D3D11 纹理
             // 交 Avalonia 合成器直接导入、作为控件子视觉无空域上屏（不走 Skia CPU 回读），Skia 仍作末级兜底。
             builder
-                .AddMediaFoundation()
+                //.AddMediaFoundation()
                 .AddD3D11Renderer()
-                // 无空域 GPU 合成上屏暂未启用：先以 Skia 软渲染（解码仍走 GPU）验证「帧→图片→每帧上屏」基础链路。
-                // Composition 渲染器在控件内会被优先选中，但其子视觉尺寸/跨设备纹理导入存在盲区，会留下空白画面；
-                // 待其修复后再取消下行注释即可启用，Skia 仍作末级兜底。
-                // .AddCompositionRenderer()
+                // 无空域 GPU 合成上屏（CompositionVideoRenderer）：解码侧 GPU 纹理经共享 D3D11 纹理交 Avalonia
+                // 合成器直接导入、作为控件子视觉无空域零拷贝上屏（不走 Skia CPU 回读）。
+                // 已加固：① 挂载期导入自检（合成器无法跨设备导入即抛异常 → 回退 Skia）；② 运行期连续失败健康计数
+                // （Unhealthy → VideoView 拉黑本工厂并重建回退链 → Skia 末级兜底）；③ 子视觉 Size=0 兜底。
+                // 三项保障确保 Composition 永不静默空白：任何失败都干净落到 Skia。
+                .AddCompositionRenderer()
                 .AddWasapiOutput();
         }
+        builder//.AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
+                .AddVLC();
+                // composer 工厂需要 ILoggerFactory；独立运行的 App 手动 AddLogging 提供。
+        services.AddLogging(options =>
+        {
+            options.AddConsole();
+            options.SetMinimumLevel(LogLevel.Information);
+        });
 
-        // composer 工厂需要 ILoggerFactory；独立运行的 App 手动 AddLogging 提供。
-        services.AddLogging();
+
         // ViewModel 经 DI 解析，构造函数注入 IServiceProvider。
         services.AddTransient<MainViewModel>();
 
@@ -90,6 +103,25 @@ public partial class App : Application
         // 纯优化，失败一律降级为未预热，绝不影响启动与播放。
         _ = Task.Run(() => PreheatAsync(Services!));
     }
+
+#if DEBUG
+    [LibraryImport("kernel32", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AllocConsole();
+
+    /// <summary>诊断期（DEBUG）：为 WinExe 分配一个控制台窗口，使 AddConsole 日志可见。失败静默忽略。</summary>
+    private static void AttachDebugConsole()
+    {
+        try
+        {
+            _ = AllocConsole();
+        }
+        catch
+        {
+            // 诊断辅助：分配失败不影响正常运行。
+        }
+    }
+#endif
 
     /// <summary>
     /// 启动预热。跨平台安全：非 Windows 主机不注册 WASAPI，解析到 null 直接跳过。

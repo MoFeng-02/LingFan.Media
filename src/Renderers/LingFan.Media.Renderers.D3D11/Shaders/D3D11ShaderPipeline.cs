@@ -84,6 +84,40 @@ internal sealed class D3D11ShaderPipeline : IDisposable
             float2 vu = TexU.Sample(LinearSampler, i.uv).rg; // R=V, G=U (NV21 interleave order reversed)
             return float4(YuvToRgb(y, vu.y, vu.x), 1.0);
         }
+
+        // Flip variants: D3D11 writes the shared texture with origin at top-left, but the Avalonia
+        // Composition compositor samples it OpenGL-style (origin bottom-left), which flips the picture
+        // vertically. We pre-flip UV.y when writing the shared texture so the compositor reads it upright.
+        float4 PSRgbFlip(VSOut i) : SV_Target
+        {
+            float2 uv = float2(i.uv.x, 1.0 - i.uv.y);
+            return float4(TexRgb.Sample(LinearSampler, uv).rgb, 1.0);
+        }
+
+        float4 PSYuvPlanarFlip(VSOut i) : SV_Target
+        {
+            float2 uv = float2(i.uv.x, 1.0 - i.uv.y);
+            float y = TexY.Sample(LinearSampler, uv).r;
+            float u = TexU.Sample(LinearSampler, uv).r;
+            float v = TexV.Sample(LinearSampler, uv).r;
+            return float4(YuvToRgb(y, u, v), 1.0);
+        }
+
+        float4 PSNv12Flip(VSOut i) : SV_Target
+        {
+            float2 uv = float2(i.uv.x, 1.0 - i.uv.y);
+            float y = TexY.Sample(LinearSampler, uv).r;
+            float2 uvChroma = TexU.Sample(LinearSampler, uv).rg; // R=U, G=V
+            return float4(YuvToRgb(y, uvChroma.x, uvChroma.y), 1.0);
+        }
+
+        float4 PSNv21Flip(VSOut i) : SV_Target
+        {
+            float2 uv = float2(i.uv.x, 1.0 - i.uv.y);
+            float y = TexY.Sample(LinearSampler, uv).r;
+            float2 vu = TexU.Sample(LinearSampler, uv).rg; // R=V, G=U (NV21 interleave order reversed)
+            return float4(YuvToRgb(y, vu.y, vu.x), 1.0);
+        }
         """;
 
     private readonly ID3D11Device _device;
@@ -94,6 +128,10 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     private ID3D11PixelShader? _psYuvPlanar;
     private ID3D11PixelShader? _psNv12;
     private ID3D11PixelShader? _psNv21;
+    private ID3D11PixelShader? _psRgbFlip;
+    private ID3D11PixelShader? _psYuvPlanarFlip;
+    private ID3D11PixelShader? _psNv12Flip;
+    private ID3D11PixelShader? _psNv21Flip;
     private ID3D11SamplerState? _sampler;
     private bool _shadersReady;
     private bool _disposed;
@@ -134,7 +172,9 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     /// <param name="rtv">渲染目标视图（BackBuffer RTV）。</param>
     /// <param name="targetWidth">渲染目标宽度（像素）。</param>
     /// <param name="targetHeight">渲染目标高度（像素）。</param>
-    internal void Present(SoftwareFrameResource sw, ID3D11RenderTargetView rtv, int targetWidth, int targetHeight)
+    /// <param name="flipY">是否在采样时翻转 UV.y。共享纹理经 Avalonia Composition 导入时，
+    /// 合成器按 OpenGL 风格（原点在左下）采样，需在写入共享纹理时预翻转；默认 false。</param>
+    internal void Present(SoftwareFrameResource sw, ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, bool flipY = false)
     {
         ArgumentNullException.ThrowIfNull(sw);
         ArgumentNullException.ThrowIfNull(rtv);
@@ -145,13 +185,13 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         UploadPlanes(sw);
         RegenerateMips(); // 重建 mip 链 → 硬件自动 LOD 三线性缩小，消摩尔纹
 
-        // 选择 PS
+        // 选择 PS（Composition 共享纹理路径需预翻转 Y，抵消合成器 OpenGL 风格采样）
         ID3D11PixelShader ps = sw.Format switch
         {
-            PixelFormat.BGRA32 or PixelFormat.RGBA32 => _psRgb!,
-            PixelFormat.YUV420P or PixelFormat.YUV422P or PixelFormat.YUV444P => _psYuvPlanar!,
-            PixelFormat.NV12 => _psNv12!,
-            PixelFormat.NV21 => _psNv21!,
+            PixelFormat.BGRA32 or PixelFormat.RGBA32 => flipY ? _psRgbFlip! : _psRgb!,
+            PixelFormat.YUV420P or PixelFormat.YUV422P or PixelFormat.YUV444P => flipY ? _psYuvPlanarFlip! : _psYuvPlanar!,
+            PixelFormat.NV12 => flipY ? _psNv12Flip! : _psNv12!,
+            PixelFormat.NV21 => flipY ? _psNv21Flip! : _psNv21!,
             _ => throw new NotSupportedException(
                 $"D3D11 Shader 管线不支持像素格式 {sw.Format}。支持 BGRA32/RGBA32/YUV420P/YUV422P/YUV444P/NV12/NV21。"),
         };
@@ -190,10 +230,12 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     /// V3 可通过 plane-specific SRV 实现完全零拷贝。</para>
     /// <para>调用方持锁；本方法同步 GPU 提交，无 I/O。</para>
     /// </remarks>
+    /// <param name="flipY">是否在采样时翻转 UV.y。共享纹理经 Avalonia Composition 导入时，
+    /// 合成器按 OpenGL 风格（原点在左下）采样，需在写入共享纹理时预翻转；默认 false。</param>
     internal void PresentFromGpuTexture(
         ID3D11Texture2D srcTexture, int subresourceIndex,
         int srcWidth, int srcHeight,
-        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight)
+        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, bool flipY = false)
     {
         ArgumentNullException.ThrowIfNull(srcTexture);
         ArgumentNullException.ThrowIfNull(rtv);
@@ -254,13 +296,13 @@ internal sealed class D3D11ShaderPipeline : IDisposable
 
         RegenerateMips(); // 重建 mip 链 → 硬件自动 LOD 三线性缩小，消摩尔纹
 
-        // 3. 用 PS_Nv12 渲染
+        // 3. 用 PS_Nv12 渲染（Composition 共享纹理路径使用 Flip 变体预翻转 Y）
         _context.OMSetRenderTargets(rtv, null!);
         _context.RSSetViewport(0, 0, targetWidth, targetHeight, 0f, 1f);
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _context.IASetInputLayout(null!);
         _context.VSSetShader(_vs!);
-        _context.PSSetShader(_psNv12!);
+        _context.PSSetShader(flipY ? _psNv12Flip! : _psNv12!);
         _context.PSSetSampler(0, _sampler!);
         _context.PSSetShaderResource(0, _planeSrvs[0]!);
         _context.PSSetShaderResource(1, _planeSrvs[1]!);
@@ -284,10 +326,12 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     /// 替代原先抛 <see cref="NotSupportedException"/> 的行为——帧尺寸本应逐帧可变（源分辨率 ≠ 窗口尺寸属正常缩放场景）。</para>
     /// <para>调用方持锁；本方法同步 GPU 提交，无 I/O。</para>
     /// </remarks>
+    /// <param name="flipY">是否在采样时翻转 UV.y。共享纹理经 Avalonia Composition 导入时，
+    /// 合成器按 OpenGL 风格（原点在左下）采样，需在写入共享纹理时预翻转；默认 false。</param>
     internal void PresentFromBgraGpuTexture(
         ID3D11Texture2D srcTexture, int subresourceIndex,
         int srcWidth, int srcHeight, PixelFormat srcFormat,
-        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight)
+        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, bool flipY = false)
     {
         ArgumentNullException.ThrowIfNull(srcTexture);
         ArgumentNullException.ThrowIfNull(rtv);
@@ -303,13 +347,13 @@ internal sealed class D3D11ShaderPipeline : IDisposable
             srcTexture, (uint)subresourceIndex, null);
         RegenerateMips(); // 重建 mip 链 → 硬件自动 LOD 三线性缩小，消摩尔纹
 
-        // 复用 PSRgb + 平面0 SRV 采样缩放（与软帧 BGRA/RGBA 路径完全一致）
+        // 复用 PSRgb + 平面0 SRV 采样缩放（Composition 共享纹理路径使用 Flip 变体预翻转 Y）
         _context.OMSetRenderTargets(rtv, null!);
         _context.RSSetViewport(0, 0, targetWidth, targetHeight, 0f, 1f);
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _context.IASetInputLayout(null!);
         _context.VSSetShader(_vs!);
-        _context.PSSetShader(_psRgb!);
+        _context.PSSetShader(flipY ? _psRgbFlip! : _psRgb!);
         _context.PSSetSampler(0, _sampler!);
         _context.PSSetShaderResource(0, _planeSrvs[0]!);
 
@@ -362,6 +406,14 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         ReleaseFrameTextures();
         _sampler?.Dispose();
         _sampler = null;
+        _psNv21Flip?.Dispose();
+        _psNv21Flip = null;
+        _psNv12Flip?.Dispose();
+        _psNv12Flip = null;
+        _psYuvPlanarFlip?.Dispose();
+        _psYuvPlanarFlip = null;
+        _psRgbFlip?.Dispose();
+        _psRgbFlip = null;
         _psNv21?.Dispose();
         _psNv21 = null;
         _psNv12?.Dispose();
@@ -388,12 +440,20 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         ReadOnlyMemory<byte> psYuvBlob = Compiler.Compile(HlslSource, "PSYuvPlanar", "LingFanMedia.PSYuv", "ps_4_0", ShaderFlags.OptimizationLevel3, EffectFlags.None);
         ReadOnlyMemory<byte> psNv12Blob = Compiler.Compile(HlslSource, "PSNv12", "LingFanMedia.PSNv12", "ps_4_0", ShaderFlags.OptimizationLevel3, EffectFlags.None);
         ReadOnlyMemory<byte> psNv21Blob = Compiler.Compile(HlslSource, "PSNv21", "LingFanMedia.PSNv21", "ps_4_0", ShaderFlags.OptimizationLevel3, EffectFlags.None);
+        ReadOnlyMemory<byte> psRgbFlipBlob = Compiler.Compile(HlslSource, "PSRgbFlip", "LingFanMedia.PSRgbFlip", "ps_4_0", ShaderFlags.OptimizationLevel3, EffectFlags.None);
+        ReadOnlyMemory<byte> psYuvFlipBlob = Compiler.Compile(HlslSource, "PSYuvPlanarFlip", "LingFanMedia.PSYuvFlip", "ps_4_0", ShaderFlags.OptimizationLevel3, EffectFlags.None);
+        ReadOnlyMemory<byte> psNv12FlipBlob = Compiler.Compile(HlslSource, "PSNv12Flip", "LingFanMedia.PSNv12Flip", "ps_4_0", ShaderFlags.OptimizationLevel3, EffectFlags.None);
+        ReadOnlyMemory<byte> psNv21FlipBlob = Compiler.Compile(HlslSource, "PSNv21Flip", "LingFanMedia.PSNv21Flip", "ps_4_0", ShaderFlags.OptimizationLevel3, EffectFlags.None);
 
         _vs = _device.CreateVertexShader(vsBlob.Span, null!);
         _psRgb = _device.CreatePixelShader(psRgbBlob.Span, null!);
         _psYuvPlanar = _device.CreatePixelShader(psYuvBlob.Span, null!);
         _psNv12 = _device.CreatePixelShader(psNv12Blob.Span, null!);
         _psNv21 = _device.CreatePixelShader(psNv21Blob.Span, null!);
+        _psRgbFlip = _device.CreatePixelShader(psRgbFlipBlob.Span, null!);
+        _psYuvPlanarFlip = _device.CreatePixelShader(psYuvFlipBlob.Span, null!);
+        _psNv12Flip = _device.CreatePixelShader(psNv12FlipBlob.Span, null!);
+        _psNv21Flip = _device.CreatePixelShader(psNv21FlipBlob.Span, null!);
 
         _sampler = _device.CreateSamplerState(new SamplerDescription
         {

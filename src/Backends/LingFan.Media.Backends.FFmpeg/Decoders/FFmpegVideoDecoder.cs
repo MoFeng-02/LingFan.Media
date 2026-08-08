@@ -256,6 +256,27 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
             ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
         }
+        if (ret < 0 && IsHardwareAccelerated)
+        {
+            // V2-15 B6: D3D11VA 解码器打开失败（如驱动不支持该 profile 的硬件解码会话、
+            // 共享设备在该分辨率下无法建立 DXVA 会话）——但软件解码器仍可用，干净回退，
+            // 绝不抛异常阻断播放（与上方 MediaCodec 分支对称，落实「软解正确的逻辑」）。
+            _logger.LogWarning("D3D11VA 解码器打开失败 ({Error})，回退到软件解码。", GetErrorString(ret));
+            _hwDeviceCtx?.Dispose();
+            _hwDeviceCtx = null;
+            _codecContextHandle.Dispose();
+            _codecContextHandle = null;
+            IsHardwareAccelerated = false;
+
+            avCodec = ffmpeg.avcodec_find_decoder(codecId);
+            if (avCodec == null)
+                throw new NotSupportedException($"FFmpeg 未找到视频解码器: {codec} (codec_id={codecId})");
+            ctx = ffmpeg.avcodec_alloc_context3(avCodec);
+            if (ctx == null)
+                throw new InvalidOperationException("avcodec_alloc_context3 失败（软件回退）");
+            _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
+            ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
+        }
         if (ret < 0)
         {
             _codecContextHandle.Dispose();

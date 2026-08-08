@@ -1,9 +1,5 @@
-﻿using Foundation;
-using UIKit;
 using Avalonia;
-using Avalonia.Controls;
 using Avalonia.iOS;
-using Avalonia.Media;
 
 namespace LingFan.Media.AvaloniaTools.iOS;
 

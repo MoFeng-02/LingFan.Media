@@ -19,7 +19,7 @@ public static class ModuleExtensions
     //   输出（WASAPI/ALSA/CoreAudio/...）      → 各 Outputs 项目的 *Extensions.cs
     //   UI（Avalonia）                          → LingFan.Media.Avalonia/Extensions/
     //
-    // 未来扩展：
+    // 未来扩展（仅考虑，可能丢弃）：
     //   services.AddCodecRegistry()    → ICodecRegistry
     //   services.AddGpuDeviceContext() → IGpuDeviceContext
 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Rendering.Composition;
 using Avalonia.Threading;
@@ -24,11 +25,13 @@ namespace LingFan.Media.Avalonia;
 /// <para><b>回退</b>：在 <c>VideoView</c> 回退链中位于 D3D11 SwapChain 之后、Skia 之前；
 /// <see cref="Attach"/> 失败（合成器不可用 / 无匹配句柄类型 / 共享表面源创建失败）即抛
 /// <see cref="NotSupportedException"/>，由 <c>VideoView</c> 自动回退 Skia。</para>
-/// <para><b>线程</b>：Attach/Detach 在 UI 线程（合成器/子视觉创建、事件订阅）；
-/// <see cref="Present"/> 在管线线程（ImportImage / UpdateWithKeyedMutexAsync，与官方 GpuInterop 样例同线程模型）。</para>
+    /// <para><b>线程</b>：Attach/Detach 在 UI 线程（合成器/子视觉创建、事件订阅）；
+    /// <see cref="Present"/> 在管线线程被调用，仅负责把帧渲染进独立共享纹理（GPU 拷贝，与解码帧解耦）；
+    /// 真正的导入与上屏（<c>ImportImage</c> / <c>UpdateWithKeyedMutexAsync</c> / <c>Visual</c> 属性）必须经
+    /// <c>Dispatcher.UIThread</c> 封送到 UI（Compositor 拥有者）线程执行，否则抛 VerifyAccess 异常。</para>
 /// <para><b>AOT 兼容</b>：无反射。</para>
 /// </remarks>
-internal sealed class CompositionVideoRenderer : IVideoRenderer
+internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
 {
     // ≈ 1 个 60Hz 帧刷新周期；VideoPipeline 据其做音画对齐提前量。
     private static readonly TimeSpan PresentLatency = TimeSpan.FromMilliseconds(16);
@@ -47,6 +50,19 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer
     private Task? _lastPresent;
     private bool _disposed;
 
+    // 运行期健康：连续无法呈现达到阈值即触发 Unhealthy → 宿主（VideoView）拉黑本工厂并回退 Skia，
+    // 确保 Composition 永不静默空白（Attach 成功但运行期持续出不了画时有兜底）。
+    private int _consecutiveSkips;
+    private bool _unhealthyFired;
+    private const int SkipThreshold = 30;
+    private readonly object _healthLock = new();
+
+    // 布局状态：CompositionSurfaceVisual 无 Stretch 属性，须手动根据 VideoView.Stretch 计算目标尺寸与偏移。
+    private Stretch _stretch = Stretch.Uniform;
+    private Vector _controlSize;
+    private Vector _frameSize;
+    private IDisposable? _stretchSubscription;
+
     /// <summary>
     /// 初始化 <see cref="CompositionVideoRenderer"/> 的新实例。
     /// </summary>
@@ -62,6 +78,9 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer
 
     /// <inheritdoc/>
     public TimeSpan PresentationLatency => PresentLatency;
+
+    /// <inheritdoc/>
+    public event Action? Unhealthy;
 
     /// <inheritdoc/>
     public void Attach(IRenderTarget target)
@@ -82,6 +101,12 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer
         if (interop is null)
             throw new NotSupportedException("当前 Avalonia 渲染后端不支持 ICompositionGpuInterop（回退 Skia）。");
 
+        // 诊断：打印合成器实际支持的句柄类型集合，用于确认零拷贝路径是否被接受
+        // （legacy 全局共享句柄不支持跨 GPU 适配器；若合成器在其他适配器上则导入会静默黑屏）。
+        _logger.LogInformation(
+            "CompositionVideoRenderer 合成器支持句柄类型=[{HandleTypes}]。",
+            string.Join(", ", interop.SupportedImageHandleTypes));
+
         // 选定首个可用且句柄类型被合成器支持的共享表面源工厂（UI 层无「优先 D3D11」硬编码分支）。
         ISharedGpuSurfaceSourceFactory? selected = null;
         string? handleType = null;
@@ -101,24 +126,40 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer
         if (selected is null)
             throw new NotSupportedException("无可用且被合成器支持的共享表面源工厂（回退 Skia）。");
 
-        // 创建绘制表面 + 子视觉（无空域，挂在控件 Visual 下），并铺满控件边界。
+        _logger.LogInformation(
+            "CompositionVideoRenderer 选定共享表面源工厂={Factory}，句柄类型={HandleType}。",
+            selected.GetType().Name, handleType);
+
+        // 创建绘制表面 + 子视觉（无空域，挂在控件 Visual 下）。
+        // CompositionSurfaceVisual 没有 Stretch 属性，目标尺寸/偏移由本类按 VideoView.Stretch 手动计算。
         _drawingSurface = compositor.CreateDrawingSurface();
         _surfaceVisual = compositor.CreateSurfaceVisual();
         _surfaceVisual.Surface = _drawingSurface;
-        _surfaceVisual.Size = new Vector(visual.Bounds.Width, visual.Bounds.Height);
         ElementComposition.SetElementChildVisual(visual, _surfaceVisual);
+
+        // 初始化布局状态并订阅 Stretch 变化。
+        _controlSize = new Vector(visual.Bounds.Width, visual.Bounds.Height);
+        _frameSize = new Vector(0, 0);
+        if (visual is Control control)
+        {
+            _stretch = control.GetValue(VideoView.StretchProperty);
+            control.SizeChanged += OnControlSizeChanged;
+            _stretchSubscription = control.GetObservable(VideoView.StretchProperty)
+                .Subscribe(new StretchObserver(this));
+        }
+        UpdateSurfaceLayout();
 
         // 初次尺寸：OnAttachedToVisualTree 时布局可能尚未完成（Bounds 仍 0），
         // 延迟到下一 UI 循环读取 post-layout 尺寸，避免子视觉尺寸为 0 不可见。
         // 后续尺寸变化由 OnControlSizeChanged 持续同步。
         Dispatcher.UIThread.Post(() =>
         {
-            if (_surfaceVisual is not null && !_disposed)
-                _surfaceVisual.Size = new Vector(visual.Bounds.Width, visual.Bounds.Height);
+            if (_surfaceVisual is not null && !_disposed && visual is not null)
+            {
+                _controlSize = new Vector(visual.Bounds.Width, visual.Bounds.Height);
+                UpdateSurfaceLayout();
+            }
         });
-
-        if (visual is Control control)
-            control.SizeChanged += OnControlSizeChanged;
 
         // 创建共享表面源（延迟到此处以确保共享 D3D11 设备就绪；失败抛异常触发回退）。
         ISharedGpuSurfaceSource source;
@@ -136,23 +177,121 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer
         _source = source;
         _handleType = handleType;
         _lastVersion = 0;
+
+        // 导入能力自检：用 1×1 软件探针帧走完整「写入共享纹理 → 合成器导入」路径，
+        // 验证本共享 D3D11 设备纹理能被 Avalonia 合成器跨设备导入。
+        // 失败即抛 NotSupportedException → VideoView 在挂载期干净回退 Skia，
+        // 把「Attach 成功但运行期静默空白」提前变成「挂载期可诊断的回退」。
+        if (!SelfTestImport())
+            throw new NotSupportedException("Composition 共享纹理导入自检失败（回退 Skia）。");
+
+        _logger.LogInformation(
+            "CompositionVideoRenderer 导入自检通过，启用零拷贝上屏路径（句柄类型={HandleType}）。",
+            _handleType);
     }
 
     private void OnControlSizeChanged(object? sender, SizeChangedEventArgs e)
     {
-        if (_surfaceVisual is not null)
-            _surfaceVisual.Size = new Vector(e.NewSize.Width, e.NewSize.Height);
+        _controlSize = new Vector(e.NewSize.Width, e.NewSize.Height);
+        UpdateSurfaceLayout();
+    }
+
+    private void OnStretchChanged()
+    {
+        if (_attachedVisual is Control control)
+            _stretch = control.GetValue(VideoView.StretchProperty);
+        UpdateSurfaceLayout();
+    }
+
+    /// <summary>
+    /// 根据 <see cref="VideoView.Stretch"/> 模式计算 <see cref="CompositionSurfaceVisual"/> 的目标尺寸与偏移。
+    /// CompositionSurfaceVisual 没有内置 Stretch，须手动实现 Fill/Uniform/UniformToFill/None。
+    /// </summary>
+    private void UpdateSurfaceLayout()
+    {
+        if (_surfaceVisual is null)
+            return;
+
+        if (_frameSize.X <= 0 || _frameSize.Y <= 0 || _controlSize.X <= 0 || _controlSize.Y <= 0)
+        {
+            // 尚未拿到帧尺寸：先按控件大小 Fill，避免 0 尺寸不可见。
+            _surfaceVisual.Size = _controlSize;
+            _surfaceVisual.Offset = new Vector3D(0, 0, 0);
+            return;
+        }
+
+        double frameW = _frameSize.X;
+        double frameH = _frameSize.Y;
+        double ctrlW = _controlSize.X;
+        double ctrlH = _controlSize.Y;
+        double targetW = ctrlW;
+        double targetH = ctrlH;
+
+        switch (_stretch)
+        {
+            case Stretch.None:
+                targetW = frameW;
+                targetH = frameH;
+                break;
+            case Stretch.Uniform:
+                double uniformScale = Math.Min(ctrlW / frameW, ctrlH / frameH);
+                targetW = frameW * uniformScale;
+                targetH = frameH * uniformScale;
+                break;
+            case Stretch.UniformToFill:
+                double fillScale = Math.Max(ctrlW / frameW, ctrlH / frameH);
+                targetW = frameW * fillScale;
+                targetH = frameH * fillScale;
+                break;
+            case Stretch.Fill:
+            default:
+                // targetW/H 已等于控件尺寸
+                break;
+        }
+
+        double offsetX = (ctrlW - targetW) / 2.0;
+        double offsetY = (ctrlH - targetH) / 2.0;
+
+        _surfaceVisual.Size = new Vector(targetW, targetH);
+        _surfaceVisual.Offset = new Vector3D(offsetX, offsetY, 0);
     }
 
     /// <inheritdoc/>
     public void Present(VideoFrame frame)
     {
         if (_disposed || _source is null || _interop is null || _drawingSurface is null || _handleType is null)
+        {
+            PostNoteSkip();
             return;
+        }
 
-        // 解码帧经 GPU 适配层写入共享纹理（内部 keyed mutex 握手，超时即丢帧）。
+        // ① 管线线程：把解码帧 GPU 内容渲染进独立的共享 D3D11 纹理（keyed mutex 握手）。
+        //    必须在 frame 仍存活时（本线程，Emit 的 ReturnFrame 之前）完成——共享纹理内容被固化拷贝，
+        //    与解码帧纹理解耦，故后续封送到 UI 线程导入时 frame 是否已释放均安全。
+        //    共享 D3D11 设备已开启多线程保护，跨线程调用安全。
         if (!_source.TryWriteFrame(frame, out var desc) || !desc.IsValid)
+        {
+            PostNoteSkip();
             return;
+        }
+
+        // ② 导入 + 上屏必须在 UI 线程（Compositor 拥有者）：Avalonia 的 ImportImage /
+        //    UpdateWithKeyedMutexAsync / Visual 属性全部要求 UI 线程，否则抛 VerifyAccess 异常
+        //    （之前在管线线程直接调用即暴露为「连续 30 帧无法呈现 → 回退 Skia」）。
+        //    desc 为值类型，拷贝后跨线程安全传递到 UI 线程。
+        var d = desc;
+        Dispatcher.UIThread.Post(() => PresentUi(d));
+    }
+
+    /// <summary>在 UI（Compositor 拥有者）线程执行共享纹理导入与上屏。</summary>
+    private void PresentUi(SharedGpuSurfaceDescriptor desc)
+    {
+        // Detach 后可能有挂起的封送调用：字段已被 DetachCore 置空，直接退出避免触碰已释放对象。
+        if (_disposed || _source is null || _interop is null || _drawingSurface is null || _handleType is null)
+        {
+            PostNoteSkip();
+            return;
+        }
 
         try
         {
@@ -174,30 +313,129 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer
                     _logger.LogWarning(
                         "CompositionVideoRenderer 导入共享纹理失败（句柄类型={HandleType}），跳过本帧。",
                         _handleType);
+                    PostNoteSkip();
                     return;
                 }
                 _lastVersion = desc.Version;
+            }
+
+            // 帧尺寸变化或首次呈现时，按 VideoView.Stretch 重新计算子视觉目标尺寸与偏移。
+            // 必须在 UpdateWithKeyedMutexAsync 之前完成，确保合成器采样到正确布局。
+            var newFrameSize = new Vector(desc.Width, desc.Height);
+            if (_frameSize != newFrameSize)
+            {
+                _frameSize = newFrameSize;
+                UpdateSurfaceLayout();
+            }
+
+            // Size=0 兜底：若子视觉尺寸仍为 0（Attach 时控件布局尚未完成、SizeChanged 尚未触发），
+            // 按控件当前边界重设，避免「内容已提交但显示尺寸为 0 的空白」。
+            if (_surfaceVisual is { } sv && (sv.Size.X == 0 || sv.Size.Y == 0) && _attachedVisual is { } v)
+            {
+                _controlSize = new Vector(v.Bounds.Width, v.Bounds.Height);
+                UpdateSurfaceLayout();
             }
 
             // 消费者（Avalonia 合成线程）以 ConsumerAcquireKey 取锁采样、以 ConsumerReleaseKey 归还。
             _surfaceVisual!.Opacity = 1;
             _lastPresent = _drawingSurface.UpdateWithKeyedMutexAsync(
                 _imported, (uint)_source.ConsumerAcquireKey, (uint)_source.ConsumerReleaseKey);
+
+            NoteSuccess();
         }
         catch (Exception ex)
         {
             // 单帧提交异常（如跨设备导入失败）吞掉，绝不击杀管线线程；下一帧重试。
             // 用 Warning 而非 Trace：跨设备纹理导入失败是「无空域上屏空白」的首要嫌疑，必须可见以便诊断。
             _logger.LogWarning(ex, "CompositionVideoRenderer 提交帧失败（跳过本帧）。");
+            PostNoteSkip();
         }
     }
+
+    /// <summary>
+    /// 挂载期导入能力自检：用 1×1 软件探针帧走完整「写入共享纹理 → 合成器导入」路径，
+    /// 验证本共享 D3D11 设备纹理能被 Avalonia 合成器跨设备导入。
+    /// </summary>
+    /// <returns>自检通过返回 <see langword="true"/>；任一环节失败返回 <see langword="false"/>。</returns>
+    private bool SelfTestImport()
+    {
+        // 探针资源：VideoFrame / SoftwareFrameResource 仅实现 IDisposableFrame（非 System.IDisposable），
+        // 故手动 new + finally 释放；导入图像为 IAsyncDisposable，与文件既有 _imported?.DisposeAsync() 一致。
+        SoftwareFrameResource? probe = null;
+        VideoFrame? frame = null;
+        ICompositionImportedGpuImage? imported = null;
+        try
+        {
+            // 1×1 BGRA 探针（4 字节）——仅验证导入可达性，尺寸任意。
+            // 完全限定 PixelFormat 以消除与 Avalonia.Platform.PixelFormat 的歧义（CS0104/CS1503）。
+            probe = new SoftwareFrameResource(1, 1, LingFan.Media.Abstractions.PixelFormat.BGRA32, new Memory<byte>(new byte[4]));
+            frame = new VideoFrame(1, 1, LingFan.Media.Abstractions.PixelFormat.BGRA32, probe, TimeSpan.Zero, TimeSpan.Zero, true);
+            if (!_source!.TryWriteFrame(frame, out var desc) || !desc.IsValid)
+                return false;
+
+            var props = new PlatformGraphicsExternalImageProperties
+            {
+                Width = desc.Width,
+                Height = desc.Height,
+                Format = PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm,
+            };
+            imported = _interop!.ImportImage(new PlatformHandle(desc.Handle, _handleType!), props);
+            return imported is not null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CompositionVideoRenderer 导入自检异常（回退 Skia）。");
+            return false;
+        }
+        finally
+        {
+            // 级联释放探针 CPU 资源（释放顺序：先 VideoFrame 再其 Resource）。
+            frame?.Dispose();
+            probe?.Dispose();
+            // 探针导入图像为一次性探测，释放即可；失败回退链不依赖此导入实例。
+            if (imported is not null)
+                _ = imported.DisposeAsync();
+        }
+    }
+
+    /// <summary>把出画失败记录封送到 UI 线程（<see cref="NoteSkip"/> 内会触碰 Visual 属性，必须 UI 线程）。</summary>
+    private void PostNoteSkip() => Dispatcher.UIThread.Post(NoteSkip);
+
+    /// <summary>记录一次出画失败；连续达到阈值即触发 <see cref="Unhealthy"/> 让宿主回退 Skia。</summary>
+    private void NoteSkip()
+    {
+        if (_disposed)
+            return;
+        int n = Interlocked.Increment(ref _consecutiveSkips);
+        if (n < SkipThreshold)
+            return;
+        // 原子化单次触发，避免管线线程与 UI 线程并发重复触发 Unhealthy。
+        bool already;
+        lock (_healthLock)
+        {
+            already = _unhealthyFired;
+            _unhealthyFired = true;
+        }
+        if (already)
+            return;
+
+        _logger.LogError("CompositionVideoRenderer 连续 {N} 帧无法呈现，触发渲染器回退（Skia）。", SkipThreshold);
+        // Visual 属性必须在 UI 线程设置。
+        if (_surfaceVisual is not null)
+            Dispatcher.UIThread.Post(() => { if (_surfaceVisual is not null) _surfaceVisual.Opacity = 0; });
+        Unhealthy?.Invoke();
+    }
+
+    /// <summary>记录一次成功出画，清零连续失败计数（原子，跨线程安全）。</summary>
+    private void NoteSuccess() => Interlocked.Exchange(ref _consecutiveSkips, 0);
 
     /// <inheritdoc/>
     public void Clear()
     {
         // 隐藏表面视觉（保留子视觉挂载，避免重建开销）；下次 Present 恢复 Opacity=1。
+        // Visual 属性须 UI 线程设置。
         if (_surfaceVisual is not null)
-            _surfaceVisual.Opacity = 0;
+            Dispatcher.UIThread.Post(() => { if (_surfaceVisual is not null) _surfaceVisual.Opacity = 0; });
     }
 
     /// <inheritdoc/>
@@ -217,6 +455,9 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer
     {
         if (_attachedVisual is Control control)
             control.SizeChanged -= OnControlSizeChanged;
+
+        _stretchSubscription?.Dispose();
+        _stretchSubscription = null;
 
         // 移除子视觉挂载
         if (_attachedVisual is not null)
@@ -294,6 +535,16 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer
         }
 
         DetachCore();
+    }
+
+    /// <summary>订阅 VideoView.Stretch 变化的简单 IObserver 实现（避免引入 System.Reactive）。</summary>
+    private sealed class StretchObserver : IObserver<Stretch>
+    {
+        private readonly CompositionVideoRenderer _owner;
+        public StretchObserver(CompositionVideoRenderer owner) => _owner = owner;
+        public void OnNext(Stretch value) => _owner.OnStretchChanged();
+        public void OnError(Exception error) { }
+        public void OnCompleted() { }
     }
 
     /// <summary>

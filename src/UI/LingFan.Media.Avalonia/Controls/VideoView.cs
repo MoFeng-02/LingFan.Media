@@ -57,6 +57,10 @@ public sealed class VideoView : Control, IRenderTarget
     private ILogger? _logger;
     private bool _videoSinkSubscribed;
 
+    // 运行期被判定不健康的渲染器工厂（如 Composition 合成器导入失败）→ 拉黑，重建回退链时跳过，避免无限重试。
+    private readonly HashSet<Type> _failedFactories = new();
+    private Type? _activeFactoryType;
+
     #region StyledProperties
 
     /// <summary>绑定播放器的 StyledProperty。</summary>
@@ -383,10 +387,16 @@ public sealed class VideoView : Control, IRenderTarget
         // 不 Dispose 失败的 GPU 单例渲染器——其共享 GPU 设备由工厂持有，部分 Attach 失败无资源泄漏。
         foreach (var factory in factories)
         {
+            // 运行期已被判定不健康的工厂直接跳过（拉黑），避免无限重试。
+            if (_failedFactories.Contains(factory.GetType()))
+                continue;
             try
             {
                 var renderer = factory.Create();
                 renderer.Attach(this);
+                _activeFactoryType = factory.GetType();
+                if (renderer is IRendererHealth health)
+                    health.Unhealthy += OnRendererUnhealthy;
                 _renderer = renderer;
                 break;
             }
@@ -411,6 +421,8 @@ public sealed class VideoView : Control, IRenderTarget
             skiaFinal.AspectRatioMode = AspectRatioMode;
         }
 
+        _logger?.LogInformation("VideoView 回退链解析完成，激活渲染器={Renderer}。", _renderer?.GetType().Name ?? "null");
+
         // 渲染器创建/重建后重新评估视频帧 sink 订阅（所有渲染器均经统一 FrameChannel 收帧）。
         UpdateVideoSinkSubscription();
     }
@@ -424,6 +436,35 @@ public sealed class VideoView : Control, IRenderTarget
             _renderer = null;
         }
         EnsurePresenter();
+    }
+
+    /// <summary>
+    /// 渲染器运行期不健康（持续无法出画）回调：拉黑该工厂并重建回退链（落 Skia 末级兜底）。
+    /// 由渲染器在管线线程触发，故切回 UI 线程处理，避免跨线程操作控件。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>安全网</b>：Composition 等 GPU 合成渲染器可能在 <see cref="IVideoRenderer.Attach"/>
+    /// 成功、但运行期持续无法导入/呈现（跨设备纹理不被合成器接收）。此时 <see cref="IRendererHealth.Unhealthy"/>
+    /// 触发本方法，把该工厂加入 <see cref="_failedFactories"/> 后重建回退链——保证永不静默空白，
+    /// 任意渲染器失败都有 Skia 兜底，符合「后端/渲染器统一公平、不能让某个玩不了」原则。</para>
+    /// </remarks>
+    private void OnRendererUnhealthy()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_renderer is null)
+                return;
+            if (_activeFactoryType is { } ft)
+            {
+                _logger?.LogWarning("渲染器（{Factory}）运行期不健康，回退到下一个渲染器。", ft.Name);
+                _failedFactories.Add(ft);
+            }
+            var bad = _renderer;
+            _renderer = null;
+            bad.Detach();
+            bad.Dispose();
+            EnsurePresenter();
+        });
     }
 
     /// <summary>
