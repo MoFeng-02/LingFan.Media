@@ -1,0 +1,37 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:media="using:LingFan.Media.Avalonia"
+             xmlns:vm="using:LingFan.Media.AvaloniaTools.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+             x:Class="LingFan.Media.AvaloniaTools.Views.MainView"
+             x:DataType="vm:MainViewModel">
+
+    <Grid RowDefinitions="*,Auto">
+        <!-- 视频显示控件：Player 绑定到 ViewModel.Player（先 OpenAsync 再绑定，见 VideoView 文档约定） -->
+        <!-- D3D11 无空域渲染把视频直接合成到窗口层（在 Avalonia UI 之下），任何不透明父级背景都会挡住视频；
+             故 VideoView 外层 Border 必须透明。Skia 软渲染时 VideoView 自身会画出帧，不受透明背景影响。 -->
+        <Border Grid.Row="0" Background="Transparent">
+            <media:VideoView x:Name="VideoView"
+                             Player="{Binding Player}"
+                             Stretch="Uniform" />
+        </Border>
+
+        <Button Content="我是测试" Margin="500,0" Grid.Row="0"/>
+
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    Spacing="12"
+                    Margin="12"
+                    HorizontalAlignment="Center">
+            <!-- 打开文件：需 TopLevel.StorageProvider，故用 Click 事件在 code-behind 处理 -->
+            <Button Content="打开文件" Click="OnOpenClick" />
+            <!-- 播放/暂停：纯 VM 逻辑，直接绑定命令 -->
+            <Button Content="播放 / 暂停" Command="{Binding TogglePlayCommand}" />
+            <TextBlock Text="{Binding Status}"
+                       VerticalAlignment="Center"
+                       Foreground="LightGray" />
+        </StackPanel>
+    </Grid>
+</UserControl>

@@ -8,6 +8,7 @@
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Infrastructure/LingFan.Media.Formats/LingFan.Media.Formats.csproj" />
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Infrastructure/LingFan.Media.Sources/LingFan.Media.Sources.csproj" />
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Infrastructure/LingFan.Media.Video/LingFan.Media.Video.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Playback/LingFan.Media.Playback.csproj" />
   </Folder>
   <Folder Name="/Backends/">
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Backends/LingFan.Media.Backends.FFmpeg/LingFan.Media.Backends.FFmpeg.csproj" />
@@ -40,6 +41,17 @@
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Tools/WasapiDriverProbe/WasapiDriverProbe.csproj" />
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
     <Project Path="src/Tools/PlaybackProbe/PlaybackProbe.csproj" />
+  </Folder>
+  <Folder Name="/Tools/AvaloniaTools/">
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Android/LingFan.Media.AvaloniaTools.Android.csproj" Id="2be81614-5752-465f-9481-ef9a68436bb2">
+      <Deploy />
+    </Project>
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Browser/LingFan.Media.AvaloniaTools.Browser.csproj" Id="38d58034-d6b1-45b7-b289-d0463637a0ea" />
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Desktop/LingFan.Media.AvaloniaTools.Desktop.csproj" Id="4787fa0d-4b99-4e05-8d54-d8d9dfb291a5" />
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.iOS/LingFan.Media.AvaloniaTools.iOS.csproj" Id="7ebca85e-3831-4913-9bc1-f8fe9ccbe2cc">
+      <Deploy />
+    </Project>
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.csproj" Id="8fb21948-9c12-4eb2-9f3a-03b883a19734" />
   </Folder>
   <Folder Name="/UI/">
     <Project Path="E:/Project/MyProject/AvaloniaUIApp/LingFanEngine.Media/src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />

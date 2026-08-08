@@ -13,4 +13,35 @@
 		<SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
 		<TrimmerSingleWarn>false</TrimmerSingleWarn>
 	</PropertyGroup>
+
+	<!-- ============================================================
+	     集中 NuGet 包品牌元数据（2026-08-08）
+	     作用：所有可打包的生产库在 `dotnet pack` 时自动带上
+	           LingFan.Media 的 Logo / README / Apache-2.0 许可声明，
+	           无需每个 csproj 重复配置。仅对 IsPackable=true 生效。
+	     授权边界：源代码与 logo 素材统一以 Apache-2.0 授权，
+	       无独立商标/品牌政策文件；第三方 LGPL 义务见 THIRD_PARTY_NOTICES.md。
+	     ============================================================ -->
+	<PropertyGroup>
+		<Authors>MoFeng-02</Authors>
+		<Company>MoFeng-02</Company>
+		<Product>LingFan.Media</Product>
+		<Copyright>Copyright (c) 2026 MoFeng-02</Copyright>
+		<PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageIcon>LingFan.icon.png</PackageIcon>
+		<RepositoryType>git</RepositoryType>
+		<PackageTags>dotnet;media;video;audio;cross-platform;ffmpeg;vlc;aot;playback</PackageTags>
+		<PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+	</PropertyGroup>
+
+	<ItemGroup Condition="'$(IsPackable)' == 'true'">
+		<!-- 仓库根 README 作为 NuGet 包说明；相对路径在 GitHub/仓库渲染时亦可用 -->
+		<None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
+		<!-- 专用小尺寸包图标（由 logo/LingFan.png 生成，256x256，避免塞入 5.6MB 原图） -->
+		<None Include="$(MSBuildThisFileDirectory)logo/LingFan.icon.png" Pack="true" PackagePath="\" />
+		<!-- Apache 合规随包文件 -->
+		<None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="\" />
+		<None Include="$(MSBuildThisFileDirectory)THIRD_PARTY_NOTICES.md" Pack="true" PackagePath="\" />
+	</ItemGroup>
 </Project>

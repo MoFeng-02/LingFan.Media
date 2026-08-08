@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<RootNamespace>LingFan.Media.AvaloniaTools</RootNamespace>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+
+		<IsAotCompatible>true</IsAotCompatible>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<AvaloniaResource Include="Assets\**" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 自管理版本（不使用中央包管理，避免与仓库其它子树版本冲突） -->
+		<PackageReference Include="Avalonia" Version="12.1.1" />
+		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+		<PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
+		<PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
+			<IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+			<PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+		</PackageReference>
+		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+		<!-- DI 容器 + 日志（AddLingFanMedia 的 composer 工厂需要 ILoggerFactory / IServiceProvider）；
+		     版本与仓库其它工程一致（10.0.10） -->
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+		<ProjectReference Include="..\..\..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+		<ProjectReference Include="..\..\..\..\UI\LingFan.Media.Avalonia\LingFan.Media.Avalonia.csproj" />
+		<!-- 三后端（含 GPU 加速）+ D3D11 渲染/呈现器 + WASAPI 音频；Windows 专属项在注册处用 OperatingSystem.IsWindows 守卫 -->
+		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
+		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
+		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
+		<ProjectReference Include="..\..\..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
+		<ProjectReference Include="..\..\..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
+		<ProjectReference Include="..\..\..\..\Presenters\LingFan.Media.GpuPresenter\LingFan.Media.GpuPresenter.csproj" />
+	</ItemGroup>
+</Project>

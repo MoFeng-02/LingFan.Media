@@ -18,7 +18,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
     <!-- 原生 libvlc 运行时分发包（LGPL）。仅探针携带，用于独立分发；库本体不含原生运行时。 -->
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
     <!-- LibVLCSharp 由 Backends.VLC 经 NuGet 透传提供（"引用 VLC 后端即拥有 LibVLCSharp"），此处无需重复显式引用。 -->
   </ItemGroup>
 

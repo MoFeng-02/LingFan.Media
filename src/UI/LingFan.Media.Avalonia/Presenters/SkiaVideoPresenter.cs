@@ -3,44 +3,62 @@ using Avalonia;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using LingFan.Media.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Avalonia;
 
 /// <summary>
-/// Skia 视频呈现器。IVideoPresenter 的默认实现，复用 Avalonia 渲染管线的 SkiaSharp 实例。
+/// Skia 视频呈现器（Avalonia UI 层）。IVideoPresenter 的默认实现，复用 Avalonia 渲染管线的 SkiaSharp 实例。
 /// </summary>
 /// <remarks>
 /// <para><b>关键原则</b>：不独立引用 SkiaSharp NuGet 包，通过 Avalonia 的 WriteableBitmap
-/// 复用底层 SkiaSharp 渲染实例。WriteableBitmap 是 Avalonia 对 Skia 像素缓冲区的封装，
-/// 内部由 SkiaSharp 驱动，避免版本冲突、原生库冲突和 AOT 部署问题。</para>
-/// <para><b>异步策略</b>：全部同步（sync / native 分类）——
-/// Present/Clear/Resize/Dispose 为 sync（纯内存 + GPU 操作）；
-/// Render 为 native（Avalonia Render 覆写，void 签名是框架硬限制）。
-/// 绝对无伪异步——所有 void 方法体内无 await，无 .Wait()，无 .Result。</para>
-/// <para><b>线程安全（U8 竞态修复）</b>：Present（渲染线程）和 Render（Avalonia 渲染线程）需同步访问 _bitmap。
-/// V1 竞态：Render 在锁内捕获 _bitmap 引用后释放锁，DrawImage 在锁外执行，期间 Present/Dispose 可能
-/// 释放该位图导致绘制已释放对象。V2 修复：<b>DrawImage 在锁内完成</b>（不释放锁），保证 _bitmap 在绘制期间
-/// 不被 Dispose/替换；锁内绘制仅短暂阻塞 Present（视频管线线程），属可接受的背压，且无伪异步。</para>
-/// <para><b>帧所有权</b>：V2 变更——Present 不再接管帧所有权，完成后不 Dispose 帧。
-/// 调用方（VideoPipeline）负责 Return 到 FramePool 或 Dispose。</para>
-/// <para><b>像素格式（U11）</b>：V1 仅 BGRA32/RGBA32。V2 新增 YUV420P/YUV422P/YUV444P/NV12/NV21/RGB24
-/// → BGRA 的 CPU 转换（Span + LUT，AOT 友好）。转换假设解码器拷贝路径的紧凑平面布局
-/// （av_image_copy_to_buffer align=1 产出：平面无行内填充、平面连续排列），故平面偏移仅由
-/// 宽高/格式推导，无需帧携带逐平面 stride。</para>
-/// <para><b>AOT 兼容</b>：sealed 类，无反射；YUV→RGB 用预计算只读 LUT（short[]，类型初始化期构造）。</para>
+/// 复用底层 SkiaSharp 渲染实例，避免版本冲突、原生库冲突和 AOT 部署问题。</para>
+/// <para><b>线程模型修正（修复不出画/冻屏根因）</b>：</para>
+/// <list type="bullet">
+/// <item>WriteableBitmap 有线程亲缘性——<b>创建 / Lock 写入 / DrawImage 必须发生在同一线程</b>（Avalonia 渲染线程）。
+/// 旧实现在管线线程创建并写入位图、渲染线程 DrawImage，跨线程访问抛 InvalidOperationException 致渲染线程崩溃，
+/// 表现为「不出画 + 应用冻死（播几秒音乐就没动静）」。</item>
+/// <item>本实现将帧像素拷贝与位图绘制解耦：<see cref="Present"/>（管线线程）仅把帧像素转换/拷贝进线程安全的
+/// <c>_staging</c> 缓冲（跨线程只读借用，不碰 WriteableBitmap）；<see cref="Render"/>（渲染线程）在锁定内
+/// 于<b>渲染线程</b>创建/更新 WriteableBitmap 并 DrawImage。两者经 <c>_gate</c> 同步，规避跨线程亲缘性。</item>
+/// </list>
+/// <para><b>异步策略</b>：全部同步（Present/Clear/Resize/Render 纯内存 + 像素拷贝；帧所有权归管线，
+/// Present 完成后由管线 ReturnFrame，本类绝不 Dispose 帧）。无伪异步——void 方法体内无 await。</para>
+/// <para><b>容错</b>：单帧异常（如 GPU 纹理回读失败）在 Present 内吞掉，绝不向上抛到管线线程击杀播放；
+/// 不支持的帧格式跳过该帧。</para>
+/// <para><b>AOT 兼容</b>：sealed 类，无反射；YUV→BGRA 用预计算只读 LUT（short[]，类型初始化期构造）。</para>
 /// </remarks>
 public sealed class SkiaVideoPresenter : IVideoPresenter
 {
-    private readonly object _frameLock = new();
+    private readonly object _gate = new();
 
+    /// <summary>线程安全 staging 缓冲：管线线程写入、渲染线程读取，仅经 <c>_gate</c> 保护。</summary>
+    private byte[]? _staging;
+    private int _stagingW;
+    private int _stagingH;
+    /// <summary>是否有尚未被渲染线程取走的新帧。</summary>
+    private bool _newFrame;
+
+    /// <summary>WriteableBitmap（仅在渲染线程创建/写入/绘制，规避线程亲缘性）。</summary>
     private WriteableBitmap? _bitmap;
-    private int _bitmapWidth;
-    private int _bitmapHeight;
+    private int _bitmapW;
+    private int _bitmapH;
     private global::Avalonia.Platform.PixelFormat _bitmapFormat = global::Avalonia.Platform.PixelFormat.Bgra8888;
-    private int _targetWidth;
-    private int _targetHeight;
+
+    private int _targetW;
+    private int _targetH;
     private float _scale = 1.0f;
     private bool _disposed;
+
+    private readonly ILogger? _logger;
+
+    /// <summary>初始化 Skia 呈现器。可选注入日志器，用于暴露帧转换失败（避免静默白屏）。</summary>
+    /// <param name="logger">可选日志器；为 null 时不记录。</param>
+    public SkiaVideoPresenter(ILogger? logger = null)
+    {
+        _logger = logger;
+    }
 
     /// <summary>宽高比模式。</summary>
     public AspectRatioMode AspectRatioMode { get; set; } = AspectRatioMode.Uniform;
@@ -52,8 +70,8 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     public void Initialize(IRenderTarget target)
     {
         ArgumentNullException.ThrowIfNull(target);
-        _targetWidth = target.Width;
-        _targetHeight = target.Height;
+        _targetW = target.Width;
+        _targetH = target.Height;
         _scale = target.Scale;
     }
 
@@ -61,86 +79,121 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     public void Present(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-
-        // 防御性检查：如果已 Dispose，直接返回（V2: 调用方负责帧生命周期）
         if (_disposed)
-        {
             return;
-        }
 
-        if (frame.Resource is SoftwareFrameResource sw)
+        try
         {
-            // 决定 WriteableBitmap 目标格式：所有非 BGRA 源格式统一转换为 BGRA32 写入
-            var avFormat = sw.Format switch
+            if (frame.Resource is SoftwareFrameResource sw)
             {
-                LingFan.Media.Abstractions.PixelFormat.BGRA32 => global::Avalonia.Platform.PixelFormat.Bgra8888,
-                LingFan.Media.Abstractions.PixelFormat.RGBA32 => global::Avalonia.Platform.PixelFormat.Rgba8888,
-                LingFan.Media.Abstractions.PixelFormat.RGB24 => global::Avalonia.Platform.PixelFormat.Bgra8888,
-                LingFan.Media.Abstractions.PixelFormat.YUV420P => global::Avalonia.Platform.PixelFormat.Bgra8888,
-                LingFan.Media.Abstractions.PixelFormat.YUV422P => global::Avalonia.Platform.PixelFormat.Bgra8888,
-                LingFan.Media.Abstractions.PixelFormat.YUV444P => global::Avalonia.Platform.PixelFormat.Bgra8888,
-                LingFan.Media.Abstractions.PixelFormat.NV12 => global::Avalonia.Platform.PixelFormat.Bgra8888,
-                LingFan.Media.Abstractions.PixelFormat.NV21 => global::Avalonia.Platform.PixelFormat.Bgra8888,
-                _ => throw new NotSupportedException(
-                    $"像素格式 {sw.Format} 在 Skia UI 模式下暂不支持。V2 支持 BGRA32/RGBA32/RGB24/YUV420P/YUV422P/YUV444P/NV12/NV21。")
-            };
-
-            lock (_frameLock)
-            {
-                // 双重检查锁定：防止 Dispose 在锁外检查和锁内执行之间运行
-                if (_disposed)
-                    return;
-                unsafe
+                int w = sw.Width, h = sw.Height;
+                lock (_gate)
                 {
-                    // 尺寸或格式变化时重建位图
-                    EnsureBitmap(sw.Width, sw.Height, avFormat);
-
-                    // 写入像素数据（unsafe: IntPtr → Span<byte> 零拷贝）
-                    using (var locked = _bitmap!.Lock())
+                    EnsureStaging(w, h);
+                    unsafe
                     {
-                        var src = sw.Data.Span;
-                        IntPtr dest = locked.Address;
-                        int destStride = locked.RowBytes;
-
-                        switch (sw.Format)
+                        fixed (byte* p = _staging)
                         {
-                            case LingFan.Media.Abstractions.PixelFormat.BGRA32:
-                            case LingFan.Media.Abstractions.PixelFormat.RGBA32:
-                                WriteBgra(src, sw.Width, sw.Height, sw.Stride, dest, destStride);
-                                break;
-                            case LingFan.Media.Abstractions.PixelFormat.RGB24:
-                                WriteRgb24ToBgra(src, sw, dest, destStride);
-                                break;
-                            default:
-                                // YUV420P / YUV422P / YUV444P / NV12 / NV21 → BGRA
-                                WriteYuvToBgra(src, sw, dest, destStride);
-                                break;
+                            IntPtr dest = (IntPtr)p;
+                            int destStride = w * 4; // staging 始终紧凑 BGRA
+                            switch (sw.Format)
+                            {
+                                case LingFan.Media.Abstractions.PixelFormat.BGRA32:
+                                case LingFan.Media.Abstractions.PixelFormat.RGBA32:
+                                    WriteBgra(sw.Data.Span, w, h, sw.Stride, dest, destStride);
+                                    break;
+                                case LingFan.Media.Abstractions.PixelFormat.RGB24:
+                                    WriteRgb24ToBgra(sw, dest, destStride);
+                                    break;
+                                default:
+                                    WriteYuvToBgra(sw, dest, destStride);
+                                    break;
+                            }
                         }
                     }
+                    _stagingW = w;
+                    _stagingH = h;
+                    _newFrame = true;
                 }
             }
-        }
-        else if (frame.Resource is IGpuTextureResource gpu)
-        {
-            // GPU 纹理回退：经中立 IGpuTextureResource 桥回读为 BGRA32，写入 WriteableBitmap。
-            // 全程零 Renderers 具体类型进入 Avalonia（依赖倒置严守）。
-            using var rb = gpu.ReadbackToCpu();
-            lock (_frameLock)
+            else if (frame.Resource is IGpuTextureResource gpu)
             {
-                if (_disposed) return;
-                EnsureBitmap(rb.Width, rb.Height, global::Avalonia.Platform.PixelFormat.Bgra8888);
-                using (var locked = _bitmap!.Lock())
+                // GPU 纹理回退：经中立 IGpuTextureResource 桥回读为 BGRA（与 Avalonia Bgra8888 位图一致）。
+                // 回读在管线线程执行（与最简播放 GPU 工作同线程），仅把结果像素拷进 staging；
+                // 位图本身仍在渲染线程创建/绘制。
+                using var rb = gpu.ReadbackToCpu();
+                int w = rb.Width, h = rb.Height;
+                lock (_gate)
                 {
-                    WriteBgra(rb.Data.Span, rb.Width, rb.Height, rb.Stride, locked.Address, locked.RowBytes);
+                    EnsureStaging(w, h);
+                    unsafe
+                    {
+                        fixed (byte* p = _staging)
+                        {
+                            // rb.Data 为 BGRA（最简播放 FrameDumper 的 ReorderBgraToRgba 是 PNG(RGBA) 专用）；
+                            // 此处直接整块拷进 staging（BGRA），匹配 Bgra8888 位图，无需重排。
+                            rb.Data.Span.CopyTo(new Span<byte>(p, w * h * 4));
+                        }
+                    }
+                    _stagingW = w;
+                    _stagingH = h;
+                    _newFrame = true;
                 }
             }
+            // 其它资源类型：跳过该帧（不抛，避免击杀管线），但必须记录——静默跳过是此前白屏的元凶。
+            else
+            {
+                _logger?.LogWarning(
+                    "SkiaVideoPresenter 收到不支持的帧资源类型 {ResourceType}，跳过该帧（视频将不出画）。" +
+                    "如需支持该类型，请在 Present 中补充其像素拷贝/回读分支。",
+                    frame.Resource?.GetType().Name ?? "<null>");
+            }
         }
-        else
+        catch (Exception ex)
         {
-            throw new NotSupportedException(
-                $"帧资源类型 {frame.Resource?.GetType().Name ?? "null"} 在 Skia UI 模式下暂不支持。V1/V2 仅支持 SoftwareFrameResource 与 GPU 纹理（经 IGpuTextureResource 回退）。");
+            // 单帧异常（如 GPU 回读失败）记录但不向上抛到管线线程击杀播放——此前 ReadbackToCpu 抛 NotSupported 即被此处吞掉导致白屏。
+            _logger?.LogWarning(ex, "SkiaVideoPresenter 帧转位图失败（跳过本帧）。");
         }
-        // V2: Present 不再 Dispose 帧——调用方（VideoPipeline）负责 Return 到 FramePool
+    }
+
+    /// <summary>确保 staging 缓冲足够容纳 w*h*4 字节（BGRA）。</summary>
+    private void EnsureStaging(int w, int h)
+    {
+        int need = w * h * 4;
+        if (_staging is null || _staging.Length < need)
+            _staging = new byte[need];
+    }
+
+    /// <inheritdoc/>
+    public void Render(DrawingContext drawingContext)
+    {
+        ArgumentNullException.ThrowIfNull(drawingContext);
+        if (_disposed)
+            return;
+
+        // 仅在渲染线程内：锁定取走新帧像素 → 于本线程创建/更新 WriteableBitmap → 解锁后绘制。
+        lock (_gate)
+        {
+            if (_newFrame && _staging is not null && _stagingW > 0 && _stagingH > 0)
+            {
+                EnsureBitmap(_stagingW, _stagingH, _bitmapFormat);
+                if (_bitmap is not null)
+                {
+                    using (var locked = _bitmap.Lock())
+                    {
+                        // staging 为紧凑 BGRA（stride = w*4），Bgra8888 位图 RowBytes 亦为 w*4 → 整块拷贝。
+                        System.Runtime.InteropServices.Marshal.Copy(_staging, 0, locked.Address, _stagingW * _stagingH * 4);
+                    }
+                }
+                _newFrame = false;
+            }
+        }
+
+        if (_bitmap is not null && _bitmapW > 0 && _bitmapH > 0)
+        {
+            var destRect = CalculateDestRect(_bitmapW, _bitmapH, _targetW, _targetH, AspectRatioMode);
+            drawingContext.DrawImage(_bitmap, destRect);
+        }
     }
 
     /// <summary>
@@ -148,20 +201,16 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// </summary>
     private static unsafe void WriteBgra(ReadOnlySpan<byte> src, int width, int height, int srcStride, IntPtr dest, int destStride)
     {
-        // V2-05: 零拷贝帧携带原生 stride（可能含对齐填充）；Stride==0 为历史紧凑布局，
-        // 视为与目标一致（保持 V1 行为）。
         int srcStride2 = srcStride > 0 ? srcStride : destStride;
         byte* d = (byte*)dest;
 
         if (srcStride2 == destStride)
         {
-            // 快路径：源/目标 stride 一致，整块拷贝
             var copyLength = Math.Min(src.Length, destStride * height);
             src.Slice(0, copyLength).CopyTo(new Span<byte>(d, copyLength));
         }
         else
         {
-            // 慢路径：stride 不一致，逐行拷贝有效载荷
             var rowBytes = Math.Min(srcStride2, destStride);
             for (int y = 0; y < height; y++)
             {
@@ -175,15 +224,15 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     }
 
     /// <summary>
-    /// 确保 WriteableBitmap 存在且尺寸/格式匹配（不匹配则重建）。
+    /// 确保 WriteableBitmap 存在且尺寸/格式匹配（不匹配则重建）。始终在渲染线程调用。
     /// </summary>
     private void EnsureBitmap(int width, int height, global::Avalonia.Platform.PixelFormat format)
     {
-        if (_bitmap == null || _bitmapWidth != width || _bitmapHeight != height || _bitmapFormat != format)
+        if (_bitmap is null || _bitmapW != width || _bitmapH != height || _bitmapFormat != format)
         {
             _bitmap?.Dispose();
-            _bitmapWidth = width;
-            _bitmapHeight = height;
+            _bitmapW = width;
+            _bitmapH = height;
             _bitmapFormat = format;
             _bitmap = new WriteableBitmap(
                 new PixelSize(width, height),
@@ -195,7 +244,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// <summary>
     /// RGB24（打包 R,G,B 各 1 字节）→ BGRA32。AOT 友好，纯 Span 逐像素写。
     /// </summary>
-    internal static unsafe void WriteRgb24ToBgra(ReadOnlySpan<byte> src, SoftwareFrameResource sw, IntPtr dest, int destStride)
+    internal static unsafe void WriteRgb24ToBgra(SoftwareFrameResource sw, IntPtr dest, int destStride)
     {
         int srcStride = sw.Stride > 0 ? sw.Stride : sw.Width * 3;
         byte* dst = (byte*)dest;
@@ -206,7 +255,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
             for (int x = 0; x < sw.Width; x++)
             {
                 int s = srcRow + x * 3;
-                byte r = src[s], g = src[s + 1], b = src[s + 2];
+                byte r = sw.Data.Span[s], g = sw.Data.Span[s + 1], b = sw.Data.Span[s + 2];
                 int di = x * 4;
                 dstRow[di] = b;
                 dstRow[di + 1] = g;
@@ -239,13 +288,12 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// 假设紧凑平面布局（解码器 av_image_copy_to_buffer align=1 产出）：平面无行内填充、连续排列，
     /// 平面偏移仅由宽高与色度子采样推导（与 av_image_copy_to_buffer 的打包语义一致）。
     /// </summary>
-    internal static unsafe void WriteYuvToBgra(ReadOnlySpan<byte> src, SoftwareFrameResource sw, IntPtr dest, int destStride)
+    internal static unsafe void WriteYuvToBgra(SoftwareFrameResource sw, IntPtr dest, int destStride)
     {
         byte* dstBase = (byte*)dest;
         int w = sw.Width, h = sw.Height;
         bool isNv = sw.Format is LingFan.Media.Abstractions.PixelFormat.NV12 or LingFan.Media.Abstractions.PixelFormat.NV21;
 
-        // 推导色度平面尺寸（与 av_image_get_linesize / av_image_copy_to_buffer 一致）
         int chromaW, chromaH;
         bool hSub, vSub;
         switch (sw.Format)
@@ -264,40 +312,40 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
         int ySize = w * h;
         int uOff = ySize;
         int vOff = ySize + chromaW * chromaH;
-        int uvOff = ySize; // NV12/NV21 交错色度平面基址
+        int uvOff = ySize;
 
         for (int y = 0; y < h; y++)
         {
             byte* dstRow = dstBase + (nuint)(y * destStride);
             int yBase = y * w;
             int cRow = vSub ? (y >> 1) : y;
-            int uvRowBase = uvOff + cRow * (w * 2);   // NV 色度行宽 = w * 2 字节（紧凑）
+            int uvRowBase = uvOff + cRow * (w * 2);
             int uRowBase = uOff + cRow * chromaW;
             int vRowBase = vOff + cRow * chromaW;
 
             for (int x = 0; x < w; x++)
             {
-                int yv = src[yBase + x];
+                int yv = sw.Data.Span[yBase + x];
                 int cu, cv;
                 if (isNv)
                 {
                     int idx = uvRowBase + x * 2;
                     if (sw.Format == LingFan.Media.Abstractions.PixelFormat.NV12)
                     {
-                        cu = src[idx];
-                        cv = src[idx + 1];
+                        cu = sw.Data.Span[idx];
+                        cv = sw.Data.Span[idx + 1];
                     }
                     else // NV21: V 在前
                     {
-                        cv = src[idx];
-                        cu = src[idx + 1];
+                        cv = sw.Data.Span[idx];
+                        cu = sw.Data.Span[idx + 1];
                     }
                 }
                 else
                 {
                     int cCol = hSub ? (x >> 1) : x;
-                    cu = src[uRowBase + cCol];
-                    cv = src[vRowBase + cCol];
+                    cu = sw.Data.Span[uRowBase + cCol];
+                    cv = sw.Data.Span[vRowBase + cCol];
                 }
 
                 int r = yv + Rv[cv];
@@ -319,7 +367,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// <inheritdoc/>
     public void Clear()
     {
-        lock (_frameLock)
+        lock (_gate)
         {
             _bitmap?.Dispose();
             _bitmap = null;
@@ -329,28 +377,9 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// <inheritdoc/>
     public void Resize(int width, int height, float scale)
     {
-        _targetWidth = width;
-        _targetHeight = height;
+        _targetW = width;
+        _targetH = height;
         _scale = scale;
-    }
-
-    /// <inheritdoc/>
-    public void Render(DrawingContext drawingContext)
-    {
-        ArgumentNullException.ThrowIfNull(drawingContext);
-        if (_disposed)
-            return;
-
-        // U8 竞态修复：DrawImage 必须在锁内完成——防止释放锁后 Present/Dispose 释放正在绘制的 _bitmap。
-        // 锁内绘制仅短暂阻塞 Present（视频管线线程），是可接受的背压；纯 GPU blit，无 I/O、无 await，非伪异步。
-        lock (_frameLock)
-        {
-            if (_bitmap == null || _bitmapWidth <= 0 || _bitmapHeight <= 0)
-                return;
-
-            var destRect = CalculateDestRect(_bitmapWidth, _bitmapHeight, _targetWidth, _targetHeight, AspectRatioMode);
-            drawingContext.DrawImage(_bitmap, destRect);
-        }
     }
 
     /// <summary>
@@ -408,10 +437,11 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
         if (_disposed) return;
         _disposed = true;
 
-        lock (_frameLock)
+        lock (_gate)
         {
             _bitmap?.Dispose();
             _bitmap = null;
+            _staging = null;
         }
     }
 }

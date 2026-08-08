@@ -1,0 +1,13 @@
+﻿<Project>
+  <!--
+    本子项目（LingFan.Media.AvaloniaTools 及其各 head：.Desktop/.Android/.iOS/.Browser）
+    不使用中央包管理（Central Package Management）。
+    每个 csproj 自带显式 Version 自管理，避免与仓库其它子树（Demo 等）的版本冲突。
+    注意：若将来在仓库更上层引入 Directory.Packages.props 开启中央管理，
+    本文件中的 ManagePackageVersionsCentrally=false 会作为子树覆盖项继续生效，
+    确保 AvaloniaTools 始终自管理版本。
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

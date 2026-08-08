@@ -36,6 +36,11 @@ public static class D3D11Extensions
         // 而无需引用具体渲染器模块（依赖倒置严守）。
         builder.Services.AddSingleton<IGpuDeviceContext>(sp => sp.GetRequiredService<D3D11RendererFactory>().Context);
 
+        // 中立共享表面源工厂（GPU 适配层 ↔ UI 渲染器层之间唯一桥的 D3D11 实现）。
+        // 产出 D3D11TextureGlobalSharedHandle 句柄，供 Avalonia ICompositionGpuInterop 无空域导入。
+        // 与 IGpuDeviceContext 同源：依赖具体 D3D11RendererFactory 取共享设备，注册为 Singleton。
+        builder.Services.AddSingleton<ISharedGpuSurfaceSourceFactory, D3D11SharedSurfaceSourceFactory>();
+
         // E3 后端自动选择：启用且未显式指定时，D3D11 作为 Windows 默认 GPU 后端。
         if (builder.Options.EnableAutoBackendSelection && builder.Options.DefaultVideoRenderer is null)
         {

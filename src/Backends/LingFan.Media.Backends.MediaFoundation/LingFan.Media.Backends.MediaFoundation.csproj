@@ -10,6 +10,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <!-- MfD3D11TextureResource.ReadbackToCpu：MF DXVA 硬解纹理 CPU 回读（NV12→BGRA），
+         供 Skia 软渲染兜底路径消费（保持 GPU 解码，打通控件内 WriteableBitmap 上屏）。 -->
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
   </ItemGroup>
 
   <ItemGroup>

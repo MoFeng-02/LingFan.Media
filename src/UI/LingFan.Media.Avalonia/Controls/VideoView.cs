@@ -4,7 +4,6 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
-using LingFan.Media.Presenters;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -26,7 +25,7 @@ namespace LingFan.Media.Avalonia;
 /// <para><b>异步策略</b>（遵守异步同步分类表）：</para>
 /// <list type="bullet">
 /// <item>OnAttachedToVisualTree：sync——创建 Presenter + Initialize，纯内存</item>
-/// <item>OnDetachedFromVisualTree：V1 sync（SkiaVideoPresenter.Dispose 同步，无 I/O 可 await）。
+/// <item>OnDetachedFromVisualTree：V1 sync（SkiaVideoRenderer.Dispose 同步，无 I/O 可 await）。
 /// V2 原生 GPU 模式新增 <see cref="DisposePlayerAsync"/> 供消费方显式调用（**async void 绝对禁止**），
 /// void 覆写内调同步清理兜底。</item>
 /// <item>Render(DrawingContext)：native——Avalonia 框架 void 签名硬限制</item>
@@ -51,7 +50,7 @@ namespace LingFan.Media.Avalonia;
 /// </remarks>
 public sealed class VideoView : Control, IRenderTarget
 {
-    private IGpuPresenter? _presenter;
+    private IVideoRenderer? _renderer;
     private IMediaPlayer? _player;
     private SubtitleFrame? _currentSubtitle;
     private IServiceProvider? _services;
@@ -64,9 +63,9 @@ public sealed class VideoView : Control, IRenderTarget
     public static readonly StyledProperty<IMediaPlayer?> PlayerProperty =
         AvaloniaProperty.Register<VideoView, IMediaPlayer?>(nameof(Player));
 
-    /// <summary>渲染器类型的 StyledProperty。</summary>
+    /// <summary>偏好渲染器类型的 StyledProperty（可选；null=按注册顺序自动回退，Skia 末级兜底）。</summary>
     public static readonly StyledProperty<Type?> RendererTypeProperty =
-        AvaloniaProperty.Register<VideoView, Type?>(nameof(RendererType), defaultValue: typeof(SkiaVideoPresenter));
+        AvaloniaProperty.Register<VideoView, Type?>(nameof(RendererType), defaultValue: null);
 
     /// <summary>宽高比模式的 StyledProperty。</summary>
     public static readonly StyledProperty<AspectRatioMode> AspectRatioModeProperty =
@@ -103,7 +102,14 @@ public sealed class VideoView : Control, IRenderTarget
         set => SetValue(PlayerProperty, value);
     }
 
-    /// <summary>渲染器类型（默认 SkiaVideoPresenter，可切换 D3D11/Vulkan/Metal/OpenGL）。</summary>
+    /// <summary>
+    /// 偏好渲染器类型（可选）。设为某个 <see cref="IVideoRenderer"/> 实现类型（如
+    /// <c>typeof(D3D11Renderer)</c>）可令对应工厂在回退链中优先尝试；若其在该环境无法合成
+    /// （Avalonia 控件内仅提供 RenderHandleType.None，GPU 原生 SwapChain 渲染器需 Pointer/HWND
+    /// 而抛 NotSupportedException），VideoView 自动回退到下一个已注册渲染器，最终落到内置
+    /// <see cref="SkiaVideoRenderer"/> 软渲染——与后端回退（BackendFallbackMediaPlayerFactory）同构。
+    /// 不设置（null）则按注册顺序尝试，Skia 永远作为末级兜底。
+    /// </summary>
     public Type? RendererType
     {
         get => GetValue(RendererTypeProperty);
@@ -111,9 +117,10 @@ public sealed class VideoView : Control, IRenderTarget
     }
 
     /// <summary>
-    /// 宿主注入的 DI 服务容器。供 VideoView 按 <see cref="RendererType"/> 解析已注册的
-    /// <see cref="IVideoPresenterFactory"/>（如 D3D11 GPU Presenter 桥接项目）。未注入时回退到内置
-    /// <see cref="SkiaVideoPresenter"/>。VideoView 不引用桥接项目，仅用 Type 对象比较，符合依赖倒置（D1 方案 B）。
+    /// 宿主注入的 DI 服务容器。供 VideoView 解析已注册的 <see cref="IVideoRendererFactory"/>
+    /// （如 D3D11RendererFactory 等 GPU 渲染器工厂）。未注入时直接兜底到内置
+    /// <see cref="SkiaVideoRenderer"/>。VideoView 不引用具体 GPU 项目，仅通过 IVideoRendererFactory
+    /// 抽象消费，符合依赖倒置（D1 方案 B）。
     /// </summary>
     public IServiceProvider? Services
     {
@@ -168,23 +175,23 @@ public sealed class VideoView : Control, IRenderTarget
 
     /// <summary>
     /// 呈现一帧到 VideoView。由管线或桥接组件调用。
-    /// 同步方法——委托给 SkiaVideoPresenter.Present（纯内存 + GPU操作）。
+    /// 同步方法——委托给 SkiaVideoRenderer.Present（纯内存 + GPU操作）。
     /// </summary>
     /// <param name="frame">要呈现的视频帧（只读借用：所有权归管线，回调返回后由管线 ReturnFrame 释放）。</param>
     public void PresentFrame(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
 
-        // 捕获引用防止 TOCTOU 竞态：_presenter 可能被 OnDetachedFromVisualTree（UI 线程）置 null
-        var presenter = _presenter;
-        if (presenter == null)
+        // 捕获引用防止 TOCTOU 竞态：_renderer 可能被 OnDetachedFromVisualTree（UI 线程）置 null
+        var renderer = _renderer;
+        if (renderer == null)
         {
-            // Presenter 尚未初始化：帧归还由管线 ReturnFrame 统一负责（只读借用契约）。
+            // 渲染器尚未初始化：帧归还由管线 ReturnFrame 统一负责（只读借用契约）。
             // 此处不得 Dispose——统一 FrameChannel 多播下，后续订阅方会读到已释放帧（use-after-free）。
             return;
         }
 
-        presenter.Present(frame);
+        renderer.Present(frame);
         Dispatcher.UIThread.Post(() => InvalidateVisual());
     }
 
@@ -203,7 +210,7 @@ public sealed class VideoView : Control, IRenderTarget
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <b>V1 同步兜底</b>：SkiaVideoPresenter.Dispose 是同步的，无 I/O 可 await。
+    /// <b>V1 同步兜底</b>：SkiaVideoRenderer.Dispose 是同步的，无 I/O 可 await。
     /// <b>V2 推荐路径</b>：消费方先 <c>await DisposePlayerAsync()</c> 释放 GPU 资源（GPU flush + SwapChain 释放是真实异步 I/O），
     /// 再让控件 Detach。void 覆写不可改签名为 Task/ValueTask（<b>async void 绝对禁止</b>），
     /// 内调同步清理兜底——解绑播放器事件 + 同步释放 Presenter。
@@ -216,9 +223,13 @@ public sealed class VideoView : Control, IRenderTarget
         // 解绑播放器事件
         DetachPlayer();
 
-        // 释放 Presenter（SkiaVideoPresenter.Dispose 是同步的）
-        _presenter?.Dispose();
-        _presenter = null;
+        // 释放渲染器（Detach 解绑渲染目标 + Dispose 同步释放；Skia 为同步 Dispose，无 I/O 可 await）
+        if (_renderer is not null)
+        {
+            _renderer.Detach();
+            _renderer.Dispose();
+            _renderer = null;
+        }
     }
 
     /// <summary>
@@ -246,9 +257,13 @@ public sealed class VideoView : Control, IRenderTarget
             await player.DisposeAsync();
         }
 
-        // 4. 释放 Presenter（SkiaVideoPresenter.Dispose 是同步的）
-        _presenter?.Dispose();
-        _presenter = null;
+        // 4. 释放渲染器（Detach 解绑渲染目标 + Dispose 同步释放；Skia 为同步 Dispose，无 I/O 可 await）
+        if (_renderer is not null)
+        {
+            _renderer.Detach();
+            _renderer.Dispose();
+            _renderer = null;
+        }
     }
 
     /// <inheritdoc/>
@@ -256,10 +271,11 @@ public sealed class VideoView : Control, IRenderTarget
     {
         base.Render(drawingContext);
 
-        // 委托给 Presenter 绘制视频帧（GPU Presenter 实现 IGpuPresenter 不含 Render，自然跳过无空域合成）
-        if (_presenter is IVideoPresenter presenter)
+        // 仅 Avalonia 合成型渲染器（如 SkiaVideoRenderer）经本回调绘制缓存位图；
+        // 原生 SwapChain 渲染器（D3D11 等）不经此路径（其 Attach 在 Avalonia 控件内必然失败并回退）。
+        if (_renderer is IAvaloniaRenderAware renderAware)
         {
-            presenter.Render(drawingContext);
+            renderAware.Render(drawingContext);
         }
 
         // 绘制字幕叠加层
@@ -283,7 +299,7 @@ public sealed class VideoView : Control, IRenderTarget
         {
             OnRendererTypeChanged();
         }
-        else if (change.Property == AspectRatioModeProperty && _presenter is SkiaVideoPresenter skia)
+        else if (change.Property == AspectRatioModeProperty && _renderer is SkiaVideoRenderer skia)
         {
             skia.AspectRatioMode = (AspectRatioMode)change.NewValue!;
         }
@@ -293,99 +309,119 @@ public sealed class VideoView : Control, IRenderTarget
     protected override void OnSizeChanged(SizeChangedEventArgs e)
     {
         base.OnSizeChanged(e);
-        _presenter?.Resize((int)e.NewSize.Width, (int)e.NewSize.Height, (float)(TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0));
+        if (_renderer is IAvaloniaRenderAware renderAware)
+        {
+            renderAware.Resize((int)e.NewSize.Width, (int)e.NewSize.Height, (float)(TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0));
+        }
     }
 
     #region Private Methods
 
+    /// <summary>
+    /// 按 DI 注册的 <see cref="IVideoRendererFactory"/> 集合，以「注册顺序 + 异常驱动回退」解析可用渲染器。
+    /// 与 <c>BackendFallbackMediaPlayerFactory</c> 同构：逐个尝试 <c>Create()</c> + <c>Attach(this)</c>，
+    /// 任一环节抛异常则安全降级到下一个工厂；<see cref="SkiaVideoRendererFactory"/> 接受
+    /// <see cref="RenderHandleType.None"/> 渲染目标，作为末级兜底必然成功。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Avalonia 控件约束</b>：VideoView 实现 <see cref="IRenderTarget"/> 且其
+    /// <see cref="IRenderTarget.HandleType"/> 为 <see cref="RenderHandleType.None"/>（无子 HWND 宿主）。
+    /// GPU 原生 SwapChain 渲染器（D3D11/Vulkan/Metal/OpenGL）的 <c>Attach</c> 要求
+    /// <see cref="RenderHandleType.Pointer"/>（HWND），在控件内必抛 <see cref="NotSupportedException"/>
+    /// → 自动回退到 Skia 软渲染。解码仍走 GPU（FFmpeg D3D11VA / MF DXVA），仅最终 blit 到位图，
+    /// 与「GPU 友好且不固定 GPU」诉求一致。原生零拷贝上屏留作独立任务。</para>
+    /// <para><b>无空域合成</b>：Skia 路径将帧写入 Avalonia 的 WriteableBitmap，由
+    /// <see cref="Render(DrawingContext)"/> 经 <see cref="IAvaloniaRenderAware"/> 绘入合成树，
+    /// 与 Avalonia 合成器共存，无黑屏/竞态。</para>
+    /// <para><b>异步策略</b>：sync——纯内存 + 渲染器 Attach（GPU 失败抛异常，无 I/O await）。</para>
+    /// <para><b>AOT 兼容</b>：无反射；工厂解析经 DI 抽象。</para>
+    /// </remarks>
     private void EnsurePresenter()
     {
-        if (_presenter != null)
+        if (_renderer != null)
             return;
 
-        var rendererType = RendererType ?? typeof(SkiaVideoPresenter);
-
-        IGpuPresenter? created = null;
-
-        // 优先通过 DI 注册的 IGpuPresenterFactory 按 RendererType 匹配（D1 方案 B 演进）。
-        // VideoView 不引用具体 GPU 项目（如 GpuPresenter.D3D11），仅用 Type 对象比较，符合依赖倒置。
-        // 工厂集合同时包含 SkiaPresenterFactory（继承 IGpuPresenterFactory）与各后端 GPU 工厂。
-        if (_services is not null)
+        // 无 DI 容器：直接兜底内置 Skia——独立于注册顺序，保证视频必出。
+        if (_services is null)
         {
-            foreach (var factory in _services.GetServices<IGpuPresenterFactory>())
+            var skia = new SkiaVideoRenderer(_logger);
+            skia.Attach(this);
+            _renderer = skia;
+            if (_renderer is SkiaVideoRenderer sk) sk.AspectRatioMode = AspectRatioMode;
+            UpdateVideoSinkSubscription();
+            return;
+        }
+
+        _logger ??= _services.GetService<ILogger<VideoView>>();
+
+        // 解析全部已注册 IVideoRendererFactory（DI 注册顺序）。
+        var factories = new List<IVideoRendererFactory>(_services.GetServices<IVideoRendererFactory>());
+
+        // 1) Skia 永远置于末位（无论注册顺序如何，保证它是最终兜底）。
+        factories.RemoveAll(f => f is SkiaVideoRendererFactory);
+
+        // 2) 若指定 RendererType 偏好，将其对应工厂前置（按工厂命名约定匹配，避免为类型检查而 Create）。
+        if (RendererType is { } preferred)
+        {
+            for (int i = 0; i < factories.Count; i++)
             {
-                if (factory.PresenterType == rendererType)
+                if (factories[i].GetType().Name.Contains(preferred.Name, StringComparison.Ordinal))
                 {
-                    created = factory.Create();
+                    var pref = factories[i];
+                    factories.RemoveAt(i);
+                    factories.Insert(0, pref);
                     break;
                 }
             }
         }
 
-        created ??= (rendererType == typeof(SkiaVideoPresenter))
-            ? new SkiaVideoPresenter()
-            : throw new NotSupportedException(
-                $"渲染器类型 {rendererType.Name} 未注册对应的 IGpuPresenterFactory，且非 SkiaVideoPresenter。" +
-                "请调用 AddD3D11Presenter()（或对应后端注册方法）以注册匹配的 IGpuPresenterFactory。");
+        // 3) 末位追加 Skia 兜底工厂（Accept RenderHandleType.None，必然成功）。
+        factories.Add(new SkiaVideoRendererFactory(_logger));
 
-        _presenter = created;
-
-        // 统一初始化：尝试解析窗口 HWND 并构造 Pointer 渲染目标。
-        // - GPU 路径（D3D11GpuPresenter 等）：需要 HWND 建 SwapChain。
-        // - Skia 路径：只读 Width/Height/Scale（不碰 NativeHandle），GpuRenderTarget 同样满足。
-        // HWND 解析依赖 Avalonia Visual/TopLevel，故放在 UI 层；IGpuPresenter 本身保持与 UI 无关。
-        var hwnd = TryResolveHwnd();
-        IRenderTarget initTarget = hwnd is not null
-            ? new GpuRenderTarget(hwnd.Value, (int)Bounds.Width, (int)Bounds.Height,
-                (float)(TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0))
-            : this;
-
-        // GPU 后端（D3D11 等）初始化可能因环境/驱动失败（非 Windows、无 GPU、Attach 异常等）。
-        // 捕获异常并安全降级到内置 SkiaVideoPresenter，保证 UI 不崩、视频仍可软渲染呈现（无空域渲染）。
-        try
+        // 异常驱动回退：依次尝试 Create() + Attach(this)。
+        // GPU 渲染器在 Avalonia 控件内 Attach（需 Pointer/HWND）抛 NotSupportedException → 安全落入下一个；
+        // 不 Dispose 失败的 GPU 单例渲染器——其共享 GPU 设备由工厂持有，部分 Attach 失败无资源泄漏。
+        foreach (var factory in factories)
         {
-            _presenter.Initialize(initTarget);
-        }
-        catch (Exception ex)
-        {
-            _logger ??= _services?.GetService<ILogger<VideoView>>();
-            _logger?.LogWarning(ex,
-                "GPU Presenter（{RendererType}）初始化失败，降级到 SkiaVideoPresenter 软渲染。",
-                rendererType.Name);
-            try { _presenter.Dispose(); } catch { } // 释放失败的 GPU Presenter（其 Initialize 已清理部分资源）
-
-            IGpuPresenter fallback = new SkiaVideoPresenter();
-            try { fallback.Initialize(this); }       // Skia 用 VideoView 自身作渲染目标（只读尺寸/缩放）
-            catch { /* 最后兜底：保留 fallback，后续 Present/Clear/Resize 均为安全空操作 */ }
-            _presenter = fallback;
+            try
+            {
+                var renderer = factory.Create();
+                renderer.Attach(this);
+                _renderer = renderer;
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex,
+                    "IVideoRendererFactory（{Factory}）创建/附加失败，回退到下一个渲染器。",
+                    factory.GetType().Name);
+            }
         }
 
-        if (_presenter is SkiaVideoPresenter skia)
+        // 极端兜底（理论不可达：末位必为 SkiaVideoRendererFactory 且 Attach(None) 必然成功）。
+        if (_renderer is null)
         {
-            skia.AspectRatioMode = AspectRatioMode;
+            var skia = new SkiaVideoRenderer(_logger);
+            skia.Attach(this);
+            _renderer = skia;
         }
 
-        // V2-12: Presenter 创建/重建后重新评估视频帧 sink 订阅（Skia 订阅、D3D11/GPU 退订）。
-        // GPU 初始化失败降级 Skia 时，此处会自动订阅 sink，使管线切到软渲染喂帧路径。
+        if (_renderer is SkiaVideoRenderer skiaFinal)
+        {
+            skiaFinal.AspectRatioMode = AspectRatioMode;
+        }
+
+        // 渲染器创建/重建后重新评估视频帧 sink 订阅（所有渲染器均经统一 FrameChannel 收帧）。
         UpdateVideoSinkSubscription();
-    }
-
-    /// <summary>
-    /// 从 Avalonia 视觉树解析窗口平台句柄（HWND）。GPU Presenter 需要它创建 SwapChain。
-    /// HWND 解析属于 UI 框架职责，推回 Avalonia 层；中立的 IGpuPresenter 只消费 Pointer 渲染目标。
-    /// </summary>
-    private IntPtr? TryResolveHwnd()
-    {
-        var handle = TopLevel.GetTopLevel(this)?.TryGetPlatformHandle()?.Handle;
-        return handle is { } h && h != IntPtr.Zero ? h : null;
     }
 
     private void OnRendererTypeChanged()
     {
-        if (_presenter != null)
+        if (_renderer != null)
         {
-            _presenter.Dispose();
-            _presenter = null;
+            _renderer.Detach();
+            _renderer.Dispose();
+            _renderer = null;
         }
         EnsurePresenter();
     }
@@ -464,15 +500,14 @@ public sealed class VideoView : Control, IRenderTarget
     }
 
     /// <summary>
-    /// V2-12 收敛：所有 <see cref="IGpuPresenter"/>（Skia 软渲染 / D3D11 零拷贝 GPU 等）均订阅
-    /// <see cref="IMediaPlayer.VideoFrameAvailable"/>，经统一 FrameChannel 接收帧——有头与无头同饮一条通道，
-    /// 不再区分"订阅 vs 直接 Present"两条路径（原 T19 硬编码分支已移除）。<see cref="PresentFrame"/> 内部
-    /// 仅调 <c>_presenter.Present(frame)</c>：Skia 写位图并调度重绘，D3D11 经共享 SwapChain 零拷贝上屏。
+    /// 视频帧 sink 订阅收敛：所有渲染器均经统一 <see cref="IMediaPlayer.VideoFrameAvailable"/>
+    /// 接收帧（有头与无头同饮一条 FrameChannel）。只要已绑定 Player 且渲染器就绪即订阅，
+    /// <see cref="PresentFrame"/> 内部调用 <c>_renderer.Present(frame)</c>。
     /// 幂等（由 <c>_videoSinkSubscribed</c> 标记防重复订阅）。
     /// </summary>
     private void UpdateVideoSinkSubscription()
     {
-        var shouldSubscribe = _player != null && _presenter is IGpuPresenter;
+        var shouldSubscribe = _player != null && _renderer != null;
         if (shouldSubscribe && !_videoSinkSubscribed)
         {
             _player!.VideoFrameAvailable += PresentFrame;

@@ -7,6 +7,11 @@
   <ItemGroup>
     <PackageReference Include="FFmpeg.AutoGen" Version="8.1.0" />
     <PackageReference Include="FFmpeg.AutoGen.Bindings.DynamicallyLoaded" Version="8.1.0" />
+    <!-- D3D11HardwareFrameResource.ReadbackToCpu：GPU 硬解纹理 CPU 回读（NV12→BGRA），
+         供 Skia 软渲染兜底路径消费。此前因 Backends.FFmpeg 无 Vortice 依赖而未实现，
+         现补齐以打通「GPU 解码 + 控件内 WriteableBitmap 上屏」链路（仍保持 GPU 解码，不退回软解）。 -->
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
   </ItemGroup>
 
   <ItemGroup>
