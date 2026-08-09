@@ -34,8 +34,14 @@ internal sealed class VLCAudioDecoder : IAudioDecoder
     public AudioCodec Codec { get; private set; }
 
     /// <inheritdoc/>
-    /// <remarks>VLC 默认输出 S16 格式，44100Hz，2 声道。实际值由 VLCDemuxer 回调设置。</remarks>
-    public int OutputSampleRate { get; private set; } = 44100;
+    /// <remarks>
+    /// 默认 0：VLC 真实采样率需等 Play 后 <c>OnAudioSetup</c> 回调才协商，Open 阶段尚不可知。
+    /// 故初始置 0，使 MediaPlayer 跳过 WASAPI 预初始化，改由 WasapiRenderLoop 首帧惰性初始化
+    /// 按 VLC 实际交付帧采样率打开设备（复用 FFmpeg+AAC 同路径），避免写死 44100 与 VLC 实际
+    /// 48000 错配导致音高偏低（「加厚」）。实际值由 <see cref="DecodeAsync"/> 每帧按
+    /// <c>packet.SampleRate</c> 回填。
+    /// </remarks>
+    public int OutputSampleRate { get; private set; }
 
     /// <inheritdoc/>
     public int OutputChannels { get; private set; } = 2;
