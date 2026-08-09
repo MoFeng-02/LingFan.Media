@@ -4,12 +4,11 @@ namespace LingFan.Media.Abstractions;
 /// 帧资源接口。统一 CPU 内存帧和 GPU 纹理帧的资源管理。
 /// </summary>
 /// <remarks>
-/// 已知 sealed 实现（在各自模块中实现，此处仅定义接口）：
+/// 已知实现：
 /// <list type="bullet">
-/// <item><see cref="SoftwareFrameResource"/>（CPU 内存，在 Abstractions/Models 中）</item>
-/// <item>D3D11TextureResource / VulkanImageResource / GLTextureResource / MetalTextureResource</item>
-/// <item><see cref="AHardwareBufferResource"/>（Android，跨层契约，在 Abstractions/Models 中）</item>
-/// <item><see cref="CVPixelBufferResource"/> / <see cref="IOSurfaceResource"/>（Apple，跨层契约，在 Abstractions/Models 中）</item>
+/// <item><see cref="SoftwareFrameResource"/>（CPU 内存帧，纯托管实现，位于本契约层）</item>
+/// <item>GPU 纹理帧由各渲染/后端模块实现，例如 D3D11TextureResource、VulkanImageResource、GLTextureResource、MetalTextureResource（分属对应渲染工程）</item>
+/// <item>平台特定原生帧（如 Android 的 AHardwareBuffer、Apple 的 CVPixelBuffer/IOSurface）由对应平台模块实现，不在此契约层</item>
 /// </list>
 /// Renderer 侧用 pattern matching 匹配类型，AOT 安全。
 /// </remarks>
