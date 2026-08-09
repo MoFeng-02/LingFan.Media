@@ -2,9 +2,9 @@ import mermaid from 'mermaid';
 
 const graphs = [
 `flowchart TD
-    A["IMediaSource<br/>File · Network · Stream"] -->|"MediaStreamFactory.CreateAsync"| B["IMediaStream<br/>File · Network · PassThrough"]
-    B -->|"DemuxerFactory.Create"| C["IDemuxer — switchable backends<br/>FFmpeg (primary) · MediaFoundation · LibVLC"]
-    C --> D["Decoders → FrameChannel (IFrameChannel) → Sinks<br/>VideoView · AudioOutput · CV pipeline"]
+    A["IMediaSource\\nFile · Network · Stream"] -->|"MediaStreamFactory.CreateAsync"| B["IMediaStream\\nFile · Network · PassThrough"]
+    B -->|"DemuxerFactory.Create"| C["IDemuxer — switchable backends\\nFFmpeg (primary) · MediaFoundation · LibVLC"]
+    C --> D["Decoders → FrameChannel (IFrameChannel) → Sinks\\nVideoView · AudioOutput · CV pipeline"]
     style C stroke:#3b82f6,stroke-width:2px`,
 
 `sequenceDiagram

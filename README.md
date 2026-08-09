@@ -2,11 +2,11 @@
   <img src="logo/LingFan.png" alt="LingFan Media" width="220" />
 </p>
 
-# LingFan.Media
+# LingFan.Media (灵泛)
 
 > 中文文档：[README.zh.md](README.zh.md)
 
-**LingFan.Media** is a cross-platform media infrastructure for the .NET platform. It provides a modular, DI-friendly, and AOT-ready abstraction layer that decouples core playback logic from the concrete engines (decoders, demuxers, renderers, audio outputs) so they can be swapped per platform or per deployment.
+**LingFan.Media (灵泛)** is a cross-platform media infrastructure for the .NET platform. It provides a modular, DI-friendly, and AOT-ready abstraction layer that decouples core playback logic from the concrete engines (decoders, demuxers, renderers, audio outputs) so they can be swapped per platform or per deployment.
 
 > Status: The library is actively developed on **.NET 10**. The primary validated target today is **Windows**; Linux support is implemented through the FFmpeg and LibVLC backends, and other platforms are on the roadmap (see [Platform & backend status](#platform--backend-status)). It is not yet a feature-complete, every-platform media framework — the design is built to get there without breaking the public surface. **Only local-file playback has been validated end-to-end so far; network-source and streaming paths are implemented but not yet runtime-validated.**
 
@@ -29,6 +29,32 @@
 Backends share one pluggable model, so the same `IMediaPlayer` surface works regardless of which engine is selected. The backend selection is resolved at runtime based on what you registered.
 
 > Note: WebRTC / GStreamer are explicitly out of the current scope.
+
+## Status & maturity
+
+The library is further along in some areas than others. The table below marks each capability as validated end-to-end, implemented but not yet runtime-validated, under active validation, on the roadmap, or explicitly out of scope.
+
+**Maturity journey:** V1 Windows (validated) → multi-backend (validated) → Linux validation (in progress) → macOS / iOS / Android (roadmap). WebRTC and GStreamer are out of scope.
+
+| Capability | Status |
+| --- | --- |
+| Local-file playback (Windows) | **Validated** |
+| D3D11 renderer (Windows) | **Validated** |
+| WASAPI audio output (Windows) | **Validated** |
+| Headless frame delivery (frame channel) | **Validated** |
+| MediaFoundation backend | **Validated** |
+| FFmpeg backend | **Validated** |
+| LibVLC backend | **Validated** |
+| Network sources (`NetworkMediaSource` + SSRF) | Implemented, not yet validated |
+| Streaming playback | Implemented, not yet validated |
+| Linux (FFmpeg + LibVLC + Vulkan / OpenGL) | **Validation in progress** |
+| Vulkan / OpenGL renderers | **Validation in progress** |
+| macOS / iOS / Android | Roadmap |
+| WebRTC / GStreamer | Out of scope |
+
+> The validated Windows path exercises the core abstraction, rendering, audio output, and headless frame delivery on a local file. Network and streaming paths are implemented (including DNS-pinning SSRF protection) but have not yet been exercised end-to-end — treat them as experimental until validated at runtime.
+
+> **Hardware decode:** MediaFoundation's decoder returns frames through CPU memory (hybrid decode) on Windows. This is a characteristic of the platform's MFT pipeline, not a defect in LingFan.Media. The FFmpeg and LibVLC backends provide full GPU-resident hardware decode. All three backends play local files correctly on Windows.
 
 ## Installation
 

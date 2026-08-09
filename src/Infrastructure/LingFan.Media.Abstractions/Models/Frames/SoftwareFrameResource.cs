@@ -12,8 +12,8 @@ namespace LingFan.Media.Abstractions;
 /// <para>内存所有权：<see cref="Data"/> 表示资源拥有该内存。</para>
 /// <list type="bullet">
 /// <item>FFmpeg 软解拷贝路径: av_frame_get_buffer 分配 → 拷贝到 Memory&lt;byte&gt; → av_frame_free 释放原生帧</item>
-/// <item>V2（L12）: ArrayPool 租借/归还，减少 GC 压力（60fps 每秒 60 个帧）</item>
-/// <item>V2-05 零拷贝路径: <see cref="Data"/> 直接映射原生引用计数 buffer，
+/// <item>ArrayPool 租借/归还内存，减少 GC 压力（60fps 每秒约 60 个帧）</item>
+/// <item>零拷贝路径：<see cref="Data"/> 直接映射原生引用计数 buffer，
 /// 生命周期由中立 <see cref="IDisposable"/> 所有者控制（本层不依赖任何后端类型）</item>
 /// <item>Dispose 时: 归还 ArrayPool buffer 或释放零拷贝所有者（原生引用计数减一）</item>
 /// </list>

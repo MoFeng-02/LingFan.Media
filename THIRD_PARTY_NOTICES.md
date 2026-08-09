@@ -1,7 +1,6 @@
 # 第三方组件与许可证声明（Third-Party Notices）
 
-本仓库（**LingFan.Media**，以 Apache-2.0 许可证分发）是 .NET 平台的跨平台媒体基础设施（独立项目，
-非灵泛引擎子模块/衍生）。当前**首要验证目标为 Windows**；**Linux** 通过 **FFmpeg** 与 **LibVLC（VLC）**
+本仓库（**LingFan.Media**，以 Apache-2.0 许可证分发）是 .NET 平台的跨平台媒体基础设施。当前**首要验证目标为 Windows**；**Linux** 通过 **FFmpeg** 与 **LibVLC（VLC）**
 两个跨平台后端提供播放（验证进行中）；**macOS / iOS / Android** 在路线图内、尚未验证。在上述已验证/在验证的
 平台上均可经 **FFmpeg** 或 **VLC（LibVLC）** 提供媒体解封装与解码能力（二者均为可选的播放后端，由回退中间件按
 注册顺序自动选择）；此外在 **Windows** 上还支持 **Media Foundation**（Windows 操作系统内置组件，无需单独分发的
