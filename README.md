@@ -4,15 +4,116 @@
 
 # LingFan.Media
 
-LingFan.Media is a modern, cross-platform .NET media infrastructure with a modular, DI-friendly, AOT-ready abstraction layer, decoupling core logic to allow pluggable backends (system or third-party) for flexibility and performance.
+> 中文文档：[README.zh.md](README.zh.md)
 
-## Platforms
+**LingFan.Media** is a cross-platform media infrastructure for the .NET platform. It provides a modular, DI-friendly, and AOT-ready abstraction layer that decouples core playback logic from the concrete engines (decoders, demuxers, renderers, audio outputs) so they can be swapped per platform or per deployment.
 
-- **Desktop & Server**: Windows / Linux / macOS
-- **Mobile**: Android / iOS
-- **Backends**: FFmpeg (LGPL), LibVLC / VLC (LGPL), Media Foundation (Windows)
+> Status: The library is actively developed on **.NET 10**. The primary validated target today is **Windows**; Linux support is implemented through the FFmpeg and LibVLC backends, and other platforms are on the roadmap (see [Platform & backend status](#platform--backend-status)). It is not yet a feature-complete, every-platform media framework — the design is built to get there without breaking the public surface. **Only local-file playback has been validated end-to-end so far; network-source and streaming paths are implemented but not yet runtime-validated.**
+
+## Why another media layer
+
+- **Modular, not monolithic.** Backends, renderers, and audio outputs are independent components registered through dependency injection. Adding or replacing one does not touch the core.
+- **DI-driven composition.** You assemble exactly the pipeline you need (`AddLingFanMedia().AddFFmpeg().AddD3D11Renderer().AddWasapiOutput()`) instead of pulling in a fixed engine.
+- **AOT-ready.** The codebase targets `net10.0` with `IsAotCompatible=true`, avoids reflection-based activation and `ComImport`, and uses source-generated P/Invoke (`[LibraryImport]`) for native interop, so it can be published as a NativeAOT binary.
+- **Headless-first.** The same playback pipeline drives both server-side / off-screen processing and on-screen rendering. Video frames are delivered through a single frame channel; headless consumers subscribe to frames, while UI renderers present them to the platform compositor.
+- **Contract layer stays clean.** Higher layers depend only on the `Abstractions` contracts; concrete backends and renderers are injected, preserving dependency inversion.
+
+## Platform & backend status
+
+| Platform | Status | Available backends |
+| --- | --- | --- |
+| **Windows** | Supported (primary, validated) | MediaFoundation (native, hardware-decode capable), FFmpeg, LibVLC |
+| **Linux** | Implemented via FFmpeg + LibVLC with Vulkan / OpenGL renderers; validation ongoing | FFmpeg, LibVLC |
+| **macOS / iOS / Android** | Roadmap — the architecture accommodates them, but they are not yet validated | — |
+
+Backends share one pluggable model, so the same `IMediaPlayer` surface works regardless of which engine is selected. The backend selection is resolved at runtime based on what you registered.
+
+> Note: WebRTC / GStreamer are explicitly out of the current scope.
+
+## Installation
+
+LingFan.Media is built from this repository. Production libraries are packed via `dotnet pack` (Apache-2.0, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party LGPL obligations such as FFmpeg and LibVLC).
+
+Reference the projects you need, or consume the produced NuGet packages in your application.
+
+## Quick start
+
+```csharp
+using Microsoft.Extensions.DependencyInjection;
+using LingFan.Media.Abstractions;        // IMediaPlayer, IMediaPlayerFactory, IMediaSource
+using LingFan.Media.Extensions;          // AddLingFanMedia
+using LingFan.Media.Backends.FFmpeg;     // AddFFmpeg
+using LingFan.Media.Renderers.D3D11;     // AddD3D11Renderer
+using LingFan.Media.Outputs.WASAPI;      // AddWasapiOutput
+using LingFan.Media.Sources;             // FileMediaSource
+
+// 1. Compose the pipeline (backends + renderer + audio output).
+var services = new ServiceCollection();
+services.AddLingFanMedia()
+        .AddFFmpeg()
+        .AddD3D11Renderer()
+        .AddWasapiOutput();
+var provider = services.BuildServiceProvider();
+
+// 2. Resolve a player. The fallback factory auto-selects a registered backend.
+var factory = provider.GetRequiredService<IMediaPlayerFactory>();
+using var player = factory.Create();
+
+// 3. Headless: subscribe to frames. (For on-screen rendering, attach a UI presenter instead.)
+player.VideoFrameAvailable += (VideoFrame frame) =>
+{
+    // Read-only borrow the frame inside the callback.
+    // Do NOT Dispose it and do not retain the reference across threads.
+};
+
+// 4. Open and play.
+await player.OpenAsync(new FileMediaSource(@"C:\videos\clip.mp4"));
+await player.PlayAsync();
+
+// Control during playback:
+await player.PauseAsync();
+await player.SeekAsync(TimeSpan.FromSeconds(30));
+
+// When finished:
+await player.StopAsync();
+await player.DisposeAsync();
+```
+
+### Choosing a backend explicitly
+
+`AddMediaFoundation()` (Windows), `AddFFmpeg()`, and `AddVLC()` register their factories into the DI container. When multiple are registered, the runtime selects one in registration order and falls back if a backend cannot handle the source. To force a specific backend, use the `IMediaPlayerFactory.Create(...)` overload that accepts an explicit backend group.
+
+### Network sources (experimental, not yet validated)
+
+`NetworkMediaSource` is implemented with DNS-pinning–based SSRF protection: private, loopback, link-local, and reserved/CGNAT addresses are rejected at construction, and the resolved IP is pinned for the actual connection so a redirected URL cannot reach an internal address. **However, network and streaming playback have not yet been exercised end-to-end** — only local-file playback has been tested so far. Treat network sources as experimental until they are validated at runtime.
+
+## Architecture in brief
+
+```
+┌─────────────────────────────────────────────┐
+│  Abstractions (contracts: IMediaPlayer,      │
+│  IMediaSource, IFrameChannel, frame models) │  ← zero external references
+├─────────────────────────────────────────────┤
+│  Core / Playback  (orchestration, clock,     │
+│  frame routing, session lifecycle)          │
+├──────────────┬───────────────┬───────────────┤
+│  Backends    │  Renderers    │  Audio Outputs │  ← pluggable, DI-registered
+│ (MF/FFmpeg/  │ (D3D11/      │  (WASAPI /     │
+│  VLC)        │  Vulkan/GL)  │   headless)    │
+└──────────────┴───────────────┴───────────────┘
+```
+
+- **Frame routing** is unified: every decoded video frame flows through one frame channel. A headless consumer borrows frames via the `VideoFrameAvailable` event; a UI renderer presents them to the platform compositor. There is no second, divergent delivery path.
+- **Session isolation**: each `IMediaPlayer` owns an independent session (clock, buffers, pipelines). Infrastructure factories are singletons; sessions are created per player.
+- **Processing modes**: `Mode = ProcessingMode.Fastest` disables A/V synchronization and real-time throttling for batch / offline scenarios (transcoding, ML inference); `RealTime` is the default for normal playback.
+
+## Usage notes & caveats
+
+- **Async / sync split.** I/O-bound operations expose async signatures (`OpenAsync`, `StopAsync`, `SeekAsync`) and accept a `CancellationToken`. Pure in-memory state transitions (`PlayAsync`, `PauseAsync`) are fast synchronous awaits and take no token. Prefer `await` over blocking calls.
+- **Frame borrowing.** In `VideoFrameAvailable` / `AudioDataAvailable` callbacks you may only *read* the supplied frame and must copy any data you need synchronously; never `Dispose` or hold the reference after the callback returns.
+- **AOT publishing.** Because the library is `IsAotCompatible`, host applications can publish as NativeAOT. Native decoder/renderer libraries (e.g. FFmpeg/LibVLC) must be deployed alongside the published output.
+- **Logging.** LingFan.Media depends only on `Microsoft.Extensions.Logging.Abstractions`; the host application supplies the concrete `ILoggerFactory`.
 
 ## License
 
-Licensed under the **Apache License, Version 2.0** — see [LICENSE](LICENSE).
-Third-party LGPL components (FFmpeg / LibVLC) are covered in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Licensed under the **Apache License, Version 2.0** — see [LICENSE](LICENSE). Third-party LGPL components (FFmpeg, LibVLC) are covered in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

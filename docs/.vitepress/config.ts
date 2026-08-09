@@ -1,11 +1,13 @@
 import { defineConfig } from 'vitepress'
-import { withMermaid } from 'vitepress-plugin-mermaid'
 
 // https://vitepress.dev/reference/site-config
-// VitePress 1.x does not have built-in Mermaid support. The standard solution
-// is vitepress-plugin-mermaid, which wraps the config and renders ```mermaid
-// fences at build time / on the client.
-export default withMermaid(defineConfig({
+// VitePress 1.x has no built-in Mermaid support. We render diagrams with a
+// custom <Mermaid> component (see .vitepress/theme/Mermaid.vue) wired through a
+// markdown-it fence rule below. This avoids the fragile third-party
+// vitepress-plugin-mermaid (its auto-injection is broken under VitePress 1.6.4
+// and it force-lists Mermaid's transitive deps in optimizeDeps.include, which
+// fails to resolve under pnpm's strict layout).
+export default defineConfig({
   // GitHub Pages project site is served at https://<user>.github.io/LingFan.Media/
   // so all asset/links must be prefixed with the repo name.
   base: '/LingFan.Media/',
@@ -13,11 +15,34 @@ export default withMermaid(defineConfig({
   titleTemplate: ':title - .NET 10 AOT Media Infrastructure',
   description:
     'LingFan.Media — a .NET 10 AOT-first, cross-platform media infrastructure.',
-  lastUpdated: true,
+  lastUpdated: false,
   cleanUrls: true,
-  mermaid: {
-    // Plugin-provided Mermaid config. Light-mode defaults here; the plugin
-    // forces the dark theme automatically when the page body has a 'dark' class.
+
+  markdown: {
+    config: (md) => {
+      const defaultFence = md.renderer.rules.fence!
+      md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+        const token = tokens[idx]
+        if (token.info.trim() === 'mermaid') {
+          // Pass the diagram source as a base64 prop so no HTML-escaping of
+          // newlines / quotes / CJK labels is needed. The <Mermaid> component
+          // decodes it on the client.
+          const b64 = Buffer.from(token.content).toString('base64')
+          return `<Mermaid code="${b64}"></Mermaid>`
+        }
+        return defaultFence(tokens, idx, options, env, self)
+      }
+    },
+  },
+
+  vite: {
+    optimizeDeps: {
+      // Pre-bundle these CJS/ESM deps so the browser gets a proper ESM module
+      // with a `default` export. Without this, dayjs (pulled in by VitePress's
+      // footer) is served as raw CJS and the browser throws
+      // "does not provide an export named 'default'".
+      include: ['dayjs', 'mermaid'],
+    },
   },
 
   locales: {
@@ -107,13 +132,10 @@ export default withMermaid(defineConfig({
     outline: {
       label: 'On this page',
     },
-    lastUpdated: {
-      text: 'Last updated',
-    },
     returnToTopLabel: 'Return to top',
     sidebarMenuLabel: 'Menu',
     darkModeSwitchLabel: 'Theme',
     lightModeSwitchTitle: 'Switch to light theme',
     darkModeSwitchTitle: 'Switch to dark theme',
   },
-}))
+})

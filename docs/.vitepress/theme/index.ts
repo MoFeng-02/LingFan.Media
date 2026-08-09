@@ -1,11 +1,9 @@
 import DefaultTheme from 'vitepress/theme'
 import type { Theme } from 'vitepress'
-import Mermaid from 'vitepress-plugin-mermaid/Mermaid.vue'
+import Mermaid from './Mermaid.vue'
 
-// vitepress-plugin-mermaid normally auto-registers this component by
-// transforming VitePress's client app entry, but that injection does not
-// reliably match the VitePress 1.6.4 module layout. Register it manually here
-// so <Mermaid> tags emitted by the markdown-it fence rule always resolve.
+// Register the <Mermaid> component globally so the ```mermaid fence rule in
+// config.ts (which emits <Mermaid code="..." />) always resolves.
 export default {
   extends: DefaultTheme,
   enhanceApp({ app }) {
