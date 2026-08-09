@@ -5,7 +5,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.AppleAudioUnit;
 
 /// <summary>
-/// Apple AudioUnit 共用播放引擎（macOS DefaultOutput / iOS RemoteIO）。P2 平台扩展（V2-18 / O2+O3）。
+/// Apple AudioUnit 共用播放引擎（macOS DefaultOutput / iOS RemoteIO）。P2 平台扩展（O2+O3）。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 AudioToolbox AudioUnit v2 C API 播放交错 S16 PCM。
@@ -175,7 +175,7 @@ internal sealed unsafe partial class AudioUnitEngine : IDisposable
         }
     }
 
-    /// <summary>提交音频帧：软件增益后写入环形缓冲（满时阻塞背压，2 秒超时）。同步边界（native 分类）；不接管帧所有权（V2 规则）。</summary>
+    /// <summary>提交音频帧：软件增益后写入环形缓冲（满时阻塞背压，2 秒超时）。同步边界（native 分类）；不接管帧所有权（规则）。</summary>
     internal void Submit(AudioFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);

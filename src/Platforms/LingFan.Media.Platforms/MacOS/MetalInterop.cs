@@ -1,14 +1,14 @@
 namespace LingFan.Media.Platforms.MacOS;
 
 /// <summary>
-/// Metal GPU 互操作。V1 桩实现。
+/// Metal GPU 互操作。桩实现。
 /// </summary>
 /// <remarks>
 /// <para>职责：将 IOSurface / CVPixelBuffer 导入 Metal 纹理（MTLTexture），
 /// 供 MetalRenderer 渲染到 CAMetalLayer。</para>
 /// <para><b>GPU 零拷贝路径</b>：
 /// VideoToolbox → CVPixelBuffer → IOSurface → MTLTexture → MetalRenderer → CAMetalLayer → Display</para>
-/// <para>V1 桩——所有方法抛出 <see cref="NotSupportedException"/>。
+/// <para>桩——所有方法抛出 <see cref="NotSupportedException"/>。
 /// Metal 互操作属 Phase 2-3 目标（macOS / iOS）。
 /// 未来实现使用 SharpMetal 库绑定 Metal API。</para>
 /// <para><b>异步策略</b>：全部同步（sync 分类）——Metal API 调用是同步边界，无 I/O。

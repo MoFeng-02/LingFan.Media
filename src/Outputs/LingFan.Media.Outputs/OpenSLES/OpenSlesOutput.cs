@@ -5,7 +5,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.OpenSLES;
 
 /// <summary>
-/// OpenSL ES 音频输出（Android）。P2 平台扩展（V2-17 / O4）。
+/// OpenSL ES 音频输出（Android）。P2 平台扩展（O4）。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 Android NDK OpenSL ES API 直接播放 PCM 数据（libOpenSLES.so）。
@@ -23,7 +23,7 @@ namespace LingFan.Media.Outputs.OpenSLES;
 /// </list>
 /// <para><b>线程安全</b>：Submit 在音频管线线程调用；Pause/Resume/Flush 在控制线程调用，不可并发。
 /// 缓冲队列回调在 OpenSL ES 内部线程触发，通过 <see cref="SemaphoreSlim"/> 与缓冲池与 Submit 同步。</para>
-/// <para><b>所有权</b>：Submit 不接管帧所有权、不 Dispose 帧（V2 规则），调用方负责 Return 到 FramePool 或 Dispose。</para>
+/// <para><b>所有权</b>：Submit 不接管帧所有权、不 Dispose 帧（规则），调用方负责 Return 到 FramePool 或 Dispose。</para>
 /// <para><b>AOT 兼容</b>：sealed 类；NDK 互操作走 <c>LibraryImport</c> + 方法表 vtable 委托封送（<c>GetDelegateForFunctionPointer</c>），
 /// 零反射；IID 经 <c>NativeLibrary.TryGetExport</c> + <c>Marshal.ReadIntPtr</c> 取得，无动态代码。</para>
 /// <para><b>平台边界</b>：仅 Android 有效；非 Android 调用抛 <see cref="PlatformNotSupportedException"/>。编译期跨平台可编译。</para>

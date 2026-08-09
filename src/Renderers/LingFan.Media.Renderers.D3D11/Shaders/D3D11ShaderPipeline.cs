@@ -4,16 +4,16 @@ using Vortice.D3DCompiler;
 namespace LingFan.Media.Renderers.D3D11.Shaders;
 
 /// <summary>
-/// D3D11 Shader 渲染管线（V2-12 R4）：GPU 缩放 + YUV→RGB 转换。
+/// D3D11 Shader 渲染管线：GPU 缩放 + YUV→RGB 转换。
 /// </summary>
 /// <remarks>
 /// <para><b>职责</b>：帧尺寸 ≠ BackBuffer 尺寸（GPU 双线性缩放）或 YUV 像素格式
 /// （YUV420P/YUV422P/YUV444P/NV12/NV21）时，走全屏三角形 + PixelShader 采样呈现；
-/// 替代 V1 的 CopyResource 尺寸一致限制。</para>
+/// 替代 CopyResource 尺寸一致限制。</para>
 /// <para><b>设计（相对任务示例的简化，均有依据）</b>：</para>
 /// <list type="bullet">
 /// <item>VS 用 <c>SV_VertexID</c> 生成全屏三角形 → 无需 InputLayout / VertexBuffer（少 2 个 COM 对象、零顶点上传）。</item>
-/// <item>RGBA32 直接建 <c>R8G8B8A8_UNorm</c> 纹理由 GPU 采样 → 消除 V1 的 CPU R/B 通道交换循环。</item>
+/// <item>RGBA32 直接建 <c>R8G8B8A8_UNorm</c> 纹理由 GPU 采样 → 消除 CPU R/B 通道交换循环。</item>
 /// <item>YUV 每平面一个 <c>R8_UNorm</c>/<c>R8G8_UNorm</c> 纹理 + SRV，PS 内 BT.601 全范围矩阵
 /// （系数 1.402 / -0.344136 / -0.714136 / 1.772，与 SkiaVideoPresenter U11 路径完全一致，双路径色彩不漂移）。</item>
 /// <item>HLSL 运行时编译经 Vortice.D3DCompiler → 系统 <c>d3dcompiler_47.dll</c> 原生 P/Invoke：
@@ -143,7 +143,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     private int _cachedHeight;
     private PixelFormat _cachedFormat = (PixelFormat)(-1);
 
-    // ── GPU 纹理缓存（V2-15 R5：DXVA 硬解纹理 → staging → 现有 R8/R8G8 SRV 纹理 → Shader 路径）──
+    // ── GPU 纹理缓存──
     private ID3D11Texture2D? _gpuStagingTexture;
     private int _gpuCachedWidth;
     private int _gpuCachedHeight;
@@ -218,7 +218,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     }
 
     /// <summary>
-    /// 用 Shader 路径呈现 GPU 纹理到渲染目标（V2-15 R5：DXVA 硬解路径）。
+    /// 用 Shader 路径呈现 GPU 纹理到渲染目标。
     /// </summary>
     /// <remarks>
     /// <para>DXVA 纹理无 SRV 绑定，无法直接采样。路径：</para>
@@ -227,7 +227,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     /// <para>3. <c>UpdateSubresource</c> 上传到现有 R8/R8G8 SRV 纹理</para>
     /// <para>4. 用现有 <c>PS_Nv12</c> 采样呈现（GPU 缩放 + YUV→RGB）</para>
     /// <para>非完全零拷贝（GPU→CPU→GPU），但硬件解码本身在 GPU 上完成。
-    /// V3 可通过 plane-specific SRV 实现完全零拷贝。</para>
+    /// 可通过 plane-specific SRV 实现完全零拷贝。</para>
     /// <para>调用方持锁；本方法同步 GPU 提交，无 I/O。</para>
     /// </remarks>
     /// <param name="flipY">是否在采样时翻转 UV.y。共享纹理经 Avalonia Composition 导入时，
@@ -261,7 +261,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
             int uvSize = uvW * uvH * 2;
             int rowPitch = (int)mapped.RowPitch;
 
-            // V2-15 审计修复：使用 ArrayPool 租借内存，避免每帧 new byte[] 的 GC 压力（60fps）
+            // 使用 ArrayPool 租借内存，避免每帧 new byte[] 的 GC 压力（60fps）
             yData = ArrayPool<byte>.Shared.Rent(ySize);
             uvData = ArrayPool<byte>.Shared.Rent(uvSize);
             unsafe
@@ -483,7 +483,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
                 break;
 
             case PixelFormat.RGBA32:
-                // GPU 直接采样 RGBA 纹理——消除 V1 的 CPU R/B 交换
+                // GPU 直接采样 RGBA 纹理——消除 CPU R/B 交换
                 CreatePlane(0, width, height, Format.R8G8B8A8_UNorm);
                 break;
 

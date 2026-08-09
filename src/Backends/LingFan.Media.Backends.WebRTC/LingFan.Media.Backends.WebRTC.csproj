@@ -6,7 +6,8 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <IsPackable>true</IsPackable>
+    <!-- WebRTC 后端目前绝对不提供（非标准、处于不支持队列，后续可能提供）。 -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
 </Project>

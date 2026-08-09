@@ -12,9 +12,9 @@ public enum ScalingAlgorithm : int
     /// <summary>最近邻采样：最快，画质较低（锯齿）。</summary>
     Nearest,
 
-    /// <summary>双线性插值：速度与画质平衡，V2 默认算法（验收要求）。</summary>
+    /// <summary>双线性插值：速度与画质平衡，默认算法。</summary>
     Bilinear,
 
-    /// <summary>双三次插值：画质较高。V2 当前复用双线性以保证性能与稳定性，完整实现为后续增强。</summary>
+    /// <summary>双三次插值：画质较高。当前复用双线性以保证性能与稳定性，完整实现为后续增强。</summary>
     Bicubic,
 }

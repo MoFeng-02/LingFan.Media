@@ -5,7 +5,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.AAudio;
 
 /// <summary>
-/// AAudio 音频输出（Android API 27+）。P2 平台扩展（V2-17 / O5）。
+/// AAudio 音频输出（Android API 27+）。P2 平台扩展（O5）。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 Android NDK AAudio API 播放 PCM 数据（libaaudio.so）。
@@ -22,7 +22,7 @@ namespace LingFan.Media.Outputs.AAudio;
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。</item>
 /// </list>
 /// <para><b>音量</b>：AAudio 无原生音量 API，采用软件增益（S16 样本缩放，写入前应用）。</para>
-/// <para><b>所有权</b>：Submit 不接管帧所有权、不 Dispose 帧（V2 规则），调用方负责 Return 到 FramePool 或 Dispose。</para>
+/// <para><b>所有权</b>：Submit 不接管帧所有权、不 Dispose 帧（规则），调用方负责 Return 到 FramePool 或 Dispose。</para>
 /// <para><b>AOT 兼容</b>：sealed 类；纯 C API 直接 <c>LibraryImport</c>，零 COM、零反射、零动态代码。</para>
 /// <para><b>平台边界</b>：仅 Android（API 27+）有效；非 Android 调用抛 <see cref="PlatformNotSupportedException"/>。编译期跨平台可编译。</para>
 /// </remarks>

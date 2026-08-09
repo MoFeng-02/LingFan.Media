@@ -127,7 +127,7 @@ public static class ServiceCollectionExtensions
         services.Configure<MediaOptions>(o => options.CopyTo(o));
 
         // 播放器默认配置（契约层 MediaPlayerOptions）经 IOptions 绑定，使宿主配置的 DefaultVolume 传播到 Core 工厂。
-        // 此前 MediaPlayerOptions 仅在 Core 定义且从未注册，导致工厂始终走默认 1.0 —— 此处闭合该缺口（V2-06 接线期遗漏）。
+        // 此前 MediaPlayerOptions 仅在 Core 定义且从未注册，导致工厂始终走默认 1.0 —— 此处闭合该缺口。
         services.Configure<MediaPlayerOptions>(o => o.DefaultVolume = options.DefaultVolume);
 
         // ── Session Lifetime（Transient：仅注册 IMediaPlayer，内部组件由 Factory 手动 new）──
@@ -140,7 +140,7 @@ public static class ServiceCollectionExtensions
         var builder = new MediaBuilder(services, options);
 
         // 播放器工厂（Singleton）：延迟构造，透传宿主经 WithAudioPipeline/WithVideoPipeline 配置的后处理链与重置钩子
-        // （V2-06 C5/C6 / V2-07 / V2-08.1）。未配置时 transforms/reset 为 null → V1 完全兼容。
+        // 。未配置时 transforms/reset 为 null。
         // 工厂委托在首次解析 IMediaPlayerFactory 时执行，此时所有 AddXxx 链式调用（含 WithAudioPipeline/WithVideoPipeline）已完成，
         // 故可安全读取 builder 中的宿主配置。
         // 核心 composer（keyed "composer"）：保留原构造逻辑，供回退中间件在选定后端组后调用其 Create(...) 重载建 Session。

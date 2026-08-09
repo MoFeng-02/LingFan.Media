@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace LingFan.Media.Backends.FFmpeg.Interop;
 
 /// <summary>
-/// FFmpeg MediaCodec 专用 C API 互操作（V2-17 B9）。
+/// FFmpeg MediaCodec 专用 C API 互操作。
 /// </summary>
 /// <remarks>
 /// <para>FFmpeg.AutoGen 8.1.0 未生成 <c>libavcodec/jni.h</c> / <c>mediacodec.h</c> 的包装

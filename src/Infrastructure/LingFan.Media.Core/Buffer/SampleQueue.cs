@@ -122,7 +122,7 @@ public sealed class SampleQueue
     /// <summary>
     /// 清空队列并 Dispose 所有帧。
     /// </summary>
-    /// <param name="pool">帧对象池（V2，可为 null = Dispose 帧而非归还到池）。</param>
+    /// <param name="pool">帧对象池（可为 null = Dispose 帧而非归还到池）。</param>
     public void Clear(IFramePool<AudioFrame>? pool = null)
     {
         while (_channel.Reader.TryRead(out var frame))
@@ -148,10 +148,10 @@ public sealed class SampleQueue
     }
 
     /// <summary>
-    /// 重置队列（V2-06 C3）。将已 Complete 的队列恢复为可写入状态。
+    /// 重置队列。将已 Complete 的队列恢复为可写入状态。
     /// 用于 Seek after stream end / 重播（Ended→Playing）场景。
     /// </summary>
-    /// <param name="pool">帧对象池（V2，可为 null = Dispose 残留帧而非归还）。</param>
+    /// <param name="pool">帧对象池（可为 null = Dispose 残留帧而非归还）。</param>
     /// <remarks>
     /// 🔴 必须 Pool-aware：残留帧归还到池而非 Dispose，否则重播/多次 Seek 会持续消耗池容量直至饿死。
     /// </remarks>

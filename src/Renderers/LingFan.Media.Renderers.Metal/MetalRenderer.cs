@@ -1,10 +1,10 @@
 namespace LingFan.Media.Renderers.Metal;
 
 /// <summary>
-/// Metal 视频渲染器。V1 桩实现。
+/// Metal 视频渲染器。桩实现。
 /// </summary>
 /// <remarks>
-/// <para>V1 桩——所有方法抛出 <see cref="NotSupportedException"/>。
+/// <para>桩——所有方法抛出 <see cref="NotSupportedException"/>。
 /// Metal 渲染器为 Phase 3 目标（macOS / iOS / tvOS）。</para>
 /// <para><b>异步策略</b>：</para>
 /// <list type="bullet">

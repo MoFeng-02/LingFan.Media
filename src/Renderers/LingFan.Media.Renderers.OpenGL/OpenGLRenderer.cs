@@ -1,10 +1,10 @@
 namespace LingFan.Media.Renderers.OpenGL;
 
 /// <summary>
-/// OpenGL 视频渲染器。V1 桩实现。
+/// OpenGL 视频渲染器。桩实现。
 /// </summary>
 /// <remarks>
-/// <para>V1 桩——所有方法抛出 <see cref="NotSupportedException"/>。
+/// <para>桩——所有方法抛出 <see cref="NotSupportedException"/>。
 /// OpenGL 渲染器为桌面兼容备用（Windows/Linux/macOS 遗留），
 /// Apple 平台已废弃 OpenGL，使用 Metal。Phase 2-3 目标。</para>
 /// <para><b>异步策略</b>：</para>

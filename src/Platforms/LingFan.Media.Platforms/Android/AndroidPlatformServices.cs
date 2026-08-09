@@ -1,10 +1,10 @@
 namespace LingFan.Media.Platforms.Android;
 
 /// <summary>
-/// Android 平台服务。V1 桩实现。
+/// Android 平台服务。桩实现。
 /// </summary>
 /// <remarks>
-/// <para>V1 桩——<see cref="CreateHardwareDecoder"/> 和 <see cref="GetGPUContext"/> 抛出 <see cref="NotSupportedException"/>。
+/// <para>桩——<see cref="CreateHardwareDecoder"/> 和 <see cref="GetGPUContext"/> 抛出 <see cref="NotSupportedException"/>。
 /// Android 硬解 / GPU 互操作属 Phase 2-3 目标（MediaCodec + Vulkan）。</para>
 /// <para><b>GPU 零拷贝路径</b>：
 /// MediaCodec → AHardwareBuffer → VkImage → VulkanRenderer → Swapchain → TextureView（SurfaceFlinger 合成）→ Display</para>

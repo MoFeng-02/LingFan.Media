@@ -52,15 +52,15 @@ public sealed class MediaPlayer : IMediaPlayer
     private bool _hpTimerActive;
     private readonly PlaybackController _controller = new();
 
-    // V2 帧对象池（Session 级）
+    // 帧对象池（Session 级）
     private FramePool<VideoFrame>? _videoFramePool;
     private FramePool<AudioFrame>? _audioFramePool;
 
-    // 播放控制（音量/静音/速率为本地字段；状态机交由 PlaybackController，V2-06 C1）
+    // 播放控制（音量/静音/速率为本地字段；状态机交由 PlaybackController）
     private float _volume = 1.0f;
     private ProcessingMode _mode = ProcessingMode.RealTime;
 
-    // V2-06 C5/C6: 后处理变换链（中立 BCL 委托）。由 DI/Extensions 从 Video/Audio 模块的具体
+    // 后处理变换链（中立 BCL 委托）。由 DI/Extensions 从 Video/Audio 模块的具体
     // 处理器/音量/混音转换而来；Core 不依赖 Video/Audio 模块，保持分层倒置避免。
     private readonly IReadOnlyList<Func<VideoFrame, VideoFrame?>>? _videoTransforms;
     private readonly IReadOnlyList<Func<AudioFrame, AudioFrame>>? _audioTransforms;
@@ -85,7 +85,7 @@ public sealed class MediaPlayer : IMediaPlayer
     /// <param name="audioOutputFactory">音频输出工厂。</param>
     /// <param name="loggerFactory">日志工厂（用于创建子组件 logger）。</param>
     /// <param name="logger">播放器日志器。</param>
-    /// <param name="audioTransformsReset">音频效果状态重置委托（V2-08.1，中立委托，可为 null）。由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。</param>
+    /// <param name="audioTransformsReset">音频效果状态重置委托（中立委托，可为 null）。由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。</param>
     public MediaPlayer(
         IMediaStreamFactory streamFactory,
         IMediaDemuxerFactory demuxerFactory,
@@ -231,7 +231,7 @@ public sealed class MediaPlayer : IMediaPlayer
     /// <inheritdoc />
     public async Task OpenAsync(IMediaSource source, CancellationToken ct = default)
     {
-        // V2-06 C1: 重置状态机（从 Error/Stopped 恢复到 Idle）后再进入 Opening
+        // 重置状态机（从 Error/Stopped 恢复到 Idle）后再进入 Opening
         _controller.Reset();
         TransitionState(MediaState.Opening);
 
@@ -268,7 +268,7 @@ public sealed class MediaPlayer : IMediaPlayer
             if (videoTrack != null && videoTrack.VideoCodec.HasValue)
             {
                 // 透传解封装器提取的编解码器私有配置（H264/H265 的 SPS+PPS）→ 解码器输入类型
-                // 同时透传公开开关 EnableHardwareAcceleration（V2-10）：用户显式关闭硬解时须真实生效，
+                // 同时透传公开开关 EnableHardwareAcceleration：用户显式关闭硬解时须真实生效，
                 // 否则两级与（会话级 VideoSettings × 后端级 FFmpegOptions）的会话级恒为 true 而失效。
                 _videoDecoder = _videoDecoderFactory.Create(videoTrack.VideoCodec.Value, new VideoSettings
                 {
@@ -280,7 +280,7 @@ public sealed class MediaPlayer : IMediaPlayer
 
             if (audioTrack != null && audioTrack.AudioCodec.HasValue)
             {
-                // 从 MediaPlayerOptions 透传音频目标配置（V2-10 P1）：任一字段为 null 时
+                // 从 MediaPlayerOptions 透传音频目标配置：任一字段为 null 时
                 // FFmpegAudioDecoder 回退到源媒体参数，B11 重采样仅在显式配置目标时触发。
                 var audioSettings = new AudioSettings
                 {
@@ -313,14 +313,14 @@ public sealed class MediaPlayer : IMediaPlayer
                 }
             }
 
-            // V2: 创建帧对象池并注入解码器（Session 级）
+            // 创建帧对象池并注入解码器（Session 级）
             _videoFramePool = new FramePool<VideoFrame>(
                 factory: static () => new VideoFrame(),
                 reset: static frame => frame.Reset(0, 0, default, null, default, default, false),
                 maxSize: 16);
             _audioFramePool = new FramePool<AudioFrame>(
                 factory: static () => new AudioFrame(),
-                // V2-05: 零拷贝 AudioFrame 持有原生引用计数所有者，Return 时必须经
+                // 零拷贝 AudioFrame 持有原生引用计数所有者，Return 时必须经
                 // Reset 释放旧所有者（原生引用计数减一），否则池内滞留帧会泄漏原生内存。
                 reset: static frame => frame.Reset(default, 0, 0, SampleFormat.S16, default, default, 0),
                 maxSize: 16);
@@ -425,7 +425,7 @@ public sealed class MediaPlayer : IMediaPlayer
             await CleanupAsync();
             var errorArgs = new MediaErrorEventArgs(
                 MediaErrorCode.SourceOpenFailed, "打开媒体源失败", ex, isFatal: true);
-            _controller.OnError(errorArgs); // V2-06 C1
+            _controller.OnError(errorArgs);
             TransitionState(MediaState.Error);
             ErrorOccurred?.Invoke(this, errorArgs);
             throw;
@@ -525,7 +525,7 @@ public sealed class MediaPlayer : IMediaPlayer
                 try { await _bufferManager.ReaderTask; } catch { }
             }
 
-            // 2. 清空缓冲队列（V2: 移到 Flush 之前，确保管线恢复后包队列已空，不会处理旧包）
+            // 2. 清空缓冲队列（移到 Flush 之前，确保管线恢复后包队列已空，不会处理旧包）
             _bufferManager?.Clear();
 
             // 3. 时钟跳转
@@ -536,7 +536,7 @@ public sealed class MediaPlayer : IMediaPlayer
             if (_demuxer != null)
                 await _demuxer.SeekAsync(position, ct);
 
-            // 5. 管线刷新（V2 修复 L2: 异步等待管线暂停确认后再清空+重置，无 Thread.Sleep 阻塞。
+            // 5. 管线刷新（异步等待管线暂停确认后再清空+重置，无 Thread.Sleep 阻塞。
             //    内部先暂停管线线程防止 DecodeAsync 与 Reset 竞争，清空帧队列+重置解码器，然后恢复）
             if (_pipelineHost != null)
                 await _pipelineHost.FlushAsync();
@@ -616,7 +616,7 @@ public sealed class MediaPlayer : IMediaPlayer
         // 1. 停管线线程 (cts.Cancel + join 5s 超时)
         await Step_StopPipelinesAsync();
 
-        // 2. 清空帧队列 (V2: 归还到 FramePool)
+        // 2. 清空帧队列 (归还到 FramePool)
         Step_ClearFrameQueues();
 
         // 3. 刷新解码器 (FlushAsync 取剩余帧并 Dispose)
@@ -695,7 +695,7 @@ public sealed class MediaPlayer : IMediaPlayer
             try { _audioPipeline?.Dispose(); } catch { }
             try { _subtitleProcessor?.Dispose(); } catch { }
 
-            // V2: 同步清空帧队列（归还到池）
+            // 同步清空帧队列（归还到池）
             try { _frameQueue?.Clear(_videoFramePool); } catch { }
             try { _sampleQueue?.Clear(_audioFramePool); } catch { }
 
@@ -714,7 +714,7 @@ public sealed class MediaPlayer : IMediaPlayer
             // 归还高精度定时器（与 PlayAsync 配对，避免整机定时器泄漏）
             try { ReleaseHighPrecisionTimer(); } catch { }
 
-            // V2: 释放帧对象池
+            // 释放帧对象池
             try { _videoFramePool?.Dispose(); } catch { }
             try { _audioFramePool?.Dispose(); } catch { }
         }
@@ -726,7 +726,7 @@ public sealed class MediaPlayer : IMediaPlayer
 
     private void TransitionState(MediaState newState)
     {
-        // V2-06 C1: 委托给 PlaybackController 管理状态转换的合法性与原子性
+        // 委托给 PlaybackController 管理状态转换的合法性与原子性
         var oldState = _controller.CurrentState;
         if (_controller.TransitionTo(newState))
         {
@@ -909,7 +909,7 @@ public sealed class MediaPlayer : IMediaPlayer
     }
 
     /// <summary>
-    /// V2: 释放帧对象池（步骤7，所有帧已归还后调用）。
+    /// 释放帧对象池（步骤7，所有帧已归还后调用）。
     /// </summary>
     private void Step_DisposeFramePools()
     {

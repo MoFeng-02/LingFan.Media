@@ -67,7 +67,7 @@ public sealed class SubtitlePacketQueue
     }
 
     /// <summary>
-    /// 重置队列（V2-06 C3）。将已 Complete 的队列恢复为可写入状态。
+    /// 重置队列。将已 Complete 的队列恢复为可写入状态。
     /// 用于 Seek after stream end 场景。
     /// </summary>
     public void Reset()

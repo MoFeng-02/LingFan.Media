@@ -7,7 +7,7 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <summary>
 /// WASAPI 音频输出（公开适配层）。Phase 1 起，全部 WASAPI COM 逻辑已提取至 <see cref="WasapiRenderLoop"/>：
 /// 本类仅实现 <see cref="IAudioOutput"/> / <see cref="IBatchAudioSubmit"/> 契约，并把每个调用转发给内部的
-/// <see cref="_loop"/>（常驻 STA 渲染线程）。公开 API 签名、行为与线程语义与 v1 完全一致。
+/// <see cref="_loop"/>（常驻 STA 渲染线程）。公开 API 签名、行为与线程语义完全一致。
 /// </summary>
 /// <remarks>
 /// <para><b>为什么要这层适配</b>：保留 <c>IAudioOutput</c> / <c>IBatchAudioSubmit</c> 公共契约不变（Phase 1 不删接口），

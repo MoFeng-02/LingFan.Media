@@ -234,8 +234,8 @@ public class FormatDetector : IFormatDetector
     /// </summary>
     /// <remarks>
     /// MPEG-TS 同步字节 0x47（ASCII 'G'）每 188 字节重复一次。
-    /// <b>V2-11 L5</b>：扫描探测窗口内所有偏移（不仅是 offset 0），
-    /// 以识别从非零偏移开始的录制文件（V1 仅检测 offset 0，存在漏报）。
+    /// 扫描探测窗口内所有偏移（不仅是 offset 0），
+    /// 以识别从非零偏移开始的录制文件（仅检测 offset 0，存在漏报）。
     /// 为降低误报，要求从某偏移起连续至少 3 个同步字节（间隔 188 字节），与任务规格一致。
     /// </remarks>
     /// <param name="data">探测数据。</param>

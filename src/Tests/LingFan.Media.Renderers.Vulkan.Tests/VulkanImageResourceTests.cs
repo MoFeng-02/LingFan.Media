@@ -4,7 +4,7 @@ namespace LingFan.Media.Renderers.Vulkan.Tests;
 
 /// <summary>
 /// VK-ZERO：<see cref="VulkanImageResource"/> 封装正确性 + <see cref="VulkanRenderer.BlitVulkanImageResource"/>
-/// 多平面格式明确抛 <see cref="NotSupportedException"/>（归 V3 Shader 转码）。
+/// 多平面格式明确抛 <see cref="NotSupportedException"/>（归 Shader 转码）。
 /// 本机有 Vulkan（核显/独显），headless 真实驱动验证。
 /// </summary>
 public unsafe class VulkanImageResourceTests

@@ -1,7 +1,7 @@
 namespace LingFan.Media.Outputs.OpenSLES;
 
 /// <summary>
-/// OpenSL ES 音频输出 DI 注册扩展方法（Android，V2-17 / O4）。
+/// OpenSL ES 音频输出 DI 注册扩展方法（Android，O4）。
 /// </summary>
 /// <remarks>
 /// <para>使用模式：<code>services.AddLingFanMedia().AddOpenSlesOutput()</code></para>

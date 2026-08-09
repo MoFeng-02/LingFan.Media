@@ -8,7 +8,7 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// <para><b>异步策略</b>（与 <see cref="FFmpegVideoDecoderFactory"/> 对称）：</para>
 /// <list type="bullet">
 /// <item><see cref="Create"/>：同步，手动 new + <see cref="IAudioDecoder.Initialize"/>。</item>
-/// <item><see cref="CreateAsync"/>：接口契约，V1 无 I/O，返回 <see cref="Task.FromResult"/>。</item>
+/// <item><see cref="CreateAsync"/>：接口契约，无 I/O，返回 <see cref="Task.FromResult"/>。</item>
 /// </list>
 /// </remarks>
 public sealed class FFmpegAudioDecoderFactory : IAudioDecoderFactory
@@ -33,7 +33,7 @@ public sealed class FFmpegAudioDecoderFactory : IAudioDecoderFactory
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 接口契约：V1 无 I/O，返回 <see cref="Task.FromResult"/>。
+    /// 接口契约：无 I/O，返回 <see cref="Task.FromResult"/>。
     /// 优先使用此方法（支持 CT，对称一致性）。
     /// </remarks>
     public Task<IAudioDecoder> CreateAsync(AudioCodec codec, AudioSettings settings, CancellationToken ct = default)

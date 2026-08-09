@@ -75,7 +75,7 @@ public class FormatDetectorMpegTsOffsetTests
     }
 
     [Fact]
-    public void Detect_RecognizesTsAtNonZeroOffset() // V2-11 L5：非零偏移起始
+    public void Detect_RecognizesTsAtNonZeroOffset() // L5：非零偏移起始
     {
         var stream = new MemoryMediaStream(BuildTsBuffer(10));
         FormatDetector.Detect(stream).Should().Be(ContainerFormat.TS);

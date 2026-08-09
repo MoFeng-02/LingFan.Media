@@ -3,7 +3,7 @@ using System.Buffers;
 namespace LingFan.Media.Backends.FFmpeg.Interop;
 
 /// <summary>
-/// 将非托管指针映射为 <see cref="Memory{T}"/>，供 V2-05 零拷贝场景使用
+/// 将非托管指针映射为 <see cref="Memory{T}"/>，供 零拷贝场景使用
 /// （FFmpeg 引用计数 buffer：<c>av_frame_clone</c> / <c>av_packet_clone</c> 共享的原生内存）。
 /// </summary>
 /// <remarks>

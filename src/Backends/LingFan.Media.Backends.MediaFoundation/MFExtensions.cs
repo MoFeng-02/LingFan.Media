@@ -14,7 +14,7 @@ namespace LingFan.Media.Backends.MediaFoundation;
 /// <para>MFBackend 作为 Singleton 是安全的——只持有 MFStartup 全局状态。</para>
 /// <para><b>仅 Windows 可用</b>：MFBackend 构造时检测平台，非 Windows 抛 PlatformNotSupportedException。</para>
 /// <para>此方法为同步配置（config 分类），无 I/O。</para>
-/// <para>从 BackendStubs.cs 迁移真实实现（Task-V2-14 B2）。</para>
+/// <para>从 BackendStubs.cs 迁移真实实现。</para>
 /// </remarks>
 public static class MFExtensions
 {

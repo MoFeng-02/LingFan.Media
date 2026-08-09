@@ -19,7 +19,7 @@ public interface IVideoProcessor
     bool IsEnabled { get; set; }
 
     /// <summary>
-    /// 重置处理器内部状态（Seek/Flush 后调用，V2-06 二次审计修复）。
+    /// 重置处理器内部状态（Seek/Flush 后调用）。
     /// </summary>
     /// <remarks>
     /// <para>所有权：有状态处理器（如 <see cref="FrameRateConverter"/> 持有的上一帧副本 _held）

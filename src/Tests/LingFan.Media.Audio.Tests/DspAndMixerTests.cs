@@ -8,7 +8,7 @@ using Xunit;
 namespace LingFan.Media.Audio.Tests;
 
 /// <summary>
-/// V2-08 AU1~AU6 真实算法与混音单元验证。
+/// AU1~AU6 真实算法与混音单元验证。
 /// 重点：所有权转移（启用时输入帧被 Dispose、返回新帧）、恒等变换、整数/溢出边界、环形缓冲与声道转换。
 /// </summary>
 public class DspAndMixerTests

@@ -25,12 +25,12 @@ namespace LingFan.Media.Avalonia;
 /// <para><b>异步策略</b>（遵守异步同步分类表）：</para>
 /// <list type="bullet">
 /// <item>OnAttachedToVisualTree：sync——创建 Presenter + Initialize，纯内存</item>
-/// <item>OnDetachedFromVisualTree：V1 sync（SkiaVideoRenderer.Dispose 同步，无 I/O 可 await）。
-/// V2 原生 GPU 模式新增 <see cref="DisposePlayerAsync"/> 供消费方显式调用（**async void 绝对禁止**），
+/// <item>OnDetachedFromVisualTree：sync（SkiaVideoRenderer.Dispose 同步，无 I/O 可 await）。
+/// 原生 GPU 模式新增 <see cref="DisposePlayerAsync"/> 供消费方显式调用（**async void 绝对禁止**），
 /// void 覆写内调同步清理兜底。</item>
 /// <item>Render(DrawingContext)：native——Avalonia 框架 void 签名硬限制</item>
 /// <item>OnSizeChanged：sync——通知 Presenter.Resize，纯内存</item>
-/// <item>OnPlayerChanged：sync 设置——检查 Session 是否已就绪（V1 不 await OpenAsync，消费方应先调用 OpenAsync 再绑定 Player）</item>
+/// <item>OnPlayerChanged：sync 设置——检查 Session 是否已就绪（不 await OpenAsync，消费方应先调用 OpenAsync 再绑定 Player）</item>
 /// </list>
 /// <para><b>数据绑定</b>：使用 Avalonia 原生 StyledProperty&lt;T&gt;，不依赖 MVVM 框架。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射。</para>
@@ -44,7 +44,7 @@ namespace LingFan.Media.Avalonia;
 /// </code>
 /// 释放时推荐异步路径：
 /// <code>
-/// await videoView.DisposePlayerAsync(); // V2 推荐路径
+/// await videoView.DisposePlayerAsync(); // 推荐路径
 /// </code>
 /// </example>
 /// </remarks>
@@ -214,11 +214,11 @@ public sealed class VideoView : Control, IRenderTarget
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <b>V1 同步兜底</b>：SkiaVideoRenderer.Dispose 是同步的，无 I/O 可 await。
-    /// <b>V2 推荐路径</b>：消费方先 <c>await DisposePlayerAsync()</c> 释放 GPU 资源（GPU flush + SwapChain 释放是真实异步 I/O），
+    /// <b>同步兜底</b>：SkiaVideoRenderer.Dispose 是同步的，无 I/O 可 await。
+    /// <b>推荐路径</b>：消费方先 <c>await DisposePlayerAsync()</c> 释放 GPU 资源（GPU flush + SwapChain 释放是真实异步 I/O），
     /// 再让控件 Detach。void 覆写不可改签名为 Task/ValueTask（<b>async void 绝对禁止</b>），
     /// 内调同步清理兜底——解绑播放器事件 + 同步释放 Presenter。
-    /// 当前 V1 无伪异步——方法体内无 await 故不加 async 关键字。
+    /// 当前无伪异步——方法体内无 await 故不加 async 关键字。
     /// </remarks>
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
@@ -240,7 +240,7 @@ public sealed class VideoView : Control, IRenderTarget
     /// 异步释放播放器和渲染器资源。供消费方在控件 Detach 前显式调用。
     /// </summary>
     /// <remarks>
-    /// <para><b>V2 推荐路径</b>：原生 GPU 模式下，<c>await _player.DisposeAsync()</c> 释放 GPU 资源
+    /// <para><b>推荐路径</b>：原生 GPU 模式下，<c>await _player.DisposeAsync()</c> 释放 GPU 资源
     /// （GPU flush + SwapChain 释放是真实异步 I/O，不能同步阻塞 UI 线程）。</para>
     /// <para><b>ValueTask</b> 与 <see cref="IMediaPlayer.DisposeAsync()"/> 返回类型一致。</para>
     /// <para><b>async void 绝对禁止</b>——此方法不是 void 覆写，是新增独立 async 方法。</para>
@@ -504,7 +504,7 @@ public sealed class VideoView : Control, IRenderTarget
         player.StateChanged += OnPlayerStateChanged;
         player.SubtitleReceived += OnSubtitleReceived;
 
-        // V2-12: 若当前为 Skia 软渲染 Presenter，订阅视频帧 sink（管线线程同步投递帧）。
+        // 若当前为 Skia 软渲染 Presenter，订阅视频帧 sink（管线线程同步投递帧）。
         // D3D11 原生 GPU 模式不订阅——管线直接 Present 到已 Attach 的共享 SwapChain。
         UpdateVideoSinkSubscription();
 
@@ -527,7 +527,7 @@ public sealed class VideoView : Control, IRenderTarget
         if (_player == null)
             return;
 
-        // V2-12: 退订视频帧 sink（避免管线线程继续向已解绑 Player 投递帧）
+        // 退订视频帧 sink（避免管线线程继续向已解绑 Player 投递帧）
         if (_videoSinkSubscribed)
         {
             _player.VideoFrameAvailable -= PresentFrame;

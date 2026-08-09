@@ -5,7 +5,7 @@ using LingFan.Media.Abstractions;
 namespace LingFan.Media.Backends.MediaFoundation.Interop;
 
 /// <summary>
-/// MediaFoundation DXVA 硬件解码零拷贝互操作（V2-15 扩展，选项 B）。
+/// MediaFoundation DXVA 硬件解码零拷贝互操作。
 /// </summary>
 /// <remarks>
 /// <para>提供：① <see cref="MFCreateDXGIDeviceManager"/>（mfplat.dll 扁平导出）创建 DXGI 设备管理器；

@@ -4,7 +4,7 @@ using LingFan.Media.Outputs.AppleAudioUnit;
 namespace LingFan.Media.Outputs.CoreAudio;
 
 /// <summary>
-/// CoreAudio 音频输出（macOS）。P2 平台扩展（V2-18 / O2）。
+/// CoreAudio 音频输出（macOS）。P2 平台扩展（O2）。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 AudioToolbox AudioUnit（kAudioUnitSubType_DefaultOutput）播放交错 S16 PCM，
@@ -21,7 +21,7 @@ namespace LingFan.Media.Outputs.CoreAudio;
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。</item>
 /// </list>
 /// <para><b>音量</b>：软件增益（S16 样本缩放），与 AAudio 一致。</para>
-/// <para><b>所有权</b>：Submit 不接管帧所有权、不 Dispose 帧（V2 规则），调用方负责 Return 到 FramePool 或 Dispose。</para>
+/// <para><b>所有权</b>：Submit 不接管帧所有权、不 Dispose 帧（规则），调用方负责 Return 到 FramePool 或 Dispose。</para>
 /// <para><b>AOT 兼容</b>：sealed 类；纯 C API LibraryImport + <c>[UnmanagedCallersOnly]</c> 回调，零 COM、零反射、零 Obj-C 运行时。</para>
 /// <para><b>平台边界</b>：仅 macOS 有效；非 macOS 调用抛 <see cref="PlatformNotSupportedException"/>。编译期跨平台可编译。</para>
 /// </remarks>

@@ -11,7 +11,7 @@ using Xunit.Sdk;
 namespace LingFan.Media.Outputs.Tests;
 
 /// <summary>
-/// WasapiOutput V2-13 单元测试。
+/// WasapiOutput 单元测试。
 /// 测试格式解析（O9）、PCM 转换逻辑（O9）、选项配置（O7/O8）。
 /// </summary>
 /// <remarks>
@@ -427,8 +427,8 @@ public class WasapiOutputTests
         var options = new WasapiOptions();
 
         options.ExclusiveMode.Should().BeFalse();
-        options.EventDrivenMode.Should().BeTrue();       // V2 默认事件驱动
-        options.PreferredSampleFormat.Should().BeNull(); // V2 默认自动检测
+        options.EventDrivenMode.Should().BeTrue();       // 默认事件驱动
+        options.PreferredSampleFormat.Should().BeNull(); // 默认自动检测
         // 1d1b07f 起默认由 50ms 调整为 100ms：共享模式下兼顾播放稳定性与 A/V 同步。
         options.BufferDuration.Should().Be(TimeSpan.FromMilliseconds(100));
         options.SampleRate.Should().Be(44100);
@@ -441,7 +441,7 @@ public class WasapiOutputTests
         var options = new WasapiOptions
         {
             ExclusiveMode = true,
-            EventDrivenMode = false,         // 回退 V1 轮询
+            EventDrivenMode = false,         // 回退轮询
             PreferredSampleFormat = SampleFormat.S32,
             BufferDuration = TimeSpan.FromMilliseconds(10),
             SampleRate = 48000,
@@ -526,7 +526,7 @@ public class WasapiOutputTests
         }
     }
 
-    // ── 无头冒烟测试（V2-13 W1 待开发）──
+    // ── 无头冒烟测试（W1 待开发）──
 
     /// <summary>
     /// 无 UI 环境下 WASAPI 生命周期冒烟：InitializeAsync → Initialize → Submit(静音帧) → Dispose。

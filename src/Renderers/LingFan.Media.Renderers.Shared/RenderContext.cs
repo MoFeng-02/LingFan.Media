@@ -6,7 +6,7 @@ namespace LingFan.Media.Renderers.Shared;
 /// <remarks>
 /// <para>由 <see cref="IVideoRendererFactory"/>（如 <c>D3D11RendererFactory</c>）持有（Singleton 共享 GPU Device），
 /// SwapChain / CommandQueue 是 Session 级（每个 Renderer 实例独立）。</para>
-/// <para>V2 扩展：实现 <see cref="IGpuDeviceContext"/>（Abstractions 中立桥），暴露完整设备能力查询，
+/// <para>扩展：实现 <see cref="IGpuDeviceContext"/>（Abstractions 中立桥），暴露完整设备能力查询，
 /// 供 Avalonia / Outputs 等层查询 GPU 能力而无需引用具体渲染器模块（依赖倒置严守）。</para>
 /// <para><b>能力注入</b>：设备能力（<see cref="GpuDeviceCapabilities"/>）由具体渲染器工厂在设备创建时查询并注入，
 /// 本类（Renderers.Shared）不依赖任何具体 GPU API 库（零 Vortice 依赖、AOT 友好）。</para>

@@ -59,7 +59,7 @@ public sealed class VideoProcessor
     }
 
     /// <summary>
-    /// 重置整条处理器链（Seek/Flush 后调用，V2-06 二次审计修复）。
+    /// 重置整条处理器链（Seek/Flush 后调用）。
     /// </summary>
     /// <remarks>依次调用每个处理器的 <see cref="IVideoProcessor.Reset"/>。</remarks>
     public void Reset()

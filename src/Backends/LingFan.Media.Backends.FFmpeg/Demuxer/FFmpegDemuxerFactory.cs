@@ -36,7 +36,7 @@ public sealed class FFmpegDemuxerFactory : IMediaDemuxerFactory
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 接口契约：V1 无 I/O（手动 new），返回 <see cref="Task.FromResult"/>。
+    /// 接口契约：无 I/O（手动 new），返回 <see cref="Task.FromResult"/>。
     /// 优先使用此方法（支持 CT，未来可异步初始化 FFmpeg 库）。
     /// </remarks>
     public Task<IMediaDemuxer> CreateAsync(IMediaStream stream, CancellationToken ct = default)

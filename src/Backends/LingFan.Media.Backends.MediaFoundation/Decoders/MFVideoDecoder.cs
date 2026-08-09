@@ -65,7 +65,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     // 引用计数只增不减，MF 平台常驻进程永不释放（内存/句柄泄漏）。
     private bool _mfStartupAcquired;
 
-    // 两阶段关闭协议构件（V1/V3）：关闸 → 排空在途原生调用 → 独占释放或意泄漏。
+    // 两阶段关闭协议构件：关闸 → 排空在途原生调用 → 独占释放或意泄漏。
     private readonly NativeCallGate _transformGate = new();
     private bool _leakedOnClose;   // drain 失败标记：已有意泄漏，禁止任何后续释放尝试
 
@@ -118,7 +118,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// <summary>MFVideoArea blob 的原始 16 字节 hex，仅用于首帧诊断（防止结构布局理解错误时无从对证）。</summary>
     private string? _apertureBlobHex;
 
-    // ── DXVA 硬件解码零拷贝（V2-15 扩展，选项 B）──────────────────────────────
+    // ── DXVA 硬件解码零拷贝──────────────────────────────
     // 依赖契约层 IGpuDeviceContext（共享 D3D11 设备），不引用任何渲染器模块，严守依赖倒置。
     // 有头：设备由 D3D11 渲染器注册（同设备 → 零拷贝）；无头：由 MF 自备（MfGpuDeviceContext），均经同一契约。
     private readonly IGpuDeviceContext? _gpuContext;
@@ -173,7 +173,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             throw new PlatformNotSupportedException("MediaFoundation 后端仅支持 Windows。");
         if (_initialized)
             throw new InvalidOperationException("MF 视频解码器已初始化，请先 Dispose 再重新初始化。");
-        // V3 补强：关闭不可逆（gate 一旦 BeginClose 便永久关闸，见 NativeCallGate 不变量 I1）。
+        // 关闭不可逆（gate 一旦 BeginClose 便永久关闸，见 NativeCallGate 不变量 I1）。
         // 已关闭实例若重新 Initialize，后续 DecodeAsync 的 TryEnter 恒失败 ⇒ 静默恒返回 null 帧（哑解码器）。
         // 故直接快速失败；Session 级对象按约定为 Transient，请新建实例。
         if (Volatile.Read(ref _closed) != 0)
@@ -276,7 +276,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 }
             }
 
-            // ── DXVA 硬件解码零拷贝接入（V2-15 扩展，选项 B）────────────────────────
+            // ── DXVA 硬件解码零拷贝接入────────────────────────
             // 依赖契约层 IGpuDeviceContext（共享 D3D11 设备），不引用渲染器，严守依赖倒置。
             // 🔴 时序铁律（§9.8/R39 + §9.9 SDK 实物）：SET_D3D_MANAGER 必须在 SetInputType **之前**发送
             // （mftransform.h 权威值 0x2，MSDN 原文「必须在 SetInputType / SetOutputType 之前调用」）。MFT 在 SetInputType
@@ -468,7 +468,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     {
         ArgumentNullException.ThrowIfNull(packet);
 
-        // V2：decode 全程处于 gate 内，与 Dispose 的释放形成互斥（窗口 A）。关闸时立即返回空帧。
+        // decode 全程处于 gate 内，与 Dispose 的释放形成互斥（窗口 A）。关闸时立即返回空帧。
         if (!_transformGate.TryEnter())
             return new ValueTask<VideoFrame?>((VideoFrame?)null);
         try
@@ -1220,7 +1220,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// </summary>
     private bool RenegotiateOutput()
     {
-        // V2（防御性）：RenegotiateOutput 触碰 _transform/_outputTypePtr，须处于 gate 内。
+        // RenegotiateOutput 触碰 _transform/_outputTypePtr，须处于 gate 内。
         // 正常仅从 DecodeAsync/FlushAsync（已在 gate 内）调用，此处再包裹一次无副作用（嵌套 Enter/Exit 配对）。
         if (!_transformGate.TryEnter()) return false;
         try
@@ -1404,7 +1404,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// <inheritdoc/>
     public unsafe ValueTask<VideoFrame?> FlushAsync()
     {
-        // V1：关闭期快速返回 null（EOS 语义），绝不触碰 _transform
+        // 关闭期快速返回 null（EOS 语义），绝不触碰 _transform
         if (!_transformGate.TryEnter())
             return new ValueTask<VideoFrame?>((VideoFrame?)null);
         try
@@ -1435,7 +1435,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// <inheritdoc/>
     public void Reset()
     {
-        // V1：关闭期直接 no-op，绝不触碰 _transform
+        // 关闭期直接 no-op，绝不触碰 _transform
         if (!_transformGate.TryEnter()) return;
         try
         {
@@ -1465,7 +1465,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         return CloseNativeAsync();
     }
 
-    // ── 两阶段关闭协议（V3/V4）──
+    // ── 两阶段关闭协议──
     // ⚠️ 重入互斥（审计 A-2）：CloseNativeSync / CloseNativeAsync 共用 _closed 这一 Interlocked 令牌，
     //    先到者执行完整协议，后到者立即返回（不等待）。保证的是**绝不二次 Release**。
 

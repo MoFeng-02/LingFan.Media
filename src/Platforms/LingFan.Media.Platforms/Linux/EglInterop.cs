@@ -3,14 +3,14 @@ using System.Runtime.InteropServices;
 namespace LingFan.Media.Platforms.Linux;
 
 /// <summary>
-/// EGL 互操作——DMABuf → EGLImage → GL 纹理零拷贝路径（V2-12 R13）。
+/// EGL 互操作——DMABuf → EGLImage → GL 纹理零拷贝路径（R13）。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 <c>EGL_EXT_image_dma_buf_import</c> 扩展从 dmabuf 创建 EGLImage，
 /// 再经 <c>glEGLImageTargetTexture2DOES</c> 绑定到 GL 纹理实现零拷贝。</para>
 /// <para><b>GPU 零拷贝路径</b>：VAAPI 硬解 → dmabuf → EGLImage → GLTexture → OpenGLRenderer → EGL → Display。</para>
 /// <para><b>平台边界</b>：仅 Linux 有效；非 Linux 调用抛 <see cref="PlatformNotSupportedException"/>
-/// （继承自 <see cref="NotSupportedException"/>，与 V1 桩契约兼容）。编译期跨平台可编译——
+/// （继承自 <see cref="NotSupportedException"/>，与桩契约兼容）。编译期跨平台可编译——
 /// <c>libEGL.so.1</c> 仅在首次调用时加载。</para>
 /// <para><b>异步策略</b>：全部同步（sync 分类）——EGL/GL 调用是同步原生边界，无 I/O await；
 /// 若改为 <c>async</c> 方法体内无 <c>await</c> 则为伪异步，故保持同步。</para>

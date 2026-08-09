@@ -21,9 +21,9 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <item><see cref="InitializeAsync"/>：接口契约，内部启动 STA 线程 + 在渲染线程执行 InitializeCore，返回 <see cref="Task.CompletedTask"/>。
 /// CoInitializeEx + COM 设备枚举均为同步 COM 调用，无 I/O 可 await，非伪异步。</item>
 /// <item><see cref="Initialize"/>：同步（sync 分类），在渲染线程执行 IAudioClient + IAudioRenderClient 创建 +
-/// V2 格式协商（GetMixFormat / IsFormatSupported）+ V2 事件驱动初始化（SetEventHandle）。</item>
+/// 格式协商（GetMixFormat / IsFormatSupported）+ 事件驱动初始化（SetEventHandle）。</item>
 /// <item><see cref="Submit"/>/<see cref="SubmitBatch"/>：同步边界（native 分类），将帧交给渲染线程消费（阻塞等待该帧写入完成，
-/// 故调用方在 Submit 返回后可安全归还帧所有权——与 v1 行为一致）；缓冲满时由渲染线程的 COM 背压等待，
+/// 故调用方在 Submit 返回后可安全归还帧所有权——与行为一致）；缓冲满时由渲染线程的 COM 背压等待，
 /// 不再由调用方跨线程往返。</item>
 /// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），渲染线程执行 IAudioClient.Stop/Start/Reset。</item>
 /// <item><see cref="GetPlaybackPosition"/>：同步（sync 分类），渲染线程执行 IAudioClock.GetPosition。</item>
@@ -33,9 +33,9 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，采用原始 vtable P/Invoke（ComVTable 委托封送），不使用 [ComImport]/RCW，NativeAOT 兼容。</para>
 /// <para><b>资源所有权</b>：IMMDeviceEnumerator/IMMDevice/IAudioClient/IAudioRenderClient/ISimpleAudioVolume/IAudioClock
 /// 的原生指针均由本类持有（Session 级），Dispose 时通过 Marshal.Release(IntPtr) 逆序释放。
-/// V2 事件句柄（EventWaitHandle）由本类创建并持有，Dispose 时释放。</para>
-/// <para><b>Submit 所有权</b>：v2 语义保持——Submit 不接管帧所有权，不 Dispose 帧。调用方（AudioPipeline）负责 Return 到 FramePool 或 Dispose。</para>
-/// <para><b>V2 增强（Task-V2-13）</b>：O7 独占模式（IsFormatSupported 协商 + 错误处理）、O8 事件驱动（SetEventHandle + WaitOne 替代 Sleep 轮询）、
+/// 事件句柄（EventWaitHandle）由本类创建并持有，Dispose 时释放。</para>
+/// <para><b>Submit 所有权</b>：语义保持——Submit 不接管帧所有权，不 Dispose 帧。调用方（AudioPipeline）负责 Return 到 FramePool 或 Dispose。</para>
+/// <para><b>增强</b>：O7 独占模式（IsFormatSupported 协商 + 错误处理）、O8 事件驱动（SetEventHandle + WaitOne 替代 Sleep 轮询）、
 /// O9 多格式直出（GetMixFormat 检测 + S16/S32/F32 直出）。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
@@ -107,7 +107,7 @@ internal sealed class WasapiRenderLoop
     private int _channels;
     private float _volume = 1.0f;
 
-    // V2: 事件驱动模式
+    // 事件驱动模式
     private EventWaitHandle? _bufferEvent;
 
     // 设备是否处于 Running（引擎正在消费缓冲）。分段写入遇缓冲满时据此决策：
@@ -125,17 +125,17 @@ internal sealed class WasapiRenderLoop
     private readonly bool _openDiag = System.Environment.GetEnvironmentVariable("WASAPI_OPEN_DIAG") == "1";
     private Stopwatch? _initDiagSw;
 
-    // V2: 设备原生采样格式（Initialize 时检测，Submit 时用于直出判断）
+    // 设备原生采样格式（Initialize 时检测，Submit 时用于直出判断）
     private SampleFormat _deviceSampleFormat = SampleFormat.F32;
 
-    // V2: 设备原生 mix format 的采样率/声道数（GetMixFormat 检测）。
+    // 设备原生 mix format 的采样率/声道数（GetMixFormat 检测）。
     // ⚠️ 审计修正（2026-07-31）：此前注释称"初始化 WAVEFORMATEX 必须用它而非解码器输出格式"，这是错的
     // ——那样会让 Submit 侧的解码器格式帧被按设备速率播出。现仅用于诊断日志与 AUTOCONVERTPCM 判断，
     // 实际初始化格式一律用客户端（解码器）采样率/声道数。详见 NegotiateSharedFormat 步骤 4。
     private int _mixSampleRate;
     private int _mixChannels;
 
-    // V2: IAudioClock 的设备频率（units/秒）。GetPosition 的返回值须除以它才是秒数，
+    // IAudioClock 的设备频率（units/秒）。GetPosition 的返回值须除以它才是秒数，
     // 单位由设备定义（共享模式常见为字节/秒 = nSamplesPerSec * nBlockAlign），不等于采样率。
     // 0 表示不可用（GetFrequency 失败），此时 GetPlaybackPosition 回落到采样率换算并告警。
     private long _audioClockFrequency;
@@ -193,7 +193,7 @@ internal sealed class WasapiRenderLoop
 
     /// <inheritdoc cref="WasapiOutput.Submit"/>
     /// <remarks>
-    /// V2 语义保持：Submit 不接管帧所有权。将帧投递给渲染线程并阻塞等待其写入完成（COM 背压在渲染线程内），
+    /// 语义保持：Submit 不接管帧所有权。将帧投递给渲染线程并阻塞等待其写入完成（COM 背压在渲染线程内），
     /// 故调用方在 Submit 返回后可安全归还帧；不跨越调用方线程做 COM 封送。
     /// </remarks>
     public void Submit(AudioFrame frame) => Submit(frame, CancellationToken.None);
@@ -633,7 +633,7 @@ internal sealed class WasapiRenderLoop
             ReleaseComObjects();
         }
 
-        // V2: 释放事件句柄
+        // 释放事件句柄
         if (_bufferEvent != null)
         {
             _bufferEvent.Dispose();
@@ -913,7 +913,7 @@ internal sealed class WasapiRenderLoop
             _audioClientSetEventHandle = ComVTable.Get<IAudioClient_SetEventHandle>(pAudioClient, 10);
             _audioClientGetService = ComVTable.Get<IAudioClient_GetService>(pAudioClient, 11);
 
-            // 1.5 V2 O10：在 Initialize 之前，通过 IAudioClient2.SetClientProperties 设置会话分类，
+            // 1.5 O10：在 Initialize 之前，通过 IAudioClient2.SetClientProperties 设置会话分类，
             // 防止 Windows 将后台/非前台/隐藏窗口的音频会话在播放数秒后挂起（声音 ~15s 中断）。
             // 全程 try/guard：任何不支持/失败都只记日志，不影响后续正常 Initialize（最坏退回旧行为）。
             // ⚠️ 2026-08-02 结案：曾长期 0xC0000005，真因是本文件 TrySetSessionCategory 的 vtable 槽位算错一格
@@ -924,7 +924,7 @@ internal sealed class WasapiRenderLoop
             if (_options.EnableBackgroundCapableSession)
                 TrySetSessionCategory(pAudioClient);
 
-            // 2. V2 格式协商（O7 独占模式 + O9 多格式直出）
+            // 2. 格式协商（O7 独占模式 + O9 多格式直出）
             WAVEFORMATEX format;
             if (_exclusiveMode)
             {
@@ -944,7 +944,7 @@ internal sealed class WasapiRenderLoop
                 ? WasapiInterop.AUDCLNT_SHAREMODE_EXCLUSIVE
                 : WasapiInterop.AUDCLNT_SHAREMODE_SHARED;
 
-            // V2 O8: 事件驱动模式
+            // O8: 事件驱动模式
             int streamFlags = _eventDrivenMode
                 ? WasapiInterop.AUDCLNT_STREAMFLAGS_EVENTCALLBACK
                 : 0;
@@ -974,7 +974,7 @@ internal sealed class WasapiRenderLoop
             }
             LogOpen("IAudioClient.Initialize");
 
-            // V2 O7: 独占模式错误处理
+            // O7: 独占模式错误处理
             if (hr == WasapiInterop.AUDCLNT_E_DEVICE_IN_USE)
             {
                 throw new InvalidOperationException(
@@ -1005,7 +1005,7 @@ internal sealed class WasapiRenderLoop
                 Marshal.ThrowExceptionForHR(hr);
             }
 
-            // 4. V2 O8: 事件驱动模式——注册事件句柄
+            // 4. O8: 事件驱动模式——注册事件句柄
             if (_eventDrivenMode)
             {
                 _bufferEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
@@ -1336,7 +1336,7 @@ internal sealed class WasapiRenderLoop
         return !_shutdownEvent.Wait(BufferPollIntervalMs);
     }
 
-    // ── V2 格式协商方法（O7 独占模式 + O9 多格式直出）──
+    // ── 格式协商方法（O7 独占模式 + O9 多格式直出）──
 
     /// <summary>
     /// 共享模式格式协商：通过 GetMixFormat 获取设备原生格式。
@@ -1530,7 +1530,7 @@ internal sealed class WasapiRenderLoop
         return SampleFormat.F32;
     }
 
-    // ── V2 PCM 拷贝/转换方法（O9 多格式直出）──
+    // ── PCM 拷贝/转换方法（O9 多格式直出）──
 
     /// <summary>
     /// 将源 PCM 数据拷贝或转换到 WASAPI 缓冲区。格式匹配时零转换直接拷贝。

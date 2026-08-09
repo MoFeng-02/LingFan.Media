@@ -11,7 +11,7 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <IsPackable>true</IsPackable>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
 </Project>

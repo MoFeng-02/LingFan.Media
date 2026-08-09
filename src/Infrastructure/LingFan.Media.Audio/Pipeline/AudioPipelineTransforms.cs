@@ -5,7 +5,7 @@ using System.Collections.Generic;
 namespace LingFan.Media.Audio;
 
 /// <summary>
-/// 音频管线变换构造器（V2-06 C4/C6）。将 Audio 模块的富类型
+/// 音频管线变换构造器。将 Audio 模块的富类型
 /// （<see cref="VolumeControl"/> / <see cref="AudioMixer"/> / <see cref="MixerChannel"/>）
 /// 转换为 Core <c>AudioPipeline</c> 可消费的中立 BCL 委托
 /// <c>Func&lt;AudioFrame, AudioFrame&gt;</c>。
@@ -22,7 +22,7 @@ namespace LingFan.Media.Audio;
 public static class AudioPipelineTransforms
 {
     /// <summary>
-    /// 构造音量变换（V2-06 C6）。按 <see cref="VolumeControl.GetEffectiveVolume"/> 实时值
+    /// 构造音量变换。按 <see cref="VolumeControl.GetEffectiveVolume"/> 实时值
     /// 缩放 PCM 采样，创建新帧并释放输入帧（保持与 <see cref="IAudioEffect"/> 一致的所有权转移）。
     /// </summary>
     /// <param name="volumeControl">音量控制器（实时读取有效音量，含静音）。</param>
@@ -59,7 +59,7 @@ public static class AudioPipelineTransforms
     }
 
     /// <summary>
-    /// 构造混音变换（V2-06 C4）。将输入帧提交到指定 <see cref="MixerChannel"/>，
+    /// 构造混音变换。将输入帧提交到指定 <see cref="MixerChannel"/>，
     /// 再经 <see cref="AudioMixer.Mix"/> 从所有激活通道混合出一路新帧。
     /// </summary>
     /// <param name="mixer">混音器（多路混合主控制器）。</param>

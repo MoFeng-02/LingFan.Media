@@ -116,7 +116,7 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
                     "可能出现错帧/花屏甚至驱动崩溃；建议改用软件解码。");
             }
 
-            // 创建设备上下文（RenderContext 实现 IGpuDeviceContext）并注入 GPU 能力（V2 R6/E2）。
+            // 创建设备上下文（RenderContext 实现 IGpuDeviceContext）并注入 GPU 能力。
             // 能力查询失败不应阻断设备创建——降级为默认能力快照。
             try
             {

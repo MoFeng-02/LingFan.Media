@@ -2,7 +2,7 @@ namespace LingFan.Media.Video;
 
 /// <summary>
 /// 视频管线配置快照。由 <see cref="VideoPipeline.BuildConfig"/> 生成，
-/// 供 MediaPlayer（Task-02-09）在创建 Core <c>VideoPipeline</c> 执行器时消费。
+/// 供 MediaPlayer 在创建 Core <c>VideoPipeline</c> 执行器时消费。
 /// </summary>
 /// <remarks>
 /// <para>不可变快照，创建后不可修改。包含执行相关配置项：</para>
@@ -35,7 +35,7 @@ public sealed class VideoPipelineConfig
     public IReadOnlyList<IVideoProcessor> Processors { get; init; } = Array.Empty<IVideoProcessor>();
 
     /// <summary>
-    /// 将后处理链转换为 Core 管线可用的中立委托序列（V2-06 C5）。
+    /// 将后处理链转换为 Core 管线可用的中立委托序列。
     /// </summary>
     /// <remarks>
     /// <para>每个 <see cref="IVideoProcessor"/> 包装为一个 <c>Func&lt;VideoFrame, VideoFrame?&gt;</c> 闭包（null = 丢弃帧）。</para>
@@ -60,13 +60,13 @@ public sealed class VideoPipelineConfig
     }
 
     /// <summary>
-    /// 重置后处理链（Seek/Flush 后调用，V2-06 二次审计修复）。
+    /// 重置后处理链（Seek/Flush 后调用）。
     /// </summary>
     /// <remarks>
     /// <para>依次调用每个 <see cref="IVideoProcessor.Reset"/>，释放有状态处理器
     /// （如 <see cref="FrameRateConverter"/> 的上一帧副本 _held），
     /// 避免 Seek 后返回陈旧帧或跨会话滞留。</para>
-    /// <para>宿主/Extensions（V2-07/08 端到端接入）可将本方法作为
+    /// <para>宿主/Extensions 可将本方法作为
     /// <c>Action</c>（BCL 中立类型）注入 Core <c>VideoPipeline</c> 的重置钩子，
     /// 保持分层倒置（Core 不依赖 Video 模块）。</para>
     /// </remarks>

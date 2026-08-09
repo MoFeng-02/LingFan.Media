@@ -12,7 +12,7 @@ namespace LingFan.Media.Core;
 /// <para>所有方法均为同步 void（无 Task 返回，无 Resume）。</para>
 /// <para>Start() 同时处理首次启动和恢复暂停。Stop() 只调 cts.Cancel（fire-and-forget）。</para>
 /// <para>线程 join（5s 超时）在 MediaPlayer.DisposeAsync 第1步中处理，不在 Stop() 中。</para>
-/// <para>丢帧和 Present 后的帧通过 ReturnFrame 归还到 FramePool（V2）或 Dispose（V1 兼容）。</para>
+/// <para>丢帧和 Present 后的帧通过 ReturnFrame 归还到 FramePool或 Dispose。</para>
 /// </remarks>
 public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 {
@@ -107,8 +107,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// <param name="synchronizer">同步器。</param>
     /// <param name="clock">媒体时钟。</param>
     /// <param name="logger">日志器。</param>
-    /// <param name="framePool">帧对象池（V2，可为 null = 无池化回退 V1 行为）。</param>
-    /// <param name="processors">视频后处理链（V2-06 C5，可为 null = 透传）。
+    /// <param name="framePool">帧对象池。</param>
+    /// <param name="processors">视频后处理链。
     /// 中立 BCL 委托，由 Video 模块把 <c>IVideoProcessor</c> 链转换而来，Core 不依赖 Video 模块。</param>
     public VideoPipeline(
         Channel<MediaPacket> packetQueue,
@@ -146,7 +146,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 归还帧到池（若池可用）或 Dispose（V1 兼容）。
+    /// 归还帧到池（若池可用）或 Dispose。
     /// </summary>
     private void ReturnFrame(VideoFrame frame)
     {
@@ -325,7 +325,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// 清空队列和解码器缓冲（Seek 后调用）。同步版本，用于无法 await 的场景。
-    /// V2 修复（L2）：先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// 先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
     /// </summary>
     /// <remarks>
     /// <para>两阶段安全保证：</para>
@@ -362,7 +362,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 {
                     _frameQueue.Reset(_framePool);
                     _decoder.Reset();
-                    _processorReset?.Invoke(); // V2-06 二次审计修复：重置有状态处理器（释放 _held 等）
+                    _processorReset?.Invoke(); // 重置有状态处理器（释放 _held 等）
                 }
                 finally
                 {
@@ -392,7 +392,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// 清空队列和解码器缓冲（Seek 后调用）。异步版本，优先使用。
-    /// V2 修复（L2）：先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// 先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
     /// </summary>
     /// <remarks>
     /// <para>两阶段安全保证：</para>
@@ -429,7 +429,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 {
                     _frameQueue.Reset(_framePool);
                     _decoder.Reset();
-                    _processorReset?.Invoke(); // V2-06 二次审计修复：重置有状态处理器（释放 _held 等）
+                    _processorReset?.Invoke(); // 重置有状态处理器（释放 _held 等）
                 }
                 finally
                 {
@@ -683,7 +683,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                         _pendingDecoderReset = false;
                     }
 
-                    // V2-06 二次审计修复延伸：解码锁超时期间 Flush 可能跳过处理器重置，此处补做
+                    // 解码锁超时期间 Flush 可能跳过处理器重置，此处补做
                     if (_pendingProcessorReset)
                     {
                         _processorReset?.Invoke();
@@ -708,7 +708,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
                     if (decodedFrame != null && _processors != null)
                     {
-                        // V2-06 C5: 经过视频后处理链（所有权转移）
+                        // 经过视频后处理链（所有权转移）
                         foreach (var processor in _processors)
                         {
                             decodedFrame = processor(decodedFrame);
@@ -795,7 +795,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
         try
         {
-            // V2-12: _videoFrameSink 在生产路径中恒为非空 lambda（MediaPlayer 注入的转发+路由器），
+            // _videoFrameSink 在生产路径中恒为非空 lambda（MediaPlayer 注入的转发+路由器），
             // lambda 内部按"UI 是否订阅 VideoFrameAvailable"路由——订阅（Skia 软渲染）→ 投递 sink；
             // 未订阅（D3D11 原生 GPU）→ 直接 Present 到已 Attach 的共享 SwapChain。二者互斥。
             // 此处 else 仅为 null-sink 调用方（测试/无 UI）兜底：直接 Present 到渲染器。
@@ -813,7 +813,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 _firstFramePresentedTcs?.TrySetResult(true);
             }
         }
-        finally { ReturnFrame(frame); } // V2: Present 后归还到池
+        finally { ReturnFrame(frame); } // Present 后归还到池
     }
 
     /// <summary>

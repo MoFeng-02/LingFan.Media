@@ -7,7 +7,7 @@ using Xunit;
 namespace LingFan.Media.Avalonia.Tests;
 
 /// <summary>
-/// SkiaVideoPresenter GPU 纹理回退分支测试（V2-12.1）。
+/// SkiaVideoPresenter GPU 纹理回退分支测试。
 /// 验证收到 IGpuTextureResource 帧时不再抛 NotSupportedException，经中立桥回读为 BGRA32 写入 WriteableBitmap。
 /// 全程零 Renderers 引用（依赖倒置严守）。
 /// </summary>

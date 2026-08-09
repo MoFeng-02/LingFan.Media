@@ -10,8 +10,8 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <remarks>
 /// <para>用于 DXVA 硬件解码路径——FFmpeg DXVA 解码输出 ID3D11Texture2D COM 指针，
 /// 由 <see cref="SafeD3D11TextureHandle"/> 管理生命周期。</para>
-/// <para>V1：D3D11TextureResource 为最小实现，Present 路径以 SoftwareFrameResource 为主。
-/// V2 启用 DXVA 零拷贝路径后由 FFmpeg 后端创建实例。</para>
+/// <para>D3D11TextureResource 为最小实现，Present 路径以 SoftwareFrameResource 为主。
+/// 启用 DXVA 零拷贝路径后由 FFmpeg 后端创建实例。</para>
 /// <para>AOT 兼容：sealed 类，IFrameResource 多态 + pattern matching。</para>
 /// </remarks>
 internal sealed class D3D11TextureResource : IGpuTextureResource
@@ -85,7 +85,7 @@ internal sealed class D3D11TextureResource : IGpuTextureResource
                 // 从纹理自身解析其所属设备（ID3D11DeviceChild.Device 经 GetDevice 取回父设备），
                 // 避免跨模块耦合；纹理本身不实现 ID3D11Device，故不可用 QueryInterface。
                 using var device = srcTexture.Device;
-                // V2-15 第三轮审计修复：ImmediateContext 返回 AddRef 过的 COM 引用，
+                // ImmediateContext 返回 AddRef 过的 COM 引用，
                 // 须 Dispose 释放（与 D3D11RendererFactory 一致），否则 COM 引用泄漏到 GC finalizer。
                 // using var 保证 context 在 device 之前 Dispose（声明逆序释放）。
                 using var context = device.ImmediateContext;

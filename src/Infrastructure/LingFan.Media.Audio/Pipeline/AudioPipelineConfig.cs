@@ -2,7 +2,7 @@ namespace LingFan.Media.Audio;
 
 /// <summary>
 /// 音频管线配置快照。由 <see cref="AudioPipeline.BuildConfig"/> 生成，
-/// 供 MediaPlayer（Task-02-09）在创建 Core <c>AudioPipeline</c> 执行器时消费。
+/// 供 MediaPlayer在创建 Core <c>AudioPipeline</c> 执行器时消费。
 /// </summary>
 /// <remarks>
 /// <para>不可变快照，创建后不可修改。包含执行相关配置项：</para>
@@ -24,7 +24,7 @@ public sealed class AudioPipelineConfig
     public MixerSettings? MixerSettings { get; init; }
 
     /// <summary>
-    /// 将效果链转换为 Core 管线可用的中立委托序列（V2-06 C6）。
+    /// 将效果链转换为 Core 管线可用的中立委托序列。
     /// </summary>
     /// <remarks>
     /// <para>每个 <see cref="IAudioEffect"/> 包装为一个 <c>Func&lt;AudioFrame, AudioFrame&gt;</c> 闭包。</para>
@@ -49,7 +49,7 @@ public sealed class AudioPipelineConfig
     }
 
     /// <summary>
-    /// 生成效果器状态重置委托（V2-08.1），供 Core 音频管线在 Seek/Flush 解码锁内调用。
+    /// 生成效果器状态重置委托，供 Core 音频管线在 Seek/Flush 解码锁内调用。
     /// </summary>
     /// <remarks>
     /// <para>遍历 <see cref="Effects"/> 逐个调用 <see cref="IAudioEffect.Reset"/>，

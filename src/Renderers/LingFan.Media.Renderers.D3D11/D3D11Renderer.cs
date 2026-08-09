@@ -26,9 +26,9 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，pattern matching 匹配 IFrameResource 类型。</para>
 /// <para><b>资源所有权</b>：ID3D11Device/ID3D11DeviceContext 由工厂持有（共享 Singleton，本类不 Dispose），
 /// SwapChain/BackBuffer/RenderTargetView/StagingTexture 由本类持有（Session 级，Detach/Dispose 释放）。</para>
-/// <para><b>V2-12 R4</b>：软件帧支持 GPU Shader 缩放（帧尺寸 ≠ 目标尺寸）与
+/// <para><b>R4</b>：软件帧支持 GPU Shader 缩放（帧尺寸 ≠ 目标尺寸）与
 /// YUV 像素格式（YUV420P/YUV422P/YUV444P/NV12/NV21，PS 内 BT.601 全范围转换）——
-/// 经 <see cref="D3D11ShaderPipeline"/>。BGRA32/RGBA32 且尺寸一致仍走 V1 CopyResource 快路径。
+/// 经 <see cref="D3D11ShaderPipeline"/>。BGRA32/RGBA32 且尺寸一致仍走 CopyResource 快路径。
 /// GPU 纹理帧（D3D11TextureResource）维持 CopyResource 尺寸一致要求（硬解纹理无 SRV 绑定保证）。</para>
 /// </remarks>
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
@@ -48,7 +48,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// <summary>R4 Shader 管线（懒创建；设备级资源，随渲染器 Dispose 释放，不随 Detach 释放）。</summary>
     private D3D11ShaderPipeline? _shaderPipeline;
 
-    /// <summary>V2-15 R7：DirectComposition 互操作（无空域渲染，null=回退到 HWND SwapChain）。</summary>
+    /// <summary>R7：DirectComposition 互操作（无空域渲染，null=回退到 HWND SwapChain）。</summary>
     private D3D11CompositionInterop? _dcomp;
 
     private bool _disposed;
@@ -172,7 +172,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
             // （_attached 尚未设为 true，Detach() 不会清理，需 try-catch 兜底）
             try
             {
-                // V2-15 R7：优先使用 DirectComposition（无空域渲染）
+                // R7：优先使用 DirectComposition（无空域渲染）
                 // CreateSwapChainForComposition + DComp Visual 合成到窗口——视频帧不作为独立原生窗口
                 // 诊断门控 LINGFAN_D3D11_FORCE_HWND=1：跳过 DComp，直接走 HWND SwapChain
                 // （用于二分「合成层 vs 渲染层」责任，默认不生效）
@@ -294,12 +294,12 @@ internal sealed class D3D11Renderer : IVideoRenderer
             }
 
             // Pattern matching 匹配 IFrameResource 类型（AOT 安全）
-            // V2: Resource 可为 null（池化空壳），null 走 default 分支
+            // Resource 可为 null（池化空壳），null 走 default 分支
             switch (frame.Resource)
             {
                 case SoftwareFrameResource sw:
                     // R4 分支决策：YUV 格式或尺寸不匹配 → Shader 路径（GPU 缩放 + YUV→RGB）；
-                    // BGRA32/RGBA32 且尺寸一致 → V1 CopyResource 快路径（零 Shader 开销）
+                    // BGRA32/RGBA32 且尺寸一致 → CopyResource 快路径（零 Shader 开销）
                     if (D3D11ShaderPipeline.IsYuvFormat(sw.Format) || !sizeMatches || sw.Format == PixelFormat.RGBA32)
                     {
                         _shaderPipeline ??= new D3D11ShaderPipeline(_device, _context);
@@ -313,7 +313,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
                     break;
 
                 case IGpuTextureResource gpu:
-                    // V2-15 R5：GPU 纹理帧（DXVA 硬解输出）
+                    // R5：GPU 纹理帧（DXVA 硬解输出）
                     // NV12/NV21：无 SRV 绑定，经中间 SRV 纹理 + Shader 缩放/转换
                     // BGRA32/RGBA32：尺寸一致时 CopySubresourceRegion 快路径（支持纹理数组）；
                     //   尺寸不符窗口（源分辨率 ≠ 渲染目标，属正常缩放场景）时经 Shader 采样缩放（零 CPU 往返）
@@ -449,7 +449,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
         // 确保暂存纹理存在且尺寸匹配
         EnsureStagingTexture((uint)width, (uint)height);
 
-        // 行距须尊重零拷贝原生帧的对齐 stride（V2-05 可能 Stride > width*4）；
+        // 行距须尊重零拷贝原生帧的对齐 stride；
         // 紧凑帧 Stride=0 退化为 width*4。与 D3D11ShaderPipeline.UploadPlanes 保持一致，避免行错位。
         uint rowPitch = (uint)(sw.Stride > 0 ? sw.Stride : width * 4);
 
@@ -499,7 +499,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
         else
         {
             throw new NotSupportedException(
-                $"D3D11 渲染器 V1 不支持像素格式 {sw.Format}，仅支持 BGRA32 和 RGBA32。");
+                $"D3D11 渲染器 不支持像素格式 {sw.Format}，仅支持 BGRA32 和 RGBA32。");
         }
 
         // 拷贝暂存纹理到 BackBuffer
@@ -540,7 +540,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     }
 
     /// <summary>
-    /// GPU 纹理渲染路径（NV12/NV21）：经中间 SRV 纹理 + Shader 缩放/转换（V2-15 R5）。
+    /// GPU 纹理渲染路径（NV12/NV21）：经中间 SRV 纹理 + Shader 缩放/转换（R5）。
     /// </summary>
     private void PresentGpuTextureViaShader(IGpuTextureResource gpu, int targetWidth, int targetHeight)
     {
@@ -563,7 +563,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     }
 
     /// <summary>
-    /// GPU 纹理渲染路径（BGRA32/RGBA32 且尺寸 ≠ 渲染目标）：经 Shader 采样缩放（V2 帧尺寸可变修复）。
+    /// GPU 纹理渲染路径（BGRA32/RGBA32 且尺寸 ≠ 渲染目标）：经 Shader 采样缩放。
     /// </summary>
     /// <remarks>
     /// 源 GPU 纹理可绑定 SRV 直接采样（与 NV12 硬解纹理不同），故 GPU→GPU 拷贝到缓存中间纹理后
@@ -629,7 +629,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// </summary>
     private void ReleaseSessionResources()
     {
-        // V2-15 R7：先释放 DirectComposition（断开 SwapChain 与窗口的合成关联）
+        // R7：先释放 DirectComposition（断开 SwapChain 与窗口的合成关联）
         _dcomp?.Dispose();
         _dcomp = null;
 

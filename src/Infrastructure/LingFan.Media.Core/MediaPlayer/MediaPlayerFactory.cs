@@ -25,7 +25,7 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly MediaPlayerOptions _options;
 
-    // V2-06 C5/C6: 后处理变换链（中立 BCL 委托）。
+    // 后处理变换链（中立 BCL 委托）。
     // 由 Extensions/DI 从 Video/Audio 模块的具体处理器/音量/混音转换而来；
     // Core 不直接依赖 Video/Audio 模块，保持分层倒置避免。
     private readonly IReadOnlyList<Func<VideoFrame, VideoFrame?>>? _videoTransforms;
@@ -48,7 +48,7 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
     /// <param name="videoTransforms">视频后处理变换链（中立委托，可为 null）。</param>
     /// <param name="audioTransforms">音频后处理变换链（中立委托，可为 null）。</param>
     /// <param name="videoTransformsReset">视频后处理状态重置委托（中立委托，可为 null）。</param>
-    /// <param name="audioTransformsReset">音频效果状态重置委托（V2-08.1，中立委托，可为 null）。由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。</param>
+    /// <param name="audioTransformsReset">音频效果状态重置委托（中立委托，可为 null）。由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。</param>
     /// <remarks>
     /// 解码/解封装工厂一律取集合首元素作为 <see cref="Create()"/> 的默认后端组；显式指定后端组走
     /// <see cref="Create(IMediaDemuxerFactory, IVideoDecoderFactory, IAudioDecoderFactory, ISubtitleDecoderFactory?)"/> 重载。

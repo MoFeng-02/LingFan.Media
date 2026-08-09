@@ -1,7 +1,7 @@
 namespace LingFan.Media.Outputs.AAudio;
 
 /// <summary>
-/// AAudio 音频输出 DI 注册扩展方法（Android API 27+，V2-17 / O5）。
+/// AAudio 音频输出 DI 注册扩展方法（Android API 27+，O5）。
 /// </summary>
 /// <remarks>
 /// <para>使用模式：<code>services.AddLingFanMedia().AddAAudioOutput()</code></para>

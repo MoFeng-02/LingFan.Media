@@ -4,7 +4,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// Metal 纹理帧资源。实现 <see cref="IFrameResource"/>。
 /// </summary>
 /// <remarks>
-/// V1 桩实现——Metal 渲染器尚未实现（Phase 3 目标）。
+/// 桩实现——Metal 渲染器尚未实现（Phase 3 目标）。
 /// 未来实现时封装 MTLTexture（macOS / iOS），支持 VideoToolbox 零拷贝渲染。
 /// </remarks>
 public sealed class MetalTextureResource : IFrameResource

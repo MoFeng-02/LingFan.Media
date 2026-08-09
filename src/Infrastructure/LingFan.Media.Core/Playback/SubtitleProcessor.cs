@@ -106,7 +106,7 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// 清空缓存的字幕帧（Seek 后调用）。同步版本，用于无法 await 的场景。
-    /// V2 修复（L2）：先暂停处理线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// 先暂停处理线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
     /// </summary>
     /// <remarks>
     /// <para>两阶段安全保证：</para>
@@ -185,7 +185,7 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// 清空缓存的字幕帧（Seek 后调用）。异步版本，优先使用。
-    /// V2 修复（L2）：先暂停处理线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// 先暂停处理线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
     /// </summary>
     /// <remarks>
     /// <para>两阶段安全保证：</para>

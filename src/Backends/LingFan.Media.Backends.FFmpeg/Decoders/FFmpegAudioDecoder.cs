@@ -16,10 +16,10 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// <item><see cref="FlushAsync"/>：热路径异步，同上。</item>
 /// <item><see cref="Reset"/>：同步，avcodec_flush_buffers。</item>
 /// </list>
-/// <para><b>重采样（V2 B11）</b>：当 AudioSettings 指定的目标采样率/声道数/采样格式
+/// <para><b>重采样（B11）</b>：当 AudioSettings 指定的目标采样率/声道数/采样格式
 /// 与解码源不同时，在 Initialize 中创建 SwrContext 重采样上下文；
 /// 解码帧经 swr_convert_frame 重采样为目标格式后再封装为 AudioFrame。
-/// 若目标与源一致则不创建（行为与 V1 相同）。重采样为纯原生同步操作，不引入异步。</para>
+/// 若目标与源一致则不创建。重采样为纯原生同步操作，不引入异步。</para>
 /// <para><b>内存安全</b>：PCM 数据通过独立 byte[] 拷贝（不引用 FFmpeg 内部帧内存），
 /// AudioFrame 以 <see cref="ReadOnlyMemory{T}"/> 封装，消费方用
 /// <c>MemoryMarshal.Cast&lt;byte, float&gt;</c> 零拷贝访问。</para>
@@ -116,7 +116,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             throw new InvalidOperationException($"avcodec_open2 失败: {GetErrorString(ret)} (code={ret})");
         }
 
-        // V2 (B11): 若目标采样率/声道数/采样格式与源不同，创建 SwrContext 重采样上下文。
+        // 若目标采样率/声道数/采样格式与源不同，创建 SwrContext 重采样上下文。
         // 纯原生同步操作（swr_alloc_set_opts2 + swr_init），保持 Initialize 为 sync void，不引入异步。
         _targetSampleRate = settings.OutputSampleRate ?? ctx->sample_rate;
         _targetChannels = settings.OutputChannels ?? ctx->ch_layout.nb_channels;
@@ -332,10 +332,10 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
 
     // ── 辅助方法 ──
 
-    /// <summary>从 AVFrame 创建 AudioFrame（V1 无重采样）。</summary>
+    /// <summary>从 AVFrame 创建 AudioFrame。</summary>
     /// <remarks>
-    /// <para>V2 池化：若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 AudioFrame 实例减少 GC。</para>
-    /// <para>V2-05 安全零拷贝（A2）：交错格式（S16/FLT 等）data[0] 即完整 PCM——
+    /// <para>若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 AudioFrame 实例减少 GC。</para>
+    /// <para>交错格式（S16/FLT 等）data[0] 即完整 PCM——
     /// av_frame_clone 引用计数共享原生 buffer，AudioFrame 直接映射 data[0]（长度语义与拷贝路径
     /// 一致：linesize[0]，消费方 WasapiOutput 已按 expectedDataSize 截取）。
     /// 平面格式（FLTP 等）需拼接多平面为交错内存布局，保持既有拷贝路径。</para>
@@ -375,7 +375,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             if (dataSize < 0)
                 throw new InvalidOperationException($"无效的音频行大小: {dataSize}");
 
-            // V2-05 零拷贝：引用计数共享原生 buffer；克隆失败（非引用计数帧/OOM）回退拷贝
+            // 引用计数共享原生 buffer；克隆失败（非引用计数帧/OOM）回退拷贝
             AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
             if (clone != null && clone->data[0] != null)
             {
@@ -427,13 +427,13 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             ? TimeSpan.FromTicks((long)frameCount * TimeSpan.TicksPerSecond / sampleRate)
             : TimeSpan.Zero;
 
-        // V2 池化：从池中 Rent 帧壳并 Reset 填充数据（Reset 会释放旧的零拷贝所有者）
+        // 从池中 Rent 帧壳并 Reset 填充数据（Reset 会释放旧的零拷贝所有者）
         var frame = _framePool?.Rent() ?? new AudioFrame();
         frame.Reset(data, sampleRate, channels, outFormat, timestamp, duration, frameCount, dataOwner);
         return frame;
     }
 
-    // ── 重采样（B11） ──
+    // ── 重采样 ──
 
     /// <summary>将已解码的源格式 AVFrame 重采样为目标格式（如需要）。</summary>
     /// <remarks>纯原生同步操作（swr_convert_frame），不引入异步。</remarks>

@@ -4,7 +4,7 @@ namespace LingFan.Media.Video.Processors;
 /// 色彩空间转换处理器。将输入帧的像素格式转换到目标格式。
 /// </summary>
 /// <remarks>
-/// <para>V2 实现：仅处理打包格式间的 R/B 通道交换（BGRA32 ↔ RGBA32）。
+/// <para>仅处理打包格式间的 R/B 通道交换（BGRA32 ↔ RGBA32）。
 /// YUV/平面格式与 RGB24 的复杂转换留给 FFmpeg libswscale 或 GPU Shader 路径；不支持时透传。</para>
 /// <para>仅处理打包软件帧；其余格式透传。同步热路径。</para>
 /// </remarks>

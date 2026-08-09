@@ -1,10 +1,10 @@
 namespace LingFan.Media.Platforms.Linux;
 
 /// <summary>
-/// Linux 平台服务。V1 桩实现。
+/// Linux 平台服务。桩实现。
 /// </summary>
 /// <remarks>
-/// <para>V1 桩——<see cref="CreateHardwareDecoder"/> 和 <see cref="GetGPUContext"/> 抛出 <see cref="NotSupportedException"/>。
+/// <para>桩——<see cref="CreateHardwareDecoder"/> 和 <see cref="GetGPUContext"/> 抛出 <see cref="NotSupportedException"/>。
 /// Linux 硬解 / GPU 互操作属 Phase 2 目标（VAAPI + Vulkan / OpenGL）。</para>
 /// <para><b>GPU 零拷贝路径</b>：
 /// VAAPI → VkImage → VulkanRenderer → Swapchain → Wayland subsurface → Display

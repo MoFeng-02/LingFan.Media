@@ -4,7 +4,7 @@ using LingFan.Media.Backends.FFmpeg.SafeHandles;
 namespace LingFan.Media.Backends.FFmpeg.Models;
 
 /// <summary>
-/// Android MediaCodec 表面直渲染帧资源（V2-17 B9）。
+/// Android MediaCodec 表面直渲染帧资源。
 /// </summary>
 /// <remarks>
 /// <para>表面模式下 MediaCodec 硬解输出 <c>AV_PIX_FMT_MEDIACODEC</c> 帧：

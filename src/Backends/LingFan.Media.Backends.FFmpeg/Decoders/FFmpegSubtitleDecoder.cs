@@ -8,7 +8,7 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// 基于 FFmpeg libavcodec 的 <see cref="ISubtitleDecoder"/> 实现。
 /// </summary>
 /// <remarks>
-/// <para>V1 支持文本字幕（SRT / ASS / WebVTT），位图字幕（PGS / VobSub）延后。</para>
+/// <para>支持文本字幕（SRT / ASS / WebVTT），位图字幕（PGS / VobSub）延后。</para>
 /// <para><b>异步策略</b>：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，返回 <c>Task.CompletedTask</c>（无 I/O）。</item>
@@ -211,7 +211,7 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
                         sb.AppendLine(assText);
                 }
             }
-            // 位图字幕（SUBTITLE_BITMAP）V1 不实现
+            // 位图字幕（SUBTITLE_BITMAP）不实现
         }
 
         string text = sb.ToString().TrimEnd();
@@ -276,7 +276,7 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
         SubtitleCodec.PGS => AVCodecID.AV_CODEC_ID_HDMV_PGS_SUBTITLE,
         SubtitleCodec.VobSub => AVCodecID.AV_CODEC_ID_DVD_SUBTITLE,
         _ => throw new NotSupportedException(
-            $"不支持的字幕编解码器: {codec}（PGS/VobSub 位图字幕 V1 不支持解码）")
+            $"不支持的字幕编解码器: {codec}（PGS/VobSub 位图字幕 不支持解码）")
     };
 
     private static string GetErrorString(int errorCode)

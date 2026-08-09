@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.AVAudioEngine;
 
 /// <summary>
-/// iOS RemoteIO 音频输出工厂（真实实现，V2-18 / O3）。
+/// iOS RemoteIO 音频输出工厂（真实实现，O3）。
 /// </summary>
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂。<see cref="AvAudioEngineOutput"/> 是 Session 级对象，由工厂 Create() 每次新建。</para>

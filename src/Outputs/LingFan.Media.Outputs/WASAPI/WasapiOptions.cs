@@ -13,7 +13,7 @@ public sealed class WasapiOptions
     /// <remarks>
     /// 共享模式与其他应用共享音频设备，兼容性好但延迟略高。
     /// 独占模式独占设备，延迟最低但其他应用无法播放声音。
-    /// V1 推荐使用共享模式。
+    /// 推荐使用共享模式。
     /// </remarks>
     public bool ExclusiveMode { get; set; } = false;
 
@@ -21,18 +21,18 @@ public sealed class WasapiOptions
     /// <remarks>缓冲越大越稳定但延迟越高。共享模式建议 100ms（兼顾稳定与 A/V 同步），独占模式可低至 10ms。</remarks>
     public TimeSpan BufferDuration { get; set; } = TimeSpan.FromMilliseconds(100);
 
-    /// <summary>是否使用事件驱动模式。默认 true（V2）。</summary>
+    /// <summary>是否使用事件驱动模式。默认 true。</summary>
     /// <remarks>
-    /// <para>V2 新增。事件驱动模式下 WASAPI 通过内核事件通知缓冲区可写，替代 V1 的 Thread.Sleep 轮询。</para>
+    /// <para>新增。事件驱动模式下 WASAPI 通过内核事件通知缓冲区可写，替代 Thread.Sleep 轮询。</para>
     /// <para>优势：降低延迟（事件触发即唤醒 vs 轮询间隔）、减少 CPU 占用（无空转轮询）。</para>
-    /// <para>事件驱动为 sync 原生边界（EventWaitHandle.WaitOne），与 V1 轮询同属 COM 背压机制，非伪异步。</para>
-    /// <para>V1 行为（轮询）可通过设为 false 恢复。</para>
+    /// <para>事件驱动为 sync 原生边界（EventWaitHandle.WaitOne），与轮询同属 COM 背压机制，非伪异步。</para>
+    /// <para>行为（轮询）可通过设为 false 恢复。</para>
     /// </remarks>
     public bool EventDrivenMode { get; set; } = true;
 
     /// <summary>期望的采样格式。null = 自动检测设备原生格式（推荐）。</summary>
     /// <remarks>
-    /// <para>V2 新增。控制 WASAPI 设备初始化时使用的采样格式。</para>
+    /// <para>新增。控制 WASAPI 设备初始化时使用的采样格式。</para>
     /// <para>null（默认）：共享模式使用 GetMixFormat 获取设备原生格式；独占模式优先尝试 F32。</para>
     /// <para>指定格式：尝试以指定格式初始化设备，若不支持则回退到设备原生格式。</para>
     /// <para>当帧格式与设备格式匹配时，Submit 零转换直拷（O9 多格式直出）。</para>
@@ -50,7 +50,7 @@ public sealed class WasapiOptions
     /// <summary>音频会话分类（IAudioClient2.SetClientProperties）首选值。默认 <see cref="AudioClientCategory.Movie"/>。
     /// 仅在 <see cref="EnableBackgroundCapableSession"/> 为 <c>true</c> 时生效（该开关默认关闭）。</summary>
     /// <remarks>
-    /// <para>V2 O10。需在 IAudioClient.Initialize 之前通过 IAudioClient2 设置；不支持 IAudioClient2 的旧系统自动跳过。</para>
+    /// <para>O10。需在 IAudioClient.Initialize 之前通过 IAudioClient2 设置；不支持 IAudioClient2 的旧系统自动跳过。</para>
     /// <para>设置失败（负 HRESULT）时自动降级到同族候选（BackgroundCapableMedia → Movie → Media），全部失败则静默跳过。</para>
     /// <para>历史注记（2026-08-02）：曾出现任意分类值都 <c>0xC0000005</c> 的现象，一度误判为「driver 全面损坏」。
     /// 真因是 <c>TrySetSessionCategory</c> 的 vtable 槽位算错一格（slotIndex 12 = 绝对槽 15 = <c>IsOffloadCapable</c>，

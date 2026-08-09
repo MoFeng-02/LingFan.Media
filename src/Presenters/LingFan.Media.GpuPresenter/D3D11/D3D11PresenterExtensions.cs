@@ -47,7 +47,7 @@ public static class GpuPresenterExtensions
             new D3D11RendererFactory(sp.GetRequiredService<ILoggerFactory>()));
         services.AddSingleton<IVideoRendererFactory>(sp => sp.GetRequiredService<D3D11RendererFactory>());
 
-        // V2-15 第二轮审计修复：必须注册 IGpuDeviceContext，否则 FFmpegVideoDecoderFactory
+        // 第二轮审计修复：必须注册 IGpuDeviceContext，否则 FFmpegVideoDecoderFactory
         // 获取 null → D3D11VA 硬件解码静默禁用（与 AddD3D11Renderer 行为一致）
         services.AddSingleton<IGpuDeviceContext>(sp => sp.GetRequiredService<D3D11RendererFactory>().Context);
 
@@ -72,7 +72,7 @@ public static class GpuPresenterExtensions
             new D3D11RendererFactory(sp.GetRequiredService<ILoggerFactory>()));
         services.AddSingleton<IVideoRendererFactory>(sp => sp.GetRequiredService<D3D11RendererFactory>());
 
-        // V2-15 第二轮审计修复：同步注册 IGpuDeviceContext（与 AddD3D11Presenter 一致）
+        // 第二轮审计修复：同步注册 IGpuDeviceContext（与 AddD3D11Presenter 一致）
         services.AddSingleton<IGpuDeviceContext>(sp => sp.GetRequiredService<D3D11RendererFactory>().Context);
 
         services.AddSingleton<IGpuPresenterFactory>(sp =>

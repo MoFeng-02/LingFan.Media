@@ -147,7 +147,7 @@ public sealed class MediaPipelineHost
 
     /// <summary>
     /// Seek 后刷新两条管线和字幕处理器。同步版本，用于无法 await 的场景。
-    /// V2 修复（L2）：各管线 Flush 内部两阶段保证——
+    /// 各管线 Flush 内部两阶段保证——
     /// 暂停确认（快速路径）+ 解码锁（慢速路径，确保 Reset 不与 DecodeAsync 并发）。
     /// </summary>
     public void Flush()
@@ -159,7 +159,7 @@ public sealed class MediaPipelineHost
 
     /// <summary>
     /// Seek 后刷新两条管线和字幕处理器。异步版本，优先使用。
-    /// V2 修复（L2）：各管线 FlushAsync 内部两阶段保证——
+    /// 各管线 FlushAsync 内部两阶段保证——
     /// 暂停确认（快速路径，TaskCompletionSource）+ 解码锁（慢速路径，确保 Reset 不与 DecodeAsync 并发）。
     /// </summary>
     /// <remarks>

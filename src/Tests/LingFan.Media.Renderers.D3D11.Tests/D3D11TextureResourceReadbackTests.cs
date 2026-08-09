@@ -9,7 +9,7 @@ using Xunit;
 namespace LingFan.Media.Renderers.D3D11.Tests;
 
 /// <summary>
-/// D3D11TextureResource.ReadbackToCpu 单元测试（V2-12.1 GPU 纹理回退）。
+/// D3D11TextureResource.ReadbackToCpu 单元测试（GPU 纹理回退）。
 /// 验证中立 IGpuTextureResource 桥在真实 D3D11 设备上将 GPU 纹理回读为 BGRA32。
 /// </summary>
 public class D3D11TextureResourceReadbackTests

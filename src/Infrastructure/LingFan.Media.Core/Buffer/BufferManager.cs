@@ -33,7 +33,7 @@ public sealed class BufferManager : IBufferManager
     private int _videoTrackIndex = -1;
     private int _audioTrackIndex = -1;
 
-    // V2-06 C3: 流结束后包队列已 Complete，标记以便 StartAsync 重建
+    // 流结束后包队列已 Complete，标记以便 StartAsync 重建
     private bool _completed;
 
     /// <summary>
@@ -151,7 +151,7 @@ public sealed class BufferManager : IBufferManager
         // 重建 CTS
         _cts = new CancellationTokenSource();
 
-        // V2-06 C3: Seek after stream end 场景——包队列已 Complete，
+        // Seek after stream end 场景——包队列已 Complete，
         // 重建通道以恢复可写状态（同时重置字幕队列与缓冲状态）
         if (_completed)
         {
@@ -285,7 +285,7 @@ public sealed class BufferManager : IBufferManager
     }
 
     /// <summary>
-    /// 重置所有包队列（V2-06 C3）。用于 Seek after stream end 场景：
+    /// 重置所有包队列。用于 Seek after stream end 场景：
     /// 流结束后包队列已 Complete，重建通道以恢复可写状态。
     /// </summary>
     /// <remarks>

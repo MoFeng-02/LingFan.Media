@@ -24,7 +24,7 @@ public sealed class FFmpegOptions
     /// <summary>解码线程数（0 = 自动选择，默认 0）。</summary>
     public int ThreadCount { get; set; } = 0;
 
-    // ── V2-17 B9: Android MediaCodec 硬解注入点（宿主提供，库自身无法获取）──
+    // ── Android MediaCodec 硬解注入点（宿主提供，库自身无法获取）──
 
     /// <summary>
     /// Android MediaCodec 表面直渲染的 <c>android/view/Surface</c> JNI 全局引用（jobject）。

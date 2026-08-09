@@ -13,7 +13,7 @@ namespace LingFan.Media.Backends.WebRTC;
 /// <para><b>注意</b>：WebRTC 后端需要原生 WebRTC 库，当前未集成。
 /// DI 注册成功，但运行时操作抛 <see cref="PlatformNotSupportedException"/>。</para>
 /// <para>此方法为同步配置（config 分类），无 I/O。</para>
-/// <para>从 BackendStubs.cs 迁移真实实现（Task-V2-14 B4）。</para>
+/// <para>从 BackendStubs.cs 迁移真实实现。</para>
 /// </remarks>
 public static class WebRTCExtensions
 {

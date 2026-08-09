@@ -7,8 +7,8 @@ namespace LingFan.Media.Video.Processors;
 /// </summary>
 /// <remarks>
 /// <para>常见场景：24fps → 60fps（插帧）、60fps → 30fps（丢帧）。</para>
-/// <para>V2 实现：降帧率丢帧（返回 null，由管线丢弃已 Dispose 的帧）；
-/// 升帧率在两帧间插入上一帧副本（duplicate）。</para>
+    /// <para>降帧率丢帧（返回 null，由管线丢弃已 Dispose 的帧）；
+    /// 升帧率在两帧间插入上一帧副本（duplicate）。</para>
 /// <para>仅处理打包软件帧；其余格式透传。同步热路径。</para>
 /// </remarks>
 public sealed class FrameRateConverter : IVideoProcessor
@@ -109,7 +109,7 @@ public sealed class FrameRateConverter : IVideoProcessor
             throw new InvalidOperationException("CopyFrame 期望打包软件帧（FrameUtil.TryGetPackedSoftware 已保证），但收到非 SoftwareFrameResource 资源。");
         int bpp = FrameUtil.BytesPerPixel(s.Format);
         if (bpp == 0)
-            // 防御（V1 同源）：未知格式同样不可返回 src——否则 _held 与下游持有同一帧 → 双重 Dispose。
+            // 防御：未知格式同样不可返回 src——否则 _held 与下游持有同一帧 → 双重 Dispose。
             throw new InvalidOperationException($"CopyFrame 收到未知像素格式 {s.Format}（BytesPerPixel=0），无法复制帧。");
         int len = s.Data.Length;
         var dst = new SoftwareFrameResource(s.Width, s.Height, s.Format, len);

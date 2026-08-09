@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 namespace LingFan.Media.Core;
 
 /// <summary>
-/// 帧对象池。V2 实现——复用帧实例减少 GC 压力。
+/// 帧对象池。复用帧实例减少 GC 压力。
 /// </summary>
 /// <remarks>
 /// <para>线程安全：使用 <see cref="ConcurrentStack{T}"/> 天然线程安全。</para>

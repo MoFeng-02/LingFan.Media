@@ -1,10 +1,10 @@
 namespace LingFan.Media.Outputs.Alsa;
 
 /// <summary>
-/// ALSA 音频输出。V1 桩实现（Linux）。
+/// ALSA 音频输出。桩实现（Linux）。
 /// </summary>
 /// <remarks>
-/// <para>V1 桩——所有方法抛出 <see cref="NotSupportedException"/>。
+/// <para>桩——所有方法抛出 <see cref="NotSupportedException"/>。
 /// ALSA 输出为 Phase 2 目标（Linux）。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
 /// </remarks>

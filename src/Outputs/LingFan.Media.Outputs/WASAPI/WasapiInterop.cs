@@ -263,7 +263,7 @@ internal delegate int IAudioClient_GetCurrentPadding(IntPtr self, out uint pNumP
 /// 独占模式必须传 IntPtr.Zero/NULL）。</param>
 /// <returns>S_OK=完全支持；S_FALSE=不完全支持但返回最接近格式；AUDCLNT_E_UNSUPPORTED_FORMAT=不支持。</returns>
 /// <remarks>
-/// V2 审计修复：参数从 <c>out IntPtr</c> 改为 <c>IntPtr</c>（按值传递）。
+/// 审计修复：参数从 <c>out IntPtr</c> 改为 <c>IntPtr</c>（按值传递）。
 /// 原因：1) <c>out</c> 总是传递非 NULL 指针，违反独占模式 ppClosestMatch 必须为 NULL 的 API 约定；
 /// 2) 共享模式返回 S_FALSE 时 WASAPI 通过 ppClosestMatch 分配 CoTaskMem 内存，
 /// 用 <c>out _</c> 丢弃后无法释放→内存泄漏。改为按值传 IntPtr.Zero 后 WASAPI 不分配内存。

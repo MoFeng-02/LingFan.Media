@@ -1,14 +1,14 @@
 namespace LingFan.Media.Platforms.Android;
 
 /// <summary>
-/// MediaCodec 硬件解码互操作。V1 桩实现。
+/// MediaCodec 硬件解码互操作。桩实现。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 Android NDK MediaCodec API 创建硬件解码器，
 /// 输出 AHardwareBuffer 用于 Vulkan 零拷贝渲染。</para>
 /// <para><b>GPU 零拷贝路径</b>：
 /// MediaCodec → AHardwareBuffer → VkImage → VulkanRenderer → Swapchain → TextureView（SurfaceFlinger 合成）→ Display</para>
-/// <para>V1 桩——所有方法抛出 <see cref="NotSupportedException"/>。
+/// <para>桩——所有方法抛出 <see cref="NotSupportedException"/>。
 /// MediaCodec 硬解属 Phase 2-3 目标（Android）。</para>
 /// <para><b>异步策略</b>：全部同步（sync 分类）——NDK MediaCodec API 是同步边界，无 I/O。
 /// 若改为 <c>async</c> 方法体内无 <c>await</c> 则为伪异步。</para>

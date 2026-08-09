@@ -4,7 +4,7 @@ namespace LingFan.Media.Backends.VLC;
 /// VLC 后端配置选项。
 /// </summary>
 /// <remarks>
-/// 从 BackendStubs.cs 迁移至 VLC 后端项目（Task-V2-14 B1）。
+/// 从 BackendStubs.cs 迁移至 VLC 后端项目。
 /// </remarks>
 public sealed class VLCOptions
 {

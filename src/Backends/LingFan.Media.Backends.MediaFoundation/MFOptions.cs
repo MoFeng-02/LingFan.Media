@@ -4,7 +4,7 @@ namespace LingFan.Media.Backends.MediaFoundation;
 /// MediaFoundation 后端配置选项。
 /// </summary>
 /// <remarks>
-/// 从 BackendStubs.cs 迁移至 MediaFoundation 后端项目（Task-V2-14 B2）。
+/// 从 BackendStubs.cs 迁移至 MediaFoundation 后端项目。
 /// MediaFoundation 后端仅 Windows 可用，其他平台运行时检测后抛 PlatformNotSupportedException。
 /// </remarks>
 public sealed class MediaFoundationOptions

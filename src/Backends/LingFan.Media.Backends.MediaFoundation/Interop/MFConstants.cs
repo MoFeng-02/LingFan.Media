@@ -131,7 +131,7 @@ internal static class MFConstants
     // 本机运行时验证（2026-07-29）：CoCreateInstance + 全 vtable 槽位 S_OK。⚠️ 早期误写 ...8009-456E31185733（臆测值），勿回退）
     internal static readonly Guid IID_IMFTransform = new(0xbf94c121, 0x5b05, 0x4e6f, 0x80, 0x00, 0xba, 0x59, 0x89, 0x61, 0x41, 0x4d);
 
-    // ── DXVA 零拷贝（V2-15 扩展）所需 IID 与消息常量 ──
+    // ── DXVA 零拷贝所需 IID 与消息常量 ──
     // IMFDXGIDeviceManager（dxva2api.h 权威值 {AEC1CAF6-EE55-44FC-BC6A-E049C3F6D664}）
     internal static readonly Guid IID_IMFDXGIDeviceManager = new(0xaec1caf6, 0xee55, 0x44fc, 0xbc, 0x6a, 0xe0, 0x49, 0xc3, 0xf6, 0xd6, 0x64);
     // IMFDXGIBuffer（dxva2api.h 权威值 {D8AD0F58-EE55-4E44-AB48-5F6EA27FFB15}）

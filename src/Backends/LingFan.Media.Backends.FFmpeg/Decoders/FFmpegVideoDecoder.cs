@@ -89,7 +89,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// </summary>
     /// <param name="logger">日志器。</param>
     /// <param name="gpuContext">可选 GPU 设备上下文（D3D11VA 硬解需要，null=软件解码）。</param>
-    /// <param name="options">可选 FFmpeg 配置（含 V2-17 B9 MediaCodec Surface 注入点）。</param>
+    /// <param name="options">可选 FFmpeg 配置（含 MediaCodec Surface 注入点）。</param>
     public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -131,7 +131,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         // options 为 null（直接 new 解码器、未走 DI）时按 true 处理，保持既有行为。
         bool hwEnabled = settings.EnableHardwareAcceleration && (_options?.HardwareAcceleration ?? true);
 
-        // V2-17 B9: Android MediaCodec 硬解必须使用专用解码器（h264_mediacodec 等）——
+        // Android MediaCodec 硬解必须使用专用解码器（h264_mediacodec 等）——
         // avcodec_find_decoder 默认返回软件解码器，对其挂 hw_device_ctx 无效
         AVCodec* avCodec = null;
         bool useMediaCodec = false;
@@ -180,7 +180,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         // 配置硬件加速
         if (useMediaCodec)
         {
-            // V2-17 B9: MediaCodec 硬解。宿主注入 Surface → 表面直渲染（零拷贝）；
+            // MediaCodec 硬解。宿主注入 Surface → 表面直渲染（零拷贝）；
             // 未注入 → 缓冲模式（ByteBuffer 输出 NV12 软件帧，仍为硬解）
             try
             {
@@ -195,7 +195,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
         else if (hwEnabled && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
         {
-            // V2-15 B6: D3D11VA 硬件解码——使用渲染器共享的 D3D11 设备
+            // D3D11VA 硬件解码——使用渲染器共享的 D3D11 设备
             // 零拷贝链路：硬解输出 ID3D11Texture2D → D3D11HardwareFrameResource → D3D11Renderer
             try
             {
@@ -238,7 +238,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         int ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
         if (ret < 0 && useMediaCodec)
         {
-            // V2-17 B9: MediaCodec 打开失败（如宿主未调 MediaCodecInterop.SetJavaVM）→ 回退软件解码
+            // MediaCodec 打开失败（如宿主未调 MediaCodecInterop.SetJavaVM）→ 回退软件解码
             _logger.LogWarning("MediaCodec 解码器打开失败 ({Error})，回退到软件解码。" +
                 "提示：宿主须先调用 MediaCodecInterop.SetJavaVM 注入 JavaVM", GetErrorString(ret));
             _hwDeviceCtx?.Dispose();
@@ -258,7 +258,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
         if (ret < 0 && IsHardwareAccelerated)
         {
-            // V2-15 B6: D3D11VA 解码器打开失败（如驱动不支持该 profile 的硬件解码会话、
+            // D3D11VA 解码器打开失败（如驱动不支持该 profile 的硬件解码会话、
             // 共享设备在该分辨率下无法建立 DXVA 会话）——但软件解码器仍可用，干净回退，
             // 绝不抛异常阻断播放（与上方 MediaCodec 分支对称，落实「软解正确的逻辑」）。
             _logger.LogWarning("D3D11VA 解码器打开失败 ({Error})，回退到软件解码。", GetErrorString(ret));
@@ -649,7 +649,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             if (ret < 0)
                 return null;
 
-            // V2-15: Flush 时同样需检查 D3D11VA 硬解输出格式（与 DecodeCore 一致）
+            // Flush 时同样需检查 D3D11VA 硬解输出格式（与 DecodeCore 一致）
             // 🔴 同 DecodeCore：FFmpeg 8 产出 AV_PIX_FMT_D3D11，两种命名都接纳。
             var hwFmtFlush = (AVPixelFormat)avFrame->format;
             if (hwFmtFlush is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
@@ -657,7 +657,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 return CreateHardwareFrameFromAVFrame(avFrame);
             }
 
-            // V2-17 B9: Flush 时同样需检查 MediaCodec 表面输出格式（与 DecodeCore 一致）
+            // Flush 时同样需检查 MediaCodec 表面输出格式（与 DecodeCore 一致）
             if ((AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_MEDIACODEC)
             {
                 return CreateMediaCodecSurfaceFrame(avFrame);
@@ -794,8 +794,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
     /// <summary>从 AVFrame 创建 VideoFrame。</summary>
     /// <remarks>
-    /// <para>V2 池化：若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 VideoFrame 实例减少 GC。</para>
-    /// <para>V2-05 安全零拷贝（A2）：packed BGRA/RGBA 帧走 av_frame_clone 引用计数路径——
+    /// <para>若 _framePool 可用，从池中 Rent 帧壳并调用 Reset 填充数据，复用 VideoFrame 实例减少 GC。</para>
+    /// <para>packed BGRA/RGBA 帧走 av_frame_clone 引用计数路径——
     /// 克隆帧共享原生 buffer（内部对所有 buf 做 av_buffer_ref），SoftwareFrameResource
     /// 直接映射 data[0] 并携带实际 stride，Dispose 时经 SafeAVFrameHandle 释放引用。
     /// YUV/planar 格式渲染层无法直接消费（Skia 仅支持 BGRA/RGBA），保持既有拷贝路径。</para>
@@ -807,7 +807,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         AVPixelFormat pixFmt = (AVPixelFormat)avFrame->format;
         PixelFormat format = MapPixelFormatFromFFmpeg(pixFmt);
 
-        // V2-05: packed 4 字节格式优先零拷贝；失败（非引用计数帧/OOM）回退拷贝
+        // packed 4 字节格式优先零拷贝；失败（非引用计数帧/OOM）回退拷贝
         SoftwareFrameResource? resource = null;
         if (pixFmt is AVPixelFormat.AV_PIX_FMT_BGRA or AVPixelFormat.AV_PIX_FMT_RGBA)
         {
@@ -823,14 +823,14 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             : TimeSpan.Zero;
         bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
 
-        // V2 池化：从池中 Rent 帧壳并 Reset 填充数据，复用 VideoFrame 实例
+        // 从池中 Rent 帧壳并 Reset 填充数据，复用 VideoFrame 实例
         var frame = _framePool?.Rent() ?? new VideoFrame();
         frame.Reset(width, height, format, resource, timestamp, duration, keyFrame);
         return frame;
     }
 
     /// <summary>
-    /// V2-05 零拷贝路径：av_frame_clone 引用计数共享原生 buffer，避免整帧拷贝。
+    /// av_frame_clone 引用计数共享原生 buffer，避免整帧拷贝。
     /// </summary>
     /// <returns>零拷贝资源；克隆失败（非引用计数帧/内存不足/异常布局）返回 null 由调用方回退拷贝。</returns>
     private static unsafe SoftwareFrameResource? TryCreateZeroCopyResource(
@@ -873,7 +873,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             throw new InvalidOperationException(
                 $"av_image_get_buffer_size 返回 {bufSize}（format={pixFmt}, {width}x{height}）");
 
-        // V2 L12: 使用 ArrayPool 租借内存，减少 GC 压力（60fps 每秒 60 个帧）
+        // 使用 ArrayPool 租借内存，减少 GC 压力（60fps 每秒 60 个帧）
         var resource = new SoftwareFrameResource(width, height, format, bufSize);
 
         // AVFrame.data/linesize 是 Array8，av_image_copy_to_buffer 需要 Array4，需转换
@@ -901,7 +901,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         return resource;
     }
 
-    // ── V2-15 B6: D3D11VA 硬件解码 ──
+    // ── D3D11VA 硬件解码 ──
 
     /// <summary>
     /// 初始化 D3D11VA 硬件解码设备上下文（使用渲染器共享的 D3D11 设备，实现零拷贝）。
@@ -1031,7 +1031,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         return frame;
     }
 
-    // ── V2-17 B9: Android MediaCodec 硬件解码 ──
+    // ── Android MediaCodec 硬件解码 ──
 
     /// <summary>
     /// 初始化 MediaCodec 硬件设备上下文（宿主注入 Surface → 表面直渲染；未注入 → 缓冲模式）。

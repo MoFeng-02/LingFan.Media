@@ -20,10 +20,10 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// A-L8：<see cref="Present"/> 的 vkAcquireNextImage 以 <c>AcquireTimeoutNs</c>（2 秒）超时
 /// 在 <c>_gate</c> 锁内阻塞——并发调用 <see cref="Dispose"/>/<see cref="Detach"/> 最坏被卡约 2 秒后才能获得锁。
 /// 这是「有限超时替代无限等待」权衡（审计 M1）的已知副作用，属预期行为而非死锁。</para>
-/// <para><b>已知性能限制（V1）</b>：<see cref="RecordAndSubmitFrame"/> 中使用 <c>vkQueueWaitIdle</c>
-/// 每帧同步 GPU——确保 Command Buffer 可安全复用但消除 GPU 并行。V3 将改用 Fence 或环形 Command Buffer。</para>
-/// <para><b>已知功能限制（V1）</b>：不支持帧尺寸与 SwapChain 尺寸不匹配的缩放（需 Shader/Blit，V3 实现）。
-/// Linux X11/Wayland Surface 创建缺少 Display 指针——明确抛 <see cref="PlatformNotSupportedException"/>（B-M10，V3 扩展契约后支持）。
+/// <para><b>已知性能限制</b>：<see cref="RecordAndSubmitFrame"/> 中使用 <c>vkQueueWaitIdle</c>
+/// 每帧同步 GPU——确保 Command Buffer 可安全复用但消除 GPU 并行。将改用 Fence 或环形 Command Buffer。</para>
+/// <para><b>已知功能限制</b>：不支持帧尺寸与 SwapChain 尺寸不匹配的缩放（需 Shader/Blit）。
+/// Linux X11/Wayland Surface 创建缺少 Display 指针——明确抛 <see cref="PlatformNotSupportedException"/>（B-M10，扩展契约后支持）。
 /// B-M2/B-M9：ErrorOutOfDateKhr 已由 <c>RecreateSwapchain</c> 就地重建（含信号量重建，消除 signaled 残留）；
 /// 其余 QueuePresent 硬失败仍抛异常，由会话层重新 Attach 恢复（信号量在重 Attach 时重建，无 double-signal 风险）。</para>
 /// <para>AOT 兼容：sealed unsafe 类，无反射，pattern matching。</para>
@@ -49,8 +49,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     private SurfaceKHR _surface;
     private SwapchainKHR _swapchain;
     private Image[] _swapchainImages = [];
-    // R3-9: _swapchainImageViews 已移除——V1 仅用 CmdCopyBufferToImage（直接操作 VkImage），
-    // 不需要 ImageView。V3 实现 Shader 渲染时需重新添加。
+    // R3-9: _swapchainImageViews 已移除——仅用 CmdCopyBufferToImage（直接操作 VkImage），
+    // 不需要 ImageView。实现 Shader 渲染时需重新添加。
     private Format _swapchainFormat;
     private Extent2D _swapchainExtent;
     // B-M2: Attach 时记录目标尺寸，供 OutOfDate 重建 SwapChain 使用
@@ -309,7 +309,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             throw new InvalidOperationException($"vkQueueSubmit 失败: {result}");
 
         // H2: 已知性能限制——QueueWaitIdle 每帧同步 GPU 以确保 Command Buffer 可安全复用。
-        // V3 将改用 vkCreateFence + vkWaitForFences 或环形 Command Buffer 消除此阻塞。
+        // 将改用 vkCreateFence + vkWaitForFences 或环形 Command Buffer 消除此阻塞。
         // B-DEVLOST（复审补漏）：「提交成功、GPU 执行中 TDR」的设备丢失恰从 WaitIdle 浮现——必须检测。
         // 其余失败码（OOM 等）保持既有忽略语义不变。
         ThrowIfDeviceLost(_vk.QueueWaitIdle(_queue), "vkQueueWaitIdle");
@@ -324,7 +324,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
         if ((uint)width > _swapchainExtent.Width || (uint)height > _swapchainExtent.Height)
             throw new NotSupportedException(
                 $"帧尺寸 {width}x{height} 超过 SwapChain 尺寸 {_swapchainExtent.Width}x{_swapchainExtent.Height}。" +
-                "Vulkan 渲染器 V1 不支持帧缩放（V3 将通过 Shader/Blit 实现）。");
+                "Vulkan 渲染器 不支持帧缩放。");
 
         int dataSize = width * height * 4;
         int rowBytes = width * 4;
@@ -409,7 +409,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     /// <remarks>
     /// <para>同尺寸且格式一致 → <c>vkCmdCopyImage</c>（零缩放，与软帧 CopyBufferToImage 语义一致）；
     /// 尺寸不同（缩放）或格式不同（R/B 顺序 / UNORM↔sRGB 转换）→ <c>vkCmdBlitImage</c>（Linear 过滤，
-    /// 与 D3D11 双线性缩放语义一致）。多平面 / 24 位格式（NV12/NV21/YUV*/RGB24）Vulkan blit 不支持，归 V3。</para>
+    /// 与 D3D11 双线性缩放语义一致）。多平面 / 24 位格式（NV12/NV21/YUV*/RGB24）Vulkan blit 不支持。</para>
     /// <para>异步策略：同步原生调用（无 I/O await），符合 Present 的 sync-only 铁律。</para>
     /// <para>AOT 兼容：无反射、无新增 P/Invoke（复用 Vortice 源生成 <c>LibraryImport</c> 绑定）。</para>
     /// </remarks>
@@ -420,7 +420,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
         uint dstW = _swapchainExtent.Width;
         uint dstH = _swapchainExtent.Height;
 
-        // 多平面 / 24 位等 Vulkan blit 不支持或需转码 → 归 V3
+        // 多平面 / 24 位等 Vulkan blit 不支持或需转码
         Format srcVkFormat = src.Format switch
         {
             PixelFormat.BGRA32 => Format.B8G8R8A8Unorm,
@@ -428,7 +428,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             PixelFormat.NV12 or PixelFormat.NV21 or PixelFormat.YUV420P
                 or PixelFormat.YUV422P or PixelFormat.YUV444P or PixelFormat.RGB24
                 => throw new NotSupportedException(
-                    $"Vulkan GPU 纹理零拷贝暂不支持格式 {src.Format}（多平面/24 位需 Shader 转码，V3 实现）。"),
+                    $"Vulkan GPU 纹理零拷贝暂不支持格式 {src.Format}（多平面/24 位需 Shader 转码）。"),
             _ => throw new NotSupportedException($"Vulkan 渲染器不支持的像素格式 {src.Format}。"),
         };
 
@@ -715,14 +715,14 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             // B-M10：X11/Wayland Surface 创建需要 Display* 指针（Xlib 的 Dpy / Wayland 的 wl_display*），
             // 当前 IRenderTarget.NativeHandle 仅传递单个 IntPtr（窗口句柄），无法携带 Display 指针。
             // 旧「预留骨架」以缺失 Dpy/Display 的方式调用驱动，属于未定义行为（驱动解引用空 Display）。
-            // 按平台范围决策（V2-16）Linux 原生 Surface 不在范围——明确抛 PNS，快速失败优于 UB。
-            // V3 若排期：需扩展 IRenderTarget 契约（复合句柄/ExtraFields）携带 Display* 后再实现。
+            // 按平台范围决策 Linux 原生 Surface 不在范围——明确抛 PNS，快速失败优于 UB。
+            // 若排期：需扩展 IRenderTarget 契约（复合句柄/ExtraFields）携带 Display* 后再实现。
             _logger.LogWarning(
                 "Linux Vulkan Surface 创建被拒绝（Xlib 扩展可用: {HasXlib}, Wayland 扩展可用: {HasWayland}）——缺少 Display* 传递通道。",
                 _khrXlibSurface is not null, _khrWaylandSurface is not null);
             throw new PlatformNotSupportedException(
                 "Linux 原生 Vulkan Surface 需要 Display* 指针（X11 Dpy / wl_display*），" +
-                "当前 IRenderTarget.NativeHandle 仅单一窗口句柄无法携带，V3 扩展契约后才支持。");
+                "当前 IRenderTarget.NativeHandle 仅单一窗口句柄无法携带，扩展契约后才支持。");
         }
         else
         {
@@ -776,7 +776,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
         if (!formatFound)
             throw new NotSupportedException(
                 $"Surface 既不支持 B8G8R8A8Unorm 也不支持 R8G8B8A8Unorm（可用: {string.Join(", ", formats.Select(f => f.Format))}）。" +
-                "Vulkan 渲染器 V1 仅支持 8bit BGRA/RGBA SwapChain。");
+                "Vulkan 渲染器仅支持 8bit BGRA/RGBA SwapChain。");
 
         _swapchainFormat = selectedFormat.Format;
         // R3-8: 钳制 Extent 到 Surface 能力范围——CurrentExtent.Width==uint.MaxValue 表示由 SwapChain 决定尺寸

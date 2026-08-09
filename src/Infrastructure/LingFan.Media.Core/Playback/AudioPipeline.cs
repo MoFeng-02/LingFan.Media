@@ -61,10 +61,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     /// <param name="synchronizer">同步器。</param>
     /// <param name="clock">媒体时钟。</param>
     /// <param name="logger">日志器。</param>
-    /// <param name="framePool">帧对象池（V2，可为 null = 无池化回退 V1 行为）。</param>
-    /// <param name="transforms">音频变换链（V2-06 C4/C6，可为 null = 透传）。
+    /// <param name="framePool">帧对象池。</param>
+    /// <param name="transforms">音频变换链。
     /// 中立 BCL 委托，由 Audio 模块把 <c>VolumeControl</c>/<c>IAudioEffect</c>/<c>AudioMixer</c> 转换而来，Core 不依赖 Audio 模块。</param>
-    /// <param name="effectReset">音频效果状态重置委托（V2-08.1，可为 null = 无）。
+    /// <param name="effectReset">音频效果状态重置委托。
     /// 中立 BCL 委托（<see cref="Action"/>），由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。
     /// 在 Seek/Flush 的解码锁内调用，清除有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）的跨位置残留。</param>
     public AudioPipeline(
@@ -94,7 +94,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 归还帧到池（若池可用）或 Dispose（V1 兼容）。
+    /// 归还帧到池（若池可用）或 Dispose。
     /// </summary>
     private void ReturnFrame(AudioFrame frame)
     {
@@ -198,7 +198,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// 清空队列、解码器缓冲和音频输出（Seek 后调用）。同步版本，用于无法 await 的场景。
-    /// V2 修复（L2）：先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// 先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
     /// </summary>
     /// <remarks>
     /// <para>两阶段安全保证：</para>
@@ -235,7 +235,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 {
                     _sampleQueue.Reset(_framePool);
                     _decoder.Reset();
-                    _effectReset?.Invoke(); // V2-08.1: 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
+                    _effectReset?.Invoke(); // 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
                     _output.Flush();
                 }
                 finally
@@ -268,7 +268,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// 清空队列、解码器缓冲和音频输出（Seek 后调用）。异步版本，优先使用。
-    /// V2 修复（L2）：先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// 先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
     /// </summary>
     /// <remarks>
     /// <para>两阶段安全保证：</para>
@@ -305,7 +305,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 {
                     _sampleQueue.Reset(_framePool);
                     _decoder.Reset();
-                    _effectReset?.Invoke(); // V2-08.1: 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
+                    _effectReset?.Invoke(); // 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
                     _output.Flush();
                 }
                 finally
@@ -577,7 +577,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 _pendingDecoderReset = false;
             }
 
-            // V2-08.1: 解码锁超时期间 Flush 可能跳过效果重置，此处补做，
+           // 解码锁超时期间 Flush 可能跳过效果重置，此处补做，
             // 确保有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）必然复位
             if (_pendingEffectReset)
             {
@@ -605,7 +605,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             if (decodedFrame != null)
             {
                 if (!_sampleQueue.TryEnqueue(decodedFrame))
-                    ReturnFrame(decodedFrame); // V2: 队列满，归还帧到池
+                    ReturnFrame(decodedFrame); // 队列满，归还帧到池
             }
         }
         finally

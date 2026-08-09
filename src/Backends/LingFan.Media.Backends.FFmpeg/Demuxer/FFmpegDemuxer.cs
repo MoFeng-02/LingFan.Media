@@ -276,9 +276,9 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 return null;
             }
 
-            // V2-05 B5 引用计数零拷贝：av_packet_clone = av_packet_alloc + av_packet_ref，
+            // 引用计数零拷贝：av_packet_clone = av_packet_alloc + av_packet_ref，
             // 共享 FFmpeg 内部 buffer（引用计数 +1，非引用计数包内部自动降级为拷贝），
-            // 消除 V1 的 new byte[] + Marshal.Copy 托管拷贝。
+            // 消除 new byte[] + Marshal.Copy 托管拷贝。
             // 克隆包生命周期由 SafeAVPacketHandle 控制（MediaPacket.Dispose → av_packet_free → 引用计数 -1）。
             AVPacket* clone = ffmpeg.av_packet_clone(pkt);
             if (clone == null)

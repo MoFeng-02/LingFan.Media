@@ -31,7 +31,7 @@ public static class FFmpegExtensions
         var options = new FFmpegOptions();
         configure?.Invoke(options);
 
-        // 注册 FFmpegOptions（Singleton）：宿主可在运行时解析并设置 MediaCodecSurface（V2-17 B9 注入点）
+        // 注册 FFmpegOptions（Singleton）：宿主可在运行时解析并设置 MediaCodecSurface（注入点）
         builder.Services.AddSingleton(options);
 
         // 注册 FFmpeg 后端入口（Singleton，持有全局初始化状态）。

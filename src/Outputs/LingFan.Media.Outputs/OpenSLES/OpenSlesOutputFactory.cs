@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.OpenSLES;
 
 /// <summary>
-/// OpenSL ES 音频输出工厂（Android 真实实现，V2-17 / O4）。
+/// OpenSL ES 音频输出工厂（Android 真实实现，O4）。
 /// </summary>
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂。<see cref="OpenSlesOutput"/> 是 Session 级对象，由工厂 Create() 每次新建。</para>

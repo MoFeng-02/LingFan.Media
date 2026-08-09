@@ -4,7 +4,7 @@ namespace LingFan.Media.Video.Processors;
 /// 缩放处理器。将输入帧缩放到目标分辨率。
 /// </summary>
 /// <remarks>
-/// <para>V2 实现：仅处理打包（packed）CPU 帧（BGRA32/RGBA32/RGB24），
+/// <para>仅处理打包（packed）CPU 帧（BGRA32/RGBA32/RGB24），
 /// 平面/YUV 与 GPU 资源直接透传（不 Dispose，不创建新帧）。</para>
 /// <para><b>所有权转移</b>：执行实际缩放时输入帧被 Dispose，返回新帧。
 /// 透传路径不 Dispose、不创建新帧。</para>

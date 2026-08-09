@@ -7,7 +7,7 @@ using Xunit;
 namespace LingFan.Media.Video.Tests;
 
 /// <summary>
-/// V2-07 视频处理器真实算法验证（纯 CPU，无需媒体文件）。
+/// 视频处理器真实算法验证（纯 CPU，无需媒体文件）。
 /// 重点校验“像素级正确性”与“所有权转移（输入帧 Dispose / 透传不 Dispose）”。
 /// </summary>
 public class ProcessorTests

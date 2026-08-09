@@ -5,7 +5,7 @@ using LingFan.Media.Abstractions;
 namespace LingFan.Media.Avalonia.Tests;
 
 /// <summary>
-/// SkiaVideoPresenter 像素格式转换单元测试（V2-09 U11）。
+/// SkiaVideoPresenter 像素格式转换单元测试（U11）。
 /// 验证 YUV420P / YUV444P / NV12 / RGB24 → BGRA32 的转换数学正确性。
 /// 纯 CPU 逻辑，无需 Avalonia 渲染表面；通过 internal <see cref="SkiaVideoPresenter.WriteYuvToBgra"/> 直接验证。
 /// </summary>

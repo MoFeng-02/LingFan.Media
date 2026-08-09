@@ -382,7 +382,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     /// <remarks>
     /// M5 已知限制：无 finalizer 兜底。Vulkan 原生资源（VkInstance/VkDevice）不使用 SafeHandle 封装，
     /// 若 DI 容器未正确 Dispose（如应用异常退出）将泄漏。DI Singleton 生命周期确保正常场景 Dispose 被调用。
-    /// V3 可考虑用 SafeHandle 封装 VkInstance/VkDevice 以获得 CLR Critical Finalizer 兜底。
+    /// 可考虑用 SafeHandle 封装 VkInstance/VkDevice 以获得 CLR Critical Finalizer 兜底。
     /// </remarks>
     public void Dispose()
     {

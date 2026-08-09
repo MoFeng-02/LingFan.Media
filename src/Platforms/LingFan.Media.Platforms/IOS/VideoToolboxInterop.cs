@@ -1,7 +1,7 @@
 namespace LingFan.Media.Platforms.IOS;
 
 /// <summary>
-/// iOS VideoToolbox 硬件解码互操作。V1 桩实现。
+/// iOS VideoToolbox 硬件解码互操作。桩实现。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 VideoToolbox 框架创建硬件解码器（VTDecompressionSession），
@@ -10,7 +10,7 @@ namespace LingFan.Media.Platforms.IOS;
 /// VideoToolbox → CVPixelBuffer → MTLTexture → MetalRenderer → CAMetalLayer → Display</para>
 /// <para><b>与 macOS 的差异</b>：iOS 上 CVPixelBuffer 内部即 IOSurface，
 /// 可直接用于 Metal 纹理创建，无需显式 IOSurfaceInterop 步骤。</para>
-/// <para>V1 桩——所有方法抛出 <see cref="NotSupportedException"/>。
+/// <para>桩——所有方法抛出 <see cref="NotSupportedException"/>。
 /// VideoToolbox 硬解属 Phase 2-3 目标（iOS）。</para>
 /// <para><b>异步策略</b>：全部同步（sync 分类）——CoreMedia / VideoToolbox C API 调用是同步边界，无 I/O。
 /// 若改为 <c>async</c> 方法体内无 <c>await</c> 则为伪异步。</para>

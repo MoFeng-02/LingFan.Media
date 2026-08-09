@@ -5,7 +5,7 @@ namespace LingFan.Media.Video.Processors;
 /// </summary>
 /// <remarks>
 /// <para>支持 <see cref="DeinterlaceMode"/>：Bob（场复制）、Blend（场平均）。
-/// Yadif 为可选增强，V2 当前复用 Blend 以保证画质稳定。</para>
+/// Yadif 为可选增强，当前复用 Blend 以保证画质稳定。</para>
 /// <para>仅处理打包软件帧；其余格式透传。同步热路径。</para>
 /// </remarks>
 public sealed class Deinterlacer : IVideoProcessor

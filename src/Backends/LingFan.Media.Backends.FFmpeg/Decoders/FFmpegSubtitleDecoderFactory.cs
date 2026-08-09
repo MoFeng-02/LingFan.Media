@@ -9,7 +9,7 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// <para><b>异步策略</b>（与 Video/Audio 工厂对称）：</para>
 /// <list type="bullet">
 /// <item><see cref="Create"/>：同步，手动 new + <see cref="FFmpegSubtitleDecoder.BindStream"/>。</item>
-/// <item><see cref="CreateAsync"/>：接口契约，V1 无 I/O，返回 <see cref="Task.FromResult"/>。</item>
+/// <item><see cref="CreateAsync"/>：接口契约，无 I/O，返回 <see cref="Task.FromResult"/>。</item>
 /// </list>
 /// </remarks>
 public sealed class FFmpegSubtitleDecoderFactory : ISubtitleDecoderFactory
@@ -35,7 +35,7 @@ public sealed class FFmpegSubtitleDecoderFactory : ISubtitleDecoderFactory
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 接口契约：V1 无 I/O（手动 new + BindStream），返回 <see cref="Task.FromResult"/>。
+    /// 接口契约：无 I/O（手动 new + BindStream），返回 <see cref="Task.FromResult"/>。
     /// 优先使用此方法（支持 CT，对称一致性 + 未来网络字幕加载 I/O）。
     /// </remarks>
     public Task<ISubtitleDecoder> CreateAsync(MediaTrack track, CancellationToken ct = default)

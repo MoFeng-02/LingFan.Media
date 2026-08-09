@@ -22,7 +22,7 @@ namespace LingFan.Media.Outputs.OpenAL;
 /// </list>
 /// <para><b>格式</b>：OpenAL core 保证 8/16-bit 整数；为跨平台确定性，所有输入（S16/S32/F32）归一到
 /// <b>S16</b>（F32/S32 经定点缩放），避免依赖 AL_EXT_float32 扩展。音量经 alSourcef(AL_GAIN) 原生增益，无需软件改样。</para>
-/// <para><b>所有权</b>：Submit 不接管帧所有权、不 Dispose 帧（V2 规则），调用方负责 Return 到 FramePool 或 Dispose。</para>
+/// <para><b>所有权</b>：Submit 不接管帧所有权、不 Dispose 帧（规则），调用方负责 Return 到 FramePool 或 Dispose。</para>
 /// <para><b>AOT 兼容</b>：sealed 类；纯 C API <see cref="LibraryImport"/>，零 COM、零反射、零动态代码；原生库经 <see cref="OpenALInterop"/> 运行时解析。</para>
 /// <para><b>平台边界</b>：真正跨平台，无 <see cref="PlatformNotSupportedException"/>；宿主须提供 OpenAL 原生库（见 <see cref="OpenALInterop"/>）。</para>
 /// </remarks>

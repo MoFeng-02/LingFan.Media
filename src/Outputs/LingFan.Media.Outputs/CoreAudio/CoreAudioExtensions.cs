@@ -1,7 +1,7 @@
 namespace LingFan.Media.Outputs.CoreAudio;
 
 /// <summary>
-/// CoreAudio 音频输出 DI 注册扩展方法（macOS，V2-18 / O2）。
+/// CoreAudio 音频输出 DI 注册扩展方法（macOS，O2）。
 /// </summary>
 /// <remarks>
 /// <para>使用模式：<code>services.AddLingFanMedia().AddCoreAudioOutput()</code></para>

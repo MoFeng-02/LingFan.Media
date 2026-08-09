@@ -45,7 +45,7 @@ public sealed class VLCDemuxerFactory : IMediaDemuxerFactory
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 接口契约：V1 无 I/O（手动 new），返回 <see cref="Task.FromResult"/>。
+    /// 接口契约：无 I/O（手动 new），返回 <see cref="Task.FromResult"/>。
     /// 优先使用此方法（支持 CT）。
     /// </remarks>
     public Task<IMediaDemuxer> CreateAsync(IMediaStream stream, CancellationToken ct = default)

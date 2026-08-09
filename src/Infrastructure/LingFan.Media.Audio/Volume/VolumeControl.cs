@@ -7,7 +7,7 @@ namespace LingFan.Media.Audio;
 /// <para><see cref="ApplyRamp"/> 在指定时长内从当前音量平滑过渡到目标音量。
 /// 渐变期间 <see cref="Volume"/> 属性返回实时插值结果。</para>
 /// <para>使用 <see cref="Environment.TickCount64"/> 做时间基准，AOT 友好。</para>
-/// <para><b>V2（AU4）线程安全</b>：<see cref="_volume"/>/<see cref="_isRamping"/>/<see cref="_isMuted"/>
+/// <para><b>（AU4）线程安全</b>：<see cref="_volume"/>/<see cref="_isRamping"/>/<see cref="_isMuted"/>
 /// 使用 volatile 保证跨线程可见性（UI 线程写、音频线程读）。
 /// volatile float/bool 字段在 .NET 内存模型中保证 32 位对齐读写的原子性和可见性。
 /// 不使用 <c>Interlocked.Exchange(ref _volume, ...)</c>——volatile 字段传 ref 会产生 CS0420 警告。</para>

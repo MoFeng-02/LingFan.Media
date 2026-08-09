@@ -1,7 +1,7 @@
 namespace LingFan.Media.Outputs.AVAudioEngine;
 
 /// <summary>
-/// iOS RemoteIO 音频输出 DI 注册扩展方法（V2-18 / O3）。
+/// iOS RemoteIO 音频输出 DI 注册扩展方法（O3）。
 /// </summary>
 /// <remarks>
 /// <para>使用模式：<code>services.AddLingFanMedia().AddAvAudioEngineOutput()</code></para>

@@ -1,0 +1,116 @@
+# NuGet Build & Publish workflow for LingFan.Media
+#
+# Pairs with the NuGet.org Trusted Publisher policy:
+#   Owner: MoFeng | Repository: LingFan.Media | Workflow: nuget_build.yml
+#   Environment: production
+# Authentication is OIDC (no API key required): the GitHub Actions job
+# obtains a short-lived token via `id-token: write` and `environment:
+# production`, which NuGet.org exchanges after matching the policy above.
+#
+# Project conventions honored here:
+# - .NET 10 SDK; V1 is Windows-only, so we use `windows-latest` (D3D11 + Skia +
+#   WASAPI; FFmpeg / LibVLC / MediaFoundation backends).
+# - We deliberately do NOT run `dotnet test`. Tests use minimal Probe binaries
+#   under src/Tools/* for local validation; xunit is disabled.
+# - NuGet brand metadata (authors / license / icon / readme) is centralized in
+#   Directory.Build.props and inherited by every IsPackable=true project.
+
+name: NuGet Build & Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Pack only (skip publish to NuGet.org)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: nuget-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Pack & Publish NuGet packages
+    runs-on: windows-latest
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Resolve package version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME.StartsWith('v')) {
+            $version = $env:GITHUB_REF_NAME.Substring(1)
+          } else {
+            $version = "0.0.0-ci.$($env:GITHUB_RUN_NUMBER)"
+          }
+          "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
+          Write-Host "Resolved PACKAGE_VERSION=$version"
+
+      - name: Restore
+        run: dotnet restore LingFan.Media.slnx
+
+      - name: Build
+        run: >-
+          dotnet build LingFan.Media.slnx -c Release --no-restore
+          -p:Version=${{ env.PACKAGE_VERSION }}
+          -p:AssemblyVersion=${{ env.PACKAGE_VERSION }}
+          -p:FileVersion=${{ env.PACKAGE_VERSION }}
+          -p:ContinuousIntegrationBuild=true
+          -p:Deterministic=true
+
+      - name: Pack
+        run: >-
+          dotnet pack LingFan.Media.slnx -c Release --no-build --no-restore
+          -o ./artifacts
+          -p:Version=${{ env.PACKAGE_VERSION }}
+          -p:PackageVersion=${{ env.PACKAGE_VERSION }}
+
+      - name: List packed packages
+        shell: pwsh
+        run: |
+          Get-ChildItem ./artifacts -Filter '*.nupkg' |
+            Select-Object Name, Length |
+            Format-Table -AutoSize
+
+      - name: Publish to NuGet.org (OIDC trusted publishing)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run
+        shell: pwsh
+        run: |
+          $pkgs = Get-ChildItem ./artifacts -Filter '*.nupkg' -File
+          if (-not $pkgs) {
+            Write-Error "No .nupkg files found under ./artifacts"
+            exit 1
+          }
+          foreach ($pkg in $pkgs) {
+            Write-Host "Pushing $($pkg.Name) ($([math]::Round($pkg.Length/1KB, 1)) KB) ..."
+            dotnet nuget push $pkg.FullName `
+              --skip-duplicate `
+              --no-symbols `
+              --source https://api.nuget.org/v3/index.json
+          }

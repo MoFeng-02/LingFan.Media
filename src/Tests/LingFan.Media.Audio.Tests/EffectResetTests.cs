@@ -8,7 +8,7 @@ using Xunit;
 namespace LingFan.Media.Audio.Tests;
 
 /// <summary>
-/// V2-08.1 音频效果器 Seek 残留 Reset 桥接验证。
+/// 音频效果器 Seek 残留 Reset 桥接验证。
 /// 核心不变量：<see cref="IAudioEffect.Reset"/> 后，效果器内部跨位置状态回到静默初始态，
 /// 其输出必须与一个<b>全新实例</b>对相同输入的输出<b>逐帧逐样本一致</b>。
 /// 这正是 Seek/Flush 后无音频瞬态/拖尾的正确性定义。

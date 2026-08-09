@@ -4,7 +4,7 @@ namespace LingFan.Media.Backends.WebRTC;
 /// WebRTC 后端配置选项。
 /// </summary>
 /// <remarks>
-/// 从 BackendStubs.cs 迁移至 WebRTC 后端项目（Task-V2-14 B4）。
+/// 从 BackendStubs.cs 迁移至 WebRTC 后端项目。
 /// WebRTC 后端需要原生 WebRTC 库（如 Google libwebrtc 的 C API 绑定），
 /// 当前未集成原生库，所有运行时操作抛 <see cref="PlatformNotSupportedException"/>。
 /// </remarks>
