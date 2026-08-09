@@ -3,6 +3,7 @@
   <PropertyGroup>
     <!-- [LibraryImport] 源生成器要求方法/类型可声明为 partial；开启不安全代码以承载原生互操作 -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>

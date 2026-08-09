@@ -3,6 +3,7 @@
   <PropertyGroup>
     <!-- 平台互操作层：LibraryImport 源生成 P/Invoke 需要 unsafe（AOT 友好，零反射） -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>

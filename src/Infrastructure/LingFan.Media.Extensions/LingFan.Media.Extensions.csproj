@@ -10,4 +10,8 @@
 		<ProjectReference Include="..\LingFan.Media.Playback\LingFan.Media.Playback.csproj" />
 	</ItemGroup>
 
+	<PropertyGroup>
+		<IsPackable>true</IsPackable>
+	</PropertyGroup>
+
 </Project>
