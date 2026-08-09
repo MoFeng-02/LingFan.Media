@@ -18,6 +18,14 @@ export default defineConfig({
   lastUpdated: false,
   cleanUrls: true,
 
+  // NOTE: VitePress does NOT prefix `base` onto URLs inside `head`, so every
+  // href here must carry the '/LingFan.Media/' prefix explicitly.
+  head: [
+    ['link', { rel: 'icon', type: 'image/x-icon', href: '/LingFan.Media/favicon.ico' }],
+    ['link', { rel: 'icon', type: 'image/png', href: '/LingFan.Media/logo.png' }],
+    ['link', { rel: 'apple-touch-icon', href: '/LingFan.Media/logo.png' }],
+  ],
+
   markdown: {
     config: (md) => {
       const defaultFence = md.renderer.rules.fence!
@@ -119,6 +127,7 @@ export default defineConfig({
   },
 
   themeConfig: {
+    logo: '/logo.png',
     socialLinks: [
       { icon: 'github', link: 'https://github.com/MoFeng-02/LingFan.Media' },
     ],

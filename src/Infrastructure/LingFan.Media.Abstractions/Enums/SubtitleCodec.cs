@@ -9,9 +9,9 @@ public enum SubtitleCodec : int
     SRT,
     /// <summary>Advanced SubStation Alpha（.ass）。</summary>
     ASS,
-    /// <summary>PGS 图形字幕（位图，V1 不实现）。</summary>
+    /// <summary>PGS 图形字幕（位图，当前未实现）。</summary>
     PGS,
-    /// <summary>DVD VobSub 图形字幕（位图，V1 不实现）。</summary>
+    /// <summary>DVD VobSub 图形字幕（位图，当前未实现）。</summary>
     VobSub,
     /// <summary>WebVTT（.vtt）。</summary>
     WebVTT,

@@ -1,7 +1,7 @@
 namespace LingFan.Media.Abstractions;
 
 /// <summary>
-/// 帧对象池接口。V2 预留，V1 直接 new + Dispose。
+/// 帧对象池接口。供解码器等组件复用帧实例，降低分配与 GC 压力。
 /// </summary>
 /// <typeparam name="T">帧类型。</typeparam>
 public interface IFramePool<T> where T : class

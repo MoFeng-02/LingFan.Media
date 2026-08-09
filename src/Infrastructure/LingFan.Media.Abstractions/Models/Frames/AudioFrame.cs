@@ -9,8 +9,8 @@ namespace LingFan.Media.Abstractions;
 /// ReadOnlySpan&lt;float&gt; samples = MemoryMarshal.Cast&lt;byte, float&gt;(frame.Data.Span);
 /// ReadOnlySpan&lt;short&gt; samples = MemoryMarshal.Cast&lt;byte, short&gt;(frame.Data.Span);
 /// </code>
-/// <para><b>V2 池化支持</b>：属性使用 internal set，<see cref="Reset"/> 方法供解码器复用帧实例。</para>
-/// <para><b>V2-05 零拷贝支持</b>：<see cref="Data"/> 可直接映射原生引用计数 buffer，
+/// <para>属性使用 internal set，<see cref="Reset"/> 方法供解码器复用帧实例（帧池化）。</para>
+/// <para><b>零拷贝支持</b>：<see cref="Data"/> 可直接映射原生引用计数 buffer，
 /// 所有者以中立 <see cref="IDisposable"/> 经 <see cref="Reset"/> 传入；
 /// <see cref="Dispose"/> 与下一次 <see cref="Reset"/> 均会释放所有者（原生引用计数减一）。
 /// 所有者释放后不得再访问 <see cref="Data"/>。</para>
@@ -85,7 +85,7 @@ public sealed class AudioFrame : IDisposableFrame
     /// <param name="duration">帧持续时间。</param>
     /// <param name="frameCount">采样数。</param>
     /// <param name="dataOwner">
-    /// V2-05 零拷贝所有者（可选）。非 null 时 <paramref name="data"/> 映射原生引用计数 buffer。
+    /// 零拷贝所有者（可选）。非 null 时 <paramref name="data"/> 映射原生引用计数 buffer。
     /// </param>
     public void Reset(ReadOnlyMemory<byte> data, int sampleRate, int channels,
         SampleFormat sampleFormat, TimeSpan timestamp, TimeSpan duration, int frameCount,

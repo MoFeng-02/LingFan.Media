@@ -39,7 +39,7 @@ public sealed class SoftwareFrameResource : IFrameResource
 
     /// <summary>
     /// 平面 0 的行字节数（stride）。<c>0</c> 表示未指定——数据为紧凑布局（宽度 × 每像素字节数），
-    /// 兼容历史构造函数。零拷贝路径（V2-05）传入原生 buffer 的实际 stride，
+    /// 兼容历史构造函数。零拷贝路径传入原生 buffer 的实际 stride，
     /// 可能因对齐填充大于紧凑行宽，渲染方须按行拷贝。
     /// </summary>
     public int Stride { get; }
@@ -48,7 +48,7 @@ public sealed class SoftwareFrameResource : IFrameResource
     public bool IsDisposed => _disposed;
 
     /// <summary>
-    /// 从 <see cref="ArrayPool{T}"/> 租借内存创建实例（V2 L12 优化，减少 GC 压力）。
+    /// 从 <see cref="ArrayPool{T}"/> 租借内存创建实例，减少 GC 压力。
     /// </summary>
     /// <param name="width">帧宽度（像素）。</param>
     /// <param name="height">帧高度（像素）。</param>
@@ -69,7 +69,7 @@ public sealed class SoftwareFrameResource : IFrameResource
 
     /// <summary>
     /// 使用外部提供的 <see cref="Memory{T}"/> 创建实例（不租借 ArrayPool）。
-    /// 保留此构造函数兼容 V1 调用方（如 TestFrameFactory）。
+    /// 保留此构造函数兼容既有调用方（如 TestFrameFactory）。
     /// </summary>
     /// <param name="width">帧宽度（像素）。</param>
     /// <param name="height">帧高度（像素）。</param>
@@ -85,7 +85,7 @@ public sealed class SoftwareFrameResource : IFrameResource
     }
 
     /// <summary>
-    /// 零拷贝构造（V2-05）：<paramref name="data"/> 直接映射原生引用计数 buffer，
+    /// 零拷贝构造：<paramref name="data"/> 直接映射原生引用计数 buffer，
     /// 生命周期由 <paramref name="dataOwner"/> 控制。
     /// </summary>
     /// <param name="width">帧宽度（像素）。</param>

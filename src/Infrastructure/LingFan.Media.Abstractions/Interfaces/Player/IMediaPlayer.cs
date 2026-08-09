@@ -74,7 +74,7 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// 由音频管线在每帧提交给输出前<b>同步触发</b>（音频管线线程），
     /// 订阅方<b>仅可只读借用</b>传入的 <see cref="AudioFrame"/>：须在其回调内同步拷贝所需数据
     /// （PCM 字节 / 采样格式 / 采样率 / 声道数），<b>不得 Dispose、不得跨线程持有该帧引用</b>。
-    /// 未订阅时不触发，保持 V1 兼容（零额外开销）。
+    /// 未订阅时不触发（零额外开销）。
     /// </summary>
     /// <remarks>事件参数为契约层类型 <see cref="AudioFrame"/>，零外部引用合规。</remarks>
     event Action<AudioFrame>? AudioDataAvailable;

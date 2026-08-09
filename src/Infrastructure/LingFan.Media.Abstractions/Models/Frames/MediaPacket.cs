@@ -4,7 +4,7 @@ namespace LingFan.Media.Abstractions;
 /// 解封装后的压缩数据包。实现 <see cref="IDisposable"/>。
 /// </summary>
 /// <remarks>
-/// <para>内存安全注释（V2-05 引用计数零拷贝）：</para>
+/// <para>内存安全：</para>
 /// <list type="bullet">
 /// <item>零拷贝路径：FFmpegDemuxer 通过 av_packet_clone 引用计数共享 FFmpeg 内部 buffer，
 /// <see cref="Data"/> 直接映射原生内存，所有者以中立 <see cref="IDisposable"/> 传入</item>
@@ -85,7 +85,7 @@ public sealed class MediaPacket : IDisposable
     /// <param name="duration">数据包持续时间。</param>
     /// <param name="keyFrame">是否关键帧。</param>
     /// <param name="dataOwner">
-    /// V2-05 零拷贝所有者（可选）。非 null 时 <paramref name="data"/> 映射原生引用计数 buffer，
+    /// 零拷贝所有者（可选）。非 null 时 <paramref name="data"/> 映射原生引用计数 buffer，
     /// <see cref="Dispose"/> 释放该所有者使原生引用计数减一。
     /// </param>
     /// <param name="width">解码帧宽度（直通 packet 用，默认 0）。</param>

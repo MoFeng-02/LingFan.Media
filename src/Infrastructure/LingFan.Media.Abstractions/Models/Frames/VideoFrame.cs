@@ -6,7 +6,7 @@ namespace LingFan.Media.Abstractions;
 /// <remarks>
 /// <para>帧所有权转移语义：Decoder → FrameQueue → Renderer。</para>
 /// <para>Dispose 时必须级联释放 IFrameResource（GPU 纹理/CPU 内存），防止资源泄漏。</para>
-/// <para><b>V2 池化支持</b>：属性使用 internal set，<see cref="Reset"/> 方法供解码器复用帧实例。</para>
+/// <para>属性使用 internal set，<see cref="Reset"/> 方法供解码器复用帧实例（帧池化）。</para>
 /// </remarks>
 public sealed class VideoFrame : IDisposableFrame
 {
@@ -19,9 +19,9 @@ public sealed class VideoFrame : IDisposableFrame
     /// <summary>像素格式。</summary>
     public PixelFormat Format { get; internal set; }
 
-    /// <summary>帧资源（SoftwareFrameResource=CPU 或 GPU 资源=零拷贝句柄）。</summary>
+    /// <summary>帧资源（<see cref="SoftwareFrameResource"/>=CPU 内存，或 GPU 纹理=零拷贝句柄）。</summary>
     /// <remarks>
-    /// V2 池化支持：可为 null（池中未填充的空壳），<see cref="Reset"/> 填充实际资源。
+    /// 可为 null（池中未填充的空壳），<see cref="Reset"/> 填充实际资源。
     /// 消费方通过 pattern matching 访问，null 不会导致 NRE。
     /// </remarks>
     public IFrameResource? Resource { get; internal set; }
@@ -70,7 +70,7 @@ public sealed class VideoFrame : IDisposableFrame
 
     /// <summary>
     /// 重置帧状态，供 FramePool 复用。
-    /// 释放旧 Resource（归还 ArrayPool buffer），设置新属性值，重置 IsDisposed。
+    /// 释放旧 Resource，设置新属性值，重置 IsDisposed。
     /// </summary>
     /// <param name="width">帧宽度。</param>
     /// <param name="height">帧高度。</param>

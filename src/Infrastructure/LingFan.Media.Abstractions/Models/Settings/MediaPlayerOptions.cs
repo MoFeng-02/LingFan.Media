@@ -36,7 +36,7 @@ public sealed class MediaPlayerOptions
     public TimeSpan NetworkBufferTarget { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>音频输出目标采样率（可选覆盖）。null=使用源媒体采样率。</summary>
-    /// <remarks>经 AudioSettings 透传至 FFmpegAudioDecoder（V2-10 B11 重采样）。若设置，
+    /// <remarks>经 <see cref="AudioSettings"/> 透传至 FFmpegAudioDecoder 重采样。若设置，
     /// 解码器输出与 WASAPI 设备均按此率工作，避免节奏/音高错乱。</remarks>
     public int? AudioOutputSampleRate { get; set; }
 

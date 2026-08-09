@@ -8,7 +8,7 @@ namespace LingFan.Media.Abstractions;
 /// </summary>
 /// <remarks>
 /// <para>线程模型：Submit 在音频线程调用。</para>
-/// <para>Submit 所有权语义（V2 变更）：Submit 不接管帧所有权，不 Dispose 帧。</para>
+/// <para>所有权语义：Submit 不接管帧所有权，不 Dispose 帧；调用方负责 Submit 后归还池或释放。</para>
 /// <para>实现仅同步拷贝 PCM 数据到输出缓冲；调用方（AudioPipeline）负责 Submit 后将帧 Return 到 FramePool 或 Dispose。</para>
 /// <para>IFrameResource 非线程安全，需在单线程内使用。</para>
 /// </remarks>
@@ -18,7 +18,7 @@ public interface IAudioOutput : IMediaComponent
     void Initialize(int sampleRate, int channels);
 
     /// <summary>
-    /// 提交音频帧。不接管帧所有权（V2）；仅同步拷贝 PCM 数据，
+    /// 提交音频帧。不接管帧所有权；仅同步拷贝 PCM 数据，
     /// 调用方负责 Submit 后释放帧（Return 到池或 Dispose）。
     /// 音频线程调用，缓冲满时阻塞（COM 背压，同步阻塞背压是正常机制，非伪异步）。
     /// </summary>
