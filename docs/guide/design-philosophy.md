@@ -28,7 +28,7 @@ A video frame is an `IFrameResource` that may carry CPU or GPU memory. The frame
 
 ## 6. Headless rendering
 
-A video frame is delivered to the platform compositor as a GPU texture (Windows → DirectComposition, macOS/iOS → CAMetalLayer + CoreAnimation, Android → TextureView + SurfaceFlinger, Linux → Wayland subsurface). Each platform is implemented correctly once; the user gets every platform's headless experience through one `IVideoRenderer` contract.
+A video frame is delivered to the platform compositor as a GPU texture (Windows → DirectComposition, macOS/iOS → CAMetalLayer + CoreAnimation, Android → TextureView + SurfaceFlinger). Each supported platform is implemented correctly once; the user gets every supported platform's headless experience through one `IVideoRenderer` contract. (Linux is excluded from the target surface — see [Backends & Roadmap](./backends).)
 
 ## 7. Memory safety
 

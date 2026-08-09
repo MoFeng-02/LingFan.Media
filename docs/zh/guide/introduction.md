@@ -13,14 +13,15 @@
 
 ## 平台范围
 
-| 平台 | 后端 | GPU | 音频 |
-|----------|----------|-----|-------|
-| Windows (V1) | MediaFoundation, FFmpeg, VLC | D3D11 (+ DirectComposition) | WASAPI |
-| Linux | FFmpeg, VLC | Vulkan, OpenGL | OpenAL（不含 ALSA） |
-| Android | FFmpeg, VLC | Vulkan / OpenGL | OpenSL ES, AAudio |
-| iOS / macOS | FFmpeg, VLC | Metal | CoreAudio / AVAudioEngine |
+| 阶段 | 平台 | 后端 | GPU | 音频 |
+|------|------|------|-----|------|
+| **V1（受支持）** | Windows | Media Foundation ✅、FFmpeg ✅、VLC ✅ | D3D11 (+ DirectComposition) | WASAPI |
+| 下一阶段（计划） | macOS, iOS, Android | FFmpeg ✅、VLC ✅（现已可用）；AVFoundation / MediaCodec（计划中） | — | — |
+| **已排除** | Linux | FFmpeg / VLC 可用（无原生后端） | — | — |
 
-> **范围之外：** WebRTC 与 GStreamer 后端明确不在范围内。Linux 上排除 ALSA（OpenAL 是跨平台标准）。
+V1 是唯一具备受支持、经测试表面的平台（Windows + D3D11 + WASAPI）。macOS / iOS / Android 今天已可借助本身即 LGPL 跨平台的 FFmpeg / LibVLC 共享库工作；其第一方原生后端（AVFoundation、MediaCodec）将随时间逐步集成。**Linux 被排除在原生后端路线之外**——它没有标准的第一方媒体 API，故不会构建原生 Linux 后端；不过 FFmpeg / LibVLC 仍可在那里提供播放，因此 Linux 只是不被作为目标或已测试的表面。
+
+> **范围之外：** WebRTC 与 GStreamer 后端明确不在范围内（仅以空脚手架 / 存根形式存在）。Vulkan / OpenGL / Metal 渲染器为存根 / 部分实现，不属于 V1 受支持表面。
 
 ## 包结构（12 个逻辑模块）
 

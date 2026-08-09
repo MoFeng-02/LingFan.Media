@@ -504,3 +504,6 @@ ThirdParty/
 /Resources
 /docs/node_modules_bak
 /docs/node_modules
+/docs/.vitepress/dist
+/docs/.vitepress/dist_*
+/docs/.vitepress/cache

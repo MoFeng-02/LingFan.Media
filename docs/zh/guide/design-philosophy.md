@@ -28,7 +28,7 @@ FFmpeg / VLC / MediaFoundation 可互操作且可独立选择。你的应用代�
 
 ## 6. 无界面渲染
 
-一个视频帧以 GPU 纹理的形式交付给平台合成器（Windows → DirectComposition，macOS/iOS → CAMetalLayer + CoreAnimation，Android → TextureView + SurfaceFlinger，Linux → Wayland subsurface）。每个平台都正确地实现一次；用户通过一个 `IVideoRenderer` 契约获得每个平台的无界面体验。
+一个视频帧以 GPU 纹理的形式交付给平台合成器（Windows → DirectComposition，macOS/iOS → CAMetalLayer + CoreAnimation，Android → TextureView + SurfaceFlinger）。每个受支持平台都正确地实现一次；用户通过一个 `IVideoRenderer` 契约获得每个受支持平台的无界面体验。（Linux 已排除在目标表面之外——见[后端与平台路线](./backends)。）
 
 ## 7. 内存安全
 

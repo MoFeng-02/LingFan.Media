@@ -13,14 +13,15 @@ Most .NET media stacks are thin wrappers over a single native backend (typically
 
 ## Platform scope
 
-| Platform | Backends | GPU | Audio |
-|----------|----------|-----|-------|
-| Windows (V1) | MediaFoundation, FFmpeg, VLC | D3D11 (+ DirectComposition) | WASAPI |
-| Linux | FFmpeg, VLC | Vulkan, OpenGL | OpenAL (ALSA excluded) |
-| Android | FFmpeg, VLC | Vulkan / OpenGL | OpenSL ES, AAudio |
-| iOS / macOS | FFmpeg, VLC | Metal | CoreAudio / AVAudioEngine |
+| Phase | Platform | Backends | GPU | Audio |
+|-------|----------|----------|-----|-------|
+| **V1 (supported)** | Windows | Media Foundation ✅, FFmpeg ✅, VLC ✅ | D3D11 (+ DirectComposition) | WASAPI |
+| Next (planned) | macOS, iOS, Android | FFmpeg ✅, VLC ✅ now; AVFoundation / MediaCodec (planned) | — | — |
+| **Excluded** | Linux | FFmpeg / VLC usable (no native backend) | — | — |
 
-> **Not in scope:** WebRTC and GStreamer backends are explicitly out of scope. ALSA is excluded on Linux (OpenAL is the cross-platform standard).
+V1 is the only platform with a supported, tested surface (Windows + D3D11 + WASAPI). macOS / iOS / Android already work today through the LGPL-cross-platform FFmpeg / LibVLC shared libraries; their first-party native backends (AVFoundation, MediaCodec) will be integrated progressively over time. **Linux is excluded from the native-backend roadmap** — it has no standard first-party media API, so no native Linux backend will be built; however, FFmpeg / LibVLC still provide playback there, so Linux is simply not a targeted or tested surface.
+
+> **Not in scope:** WebRTC and GStreamer backends are explicitly out of scope (they exist only as empty scaffolding / stubs). Vulkan / OpenGL / Metal renderers are stubs / partials and are not part of the V1 supported surface.
 
 ## Package layout (12 logical modules)
 

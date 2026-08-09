@@ -20,7 +20,8 @@ services
     .AddD3D11Renderer()          // D3D11 GPU renderer (Windows)
     .AddWasapiOutput();          // WASAPI audio output (Windows)
 
-// On Linux you would use .AddVLC() + .AddVulkanRenderer() + .AddOpenALOutput() instead.
+// On Apple / Android, FFmpeg + VLC already work today; first-party native backends
+// (AVFoundation, MediaCodec) will be added progressively. Linux is not a target platform.
 
 var provider = services.BuildServiceProvider();
 ```

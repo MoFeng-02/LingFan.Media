@@ -1,7 +1,11 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
 // https://vitepress.dev/reference/site-config
-export default defineConfig({
+// VitePress 1.x does not have built-in Mermaid support. The standard solution
+// is vitepress-plugin-mermaid, which wraps the config and renders ```mermaid
+// fences at build time / on the client.
+export default withMermaid(defineConfig({
   // GitHub Pages project site is served at https://<user>.github.io/LingFan.Media/
   // so all asset/links must be prefixed with the repo name.
   base: '/LingFan.Media/',
@@ -11,6 +15,10 @@ export default defineConfig({
     'LingFan.Media — a .NET 10 AOT-first, cross-platform media infrastructure.',
   lastUpdated: true,
   cleanUrls: true,
+  mermaid: {
+    // Plugin-provided Mermaid config. Light-mode defaults here; the plugin
+    // forces the dark theme automatically when the page body has a 'dark' class.
+  },
 
   locales: {
     root: {
@@ -20,6 +28,7 @@ export default defineConfig({
         nav: [
           { text: 'Home', link: '/' },
           { text: 'Guide', link: '/guide/introduction' },
+          { text: 'Licensing', link: '/guide/licensing' },
           { text: 'API', link: '/api/abstractions/' },
         ],
         sidebar: [
@@ -31,6 +40,9 @@ export default defineConfig({
               { text: 'Architecture', link: '/guide/architecture' },
               { text: 'Design Philosophy', link: '/guide/design-philosophy' },
               { text: 'Async & Sync Discipline', link: '/guide/async-sync' },
+              { text: 'Media Sources', link: '/guide/media-sources' },
+              { text: 'Backends & Roadmap', link: '/guide/backends' },
+              { text: 'Licensing', link: '/guide/licensing' },
             ],
           },
           {
@@ -52,6 +64,7 @@ export default defineConfig({
         nav: [
           { text: '首页', link: '/zh/' },
           { text: '指南', link: '/zh/guide/introduction' },
+          { text: '许可与合规', link: '/zh/guide/licensing' },
           { text: 'API', link: '/zh/api/abstractions/' },
         ],
         sidebar: [
@@ -63,6 +76,9 @@ export default defineConfig({
               { text: '架构总览', link: '/zh/guide/architecture' },
               { text: '设计哲学', link: '/zh/guide/design-philosophy' },
               { text: '异步与同步纪律', link: '/zh/guide/async-sync' },
+              { text: '媒体源', link: '/zh/guide/media-sources' },
+              { text: '后端与平台路线', link: '/zh/guide/backends' },
+              { text: '许可与合规', link: '/zh/guide/licensing' },
             ],
           },
           {
@@ -79,7 +95,7 @@ export default defineConfig({
 
   themeConfig: {
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/your-org/LingFanEngine.Media' },
+      { icon: 'github', link: 'https://github.com/MoFeng-02/LingFan.Media' },
     ],
     search: {
       provider: 'local',
@@ -100,4 +116,4 @@ export default defineConfig({
     lightModeSwitchTitle: 'Switch to light theme',
     darkModeSwitchTitle: 'Switch to dark theme',
   },
-})
+}))
