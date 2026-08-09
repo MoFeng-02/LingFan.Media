@@ -3,27 +3,29 @@ layout: home
 
 hero:
   name: LingFan.Media
-  text: .NET 10 AOT 媒体基础设施
-  tagline: LingFan 引擎的媒体子系统 —— 对标 Unreal Media Framework 的跨平台媒体底座
+  text: .NET 10 AOT Media Infrastructure
+  tagline: A cross-platform, AOT-first, pluggable media infrastructure for the .NET platform.
   actions:
     - theme: brand
-      text: 快速开始
+      text: Get Started
       link: /guide/introduction
     - theme: alt
-      text: 架构总览
+      text: Architecture
       link: /guide/architecture
 
 features:
-  - title: AOT 友好
-    details: 全程零反射、零 [ComImport]，NativeAOT 发布下确定性运行。
-  - title: 后端可替换
-    details: FFmpeg / VLC / MediaFoundation 多后端，统一契约层与帧投递原语。
-  - title: 无空域渲染
-    details: GPU 纹理直接交给平台合成器，不进入应用层空域。
+  - title: AOT-first
+    details: Zero reflection, zero [ComImport], [LibraryImport]-only P/Invoke. Deterministic under NativeAOT publishing.
+  - title: Pluggable backends
+    details: FFmpeg / VLC / MediaFoundation behind one contract layer and one frame-routing primitive. No per-backend branches.
+  - title: Headless by default
+    details: Frame data flows through IFrameChannel / IFrameSink. UI is just a subscribing Sink — same API for headless and headed.
+  - title: GPU zero-copy
+    details: Video frames travel as IFrameResource (CPU or GPU). Zero-copy is a Sink capability, not a separate code path.
 ---
 
-## 关于 LingFan.Media
+## About LingFan.Media
 
-LingFan.Media 是 LingFan 引擎的媒体基础设施层，基于 .NET 10 构建，目标 AOT 100%。
+LingFan.Media is a cross-platform media infrastructure for the .NET platform, built on .NET 10 with a 100% AOT compatibility target.
 
-> 本文档尚在搭建中，内容将逐步补充。
+> Full references: [Contract Layer (Abstractions)](/api/abstractions/) · [Infrastructure Layer](/api/infrastructure/).

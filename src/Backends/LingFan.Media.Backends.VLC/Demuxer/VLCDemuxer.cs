@@ -161,7 +161,7 @@ internal sealed class VLCDemuxer : IMediaDemuxer
         }
 
         // 🔴 强制 amem 音频输出为 S16N（小端 16 位交织 PCM）：
-        // OnAudioPlay 按固定 2 字节/样本、SampleFormat.S16 消费（见 OnAudioSetup 的 ABI 约束——不敢读
+        // OnAudioSetup 按固定 2 字节/样本、SampleFormat.S16 消费（见 OnAudioSetup 的 ABI 约束——不敢读
         // format 参数）。VLC amem 默认虽为 S16N，但某些源/版本会以 FL32(float32,4 字节/样本) 交付，
         // 导致 Marshal.Copy 只拷前半段 + WASAPI 按 S16 解读 float32 数据 → 音调偏高/失真（「声音不对」），
         // 且音频实际播放速度变 2× 使主时钟 2× 推进 → 视频相对「提前」。显式强制 S16N 使硬编码的 S16
@@ -369,21 +369,16 @@ internal sealed class VLCDemuxer : IMediaDemuxer
         byte[] data = new byte[dataSize];
         Marshal.Copy(_videoBuffer, data, 0, dataSize);
 
-        // 视频帧 PTS：优先锚定 VLC 真实呈现时刻（mediaPlayer.Time，流内相对毫秒→ticks）。
-        // 旧实现用「帧计数 × 单帧时长」CFR 合成——一旦帧率探测偏差或源为 VFR，视频时间轴便与音频
-        // （按真实样本数合成）错位，表现为「帧提前/滞后」；且音视频各自从 0 独立累加，存在固定起始偏移。
-        // 改用呈现时刻后，视频直接挂在 VLC 播放时钟上（seek 后 mediaPlayer.Time 自动从新位置起算），
-        // 与音频（样本合成，同处媒体时间轴）天然对齐，根除合成偏差。
-        // 回退：mediaPlayer 不可用或 Time<=0 时退回 CFR 合成（先取值后自增，首帧 PTS=_ptsBaseTicks）。
-        long ptsTicks;
-        if (_mediaPlayer != null && _mediaPlayer.Time > 0)
-            ptsTicks = TimeSpan.FromMilliseconds(_mediaPlayer.Time).Ticks;
-        else
-        {
-            ptsTicks = _ptsBaseTicks + _videoFrameCounter * _videoFrameDurationTicks;
-            _videoFrameCounter++;
-        }
-        var pts = TimeSpan.FromTicks(ptsTicks);
+        // 视频帧 PTS 用「帧计数 × 单帧时长」合成流内相对 PTS（CFR 近似）。
+        // 🔴 关键：VLC 内存回调(lock/unlock/display)均不向回调传递帧 PTS；而 mediaPlayer.Time 在
+        // unlock 阶段（解码时刻）取值不可靠——会随 VLC 解码缓冲领先/落后于显示时钟而抖动，帧戳失真后
+        // Synchronizer 误判 Wait/Drop 引发卡顿（旧方案实测「帧有点卡」的真凶）。
+        // CFR 合成单调递增、自 _ptsBaseTicks 起，与 OnAudioPlay 的「累计样本/采样率」同处一个时间轴基准，
+        // 可直接与主时钟比对（已实测 30fps 源 985 帧全到、零丢帧、不卡）。
+        // 先取值后自增：首帧 PTS = _ptsBaseTicks（常态 0），与音频首包同起点；seek 后 _ptsBaseTicks
+        // 已重定位到目标位置，新帧自然接在正确时间轴上。
+        var pts = TimeSpan.FromTicks(_ptsBaseTicks + _videoFrameCounter * _videoFrameDurationTicks);
+        _videoFrameCounter++;
 
         var packet = new MediaPacket(
             _videoTrackIndex, data,

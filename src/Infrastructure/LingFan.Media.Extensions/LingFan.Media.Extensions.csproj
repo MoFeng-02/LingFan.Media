@@ -1,20 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.10" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
-    <ProjectReference Include="..\LingFan.Media.Core\LingFan.Media.Core.csproj" />
-    <ProjectReference Include="..\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
-    <ProjectReference Include="..\LingFan.Media.Formats\LingFan.Media.Formats.csproj" />
-    <ProjectReference Include="..\LingFan.Media.Video\LingFan.Media.Video.csproj" />
-    <ProjectReference Include="..\LingFan.Media.Audio\LingFan.Media.Audio.csproj" />
-    <ProjectReference Include="..\LingFan.Media.Playback\LingFan.Media.Playback.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+		<ProjectReference Include="..\LingFan.Media.Core\LingFan.Media.Core.csproj" />
+		<ProjectReference Include="..\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+		<ProjectReference Include="..\LingFan.Media.Formats\LingFan.Media.Formats.csproj" />
+		<ProjectReference Include="..\LingFan.Media.Video\LingFan.Media.Video.csproj" />
+		<ProjectReference Include="..\LingFan.Media.Audio\LingFan.Media.Audio.csproj" />
+		<ProjectReference Include="..\LingFan.Media.Playback\LingFan.Media.Playback.csproj" />
+	</ItemGroup>
 
 </Project>
