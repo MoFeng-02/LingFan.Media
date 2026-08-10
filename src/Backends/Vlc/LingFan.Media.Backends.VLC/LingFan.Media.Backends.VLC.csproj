@@ -5,8 +5,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
-    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

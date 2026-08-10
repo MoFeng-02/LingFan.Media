@@ -25,7 +25,7 @@
   <ItemGroup>
     <!-- 仅注册 VLC 后端（独立验证 VLC 链路，与 MF/FFmpeg 解耦）。
          VLC 解码器为直通（BGRA32 内存帧），无需 D3D11 渲染器提供 GPU 设备上下文。 -->
-    <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
+    <ProjectReference Include="..\..\Backends\Vlc\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />

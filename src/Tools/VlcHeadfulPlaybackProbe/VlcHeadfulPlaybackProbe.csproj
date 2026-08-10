@@ -42,7 +42,7 @@
 
 	<ItemGroup>
 		<!-- 有头全链路：VLC 后端（解封装+解码经 SetVideoCallbacks 内存捕获 BGRA32 帧） + D3D11 上屏（渲染器） + WASAPI 出声（输出）。 -->
-		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
+		<ProjectReference Include="..\..\Backends\Vlc\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
 		<!-- VLC 帧为 BGRA32 软件帧，D3D11Renderer 上传纹理上屏（VLC 无零拷贝路径，与 ffmpeg D3D11VA 零拷贝不同）。 -->
 		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
