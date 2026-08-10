@@ -8,7 +8,7 @@
 		<RootNamespace>VlcHeadfulPlaybackProbe</RootNamespace>
 		<AssemblyName>VlcHeadfulPlaybackProbe</AssemblyName>
 		<IsPackable>false</IsPackable>
-		<!-- VLC 后端经托管层 LibVLCSharp 驱动 VLC 引擎（零原生依赖、AOT 合规）；
+		<!-- VLC 后端经自写 Apache-2.0 P/Invoke（LingFan.Media.Backends.VLCNative）驱动 VLC 引擎（零 LGPL、AOT 合规）；
 		     D3D11 渲染器走 Vortice/SharpGen（Windows-only，抑制 CA1416）；
 		     Vortice/SharpGen 经反射构建 COM vtable，NativeAOT 下 trim 标注不全，整族 IL2xxx 均为第三方缺陷；
 		     已用 TrimmerRootAssembly 根留这些程序集保证运行时存在，此处仅静默分析器级告警。 -->
@@ -22,14 +22,12 @@
 	     IL2067/IL2072（被 Directory.Build.props 的 TreatWarningsAsErrors 提升为 error）。该库本身 AOT 运行时兼容，
 	     属第三方标注缺陷，非本库问题。做法（Vortice + NativeAOT 已知配方）：
 	     ① 根留 SharpGen.Runtime / Vortice.*，防运行时反射读取 vtable 成员被裁掉（否则 MissingMethodException）；
-	     ② 抑制该第三方库的 trim 分析告警。本库自有 COM 互操作走手搓 vtable P/Invoke 且标注合规，不会触发 IL2xxx。
-	     LibVLCSharp 托管层在 AOT 下同样需根留（其内部动态加载 libvlc 依赖反射/动态路径），避免被裁。 -->
+	     ② 抑制该第三方库的 trim 分析告警。本库自有 COM 互操作走手搓 vtable P/Invoke 且标注合规，不会触发 IL2xxx。 -->
 	<ItemGroup>
 		<TrimmerRootAssembly Include="SharpGen.Runtime" />
 		<TrimmerRootAssembly Include="Vortice.Direct3D11" />
 		<TrimmerRootAssembly Include="Vortice.DXGI" />
 		<TrimmerRootAssembly Include="Vortice.D3DCompiler" />
-		<TrimmerRootAssembly Include="LibVLCSharp" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -42,13 +40,14 @@
 
 	<ItemGroup>
 		<!-- 有头全链路：VLC 后端（解封装+解码经 SetVideoCallbacks 内存捕获 BGRA32 帧） + D3D11 上屏（渲染器） + WASAPI 出声（输出）。 -->
-		<ProjectReference Include="..\..\Backends\Vlc\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
 		<!-- VLC 帧为 BGRA32 软件帧，D3D11Renderer 上传纹理上屏（VLC 无零拷贝路径，与 ffmpeg D3D11VA 零拷贝不同）。 -->
 		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
 		<ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
+		<!-- VLC 后端（自写 Apache-2.0 P/Invoke，零 LGPL）：解封装+解码经 SetVideoCallbacks 内存捕获 BGRA32 帧。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

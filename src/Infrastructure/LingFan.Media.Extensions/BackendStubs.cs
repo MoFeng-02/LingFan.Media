@@ -5,8 +5,8 @@ namespace LingFan.Media.Extensions;
 /// </summary>
 /// <remarks>
 /// <para>VLC / MediaFoundation / WebRTC 后端已在  中实现，
-/// 分别迁移至各自的后端项目（LingFan.Media.Backends.VLC / .MediaFoundation / .WebRTC），
-/// 使用 <c>AddVLC()</c> / <c>AddMediaFoundation()</c> / <c>AddWebRTC()</c> 扩展方法注册。</para>
+/// 分别迁移至各自的后端项目（LingFan.Media.Backends.VLCNative / .MediaFoundation / .WebRTC），
+/// 使用 <c>AddVLCNative()</c> / <c>AddMediaFoundation()</c> / <c>AddWebRTC()</c> 扩展方法注册。</para>
 /// <para>GStreamer 后端<b>决定不支持</b>（）：GStreamer 过于复杂，
 /// 且 Linux 上已有 VLC 和 FFmpeg 作为充分的后端选择，无需 GStreamer。
 /// 调用 <c>AddGStreamer()</c> 抛出 <see cref="NotSupportedException"/>。</para>

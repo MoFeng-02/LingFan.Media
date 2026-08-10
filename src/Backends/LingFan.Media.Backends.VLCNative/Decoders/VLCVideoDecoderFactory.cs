@@ -1,7 +1,7 @@
-namespace LingFan.Media.Backends.VLC.Decoders;
+namespace LingFan.Media.Backends.VLCNative.Decoders;
 
 /// <summary>
-/// <see cref="IVideoDecoderFactory"/> 的 VLC 实现。
+/// <see cref="IVideoDecoderFactory"/> 的 VLC 实现（VLCNative 自写 P/Invoke 后端专用）。
 /// </summary>
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂，无状态。每次 <see cref="Create"/> 返回新实例。</para>

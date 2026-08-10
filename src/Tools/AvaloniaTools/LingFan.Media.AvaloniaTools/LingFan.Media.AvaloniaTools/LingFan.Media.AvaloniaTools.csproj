@@ -30,6 +30,8 @@
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<!-- 原生 libvlc 运行时分发包（LGPL）。随应用输出自带，供 VLCNative 后端运行时加载（库本体不含原生运行时）。 -->
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -38,8 +40,9 @@
 		<ProjectReference Include="..\..\..\..\UI\LingFan.Media.Avalonia\LingFan.Media.Avalonia.csproj" />
 		<!-- 三后端（含 GPU 加速）+ D3D11 渲染/呈现器 + WASAPI 音频；Windows 专属项在注册处用 OperatingSystem.IsWindows 守卫 -->
 		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
-		<ProjectReference Include="..\..\..\..\Backends\Vlc\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
 		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
+		<!-- VLC 后端（自写 Apache-2.0 P/Invoke，零 LGPL）：解封装+解码经 SetVideoCallbacks 内存捕获 BGRA32 帧。 -->
+		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
 		<ProjectReference Include="..\..\..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
 		<ProjectReference Include="..\..\..\..\Presenters\LingFan.Media.GpuPresenter\LingFan.Media.GpuPresenter.csproj" />

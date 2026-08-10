@@ -1,4 +1,4 @@
-namespace LingFan.Media.Backends.VLCNative;
+namespace LingFan.Media.Backends.VLCNative.Interop;
 
 /// <summary>
 /// libvlc 3.0.23.1 原生 P/Invoke 绑定（Apache-2.0，零 LibVLCSharp）。

@@ -3,7 +3,7 @@ using System.Threading;
 using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.MediaFoundation;
-using LingFan.Media.Backends.VLC;
+using LingFan.Media.Backends.VLCNative;
 using LingFan.Media.Consumers;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
@@ -75,7 +75,7 @@ internal static class Program
         var builder = services.AddLingFanMedia()
             .AddMediaFoundation(o => { if (noFusion) o.EnableReaderDecodeFusion = false; })
             .AddFFmpeg()
-            .AddVLC();
+            .AddVLCNative();
         if (useGpu) builder.AddD3D11Renderer(); else builder.AddHeadlessRenderer();
         if (useSound) builder.AddWasapiOutput(); else builder.AddSilentAudioOutput();
 

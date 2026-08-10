@@ -10,7 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using LingFan.Media.Abstractions;
-using LingFan.Media.Backends.VLC;
+using LingFan.Media.Backends.VLCNative;
 using LingFan.Media.Consumers;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
@@ -166,7 +166,7 @@ internal static class Program
         var services = new ServiceCollection();
         services.AddSingleton<ILoggerFactory>(loggerFactory);
         var builder = services.AddLingFanMedia()
-            .AddVLC(o =>
+            .AddVLCNative(o =>
             {
                 // 🔴 VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
                 // Headless=true → 注入 --vout=dummy，禁止 VLC 自建窗口；视频帧经回调全交给我们管线，

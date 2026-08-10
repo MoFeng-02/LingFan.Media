@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Backends\Vlc\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
+    <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
     <!-- 文件型 IMediaStream（地址式打开本地样本，验证 demuxer 取帧） -->
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
   </ItemGroup>

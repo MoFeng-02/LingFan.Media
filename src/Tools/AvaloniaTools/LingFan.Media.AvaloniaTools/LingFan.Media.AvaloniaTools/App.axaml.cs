@@ -8,7 +8,7 @@ using LingFan.Media.AvaloniaTools.ViewModels;
 using LingFan.Media.AvaloniaTools.Views;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.MediaFoundation;
-using LingFan.Media.Backends.VLC;
+using LingFan.Media.Backends.VLCNative;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
 using LingFan.Media.Renderers.D3D11;
@@ -68,7 +68,7 @@ public partial class App : Application
                 .AddWasapiOutput();
         }
         builder//.AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
-                .AddVLC();
+                .AddVLCNative();
                 // composer 工厂需要 ILoggerFactory；独立运行的 App 手动 AddLogging 提供。
         services.AddLogging(options =>
         {

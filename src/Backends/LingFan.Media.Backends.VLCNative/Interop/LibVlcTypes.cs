@@ -1,4 +1,4 @@
-namespace LingFan.Media.Backends.VLCNative;
+namespace LingFan.Media.Backends.VLCNative.Interop;
 
 /// <summary>
 /// libvlc 回调委托与结构体（Apache-2.0，零 LibVLCSharp）。

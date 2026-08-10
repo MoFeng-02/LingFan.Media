@@ -1,6 +1,6 @@
 using LingFan.Media.Abstractions;
 
-namespace LingFan.Media.Backends.VLCNative;
+namespace LingFan.Media.Backends.VLCNative.Demuxer;
 
 /// <summary>
 /// <see cref="VLCNativeDemuxer"/> 工厂（零 LibVLCSharp）。
@@ -9,7 +9,7 @@ namespace LingFan.Media.Backends.VLCNative;
 /// <para>Singleton 工厂，无状态；每次 Create 返回新实例（每次播放新建，不共享）。</para>
 /// <para>持 <see cref="Lazy{VLCNativeBackend}"/> 延迟原生后端初始化（仅首次播放时构造 libvlc 引擎）。</para>
 /// </remarks>
-internal sealed class VLCNativeDemuxerFactory : IMediaDemuxerFactory
+public sealed class VLCNativeDemuxerFactory : IMediaDemuxerFactory
 {
     private readonly Lazy<VLCNativeBackend> _backendLazy;
     private readonly ILogger<VLCNativeDemuxer> _demuxerLogger;
@@ -17,10 +17,11 @@ internal sealed class VLCNativeDemuxerFactory : IMediaDemuxerFactory
     /// <summary>
     /// 初始化 <see cref="VLCNativeDemuxerFactory"/> 的新实例。
     /// </summary>
-    public VLCNativeDemuxerFactory(Lazy<VLCNativeBackend> backendLazy, ILogger<VLCNativeDemuxer> demuxerLogger)
+    public VLCNativeDemuxerFactory(Lazy<VLCNativeBackend> backendLazy, ILoggerFactory loggerFactory)
     {
         _backendLazy = backendLazy ?? throw new ArgumentNullException(nameof(backendLazy));
-        _demuxerLogger = demuxerLogger ?? throw new ArgumentNullException(nameof(demuxerLogger));
+        _demuxerLogger = (loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory)))
+            .CreateLogger<VLCNativeDemuxer>();
     }
 
     /// <inheritdoc/>

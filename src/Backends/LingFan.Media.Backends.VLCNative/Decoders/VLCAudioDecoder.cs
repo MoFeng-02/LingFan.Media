@@ -1,7 +1,7 @@
-namespace LingFan.Media.Backends.VLC.Abstractions.Decoders;
+namespace LingFan.Media.Backends.VLCNative.Decoders;
 
 /// <summary>
-/// <see cref="IAudioDecoder"/> 的 VLC 直通实现（VLC 两后端共享）。
+/// <see cref="IAudioDecoder"/> 的 VLC 直通实现（VLCNative 自写 P/Invoke 后端专用）。
 /// </summary>
 /// <remarks>
 /// <para><b>直通解码器</b>：VLC 后端由 demuxer 通过 VLC 内部管线完成解封装+解码，

@@ -26,7 +26,7 @@ namespace LingFan.Media.Extensions;
 /// <para>- <see cref="IMediaPlayerFactory"/> → <see cref="MediaPlayerFactory"/></para>
 /// <para>Session（Transient）：仅注册 <see cref="IMediaPlayer"/>，内部组件由 Factory 手动 new 不走 DI。</para>
 /// <para><b>以下工厂由各子模块扩展方法注册（不在 AddLingFanMedia 中）</b>：</para>
-/// <para>- <c>AddFFmpeg()</c> / <c>AddMediaFoundation()</c> / <c>AddVLC()</c> → 各以 TryAddEnumerable 集合注册
+/// <para>- <c>AddFFmpeg()</c> / <c>AddMediaFoundation()</c> / <c>AddVLCNative()</c> → 各以 TryAddEnumerable 集合注册
 /// <see cref="IMediaDemuxerFactory"/> / <see cref="IVideoDecoderFactory"/> / <see cref="IAudioDecoderFactory"/> / <see cref="ISubtitleDecoderFactory"/>（可多后端并存，按注册顺序回退）</para>
 /// <para>- <c>AddD3D11Renderer()</c> → <see cref="IVideoRendererFactory"/></para>
 /// <para>- <c>AddWasapiOutput()</c> → <see cref="IAudioOutputFactory"/></para>

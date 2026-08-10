@@ -1,10 +1,7 @@
-using System;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using LingFan.Media.Abstractions;
-using LingFan.Media.Backends.VLC.Abstractions;
 using LingFan.Media.Backends.VLCNative;
+using LingFan.Media.Backends.VLCNative.Interop;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;

@@ -28,7 +28,7 @@ public sealed class VLCNativeBackend : IDisposable
     /// 初始化 <see cref="VLCNativeBackend"/> 的新实例。
     /// </summary>
     /// <param name="logger">日志器。</param>
-    /// <param name="options">VLC 配置选项（来自共享层 <c>LingFan.Media.Backends.VLC.Abstractions</c>）。</param>
+    /// <param name="options">VLC 配置选项（来自 <c>LingFan.Media.Backends.VLCNative</c>）。</param>
     public VLCNativeBackend(ILogger<VLCNativeBackend> logger, VLCOptions options)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));

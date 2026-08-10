@@ -89,7 +89,7 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
     public IMediaPlayer Create()
     {
         var demuxer = _demuxerFactories.Count > 0 ? _demuxerFactories[0]
-            : throw new InvalidOperationException("未注册任何后端（IMediaDemuxerFactory）。请调用 AddFFmpeg()/AddMediaFoundation()/AddVLC() 等注册至少一个后端。");
+            : throw new InvalidOperationException("未注册任何后端（IMediaDemuxerFactory）。请调用 AddFFmpeg()/AddMediaFoundation()/AddVLCNative() 等注册至少一个后端。");
         var video = _videoDecoderFactories.Count > 0 ? _videoDecoderFactories[0]
             : throw new InvalidOperationException("未注册任何视频解码器后端（IVideoDecoderFactory）。");
         var audio = _audioDecoderFactories.Count > 0 ? _audioDecoderFactories[0]

@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using LingFan.Media.Abstractions;
 
-namespace LingFan.Media.Backends.VLCNative;
+namespace LingFan.Media.Backends.VLCNative.Demuxer;
 
 /// <summary>
 /// 将 <see cref="IMediaStream"/> 适配为 VLC 的 imem access 模块（零 LibVLCSharp）。

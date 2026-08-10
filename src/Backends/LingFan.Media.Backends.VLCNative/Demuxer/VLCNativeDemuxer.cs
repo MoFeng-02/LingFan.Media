@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace LingFan.Media.Backends.VLCNative;
+namespace LingFan.Media.Backends.VLCNative.Demuxer;
 
 /// <summary>
 /// 基于自写 Apache-2.0 P/Invoke 的 <see cref="IMediaDemuxer"/> 实现（零 LibVLCSharp）。
@@ -10,7 +10,7 @@ namespace LingFan.Media.Backends.VLCNative;
 /// 本实现将 VLC 的回调式帧交付适配为拉取式 IMediaDemuxer 接口：
 /// VLC 内部线程经回调把解码帧写入 Channel，<see cref="ReadPacketAsync"/> 从 Channel 读取。</para>
 /// <para>因此产出的 <see cref="MediaPacket"/> 携带<b>已解码帧数据</b>（VLC 直通）；
-/// VLCVideoDecoder/VLCNativeAudioDecoder 为直通解码器（pass-through）。</para>
+/// VLCVideoDecoder/VLCAudioDecoder 为直通解码器（pass-through）。</para>
 /// <para><b>ABI 修正（根治 LibVLCSharp 三处不符，见 .memory 规划文档 §2.3 A/B/C）</b>：</para>
 /// <list type="bullet">
 /// <item>A 音频 setup 的 <c>format</c> 原生是 <c>char*</c>（按值）→ 声明 <c>IntPtr</c>，<b>绝不触碰</b>；

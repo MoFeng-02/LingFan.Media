@@ -1,9 +1,4 @@
 <Solution>
-  <Folder Name="/Backends/Vlc/">
-    <Project Path="src/Backends/Vlc/LingFan.Media.Backends.VLC.Abstractions/LingFan.Media.Backends.VLC.Abstractions.csproj" />
-    <Project Path="src/Backends/Vlc/LingFan.Media.Backends.VLC/LingFan.Media.Backends.VLC.csproj" />
-    <Project Path="src/Backends/Vlc/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj" />
-  </Folder>
   <Folder Name="/Infrastructure/">
     <Project Path="src/Infrastructure/LingFan.Media.Abstractions/LingFan.Media.Abstractions.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Audio/LingFan.Media.Audio.csproj" />
@@ -18,6 +13,7 @@
     <Project Path="src/Backends/LingFan.Media.Backends.GStreamer/LingFan.Media.Backends.GStreamer.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.MediaFoundation/LingFan.Media.Backends.MediaFoundation.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.WebRTC/LingFan.Media.Backends.WebRTC.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj" />
   </Folder>
   <Folder Name="/Renderers/">
     <Project Path="src/Renderers/LingFan.Media.Renderers.D3D11/LingFan.Media.Renderers.D3D11.csproj" />
@@ -52,7 +48,6 @@
     <Project Path="src/Tools/PlaybackProbe/PlaybackProbe.csproj" />
     <Project Path="src/Tools/VlcHeadfulPlaybackProbe/VlcHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/VlcNativePlaybackProbe/VlcNativePlaybackProbe.csproj" />
-    <Project Path="src/Tools/VlcPlaybackProbe/VlcPlaybackProbe.csproj" />
     <Project Path="src/Tools/WasapiDriverProbe/WasapiDriverProbe.csproj" />
     <Project Path="src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
   </Folder>

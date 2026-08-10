@@ -16,19 +16,21 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
-  </ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<!-- 原生 libvlc 运行时分发包（LGPL）。随 PlaybackProbe 输出自带，供 VLCNative 后端运行时加载（库本体不含原生运行时）。 -->
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
+	</ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
     <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
-    <ProjectReference Include="..\..\Backends\Vlc\LingFan.Media.Backends.VLC\LingFan.Media.Backends.VLC.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
     <ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
-    <ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
-  </ItemGroup>
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
+	</ItemGroup>
 
   <ItemGroup>
     <!-- 真实媒体资源（与测试工程同源） -->
@@ -39,10 +41,7 @@
     <!-- 🔴 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布：AOT 不会自动携带构建期复制的原生 DLL，
          否则运行目录为空 → EnsureUnversionedAliases 建不出无版本别名 → AutoGen 桩抛 NotSupportedException。
          无版本别名由 FFmpegBackend.EnsureUnversionedAliases 运行时兜底创建。 -->
-    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll"
-          Link="%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!--
@@ -67,24 +66,12 @@
       </FFmpegDll>
     </ItemGroup>
     <!-- 构建输出（dotnet run / Debug） -->
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != ''" />
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
     <!-- 发布输出（dotnet publish / AOT）：显式补复制到 $(PublishDir) -->
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFolder="$(PublishDir)"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
-    <Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll->Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+    <Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll-&gt;Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
     <Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
   </Target>
 

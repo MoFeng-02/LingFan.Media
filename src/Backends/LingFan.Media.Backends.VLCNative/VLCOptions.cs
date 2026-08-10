@@ -1,11 +1,8 @@
-namespace LingFan.Media.Backends.VLC;
+namespace LingFan.Media.Backends.VLCNative;
 
 /// <summary>
-/// VLC 后端配置选项。
+/// VLC Native 后端配置选项（自写 Apache-2.0 P/Invoke，零 LibVLCSharp；替代已退役的 LibVLCSharp 旧后端）。
 /// </summary>
-/// <remarks>
-/// 从 BackendStubs.cs 迁移至 VLC 后端项目。
-/// </remarks>
 public sealed class VLCOptions
 {
     /// <summary>是否启用硬件解码（默认 true）。</summary>

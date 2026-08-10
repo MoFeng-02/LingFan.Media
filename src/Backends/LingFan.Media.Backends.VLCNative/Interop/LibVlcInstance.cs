@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-namespace LingFan.Media.Backends.VLCNative;
+namespace LingFan.Media.Backends.VLCNative.Interop;
 
 /// <summary>
 /// libvlc 引擎实例封装（对应旧 <c>VLCBackend</c> 持有的 LibVLC，但走自写 Apache-2.0 P/Invoke）。

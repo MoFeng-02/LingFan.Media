@@ -1,11 +1,10 @@
-namespace LingFan.Media.Backends.VLC.Abstractions;
+namespace LingFan.Media.Backends.VLCNative;
 
 /// <summary>
 /// VLC 编解码器 / FourCC 映射工具（纯函数，零 LibVLCSharp 依赖）。
 /// </summary>
 /// <remarks>
-/// 由 VLC 两后端共享：LibVLCSharp 旧后端（<c>VLCDemuxer</c>）与 VLCNative 自写 P/Invoke 后端
-/// （<c>VLCNativeDemuxer</c>）都从这里取 FourCC 编解码与 codec 枚举映射，避免规则分歧。
+/// VLCNative 自写 P/Invoke 后端专用（替代已退役的 LibVLCSharp 旧后端）。
 /// 仅依赖 <see cref="LingFan.Media.Abstractions"/> 中的 Codec 枚举，AOT / trim 完全安全。
 /// </remarks>
 public static class VlcCodecMapping
