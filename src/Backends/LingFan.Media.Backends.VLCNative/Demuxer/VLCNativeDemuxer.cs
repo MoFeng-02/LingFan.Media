@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace LingFan.Media.Backends.VLCNative.Demuxer;
 
 /// <summary>
-/// 基于自写 Apache-2.0 P/Invoke 的 <see cref="IMediaDemuxer"/> 实现（零 LibVLCSharp）。
+/// 基于自写 Apache-2.0 P/Invoke 的 <see cref="IMediaDemuxer"/> 实现。
 /// </summary>
 /// <remarks>
 /// <para><b>VLC 架构适配</b>：VLC 内部一体化处理解封装+解码，不暴露原始压缩包。
@@ -11,16 +11,16 @@ namespace LingFan.Media.Backends.VLCNative.Demuxer;
 /// VLC 内部线程经回调把解码帧写入 Channel，<see cref="ReadPacketAsync"/> 从 Channel 读取。</para>
 /// <para>因此产出的 <see cref="MediaPacket"/> 携带<b>已解码帧数据</b>（VLC 直通）；
 /// VLCVideoDecoder/VLCAudioDecoder 为直通解码器（pass-through）。</para>
-/// <para><b>ABI 修正（根治 LibVLCSharp 三处不符，见 .memory 规划文档 §2.3 A/B/C）</b>：</para>
+/// <para><b>回调 ABI 要点（与 libvlc 原生声明对齐）：</b></para>
 /// <list type="bullet">
 /// <item>A 音频 setup 的 <c>format</c> 原生是 <c>char*</c>（按值）→ 声明 <c>IntPtr</c>，<b>绝不触碰</b>；
 /// 强制 <c>:amem-format=s16l</c> 使 S16N 假设恒成立。</item>
 /// <item>B 视频 <c>pitches</c>/<c>lines</c> 原生是数组（每平面一项）→ 声明 <c>IntPtr</c>，自行 <c>Marshal</c> 读写。</item>
 /// <item>C 视频 cleanup 的 <c>opaque</c> 原生是 <c>void*</c>（按值）→ 声明 <c>IntPtr</c>。</item>
 /// </list>
-/// <para><b>帧戳根因（H7 收口）</b>：音频 play 回调 pts 是 libvlc 绝对时钟域(µs)，弃用之，改按
+/// <para><b>帧戳策略</b>：音频 play 回调形参 pts 是 libvlc 绝对时钟域(µs)，弃用之，改按
 /// 「累计样本数 / 采样率」合成流内相对 PTS（与视频「帧计数 × 单帧时长」共用 _ptsBaseTicks 基准）。</para>
-/// <para>🔴 视频帧 PTS 用 CFR 合成（lock/unlock/display 不传帧 PTS，mediaPlayer.Time 在 unlock 取值失真）；
+/// <para>视频帧 PTS 用 CFR 合成（lock/unlock/display 不传帧 PTS，mediaPlayer.Time 在 unlock 取值失真）；
 /// VLC 内存回调不向回调传递帧 PTS，这是本后端固定采用的帧戳策略。</para>
 /// <para><b>AOT 兼容</b>：sealed 类；12 个回调委托存字段防 GC；句柄用 nint；无反射。</para>
 /// </remarks>
@@ -140,12 +140,12 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
 
         nint instance = _backend.Instance.Handle;
 
-        // ── 地址式打开优先（修复 imem 错误，与原 LibVLCSharp 后端同策略）──
+        // ── 地址式打开优先（location 打开比 imem 内存源更可靠）──
         string? location = stream.Location;
         if (!string.IsNullOrEmpty(location))
         {
             _sourceStream = stream;
-            // 🔴 关键：libvlc_media_new_location 要求合法 MRL（file:///...、http://...），
+            // 关键：libvlc_media_new_location 要求合法 MRL（file:///...、http://...），
             // 裸 Windows 路径（E:\x.mp4）会被 VLC 拒开（"unable to open the MRL"）。
             // 本地文件系统路径必须走 libvlc_media_new_path，由 VLC 内部转 MRL；
             // 仅当 location 是格式良好的 URL（http/rtsp/mms/file:// 等）才用 new_location。
@@ -157,7 +157,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         }
         else
         {
-            // 无地址（内存/透传流）：回退 imem 路径。VLC 3.x 下 imem 仍受 get/release 指针校验限制，罕见路径。
+            // 无地址（内存/透传流）：回退 imem 路径。VLC 下 imem 仍受 get/release 指针校验限制，罕见路径。
             _mediaInput = new VLCNativeMediaStreamInput(stream);
             _media = _mediaInput.CreateMedia(instance);
         }
@@ -165,11 +165,11 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         if (_media == IntPtr.Zero)
             throw new InvalidOperationException($"libvlc_media_new_* 失败: {LibVlcInstance.LastErrorMessage() ?? "unknown"}");
 
-        // 🔴 强制 amem 音频输出为 S16N（小端 16 位交织 PCM）：使得 OnAudioSetup 写死的 2 字节/样本、
-        // SampleFormat.S16 假设恒成立，消除 VLC 某些源/版本以 FL32 交付导致的音质失真与主时钟 2× 漂移。
+        // 强制 amem 音频输出为 S16N（小端 16 位交织 PCM）：使得 OnAudioSetup 写死的 2 字节/样本、
+        // SampleFormat.S16 假设恒成立，消除 VLC 某些源以 FL32 交付导致的音质失真与主时钟漂移。
         LibVlcNative.libvlc_media_add_option(_media, ":amem-format=s16l");
 
-        // 解析媒体（轮询 parsed_status，替代 LibVLCSharp 的 await Parse）
+        // 解析媒体（轮询 parsed_status，而非依赖单次解析完成事件）
         int parseRc = LibVlcNative.libvlc_media_parse_with_options(
             _media, LibVlcTypes.ParseLocal | LibVlcTypes.FetchLocal, -1);
         if (parseRc != 0)
@@ -189,9 +189,9 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
 
         _metadata = ParseMetadata(_media);
 
-        // 🔴 固定轨道索引标签：视频=0，音频=1。
+        // 固定轨道索引标签：视频=0，音频=1。
         // 不依赖「播放前 tracks_get」的枚举结果——VLC 在播放前解析常漏列视频轨（尤其硬解/--vout=dummy 路径），
-        // 导致 _videoTrackIndex 恒为 -1、视频回调不被注册、视频帧全丢（本项目「音频全到+视频全丢」表象之一）。
+        // 导致 _videoTrackIndex 恒为 -1、视频回调不被注册、视频帧全丢。
         // 内存回调直接交付解码帧，索引仅作包标签，与下方播放后重取的 Tracks 元数据保持一致即可。
         _videoTrackIndex = 0;
         _audioTrackIndex = 1;
@@ -232,7 +232,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         _mediaPlayer = LibVlcNative.libvlc_media_player_new(instance);
         LibVlcNative.libvlc_media_player_set_media(_mediaPlayer, _media);
 
-        // 🔴 无条件注册视频/音频内存回调：索引已固定（视频=0/音频=1），
+        // 无条件注册视频/音频内存回调：索引已固定（视频=0/音频=1），
         // 回调仅在存在对应轨时由 VLC 触发；缺失对应轨时回调不触发，零副作用。
         LibVlcNative.libvlc_video_set_format_callbacks(
             _mediaPlayer,
@@ -406,7 +406,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         Marshal.Copy(_videoBuffer, data, 0, dataSize);
 
         // 视频帧 PTS 用「帧计数 × 单帧时长」合成流内相对 PTS（CFR 近似），自 _ptsBaseTicks 起。
-        // 🔴 关键：VLC 内存回调不向回调传递帧 PTS；mediaPlayer.Time 在 unlock 取值不可靠（抖动致帧戳失真、卡顿）。
+        // 关键：VLC 内存回调不向回调传递帧 PTS；mediaPlayer.Time 在 unlock 取值不可靠（抖动致帧戳失真、卡顿）。
         var pts = TimeSpan.FromTicks(_ptsBaseTicks + _videoFrameCounter * _videoFrameDurationTicks);
         _videoFrameCounter++;
 
@@ -427,8 +427,8 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     private int OnAudioSetup(IntPtr opaque, IntPtr format, IntPtr rate, IntPtr channels)
     {
         _audioSetupReceived = true; // 音频轨存在的权威信号
-        // 🔴 关键 ABI 约束：format 原生是 char*（按值），绝不可作为 ref IntPtr 读写（栈破坏/野指针崩溃）。
-        // 我们【绝不触碰 format】，按 VLC 默认 S16N 消费（已用 :amem-format=s16l 强制）。
+        // 关键 ABI 约束：format 原生是 char*（按值），绝不可作为 ref IntPtr 读写（栈破坏/野指针崩溃）。
+        // 按 VLC 默认 S16N 消费（已用 :amem-format=s16l 强制）。
         _audioSampleRate = (int)Marshal.ReadInt32(rate);
         _audioChannels = (int)Marshal.ReadInt32(channels);
         _audioBytesPerSample = 2;            // S16N：16 位有符号，每样本 2 字节
@@ -445,7 +445,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
 
     private void OnAudioResume(IntPtr data, long pts) { }
 
-    // 选择性出队：仅丢弃音频包，保留视频包（修复 H7）。
+    // 选择性出队：仅丢弃音频包，保留视频包（flush 时音频需清空，视频帧保留）。
     private void OnAudioFlush(IntPtr data, long pts)
     {
         var videoPackets = new List<MediaPacket>(capacity: 4);
@@ -462,7 +462,6 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
 
     private void OnAudioDrain(IntPtr data) { }
 
-    // 🔴 根因（VLC 后端「视频 0 交付 / 全丢、音频却全到」的真凶）：
     // audio play 回调形参 pts 是 libvlc 绝对时钟域(µs)，非流内相对时间。弃用之，改按
     // 「累计样本数 / 采样率」合成流内相对 PTS，与视频 CFR 合成共用 _ptsBaseTicks 基准，音视频天然对齐。
     private void OnAudioPlay(IntPtr data, IntPtr samples, uint count, long pts)
@@ -493,9 +492,9 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     /// 播放后重取轨道元数据。
     /// </summary>
     /// <remarks>
-    /// 🔴 关键修正：VLC 在「播放前」经 <c>libvlc_media_parse_with_options</c> 枚举的轨道常漏列视频轨
+    /// 关键修正：VLC 在「播放前」经 <c>libvlc_media_parse_with_options</c> 枚举的轨道常漏列视频轨
     /// （尤其启用硬解 <c>--avcodec-hw=any</c> 与无头 <c>--vout=dummy</c> 时），导致 <c>_videoTrackIndex</c> 恒为 -1、
-    /// 视频内存回调不被注册、视频帧全丢（本项目「音频全到+视频全丢」表象之一）。
+    /// 视频内存回调不被注册、视频帧全丢。
     /// 真实可靠的视频存在性信号是<b>播放后</b> <c>OnVideoFormat</c> 回调是否触发；此处以
     /// 「tracks_get 含视频轨 OR 格式回调已触发」为存在性判据，补全 <see cref="_tracks"/>。
     /// </remarks>

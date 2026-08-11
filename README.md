@@ -107,7 +107,7 @@ await player.DisposeAsync();
 
 ### Choosing a backend explicitly
 
-`AddMediaFoundation()` (Windows), `AddFFmpeg()`, and `AddVLC()` register their factories into the DI container. When multiple are registered, the runtime selects one in registration order and falls back if a backend cannot handle the source. To force a specific backend, use the `IMediaPlayerFactory.Create(...)` overload that accepts an explicit backend group.
+`AddMediaFoundation()` (Windows), `AddFFmpeg()`, and `AddVLCNative()` register their factories into the DI container. When multiple are registered, the runtime selects one in registration order and falls back if a backend cannot handle the source. To force a specific backend, use the `IMediaPlayerFactory.Create(...)` overload that accepts an explicit backend group.
 
 ### Network sources (experimental, not yet validated)
 

@@ -107,7 +107,7 @@ await player.DisposeAsync();
 
 ### 显式选择后端
 
-`AddMediaFoundation()`（Windows）、`AddFFmpeg()`、`AddVLC()` 会把各自的工厂注册进 DI 容器。当注册了多个后端时，运行时按注册顺序选择一个；若某后端无法处理该源，则回退到下一个。要强制指定某个后端，可使用接受显式后端组的 `IMediaPlayerFactory.Create(...)` 重载。
+`AddMediaFoundation()`（Windows）、`AddFFmpeg()`、`AddVLCNative()` 会把各自的工厂注册进 DI 容器。当注册了多个后端时，运行时按注册顺序选择一个；若某后端无法处理该源，则回退到下一个。要强制指定某个后端，可使用接受显式后端组的 `IMediaPlayerFactory.Create(...)` 重载。
 
 ### 网络源（实验性，尚未验证）
 

@@ -1,7 +1,7 @@
 namespace LingFan.Media.Backends.VLCNative;
 
 /// <summary>
-/// VLC Native 后端配置选项（自写 Apache-2.0 P/Invoke，零 LibVLCSharp；替代已退役的 LibVLCSharp 旧后端）。
+/// VLC Native 后端配置选项（自写 Apache-2.0 P/Invoke）。
 /// </summary>
 public sealed class VLCOptions
 {

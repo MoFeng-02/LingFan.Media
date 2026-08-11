@@ -795,16 +795,15 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
         try
         {
-            // _videoFrameSink 在生产路径中恒为非空 lambda（MediaPlayer 注入的转发+路由器），
-            // lambda 内部按"UI 是否订阅 VideoFrameAvailable"路由——订阅（Skia 软渲染）→ 投递 sink；
-            // 未订阅（D3D11 原生 GPU）→ 直接 Present 到已 Attach 的共享 SwapChain。二者互斥。
-            // 此处 else 仅为 null-sink 调用方（测试/无 UI）兜底：直接 Present 到渲染器。
-            // 注意：路由决策在 lambda 内完成，不可在此直接判 _videoFrameSink == null 来决定 D3D11——
+            // 唯一帧出口（🔴 帧契约）：所有帧经注入的 _videoFrameSink（生产路径中恒为非空 lambda，
+            // MediaPlayer 注入为 frame => _frameChannel.Emit，内部再扇出到订阅的 Sink——
+            // 无头计算 / Skia 软渲染 / D3D11 零拷贝 GPU 呈现三者互斥，由 Sink 内部路由）。
+            // 绝不在管线内直接 _renderer.Present(frame)（曾经的 else 兜底分支已删除：它构成第二条
+            // 绕开 FrameChannel 扇出的呈现路径，违反「帧路由唯一、绝双路径」铁律）。
+            // 若 _videoFrameSink 为 null（仅测试/无 UI 且未接 Sink 的调用方），帧在此静默归池、不呈现。
+            // 注意：路由决策在 Sink lambda 内完成，不可在此判 _videoFrameSink == null 来决定 D3D11——
             // 那样会让 D3D11 模式（无订阅方，但 lambda 非空）永不调用渲染器，导致视频不显示。
-            if (_videoFrameSink != null)
-                _videoFrameSink(frame);
-            else
-                _renderer.Present(frame);
+            _videoFrameSink?.Invoke(frame);
             // 🔴 首帧已真正提交上屏：通知 A/V 启动编排等待点（§33 补强），
             // 使音频 WASAPI 启动不早于视频首帧上屏 → 根治「声音比视频先出」。
             if (!_firstFramePresented)

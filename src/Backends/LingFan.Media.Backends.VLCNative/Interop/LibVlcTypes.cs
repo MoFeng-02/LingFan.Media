@@ -1,18 +1,18 @@
 namespace LingFan.Media.Backends.VLCNative.Interop;
 
 /// <summary>
-/// libvlc 回调委托与结构体（Apache-2.0，零 LibVLCSharp）。
+/// libvlc 回调委托与结构体（Apache-2.0）。
 /// </summary>
 /// <remarks>
-/// <para>🔴 所有回调委托必须用 <see cref="UnmanagedFunctionPointerAttribute"/> + <see cref="CallingConvention.Cdecl"/>：
-/// libvlc 是纯 C ABI，**不是 Winapi**（后者仅适用于 COM vtable 如 MF）。</para>
-/// <para>🔴 §2.3 A/B/C 修正（根治 LibVLCSharp 三处 ABI 不符）：</para>
+/// <para>所有回调委托必须用 <see cref="UnmanagedFunctionPointerAttribute"/> + <see cref="CallingConvention.Cdecl"/>：
+/// libvlc 是纯 C ABI，调用约定为 Cdecl，而非 COM 接口（如 MF）所用的 Winapi。</para>
+/// <para>回调 ABI 要点（与 libvlc 原生声明对齐）：</para>
 /// <list type="bullet">
 /// <item>A 音频 <c>format</c> 原生是 <c>char*</c>（按值）→ 声明 <c>IntPtr</c>，<b>绝不可</b> <c>ref IntPtr</c>。</item>
 /// <item>B 视频 <c>pitches</c>/<c>lines</c> 原生是数组（每平面一项）→ 声明 <c>IntPtr</c>，自行 <c>Marshal.ReadUInt32</c> 读出。</item>
 /// <item>C 视频 <c>cleanup</c> 的 <c>opaque</c> 原生是 <c>void*</c>（按值）→ 声明 <c>IntPtr</c>。</item>
 /// </list>
-/// <para>🔴 结构体只读头部稳定字段，尾部（如 <c>i_multiview</c>）跨 libvlc 版本增减，不声明以免 Pack 错位。</para>
+/// <para>结构体只读头部稳定字段，尾部（如 <c>i_multiview</c>）跨版本增减，不声明以免 Pack 错位。</para>
 /// </remarks>
 public static class LibVlcTypes
 {
@@ -61,7 +61,7 @@ public static class LibVlcTypes
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate int MediaOpenCb(IntPtr opaque, IntPtr datap, IntPtr sizep);
 
-    // 🔴 read_cb 返回 ssize_t → C# 用 nint（非 long/intmax_t）
+    // read_cb 返回 ssize_t → C# 用 nint（非 long/intmax_t）
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate nint MediaReadCb(IntPtr opaque, IntPtr buf, nint len);
 
@@ -90,7 +90,7 @@ public static class LibVlcTypes
         public uint i_bitrate;
         public IntPtr psz_language;
         public IntPtr psz_description;
-        public IntPtr union_ptr;  // 联合体存指针（audio/video/subtitle）；🔴 必须位于结构体尾部，与 VLC 3.0 libvlc_media_track_t 一致
+        public IntPtr union_ptr;  // 联合体存指针（audio/video/subtitle）；必须位于结构体尾部，与 libvlc_media_track_t 布局一致
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -103,7 +103,7 @@ public static class LibVlcTypes
     [StructLayout(LayoutKind.Sequential)]
     public struct LibvlcVideoTrackT
     {
-        public uint i_width;      // 🔴 VLC 顺序：先 width 后 height
+        public uint i_width;      // VLC 字段顺序：先 width 后 height
         public uint i_height;
         public uint i_sar_num;
         public uint i_sar_den;
@@ -114,8 +114,7 @@ public static class LibVlcTypes
 
     // ── 常量 ──
 
-    // libvlc_track_type_t（🔴 VLC 3.0 真实枚举值：audio=0 / video=1 / text=2 / unknown=-1。
-    // 此前误写为 1/2/3，导致回调式 VLC 后端把视频轨(t=1)误判为音频、音频轨(t=0)漏判，两轨 codec 全落 Unknown。）
+    // libvlc_track_type_t：audio=0 / video=1 / text=2 / unknown=-1（回调式后端据此区分轨道）。
     public const int TrackTypeUnknown = -1;
     public const int TrackTypeAudio = 0;
     public const int TrackTypeVideo = 1;
@@ -143,7 +142,7 @@ public static class LibVlcTypes
     public const uint MetaGenre = 3;
     public const uint MetaDate = 4;
 
-    // libvlc_event_e（MediaPlayer 段，3.x 值）
+    // libvlc_event_e（MediaPlayer 段取值）
     public const int EventMediaPlayerOpening = 258;
     public const int EventMediaPlayerBuffering = 259;
     public const int EventMediaPlayerPlaying = 260;

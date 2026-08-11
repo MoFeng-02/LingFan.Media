@@ -7,7 +7,7 @@ LingFan.Media 自身的源代码以 **Apache-2.0** 许可证发布。它可选�
 LingFan.Media 绝不会把 FFmpeg 或 LibVLC 静态合并进自身程序集，也绝不修改其源码。它在运行时以共享库方式动态加载：
 
 - **FFmpeg** 经由 `FFmpeg.AutoGen.Bindings.DynamicallyLoaded`（MIT）消费，在运行时通过 `LoadLibrary` 解析共享库（`avcodec-*.dll` 等）。
-- **LibVLC** 经由 `LibVLCSharp`（LGPLv2.1+）消费，在运行时动态加载 `libvlc` / `libvlccore`。
+- **LibVLC** 经由本项目自写的 Apache-2.0 P/Invoke 绑定 `VLCNative` 消费，在运行时动态加载 `libvlc` / `libvlccore`。
 
 由于项目仅作动态链接、原样复制库、且未将其合并进自身二进制，依据 LGPL 2.1 第 6 条，**LingFan.Media 的自有代码不构成对 LGPL 库的派生作品**。其源代码与程序集始终保持 **Apache-2.0**——纯粹且无负担。LGPL 义务仅附着于被分发的原生二进制本身。
 

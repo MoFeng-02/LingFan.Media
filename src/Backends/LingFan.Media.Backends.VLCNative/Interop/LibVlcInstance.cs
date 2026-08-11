@@ -8,23 +8,23 @@ namespace LingFan.Media.Backends.VLCNative.Interop;
 /// </summary>
 /// <remarks>
 /// <para>DI 生命周期：Singleton。只持有 libvlc 引擎实例，不持媒体/播放上下文；多播放器共享安全。</para>
-/// <para>🔴 原生 libvlc 是 LGPL，但<b>不打包进库本体</b>：运行时由 <c>VideoLAN.LibVLC.*</c>（开发/验证期提供）
+/// <para>原生 libvlc 是 LGPL 许可证的原生库，但<b>不打包进库本体</b>：运行时由 <c>VideoLAN.LibVLC.*</c>
 /// 或系统/下游提供，作为外部运行时依赖。</para>
-/// <para>🔴 原生库定位采用<b>规则驱动 + 递归查找</b>，不硬编码任何单一 RID 路径：
+/// <para>原生库定位采用<b>规则驱动 + 递归查找</b>，不硬编码任何单一 RID 路径：
 /// 从 <c>AppContext.BaseDirectory</c>（及 <c>libvlc/</c> 子目录）出发，按当前 OS 的原生库命名规则
 /// （Windows <c>libvlc.dll</c> / macOS·iOS <c>libvlc.dylib</c> / Linux·Android <c>libvlc.so*</c>）
 /// 有界递归（深度 ≤ 6）搜索；命中后按「是否含 libvlccore + plugins 同级目录」与「是否与当前进程架构匹配」
 /// 综合评分，优先选用<b>架构匹配且完整</b>的运行时。Windows / macOS / Linux / Android / iOS 走同一套规则。</para>
-/// <para>🔴 🔴 关键修正：VideoLAN 包在 <c>libvlc/</c> 下平铺 <c>win-x64 / win-arm64 / win-x86</c> 三套镜像，
+/// <para>关键：VideoLAN 包在 <c>libvlc/</c> 下平铺 <c>win-x64 / win-arm64 / win-x86</c> 三套镜像，
 /// 递归发现必须按<b>当前进程架构</b>过滤——否则 x64 进程会误加载 arm64/x86 镜像触发
 /// <see cref="BadImageFormatException"/>（0x8007000B）。评分对架构匹配项加权 +1000，且 <c>NativeLibrary.Load</c>
 /// 对所有候选做容错遍历：单个候选架构不符即跳过试下一个。</para>
-/// <para>🔴 加载后通过 <see cref="NativeLibrary.SetDllImportResolver"/> 把逻辑名 <c>"libvlc"</c> 钉死到已加载模块句柄，
+/// <para>加载后通过 <see cref="NativeLibrary.SetDllImportResolver"/> 把逻辑名 <c>"libvlc"</c> 钉死到已加载模块句柄，
 /// 不依赖各 OS loader 的「同基名复用」隐式行为，解析确定性强。</para>
-/// <para>🔴 plugins 目录不做特殊处理：libvlc 3.x 通过 libvlccore 自身模块路径推导同级 <c>plugins/</c>，
-/// 这是官方主路径（LibVLCSharp 亦如此）；<c>VLC_PLUGIN_PATH</c> 环境变量在 .NET 下写入进程环境块后
+/// <para>plugins 目录不做特殊处理：libvlc 通过 libvlccore 自身模块路径推导同级 <c>plugins/</c>，
+/// 这是官方主路径；<c>VLC_PLUGIN_PATH</c> 环境变量在 .NET 下写入进程环境块后
 /// UCRT <c>getenv</c> 未必可见，故不采用。</para>
-/// <para>🔴 V1 仅验证 Windows 运行时；macOS / Linux / Android / iOS 的发现规则已就绪，待对应 VideoLAN 包接入后验证。</para>
+/// <para>当前版本仅验证 Windows 运行时；其他平台的发现规则已就绪，待对应 VideoLAN 包接入后验证。</para>
 /// </remarks>
 public sealed class LibVlcInstance : IDisposable
 {
@@ -77,7 +77,7 @@ public sealed class LibVlcInstance : IDisposable
     public static string NativeModulePath { get; private set; } = string.Empty;
 
     /// <summary>
-    /// libvlc 版本字符串（如 <c>3.0.23.1 Vetinari</c>）。
+    /// libvlc 版本字符串（仅供诊断）。
     /// 静态成员：<c>libvlc_get_version</c> 不需要引擎实例，可用于在 <c>libvlc_new</c> 之前单独验证原生加载与 P/Invoke 解析。
     /// </summary>
     public static string NativeVersion
@@ -105,8 +105,8 @@ public sealed class LibVlcInstance : IDisposable
     /// 调用 <c>libvlc_new</c>，按需把托管字符串数组封送为 <c>const char* const*</c>。
     /// </summary>
     /// <remarks>
-    /// 🔴 libvlc 在 <c>libvlc_new</c> 内部把选项解析并复制进自身 config，返回后调用方即可释放 argv 与各字符串
-    /// （与 LibVLCSharp 的做法一致）。这里用 <c>StringToCoTaskMemUTF8</c> / <c>FreeCoTaskMem</c> 严格配对。
+    /// libvlc 在 <c>libvlc_new</c> 内部把选项解析并复制进自身 config，返回后调用方即可释放 argv 与各字符串
+    /// （与 libvlc 标准用法一致）。这里用 <c>StringToCoTaskMemUTF8</c> / <c>FreeCoTaskMem</c> 严格配对。
     /// </remarks>
     private static nint CreateCore(IReadOnlyList<string>? options)
     {
@@ -143,7 +143,7 @@ public sealed class LibVlcInstance : IDisposable
     /// </summary>
     private static void EnsureNativeLoaded()
     {
-        // 🔴 快速路径用独立的完成标志而非句柄本身：句柄必须在解析器注册完成「之后」才对外可见，
+        // 快速路径用独立的完成标志而非句柄本身：句柄必须在解析器注册完成「之后」才对外可见，
         // 否则并发线程可能在解析器就位前发起 P/Invoke，退化为默认探测。
         if (Volatile.Read(ref _initialized))
             return;
@@ -161,7 +161,7 @@ public sealed class LibVlcInstance : IDisposable
                     $"搜索根: {string.Join("; ", GetSearchRoots().Where(r => !string.IsNullOrEmpty(r)))}");
             }
 
-            // 🔴 容错遍历：单个候选架构不符（BadImageFormatException）或缺依赖（IOException/DllNotFound）即跳过，试下一个。
+            // 容错遍历：单个候选架构不符（BadImageFormatException）或缺依赖（IOException/DllNotFound）即跳过，试下一个。
             nint module = IntPtr.Zero;
             string? loadedPath = null;
             foreach (var (dllPath, _) in candidates)
@@ -193,7 +193,7 @@ public sealed class LibVlcInstance : IDisposable
             _nativeModule = module;
             NativeModulePath = loadedPath!;
 
-            // 🔴 解析器必须在首次 P/Invoke 之前注册；同一程序集只允许注册一次，重复注册会抛 InvalidOperationException。
+            // 解析器必须在首次 P/Invoke 之前注册；同一程序集只允许注册一次，重复注册会抛 InvalidOperationException。
             if (!_resolverInstalled)
             {
                 NativeLibrary.SetDllImportResolver(typeof(LibVlcInstance).Assembly, ResolveNativeLibrary);
@@ -278,7 +278,7 @@ public sealed class LibVlcInstance : IDisposable
 
         var hasPlugins = Directory.Exists(Path.Combine(dir, "plugins"));
         var score = 0;
-        if (PathMatchesCurrentArch(libPath)) score += ArchMatchScore; // 🔴 关键：同架构优先，避免 x64 误加载 arm64/x86
+        if (PathMatchesCurrentArch(libPath)) score += ArchMatchScore; // 关键：同架构优先，避免 x64 误加载 arm64/x86
         if (hasCore) score += 50;
         if (hasPlugins) score += 100;
         return score;
@@ -318,7 +318,7 @@ public sealed class LibVlcInstance : IDisposable
     /// 判断路径是否命中<b>当前进程架构</b>。规则：路径中任一段整体等于架构 token（如 <c>x64</c>），
     /// 或按 <c>-</c> 拆分后的子 token 精确等于架构 token（如 <c>win-x64</c> → <c>x64</c>、
     /// <c>osx-arm64</c> → <c>arm64</c>）。
-    /// 🔴 用「拆分后精确匹配」而非子串包含，避免 <c>arm</c> 误中 <c>arm64</c> 之类的跨架构误判。
+    /// 用「拆分后精确匹配」而非子串包含，避免 <c>arm</c> 误中 <c>arm64</c> 之类的跨架构误判。
     /// </summary>
     private static bool PathMatchesCurrentArch(string path)
     {

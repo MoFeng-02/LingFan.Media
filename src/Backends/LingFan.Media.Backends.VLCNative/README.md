@@ -19,6 +19,6 @@
 因此无头下出现的 `[h264] get_buffer() failed` 日志是 VLC 硬解回退的预期 chatter，**不要**为消除它改成 `--avcodec-hw=none`——那会剥夺有头真硬解能力，背离「与旧库对齐」初衷。零拷贝硬解由 MF / ffmpeg 主路径承担，VLC 后端在此架构仅作「开箱即用回退中间件」。
 
 ## 已知坑（已修复，留痕）
-- `TrackType` 枚举须与 VLC 3.0 一致：`audio=0 / video=1`。初版误写为 `audio=1/video=2`，导致轨道分类错位、codec 全落 `Unknown`。
+- `TrackType` 枚举须与 VLC 实际枚举一致：`audio=0 / video=1`。若误写为 `audio=1/video=2`，会导致轨道分类错位、codec 全落 `Unknown`。
 - 帧路由唯一：`frame => _frameChannel.Emit`，不另开有头分支。
 - 本地裸路径（如 `E:\x.mp4`）须走 `libvlc_media_new_path`；合法 MRL（`file:///...` / `http://`）才走 `libvlc_media_new_location`，否则 VLC 拒开报 `unable to open the MRL`。

@@ -8,7 +8,7 @@ namespace LingFan.Media.Backends.VLCNative;
 /// 多播放器共享安全（每个 VLCNativeDemuxer 创建独立的 Media + MediaPlayer）。</para>
 /// <para>构造函数和 Dispose 均为同步——libvlc 初始化/释放是快速原生调用，无 I/O 阻塞。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
-    /// <para>与原 LibVLCSharp 版 <c>VLCBackend</c> 的<b>行为完全对齐</b>：本后端同是<b>回调式 CPU 帧</b>模型
+    /// <para>本后端同是<b>回调式 CPU 帧</b>模型（与项目此前的 VLC 后端行为一致）
     /// （<c>libvlc_video_set_callbacks</c> 经 lock/unlock 拿 BGRA 内存）。<c>EnableHardwareDecoding</c> 时注入
     /// <c>--avcodec-hw=any</c>（「可用就硬解」）：<b>有头</b>（真实显示设备）走 D3D11VA 真硬解 + 回拷 CPU BGRA，
     /// 与老库 Headful 探针一致；<b>无头</b>（<c>--vout=dummy</c>，无显示设备）下 GPU 表面无法映射回 CPU → ffmpeg
@@ -41,7 +41,7 @@ public sealed class VLCNativeBackend : IDisposable
         if (options.Headless)
             args.Add("--vout=dummy");
 
-        // 与旧 LibVLCSharp 版 VLCBackend 逐字对齐：启用硬件解码时注入 --avcodec-hw=any（「可用就硬解」）。
+        // 启用硬件解码时注入 --avcodec-hw=any（「可用就硬解」，与此前 VLC 后端逐字对齐）。
         // 无头(--vout=dummy)下 GPU 表面无法映射回 CPU，ffmpeg 会报 get_buffer() failed，但 VLC 自动回退软解，
         // 帧仍以 CPU BGRA 交付（功能无损，仅日志噪声；详见类文档与后端 README）。不按 Headless 强制 none，以免剥夺有头真硬解。
         if (options.EnableHardwareDecoding)
@@ -63,7 +63,7 @@ public sealed class VLCNativeBackend : IDisposable
     internal LibVlcInstance Instance => _instance;
 
     /// <summary>
-    /// libvlc 版本字符串（诊断用，如 <c>3.0.23.1 Vetinari</c>）。
+    /// libvlc 版本字符串（诊断用）。
     /// </summary>
     public string Version => _instance.Version;
 

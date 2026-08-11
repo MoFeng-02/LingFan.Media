@@ -1,15 +1,15 @@
 namespace LingFan.Media.Backends.VLCNative.Interop;
 
 /// <summary>
-/// libvlc 3.0.23.1 原生 P/Invoke 绑定（Apache-2.0，零 LibVLCSharp）。
+/// libvlc 原生 P/Invoke 绑定（Apache-2.0，不依赖第三方托管绑定）。
 /// </summary>
 /// <remarks>
-/// <para>🔴 调用约定 = <see cref="CallingConvention.Cdecl"/>：libvlc 是纯 C 导出库，与本项目「COM vtable=Winapi」宪法不冲突（后者仅适用于 COM 接口如 MF）。</para>
-/// <para>🔴 AOT：全部 <c>[LibraryImport]</c> static partial 方法，所在类型 partial；句柄用 <c>nint</c> 仿 ffmpeg 路径，不用 SafeHandle（AOT 友好）。</para>
+/// <para>调用约定 = <see cref="CallingConvention.Cdecl"/>：libvlc 是纯 C 导出库，与 COM 接口（如 MF）所需的 Winapi 调用约定不同。</para>
+/// <para>AOT：全部 <c>[LibraryImport]</c> static partial 方法，所在类型 partial；句柄用 <c>nint</c> 仿 ffmpeg 路径，不用 SafeHandle（AOT 友好）。</para>
 /// <para>回调注册类函数（set_* / media_new_callbacks）的回调参数声明为 <c>nint</c> 函数指针；调用方用
 /// <see cref="Marshal.GetFunctionPointerForDelegate"/> 转换后传入，避免源生成器对委托参数的封送歧义，最 AOT 安全。</para>
 /// <para>字符串参数（location/path/option）显式 <c>StringMarshalling = Utf8</c>：libvlc 是 C 库，路径用 UTF-8。</para>
-/// <para>3.x ABI 锁定：<c>libvlc_media_player_stop_async</c> 等 4.x 符号**不存在**，本绑定不声明。</para>
+/// <para>本绑定仅声明 libvlc 既有同步符号；较新版本才引入的异步符号（如 <c>libvlc_media_player_stop_async</c>）未声明，以兼容既有的 libvlc 运行时。</para>
 /// </remarks>
 public static partial class LibVlcNative
 {

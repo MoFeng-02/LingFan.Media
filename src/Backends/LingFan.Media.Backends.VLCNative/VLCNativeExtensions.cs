@@ -6,27 +6,27 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace LingFan.Media.Backends.VLCNative;
 
 /// <summary>
-/// VLC Native 后端 DI 注册扩展（零 LibVLCSharp，Apache-2.0 P/Invoke）。
+/// VLC Native 后端 DI 注册扩展（Apache-2.0 P/Invoke）。
 /// </summary>
 /// <remarks>
 /// <para>注册：<see cref="VLCNativeBackend"/>(Singleton) + <see cref="VLCOptions"/>(Singleton，位于 VLCNative 根) +
 /// <see cref="VLCNativeDemuxerFactory"/>(Singleton，枚举注册为 IMediaDemuxerFactory) +
 /// <see cref="VLCVideoDecoderFactory"/>(Singleton，枚举注册为 IVideoDecoderFactory) +
 /// <see cref="VLCAudioDecoderFactory"/>(Singleton，枚举注册为 IAudioDecoderFactory)。</para>
-/// <para>VLCNative 为唯一 VLC 后端（自写 Apache-2.0 P/Invoke，零 LibVLCSharp / LGPL），已替代退役的 LibVLCSharp 旧后端。</para>
-/// <para>🔴 后端/工厂绑定到 VLCNative 特有类型，不进共享层（VLCNative 自持工厂与扩展）。</para>
+/// <para>VLCNative 为唯一 VLC 后端（自写 Apache-2.0 P/Invoke，不依赖 LGPL 托管绑定）。</para>
+/// <para>后端/工厂绑定到 VLCNative 特有类型，不进共享层（VLCNative 自持工厂与扩展）。</para>
 /// </remarks>
 public static class VLCNativeExtensions
 {
     /// <summary>
-    /// 注册 VLC Native 解封装后端（自写 P/Invoke，零 LibVLCSharp）。
+    /// 注册 VLC Native 解封装后端（自写 P/Invoke）。
     /// </summary>
     /// <param name="services">DI 服务集合。</param>
     /// <param name="options">预构建的 VLC 选项（可选）。传入则注册该实例；为 null 时注册默认 <see cref="VLCOptions"/> 单例。</param>
     /// <returns>服务集合（链式调用）。</returns>
     public static IServiceCollection AddVLCNative(this IServiceCollection services, VLCOptions? options = null)
     {
-        // 🔴 Lazy&lt;T&gt; 解析支持必须显式开启（MS DI 不自动支持 Lazy&lt;VLCNativeBackend&gt;）。
+        // Lazy&lt;T&gt; 解析支持必须显式开启（MS DI 不自动支持 Lazy&lt;VLCNativeBackend&gt;）。
         services.AddLazySupport();
 
         if (options is not null)

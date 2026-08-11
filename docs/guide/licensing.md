@@ -7,7 +7,7 @@ LingFan.Media's own source code is released under **Apache-2.0**. It optionally 
 LingFan.Media never statically merges FFmpeg or LibVLC into its own assemblies, and never modifies their source. It loads them at runtime as shared libraries:
 
 - **FFmpeg** is consumed through `FFmpeg.AutoGen.Bindings.DynamicallyLoaded` (MIT), which resolves the shared libraries (`avcodec-*.dll`, etc.) at runtime via `LoadLibrary`.
-- **LibVLC** is consumed through `LibVLCSharp` (LGPLv2.1+), which dynamically loads `libvlc` / `libvlccore` at runtime.
+- **LibVLC** is consumed through LingFan.Media's own Apache-2.0 P/Invoke binding (`VLCNative`), which dynamically loads `libvlc` / `libvlccore` at runtime.
 
 Because the project only links dynamically, copies the libraries unmodified, and does not combine them into its own binary, **LingFan.Media's own code is not a derivative work of the LGPL libraries** (LGPL 2.1, section 6). Its source and assemblies remain **Apache-2.0** — pure and unencumbered. The LGPL obligations attach only to the distributed native binaries themselves.
 

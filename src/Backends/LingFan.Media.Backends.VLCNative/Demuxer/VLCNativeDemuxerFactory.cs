@@ -1,9 +1,7 @@
-using LingFan.Media.Abstractions;
-
 namespace LingFan.Media.Backends.VLCNative.Demuxer;
 
 /// <summary>
-/// <see cref="VLCNativeDemuxer"/> 工厂（零 LibVLCSharp）。
+/// <see cref="VLCNativeDemuxer"/> 工厂。
 /// </summary>
 /// <remarks>
 /// <para>Singleton 工厂，无状态；每次 Create 返回新实例（每次播放新建，不共享）。</para>

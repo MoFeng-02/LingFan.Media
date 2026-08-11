@@ -1,14 +1,11 @@
-using System.Runtime.InteropServices;
-using LingFan.Media.Abstractions;
-
 namespace LingFan.Media.Backends.VLCNative.Demuxer;
 
 /// <summary>
-/// 将 <see cref="IMediaStream"/> 适配为 VLC 的 imem access 模块（零 LibVLCSharp）。
+/// 将 <see cref="IMediaStream"/> 适配为 VLC 的 imem access 模块。
 /// </summary>
 /// <remarks>
 /// <para>仅用于无 <see cref="IMediaStream.Location"/> 的内存/透传流；有地址流走 location 直接打开（见 VLCNativeDemuxer）。</para>
-/// <para>VLC 3.x 下 imem 受 get/release 指针校验限制为罕见路径，但需保留以覆盖无地址字节流。</para>
+/// <para>VLC 下 imem 受 get/release 指针校验限制为罕见路径，但需保留以覆盖无地址字节流。</para>
 /// <para>4 个回调委托存字段防 GC；用 <see cref="GCHandle"/> 把本实例钉为 opaque，回调整形取回。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
 /// </remarks>
