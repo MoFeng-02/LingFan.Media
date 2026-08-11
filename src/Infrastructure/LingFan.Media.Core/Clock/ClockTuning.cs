@@ -28,7 +28,7 @@ internal static class ClockTuning
 
     /// <summary>
     /// 是否用真实音频播放位置作为视频主时钟（替代批提交内的逐帧 SyncTo 突发）。默认 false。
-    /// <para><b>这是根治方案</b>：时钟由设备真实播放游标驱动（平滑、单调、缓冲耗尽时自然停摆），
+    /// <para><b>这是解决方案</b>：时钟由设备真实播放游标驱动（平滑、单调、缓冲耗尽时自然停摆），
     /// 而非"已提交末端时间"在批内被瞬间预支。配合 <see cref="IAudioOutput.GetPlaybackPositionDirect"/> 零封送读取。</para>
     /// </summary>
     internal static readonly bool UseAudioPlaybackClock = ParseBool("LINGFAN_CLOCK_AUDIO_POS");

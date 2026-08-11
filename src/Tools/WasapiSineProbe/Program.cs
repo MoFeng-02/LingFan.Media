@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace WasapiSineProbe;
 
 /// <summary>
-/// 最小可验证程序 <b>b1</b>：<b>独立 WASAPI 出声</b>（本机生成 PCM，<b>完全不含解码</b>）。
+/// 最小可验证程序 <b>b1</b>：<b>独立 WASAPI 出声</b>（本地生成 PCM，<b>完全不含解码</b>）。
 /// </summary>
 /// <remarks>
 /// <para>对应单元测试 <c>StandaloneWasapiPlaybackTests.PlayAsync_StandaloneWasapi_SineTone_Sustained</c>，
@@ -19,7 +19,7 @@ namespace WasapiSineProbe;
 /// <list type="bullet">
 ///   <item>本程序<b>出声正常</b> ⇒ 设备枚举 / 格式协商 / IAudioClient.Start / 实时 Submit 背压 / 播放时钟
 ///     这条 WASAPI 渲染链路整体健康，后续任何「听不到」都不该再赖 WASAPI 基础设施。</item>
-///   <item>本程序<b>就断音</b> ⇒ 与解码、MF、时钟同步全部无关，责任 100% 在 WASAPI 渲染侧或本机 driver。</item>
+///   <item>本程序<b>就断音</b> ⇒ 与解码、MF、时钟同步全部无关，责任 100% 在 WASAPI 渲染侧或本地音频驱动。</item>
 /// </list>
 ///
 /// <para><b>相对测试的关键增强</b>：</para>
@@ -59,19 +59,19 @@ internal static class Program
         double amplitude = ParseDouble(args, "--amp", 0.3);
         var format = useF32 ? SampleFormat.F32 : SampleFormat.S16;
 
-        Console.WriteLine("=== b1 · 独立 WASAPI 出声验证（本机生成 PCM，不含解码） ===");
+        Console.WriteLine("=== b1 · 独立 WASAPI 出声验证（本地生成 PCM，不含解码） ===");
         Console.WriteLine($"波形          : {(sweep ? "扫频 200Hz→2000Hz 循环上滑（断音极易辨别）" : $"定频正弦 {freq:F0}Hz")}");
         Console.WriteLine($"时长          : {seconds}s   振幅 {amplitude:F2}");
         Console.WriteLine($"提交格式      : {format} {sampleRate}Hz {channels}ch");
         Console.WriteLine($"会话分类      : {(enableCategory ? "启用 (IAudioClient2.SetClientProperties)" : "禁用（默认）")}");
         Console.WriteLine($"日志级别      : {(verbose ? "Debug" : "Information")}");
         Console.WriteLine();
-        Console.WriteLine("⚠ 请把音量开到能听清，全程留意声音是否<b>持续不断</b>。");
+        Console.WriteLine("请把音量开到能听清，全程留意声音是否<b>持续不断</b>。");
         Console.WriteLine();
 
         var services = new ServiceCollection();
-        // 🔴 真实 Console Logger：测试工程注入 NullLoggerFactory，生产代码所有 LogWarning
-        //    （含背压超时、格式回退）全部不可见，这是此前多轮误判的直接成因。
+        // 真实 Console Logger：测试工程注入 NullLoggerFactory，生产代码所有 LogWarning
+        //    （含背压超时、格式回退）在该模式下不可见，容易漏看。
         services.AddLogging(b => b
             .AddSimpleConsole(o =>
             {
@@ -113,7 +113,7 @@ internal static class Program
         Console.WriteLine($"已生成 {frames.Count} 个提交帧，合计 {totalSec:F2}s PCM。开始播放……");
         Console.WriteLine();
 
-        // 🔴 IAudioClient.Start 只在 Resume() 内触发——必须先启动设备，否则提交进去也不出声。
+        // IAudioClient.Start 只在 Resume() 内触发——必须先启动设备，否则提交进去也不出声。
         output.Resume();
 
         var sw = Stopwatch.StartNew();
@@ -153,7 +153,7 @@ internal static class Program
             bool advanced = pos > prevPos + 0.05;
             if (!advanced && sub < totalSec - 0.1)
             {
-                note = "⚠ 位置未推进";
+                note = "位置未推进";
                 if (stallStartSec < 0) stallStartSec = t;
             }
             prevPos = pos;
@@ -174,9 +174,9 @@ internal static class Program
         Console.WriteLine($"  实际提交        : {Interlocked.Read(ref submittedFrames) / (double)sampleRate:F2}s");
         Console.WriteLine($"  最大播放位置    : {maxPos:F2}s");
         if (stallStartSec > 0)
-            Console.WriteLine($"  ⚠ 首个停顿起点  : 墙钟 {stallStartSec:F2}s");
+            Console.WriteLine($"  首个停顿起点  : 墙钟 {stallStartSec:F2}s");
         if (submitError is not null)
-            Console.WriteLine($"  ⚠ 提交异常      : {submitError.GetType().Name}: {submitError.Message}");
+            Console.WriteLine($"  提交异常      : {submitError.GetType().Name}: {submitError.Message}");
 
         Console.WriteLine();
         Console.WriteLine("=== 判定 ===");
@@ -185,16 +185,16 @@ internal static class Program
         bool pass = maxPos >= expect && submitError is null;
         if (pass)
         {
-            Console.WriteLine($"  ✓ 播放位置推进 {maxPos:F2}s ≥ 期望 {expect:F2}s（设备枚举/格式协商/Start/背压/时钟均正常）");
-            Console.WriteLine("  ✓ WASAPI 渲染链路本身健康 ⇒ 后续「听不到」不应再归咎于 WASAPI 基础设施。");
+            Console.WriteLine($"  播放位置推进 {maxPos:F2}s ≥ 期望 {expect:F2}s（设备枚举/格式协商/Start/背压/时钟均正常）");
+            Console.WriteLine("  WASAPI 渲染链路本身健康 ⇒ 后续「听不到」不应再归咎于 WASAPI 基础设施。");
         }
         else
         {
-            Console.WriteLine($"  ✗ 播放位置只推进 {maxPos:F2}s，低于期望 {expect:F2}s。");
-            Console.WriteLine("  ✗ 本探针不含任何解码 ⇒ 责任 100% 在 WASAPI 渲染侧或本机 driver。");
+            Console.WriteLine($"  播放位置只推进 {maxPos:F2}s，低于期望 {expect:F2}s。");
+            Console.WriteLine("  本探针不含任何解码 ⇒ 责任 100% 在 WASAPI 渲染侧或本地音频驱动。");
         }
         Console.WriteLine();
-        Console.WriteLine("  🔴 人耳判定同样重要：声音若在中途停顿/变哑，即便上面数字达标也应记录停顿时刻。");
+        Console.WriteLine("  人耳判定同样重要：声音若在中途停顿/变哑，即便上面数字达标也应记录停顿时刻。");
 
         output.Dispose();          // 停设备 + 释放 COM（渲染线程 Shutdown），触发生产代码的 [WASAPI-DIAG]
         await Task.Delay(500);     // 让 SimpleConsole 后台线程把 [WASAPI-DIAG] 落屏

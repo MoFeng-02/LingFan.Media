@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Platforms.Android;
 
 /// <summary>
-/// Android TextureView 无空域合成互操作（Phase 2，R10）。
+/// Android TextureView 无空域合成互操作（Phase 2）。
 /// </summary>
 /// <remarks>
 /// <para>职责：持有由 Android 宿主（net10.0-android TFM 的 App/Demo 层，经 JNI 把

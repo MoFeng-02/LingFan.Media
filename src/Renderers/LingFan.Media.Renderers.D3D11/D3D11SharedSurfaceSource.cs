@@ -108,7 +108,7 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
             fmt = gpu.Format;
             subresource = gpu.SubresourceIndex;
 
-            // 🔴 解码器无关 + 防跨设备非法绑定：零拷贝要求源纹理与共享表面位于同一 D3D11 设备。
+            // 解码器无关 + 防跨设备非法绑定：零拷贝要求源纹理与共享表面位于同一 D3D11 设备。
             // 当前 FFmpeg D3D11VA 与 MF DXVA 均经 IGpuDeviceContext 绑定<b>同一</b>共享 D3D11 设备
             // （见 FFmpegVideoDecoder / MFVideoDecoder / MfDxgiDeviceManagerProvider），故直接采样即可；
             // 若某后端（如未来 VLC 或独立设备）产出自异设备的纹理，此处<b>优雅回退 Skia</b>

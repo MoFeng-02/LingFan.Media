@@ -36,7 +36,7 @@ public sealed class MFBackend : IDisposable
         try
         {
             // 经 MFPlatform 引用计数封装：真正的 MFShutdown 仅在所有消费者（解封装器 + 解码器）全部释放后才触发，
-            // 避免一侧先释放把仍 in-flight 的原生 ReadSample 踩成 AV（MF 冷启动 flaky 崩溃根因修复）。
+            // 避免一侧先释放把仍 in-flight 的原生 ReadSample 踩成 AV（MF 冷启动偶发崩溃的成因与规避点）。
             MFPlatform.Startup();
             _initialized = true;
             _logger.LogDebug("MediaFoundation 平台初始化完成");

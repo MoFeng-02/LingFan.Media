@@ -21,7 +21,7 @@
     <ProjectReference Include="..\LingFan.Media.AvaloniaTools\LingFan.Media.AvaloniaTools.csproj" />
   </ItemGroup>
 
-  <!-- 🔴 原生 ffmpeg 共享库随 dotnet run / publish 一并复制进输出目录：
+  <!-- 原生 ffmpeg 共享库随 dotnet run / publish 一并复制进输出目录：
        FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载，
        但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名，
        否则运行目录为空 → EnsureUnversionedAliases 建不出别名 → AutoGen 桩抛 NotSupportedException。

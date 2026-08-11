@@ -53,7 +53,7 @@ static partial class Native
         public IntPtr hIconSm;
     }
 
-    // 🔴 [LibraryImport] 默认 ExactSpelling=true，不做 A/W 后缀自动探测（[DllImport] 默认 false 会试）。
+    // [LibraryImport] 默认 ExactSpelling=true，不做 A/W 后缀自动探测（[DllImport] 默认 false 会试）。
     // 所有 user32/kernel32 的 A/W 双版本 API 必须显式写 EntryPoint = "XxxW"，否则运行期 EntryPointNotFoundException。
     [LibraryImport("user32.dll", EntryPoint = "RegisterClassExW", SetLastError = true)]
     public static partial ushort RegisterClassEx(ref WNDCLASSEX lpwcx);
@@ -292,6 +292,9 @@ static class Program
     // -------------------------------------------------------------------------
     static void Probe2_SetClientProperties()
     {
+        // Windows 进程访问违规退出码（STATUS_ACCESS_VIOLATION）；裸 hex 仅在具名常量出现一次。
+        const int StatusAccessViolation = unchecked((int)0xC0000005);
+
         Console.WriteLine("[Probe 2] IAudioClient2.SetClientProperties 逐分类探测（每个分类独立子进程，崩溃不外溢）");
 
         foreach (var cat in Categories)
@@ -335,8 +338,8 @@ static class Program
             string stderr = p.StandardError.ReadToEnd();
             p.WaitForExit();
 
-            if (p.ExitCode == unchecked((int)0xC0000005))
-                Console.WriteLine($"  {cat.name,-22}({cat.val}): CRASH 0xC0000005 (原生 AV，driver 实现损坏)");
+            if (p.ExitCode == StatusAccessViolation)
+                Console.WriteLine($"  {cat.name,-22}({cat.val}): CRASH STATUS_ACCESS_VIOLATION (原生访问违规，driver 实现损坏)");
             else if (p.ExitCode < 0)
                 Console.WriteLine($"  {cat.name,-22}({cat.val}): 子进程退出码 0x{p.ExitCode:X8}");
             else

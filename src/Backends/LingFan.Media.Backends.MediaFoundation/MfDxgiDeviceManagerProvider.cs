@@ -21,11 +21,11 @@ namespace LingFan.Media.Backends.MediaFoundation;
 /// 若把 MF 专有的 DXGI 管理器塞进该契约，等于让渲染器契约背上 MF 概念，污染依赖倒置边界。
 /// 独立 provider 只依赖契约暴露的 <c>DeviceHandle</c>，有头/无头都能复用同一设备（同设备才是真零拷贝）。</para>
 ///
-/// <para>🔴 <b>开箱即用铁律</b>：构造期只存引用，**绝不触碰原生**。设备与管理器均在首次
+/// <para><b>开箱即用原则</b>：构造期只存引用，**绝不触碰原生**。设备与管理器均在首次
 /// <see cref="TryGetManager"/> 时延迟创建 —— 注册 MF 后端 ≠ 立刻要 D3D11/MF 原生库。</para>
 ///
-/// <para>🔴 <b>失败语义</b>：任何一步失败都只记 Warning 并返回 <see cref="IntPtr.Zero"/>，绝不抛异常。
-/// 调用方据此走软解兜底（宪法：硬解优先、软解兜底）。同时用 <c>_attempted</c> 做一次性闸门，
+/// <para><b>失败语义</b>：任何一步失败都只记 Warning 并返回 <see cref="IntPtr.Zero"/>，绝不抛异常。
+/// 调用方据此走软解兜底（设计原则：硬解优先、软解兜底）。同时用 <c>_attempted</c> 做一次性闸门，
 /// 避免每次打开媒体都重试一遍必然失败的设备创建。</para>
 ///
 /// <para><b>多线程保护</b>：DXVA 共享设备必须开 <c>ID3D10Multithread::SetMultithreadProtected(TRUE)</c>——
@@ -109,7 +109,7 @@ public sealed class MfDxgiDeviceManagerProvider : IDisposable
                 if (hr < 0)
                 {
                     _logger.LogWarning("[MF-D3D] IMFDXGIDeviceManager.ResetDevice 失败 HRESULT=0x{HR:X8} → 回落软解", hr);
-                    Marshal.Release(manager); // R5 配对：创建成功但绑定失败，须释放
+                    Marshal.Release(manager); // COM 配对：创建成功但绑定失败，须释放
                     return IntPtr.Zero;
                 }
 

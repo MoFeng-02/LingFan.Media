@@ -6,7 +6,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <c>ID3D11Multithread</c> 互操作：为<b>共享</b> D3D11 设备开启多线程保护。
 /// </summary>
 /// <remarks>
-/// <para><b>为什么必须开（2026-08-06 §29 根治「画面抽帧/跳场景 + 原生崩溃」）</b>：
+/// <para><b>为什么必须开（解决「画面抽帧/跳场景 + 原生崩溃」）</b>：
 /// <c>ID3D11DeviceContext</c>（immediate context）<b>不是线程安全的</b>。本项目的共享设备同时被两方使用：</para>
 /// <list type="number">
 /// <item>硬解线程：FFmpeg D3D11VA / MF DXVA 在解码线程上通过该 context 写解码输出纹理；</item>

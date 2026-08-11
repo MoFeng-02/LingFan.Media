@@ -12,7 +12,7 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// <remarks>
 /// <para><b>职责</b>：包装 FFmpeg D3D11VA 硬解输出的 <c>ID3D11Texture2D*</c> COM 指针，
 /// 供 <c>D3D11Renderer</c> 直接 GPU 拷贝（零拷贝路径）。</para>
-/// <para><b>🔴 切片所有权（2026-08-06 §29 根治「画面抽帧 + 跳场景」）</b>：D3D11VA 的
+/// <para><b>切片所有权（解决「画面抽帧 + 跳场景」）</b>：D3D11VA 的
 /// <c>AVHWFramesContext</c> 池语义是「少量 <c>ID3D11Texture2D</c> 纹理<b>数组</b>对象 + 每帧占用其中一个
 /// array slice」。<c>data[0]</c> 是数组对象、<c>data[1]</c> 是切片索引，而<b>切片的占用权归
 /// <c>AVFrame->buf[0]</c></b>（指向池内 buffer），<b>不</b>归纹理对象的 COM 引用计数。
@@ -101,7 +101,7 @@ internal sealed class D3D11HardwareFrameResource : IGpuTextureResource
         _frameOwner = frameOwner;
 
         // AddRef：FFmpeg 持有原始引用（随 AVFrame 释放），我们额外增加引用以独立管理纹理对象生命周期。
-        // ⚠️ 这一份引用只保「纹理数组对象」不销毁；切片占用权由 _frameOwner 保障，二者缺一不可。
+        // 这一份引用只保「纹理数组对象」不销毁；切片占用权由 _frameOwner 保障，二者缺一不可。
         Marshal.AddRef(texturePtr);
     }
 

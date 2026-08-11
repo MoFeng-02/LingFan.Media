@@ -77,7 +77,7 @@ public static class SsrfGuard
             if (bytes[0] == 192 && bytes[1] == 168) return true;
             // 169.254.0.0/16 — 链路本地
             if (bytes[0] == 169 && bytes[1] == 254) return true;
-            // 0.0.0.0/8 — 本机网络
+            // 0.0.0.0/8 — 本地网络
             if (bytes[0] == 0) return true;
             // 100.64.0.0/10 — CGNAT（L22）
             if (bytes[0] == 100 && bytes[1] >= 64 && bytes[1] <= 127) return true;

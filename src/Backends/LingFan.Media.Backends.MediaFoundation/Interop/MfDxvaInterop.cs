@@ -72,12 +72,12 @@ internal static partial class MfDxvaInterop
     // ── IMFDXGIDeviceManager（IUnknown 之后 vtable 绝对槽，MfVTable.Get 的 slotIndex = 绝对槽 − 3）：
     //    CloseDeviceHandle=3(→0), GetVideoService=4(→1), LockDevice=5(→2), OpenDeviceHandle=6(→3),
     //    ResetDevice=7(→4), TestDevice=8(→5), UnlockDevice=9(→6) ──
-    //  顺序以本地 SDK E:\Windows Kits\10\Include\10.0.28000.0\um\mfobjects.h（IMFDXGIDeviceManagerVtbl）为权威：
-    //  ResetDevice 在绝对槽 7（即 slotIndex=4）。2026-08-04 一度误改为 slotIndex=1（=GetVideoService），已据 SDK 头文件回滚。
+    //  顺序以 SDK 头文件（IMFDXGIDeviceManagerVtbl）为权威：
+    //  ResetDevice 在绝对槽 7（即 slotIndex=4）。若误置为 slotIndex=1（=GetVideoService）则语义错误，须以 SDK 头文件为准。
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate int IMFDXGIDeviceManager_ResetDevice(IntPtr self, IntPtr pUnkDevice, uint resetToken);
 
-    // 🔴 决定性验证：解码器实际经本管理器取设备，故须验证管理器内部真的绑定上了设备。
+    // 决定性验证：解码器实际经本管理器取设备，故须验证管理器内部真的绑定上了设备。
     //    ResetDevice 的 P/Invoke 若有偏差，HRESULT 仍可能成功，但管理器内部设备为空/错 ⇒ 解码器
     //    GetVideoService 取回空设备 ⇒ 静默读回系统内存（PROVIDES_SAMPLES 仍可为 True）。本探针直接
     //    从管理器取回 ID3D11Device 并复测 DXVA 能力，是「绑定是否真正生效」的唯一权威判据。
@@ -85,7 +85,7 @@ internal static partial class MfDxvaInterop
     //        HRESULT GetVideoService(THIS, _In_ HANDLE hDevice, _In_ REFIID riid, _Outptr_ void** ppService)
     //      即紧接 This 之后的【第一个参数是 OpenDeviceHandle 取得的 HANDLE】，此前手写委托漏掉该参数
     //      ⇒ 调用栈错位（riid 落到了 hDevice 位、ppService 落到 riid 位、少压一个参数）
-    //      ⇒ 返回 0x80070006 假失败（假阴性），曾误判 ResetDevice 未绑定。必须从 OpenDeviceHandle 取 HANDLE 再调用。
+    //      ⇒ 返回 0x80070006 假失败（假阴性），会被误判 ResetDevice 未绑定。必须从 OpenDeviceHandle 取 HANDLE 再调用。
     //    OpenDeviceHandle：HRESULT OpenDeviceHandle(THIS, HANDLE* phDevice)；绝对槽 6 → slot 3。
     //    CloseDeviceHandle：HRESULT CloseDeviceHandle(THIS, HANDLE hDevice)；绝对槽 3 → slot 0。
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -107,7 +107,7 @@ internal static partial class MfDxvaInterop
     // ── ID3D10Multithread（d3d10.h ID3D10MultithreadVtbl 实物顺序）：
     //    QueryInterface=0, AddRef=1, Release=2, Enter=3, Leave=4, SetMultithreadProtected=5, GetMultithreadProtected=6。
     //    MfVTable.Get 的 slotIndex = 绝对槽 − 3 ⇒ SetMultithreadProtected = slotIndex 2。
-    //    ⚠️ 返回类型是 **BOOL（返回旧状态）而非 HRESULT**，绝不能按 HRESULT 判失败（旧状态 FALSE=0 会被误读成 S_OK，
+    //    返回类型是 **BOOL（返回旧状态）而非 HRESULT**，绝不能按 HRESULT 判失败（旧状态 FALSE=0 会被误读成 S_OK，
     //    旧状态 TRUE=1 会被误读成 S_FALSE）——此处只取返回值作诊断，不做成败判定。
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate int ID3D10Multithread_SetMultithreadProtected(IntPtr self, int bMTProtect);
@@ -139,7 +139,7 @@ internal static partial class MfDxvaInterop
     //    CreateVideoProcessorEnumerator=10, GetVideoDecoderProfileCount=11, GetVideoDecoderProfile=12,
     //    CheckVideoDecoderFormat=13(→slotIndex 10), GetVideoDecoderConfigCount=14, …
     //  签名：HRESULT CheckVideoDecoderFormat(REFGUID pDecoderProfile, DXGI_FORMAT Format, BOOL* pSupported)。
-    //  🔴 slotIndex = 13 − 3 = 10。返回 HRESULT，pSupported 为 BOOL*（out int，非 0 = 支持）。
+    //  slotIndex = 13 − 3 = 10。返回 HRESULT，pSupported 为 BOOL*（out int，非 0 = 支持）。
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate int ID3D11VideoDevice_CheckVideoDecoderFormat(IntPtr self, ref Guid pDecoderProfile, int Format, out int pSupported);
 
@@ -215,7 +215,7 @@ internal static partial class MfDxvaInterop
     internal delegate int ID3D11VideoDevice_GetVideoDecoderProfile(IntPtr self, uint index, out Guid profile);
 
     /// <summary>
-    /// 🔴 决定性验证 DXGI 管理器是否真正绑定上了【带视频能力的】设备：从管理器内部
+    /// 决定性验证 DXGI 管理器是否真正绑定上了【带视频能力的】设备：从管理器内部
     /// <c>GetVideoService(IID_ID3D11VideoDevice)</c> 取回解码器实际会用的视频设备，并复测指定 profile→NV12
     /// DXVA 能力。这是区分「绑定真正生效」与「ResetDevice 静默失败（P/Invoke 偏差 / token 不匹配 /
     /// 设备缺 VIDEO_SUPPORT）」的唯一权威判据。
@@ -310,10 +310,10 @@ internal static partial class MfDxvaInterop
 
     /// <summary>
     /// 决定性诊断：把共享 D3D11 设备的适配器身份摊开（是否 WARP 软件渲染 / VendorId / DeviceId）。
-    /// 这是区分「真 DXVA 零拷贝」与「半 DXVA 读回」的<b>第二道根因探针</b>：
+    /// 这是区分「真 DXVA 零拷贝」与「半 DXVA 读回」的<b>第二道成因探针</b>：
     /// 若设备落在 WARP（Microsoft Basic Render Driver，VendorId=0x1414 DeviceId=0x008C），则
     /// CheckVideoDecoderFormat 可能仍返回格式支持，但硬件视频解码引擎不存在 ⇒ 解码器静默读回系统内存
-    /// （正是我们观察到的「DXVA 激活=True 却 GPU零拷贝=0」）。此时根因是渲染器工厂用 DriverType.Hardware
+    /// （正是我们观察到的「DXVA 激活=True 却 GPU零拷贝=0」）。此时成因是渲染器工厂用 DriverType.Hardware
     /// 选中了错误适配器，修复点=枚举 DXGI 适配器、在支持 H264 DXVA 的真实 GPU 上创建共享设备。
     /// </summary>
     /// <returns>诊断字符串（含 WARP 判定）；设备不支持 IDXGIDevice 时返回 null。</returns>

@@ -8,9 +8,8 @@ namespace LingFan.Media.Abstractions;
 /// <remarks>
 /// <para>零外部引用：仅依赖契约层中立类型（<see cref="VideoFrame"/>）。</para>
 /// <para>只读借用模型：实现方在 <see cref="Consume"/> 中仅可读、可同步拷贝所需数据，
-/// <b>不得 Dispose、不得跨线程持有传入的 <see cref="VideoFrame"/></b>——帧所有权归管线，回调返回后即释放
-/// （见设计文档「无头帧处理Sink设计文档」3.5/3.6）。</para>
-/// <para>对称生命周期：实现 <see cref="IDisposable"/> + <see cref="IAsyncDisposable"/>（宪法接口模板）。</para>
+/// <b>不得 Dispose、不得跨线程持有传入的 <see cref="VideoFrame"/></b>——帧所有权归管线，回调返回后即释放。</para>
+/// <para>对称生命周期：实现 <see cref="IDisposable"/> + <see cref="IAsyncDisposable"/>。</para>
 /// <para>AOT 兼容：纯接口契约，无反射、无 P/Invoke。</para>
 /// </remarks>
 public interface IHeadlessFrameConsumer : IDisposable, IAsyncDisposable

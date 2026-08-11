@@ -26,7 +26,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，pattern matching 匹配 IFrameResource 类型。</para>
 /// <para><b>资源所有权</b>：ID3D11Device/ID3D11DeviceContext 由工厂持有（共享 Singleton，本类不 Dispose），
 /// SwapChain/BackBuffer/RenderTargetView/StagingTexture 由本类持有（Session 级，Detach/Dispose 释放）。</para>
-/// <para><b>R4</b>：软件帧支持 GPU Shader 缩放（帧尺寸 ≠ 目标尺寸）与
+/// <para>软件帧支持 GPU Shader 缩放（帧尺寸 ≠ 目标尺寸）与
 /// YUV 像素格式（YUV420P/YUV422P/YUV444P/NV12/NV21，PS 内 BT.601 全范围转换）——
 /// 经 <see cref="D3D11ShaderPipeline"/>。BGRA32/RGBA32 且尺寸一致仍走 CopyResource 快路径。
 /// GPU 纹理帧（D3D11TextureResource）维持 CopyResource 尺寸一致要求（硬解纹理无 SRV 绑定保证）。</para>
@@ -45,10 +45,10 @@ internal sealed class D3D11Renderer : IVideoRenderer
     private uint _stagingWidth;
     private uint _stagingHeight;
 
-    /// <summary>R4 Shader 管线（懒创建；设备级资源，随渲染器 Dispose 释放，不随 Detach 释放）。</summary>
+    /// <summary>Shader 管线（懒创建；设备级资源，随渲染器 Dispose 释放，不随 Detach 释放）。</summary>
     private D3D11ShaderPipeline? _shaderPipeline;
 
-    /// <summary>R7：DirectComposition 互操作（无空域渲染，null=回退到 HWND SwapChain）。</summary>
+    /// <summary>DirectComposition 互操作（无空域渲染，null=回退到 HWND SwapChain）。</summary>
     private D3D11CompositionInterop? _dcomp;
 
     private bool _disposed;
@@ -67,16 +67,16 @@ internal sealed class D3D11Renderer : IVideoRenderer
     private bool _loggedScaleOnce;
 
     /// <summary>
-    /// 🔴 音画同步根治（2026-08-04）：真实「Present→上屏」延迟 = 显示器刷新周期。
+    /// 音画同步解决：真实「Present→上屏」延迟 = 显示器刷新周期。
     /// 视频帧在 audioClock 到达 PTS 前「本周期」调用 Present，像素恰在 PTS 时经 vsync 扫描出。
-    /// 此前错误地用 <see cref="MediaClock"/> 的 SyncThreshold(50ms) 作呈现提前量 → 视频系统性提前 ~25ms。
+    /// 此前错误地用 <see cref="MediaClock"/> 的 SyncThreshold(50ms) 作呈现提前量 → 视频系统性提前。
     /// 优先按 DXGI 实际刷新率计算；查询失败回退 60Hz(16.67ms)。Attach 时刷新。
     /// </summary>
-    // 🔴 真实「Present→上屏」延迟 = 端到端呈现延迟，非单纯刷新周期。
-    // 实测（R31 复测）：仅用刷新周期 16.67ms 作阈值时，视频恒定晚 ~25ms（delta≈-25ms），
-    // 反推 D3D11 vsync 锁定 swapchain 的真实端到端延迟 ≈ 42ms（最坏 vsync 相位 16.67ms
-    // + Present()/消费者管线路径 ~25ms）。故阈值取 ~40ms：帧在 PTS 前 40ms 释放、经消费者管线
-    // 后恰在 PTS 上屏，delta 收敛到 ~0。非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 微调（VideoPipeline 叠加）。
+    // 真实「Present→上屏」延迟 = 端到端呈现延迟，非单纯刷新周期。
+    // 实测（复测）：仅用刷新周期 16.67ms 作阈值时，视频恒定晚（delta 为负），
+    // 反推 D3D11 vsync 锁定 swapchain 的真实端到端延迟约 42ms（最坏 vsync 相位 16.67ms
+    // + Present()/消费者管线路径的延迟）。故阈值取 40ms：帧在 PTS 前 40ms 释放、经消费者管线
+    // 后恰在 PTS 上屏，delta 收敛到约 0。非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 微调（VideoPipeline 叠加）。
     private TimeSpan _presentationLatency = TimeSpan.FromMilliseconds(40.0);
 
     /// <summary>
@@ -172,7 +172,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
             // （_attached 尚未设为 true，Detach() 不会清理，需 try-catch 兜底）
             try
             {
-                // R7：优先使用 DirectComposition（无空域渲染）
+                // 优先使用 DirectComposition（无空域渲染）
                 // CreateSwapChainForComposition + DComp Visual 合成到窗口——视频帧不作为独立原生窗口
                 // 诊断门控 LINGFAN_D3D11_FORCE_HWND=1：跳过 DComp，直接走 HWND SwapChain
                 // （用于二分「合成层 vs 渲染层」责任，默认不生效）
@@ -220,12 +220,12 @@ internal sealed class D3D11Renderer : IVideoRenderer
 
             _attached = true;
 
-            // 🔴 音画同步根治：「Present→上屏」延迟 = 显示器刷新周期（vsync 下像素在下一刷新栅格扫描出）。
+            // 音画同步解决：「Present→上屏」延迟 = 显示器刷新周期（vsync 下像素在下一刷新栅格扫描出）。
             // 默认取 60Hz(16.67ms)；非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 在 VideoPipeline 叠加微调。
             // （DXGI 刷新率查询因 Vortice 3.8.3 枚举名不稳，改为固定物理正确的刷新周期 + 手动微调，避免原生风险。）
 
             // 一次性附加诊断：摊开几何与线程归属。
-            // 🔴 DirectComposition 要求视觉树（CreateTargetForHwnd / SetRoot / Commit）在【拥有该窗口
+            // DirectComposition 要求视觉树（CreateTargetForHwnd / SetRoot / Commit）在【拥有该窗口
             //    且有消息泵】的线程上操作。若 窗口线程 ≠ Attach 线程 且 合成=DComp，属已知误用形态
             //    （表现为帧不更新 / 撕裂 / 延迟累积）。此行日志把该事实直接摆出来，无需推测。
             var bbDesc = _backBuffer!.Description;
@@ -298,7 +298,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
             switch (frame.Resource)
             {
                 case SoftwareFrameResource sw:
-                    // R4 分支决策：YUV 格式或尺寸不匹配 → Shader 路径（GPU 缩放 + YUV→RGB）；
+                    // Shader 分支决策：YUV 格式或尺寸不匹配 → Shader 路径（GPU 缩放 + YUV→RGB）；
                     // BGRA32/RGBA32 且尺寸一致 → CopyResource 快路径（零 Shader 开销）
                     if (D3D11ShaderPipeline.IsYuvFormat(sw.Format) || !sizeMatches || sw.Format == PixelFormat.RGBA32)
                     {
@@ -313,7 +313,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
                     break;
 
                 case IGpuTextureResource gpu:
-                    // R5：GPU 纹理帧（DXVA 硬解输出）
+                    // GPU 纹理帧（DXVA 硬解输出）
                     // NV12/NV21：无 SRV 绑定，经中间 SRV 纹理 + Shader 缩放/转换
                     // BGRA32/RGBA32：尺寸一致时 CopySubresourceRegion 快路径（支持纹理数组）；
                     //   尺寸不符窗口（源分辨率 ≠ 渲染目标，属正常缩放场景）时经 Shader 采样缩放（零 CPU 往返）
@@ -421,7 +421,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
             // 直接释放资源，不依赖 Detach()（Detach 检查 _attached，
             // 若 Attach 中途失败 _attached=false 会导致泄漏）
             ReleaseSessionResources();
-            _shaderPipeline?.Dispose(); // R4：设备级 Shader 资源随渲染器释放
+            _shaderPipeline?.Dispose(); // 设备级 Shader 资源随渲染器释放
             _shaderPipeline = null;
             _attached = false;
             _logger.LogDebug("D3D11 渲染器已释放");
@@ -540,7 +540,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     }
 
     /// <summary>
-    /// GPU 纹理渲染路径（NV12/NV21）：经中间 SRV 纹理 + Shader 缩放/转换（R5）。
+    /// GPU 纹理渲染路径（NV12/NV21）：经中间 SRV 纹理 + Shader 缩放/转换（DXVA 硬解）。
     /// </summary>
     private void PresentGpuTextureViaShader(IGpuTextureResource gpu, int targetWidth, int targetHeight)
     {
@@ -629,7 +629,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// </summary>
     private void ReleaseSessionResources()
     {
-        // R7：先释放 DirectComposition（断开 SwapChain 与窗口的合成关联）
+        // 先释放 DirectComposition（断开 SwapChain 与窗口的合成关联）
         _dcomp?.Dispose();
         _dcomp = null;
 

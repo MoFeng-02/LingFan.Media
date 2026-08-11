@@ -10,7 +10,7 @@
 仅替换引擎：`LibVLC`（LGPL）→ `LibVlcInstance`（Apache-2.0）。
 解码 / 渲染模型、命令行参数、轨道与帧捕获逻辑**逐字对齐**旧 `VLCBackend` / `VLCDemuxer`——本后端同样是**回调式 CPU 帧**模型（`libvlc_video_set_callbacks` 经 lock/unlock 拿 BGRA 内存）。
 
-## ⚠️ 无头场景的 `get_buffer() failed` 是良性噪声（不是 bug）
+## 无头场景的 `get_buffer() failed` 是良性噪声（不是 bug）
 `--avcodec-hw=any` 语义为「可用就硬解」，与旧库一致：
 
 - **有头**（真实显示设备）：走 D3D11VA 真硬解 + 回拷 CPU BGRA，干净无错误。

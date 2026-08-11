@@ -35,7 +35,7 @@ public static class FFmpegExtensions
         builder.Services.AddSingleton(options);
 
         // 注册 FFmpeg 后端入口（Singleton，持有全局初始化状态）。
-        // 🔴 此处【不】调用任何 ffmpeg.* 原生 API——原生初始化延迟到 FFmpegBackend 首次构造时执行，
+        // 此处【不】调用任何 ffmpeg.* 原生 API——原生初始化延迟到 FFmpegBackend 首次构造时执行，
         // 以保持 AddFFmpeg() 注册阶段是纯 DI、不要求 ffmpeg 原生 DLL 在注册期就位。
         // 只有真正回退用到 FFmpeg 后端（首次解析 FFmpegBackend）时才需要原生 DLL 在场，
         // 符合“开箱即用 + 不侵入”：注册一个后端 ≠ 马上要它的 native 库（MF 直接支持的源绝不触碰 ffmpeg）。

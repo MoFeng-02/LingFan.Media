@@ -99,7 +99,7 @@ public partial class App : Application
 
         base.OnFrameworkInitializationCompleted();
 
-        // 启动后预热：吸收 WASAPI audiodg 冷启动（~2.5s），避免首次播放卡顿。
+        // 启动后预热：吸收 WASAPI audiodg 冷启动，避免首次播放卡顿。
         // 纯优化，失败一律降级为未预热，绝不影响启动与播放。
         _ = Task.Run(() => PreheatAsync(Services!));
     }

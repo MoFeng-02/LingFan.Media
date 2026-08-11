@@ -6,12 +6,12 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <c>IDXGIKeyedMutex</c> 裸 vtable 互操作。
 /// </summary>
 /// <remarks>
-/// <para><b>为什么需要（2026-08-08 修 Vortice <c>AcquireSync</c> 返回 void 的超时盲区）</b>：
+/// <para><b>为什么需要（修 Vortice <c>AcquireSync</c> 返回 void 的超时盲区）</b>：
 /// Vortice 的 <c>IDXGIKeyedMutex.AcquireSync(UInt64, Int32)</c> 声明为 <b>返回 <c>void</c></b>，
 /// 其底层 HRESULT 被 SharpGen 吞掉。keyed mutex 超时返回 <c>WAIT_TIMEOUT</c>=<c>0x102</c>（严重位为 0，
 /// 被视作成功）→ 调用方无法感知「没拿到锁」→ 释放一把没获取的锁 → 跨设备数据竞争甚至崩溃。</para>
 /// <para>本类用裸 vtable 取真实 HRESULT，使生产者能感知超时并以「丢弃本帧」优雅降级，而非阻塞管线线程。</para>
-/// <para><b>IID 与 vtable 布局（逐字节核对 dxgi.h，零臆测）</b>：</para>
+/// <para><b>IID 与 vtable 布局（逐字节核对 dxgi.h 实物）</b>：</para>
 /// <list type="bullet">
 /// <item><c>IID_IDXGIKeyedMutex</c> = <c>{9D8E1289-7B92-49EC-8441-BA727E52320F}</c>。</item>
 /// <item>继承链 <c>IDXGIKeyedMutex → IDXGIDeviceSubObject → IDXGIObject → IUnknown</c>，

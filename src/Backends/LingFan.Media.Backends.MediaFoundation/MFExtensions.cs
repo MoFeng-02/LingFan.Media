@@ -51,7 +51,7 @@ public static class MFExtensions
         // ── SourceReader 自带硬解所需的 DXGI 设备管理器（A 方案）──
         // 进程级共享单例：绑定 IGpuDeviceContext 的 D3D11 设备，供 MFDemuxer 在创建 SourceReader 时
         // 以 MF_SOURCE_READER_D3D_MANAGER 挂载 ⇒ ReadSample 直接吐 DXGI 纹理样本（零拷贝）。
-        // 🔴 构造期不触碰原生（开箱即用铁律）：设备/管理器均在首次 TryGetManager() 时延迟创建。
+        // 构造期不触碰原生（开箱即用原则）：设备/管理器均在首次 TryGetManager() 时延迟创建。
         builder.Services.TryAddSingleton<MfDxgiDeviceManagerProvider>();
 
         return builder;

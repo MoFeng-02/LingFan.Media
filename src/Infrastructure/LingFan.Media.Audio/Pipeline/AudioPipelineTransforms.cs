@@ -17,7 +17,7 @@ namespace LingFan.Media.Audio;
 /// 返回 null 表示丢弃帧（已 Dispose）。<see cref="AudioFrame.Data"/> 的 setter 为
 /// Abstractions 程序集 internal，Audio 程序集内不可写，故音量缩放创建新帧并释放输入帧，
 /// 与 <see cref="IAudioEffect.Process"/> 的所有权转移语义完全一致。</para>
-/// <para>全部为纯内存同步操作，无 I/O、无 async（符合异步同步铁律：无真实 I/O 不补 async）。</para>
+/// <para>全部为纯内存同步操作，无 I/O、无 async（符合异步同步策略：无真实 I/O 不补 async）。</para>
 /// </remarks>
 public static class AudioPipelineTransforms
 {

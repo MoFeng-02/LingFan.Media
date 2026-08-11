@@ -119,12 +119,12 @@ internal static class Program
                     nv12Count++;
 
                     // ── STRIDE 自检（首帧一次）──────────────────────────────────
-                    // ── 行间错位检测（SKEW-CHK）：眼睛无关的客观判据 ──────────────
+                    // ── 行间错位检测（SKEW-CHK）：眼睛无关的客观检测 ──────────────
                     // 原理：自然图像相邻两行内容高度相关，把下一行水平平移 d 去匹配上一行，
                     //       最佳 d 必然是 0。若解码时用错了源 stride（假定 A，实际 S），
                     //       则解出来的图像每往下一行就整体平移 d = A - S 像素、并每 S 像素回绕一次
                     //       —— 肉眼即斜条纹/剪切感，数值上表现为「相邻行最佳位移恒定非零」。
-                    // 这条判据同时覆盖裁剪路径与整块拷贝路径，且不需要知道 codedWidth。
+                    // 这种检测同时覆盖裁剪路径与整块拷贝路径，且不需要知道 codedWidth。
                     if (nv12Count == 1)
                     {
                         int skW = frame.Width, skH = frame.Height;
@@ -157,7 +157,7 @@ internal static class Program
                             $"[SKEW-CHK] 采样 {skRows} 行 | 相邻行最佳水平位移众数 d={skMode}（{skModeCount}/{skRows} 行）| " +
                             $"d=0 的行数 {skZero}/{skRows} | SAD(best)/SAD(d=0)={(skZeroSadSum > 0 ? (double)skBestSadSum / skZeroSadSum : 1.0):F4}");
                         if (skMode == 0 && skZero * 2 >= skRows)
-                            Console.WriteLine("           => 行对齐正常，解码布局无错位 ⇒ stride 假定成立，花屏根因不在解码器");
+                            Console.WriteLine("           => 行对齐正常，解码布局无错位 ⇒ stride 假定成立，花屏不在解码器");
                         else
                             Console.WriteLine($"           => ★恒定错位 {skMode} px/行 ⇒ 真实源 stride = 假定stride - ({skMode})，解码器 stride 假定错误★");
                     }
@@ -251,7 +251,7 @@ internal static class Program
                 string note = "";
                 if (a > 0 && dbfs < -80)
                 {
-                    note = "⚠ 解出静音";
+                    note = "解出静音";
                     if (firstSilentSec < 0) firstSilentSec = t;
                 }
 
@@ -259,7 +259,7 @@ internal static class Program
                                   $"{(double.IsNegativeInfinity(dbfs) ? "  -inf" : dbfs.ToString("F1").PadLeft(5))}  " +
                                   $"{peak,5:F3}  {note}");
 
-                // EOF 判据：帧总数连续 3 个采样窗口不变
+                // EOF 判定：帧总数连续 3 个采样窗口不变
                 int total = v + a;
                 stableRounds = total == lastTotal ? stableRounds + 1 : 0;
                 lastTotal = total;
@@ -294,12 +294,12 @@ internal static class Program
             contactSheet = Path.Combine(outDir, "contact_sheet.png");
             ImageUtil.BuildContactSheet(keptFrames.OrderBy(f => f.Ts).ToList(), contactSheet, luma);
             Console.WriteLine($"  联系表(肉眼看画面) : {contactSheet}");
-            Console.WriteLine($"    ⚠ 注意：联系表每格仅 {Math.Min(keptFrames.Min(f => f.W), 320)} 宽" +
+            Console.WriteLine($"   注意：联系表每格仅 {Math.Min(keptFrames.Min(f => f.W), 320)} 宽" +
                               $"（原始 {keptFrames[0].W} → 缩小 {keptFrames[0].W / (double)Math.Min(keptFrames.Min(f => f.W), 320):F2}x），" +
                               $"不可用于判定画质。判画质请用 --dump-full N 看 1:1 原图。");
         }
 
-        // ---- 1:1 原图落盘 + 方向性频域体检（眼睛无关判据）----
+        // ---- 1:1 原图落盘 + 方向性频域体检（眼睛无关检测）----
         if (dumpFull > 0 && keptFrames.Count > 0)
         {
             var ordered = keptFrames.OrderBy(f => f.Ts).ToList();
@@ -389,20 +389,20 @@ internal static class Program
         }
 
         if (firstSilentSec > 0)
-            Console.WriteLine($"  ⚠ 注意：墙钟 {firstSilentSec:F2}s 起出现「解出静音」窗口（电平 < -80dBFS）。");
+            Console.WriteLine($"  注意：墙钟 {firstSilentSec:F2}s 起出现「解出静音」窗口（电平 < -80dBFS）。");
         if (nonNv12Count > 0)
-            Console.WriteLine($"  ℹ 提示：{nonNv12Count} 帧非 NV12 软件帧（GPU 资源或其它像素格式），未纳入联系表。");
+            Console.WriteLine($"  提示：{nonNv12Count} 帧非 NV12 软件帧（GPU 资源或其它像素格式），未纳入联系表。");
 
         Console.WriteLine();
         if (fails == 0)
         {
-            Console.WriteLine("  ✅ 全部正确性断言通过 ⇒ 解封装 + 解码链路无辜。");
+            Console.WriteLine("  全部正确性断言通过 ⇒ 解封装 + 解码链路无辜。");
             Console.WriteLine("     下一步：打开上面的 decoded.wav 与 contact_sheet.png 做肉眼终审——");
             Console.WriteLine("     WAV 完整有声 + 联系表画面正常 ⇒ 任何「听不到/看不到」只可能在渲染/输出侧（见 b1 / b3）。");
         }
         else
         {
-            Console.WriteLine($"  ❌ {fails} 项判定失败 ⇒ 问题落在解封装/解码，与 WASAPI、D3D11 无关。");
+            Console.WriteLine($"  {fails} 项判定失败 ⇒ 问题落在解封装/解码，与 WASAPI、D3D11 无关。");
         }
         Console.WriteLine();
         Console.WriteLine("=== b2 完成。把以上输出整段贴回即可。 ===");
@@ -412,7 +412,7 @@ internal static class Program
     private static void Check(ref int fails, bool ok, string title, string detail)
     {
         if (!ok) fails++;
-        Console.WriteLine($"  {(ok ? "✓" : "✗")} {title,-32} {detail}");
+        Console.WriteLine($"  {(ok ? "OK" : "FAIL")} {title,-32} {detail}");
     }
 
     /// <summary>计算一段 PCM 的平方和 / 峰值 / 样本数（归一化 ±1.0）。</summary>

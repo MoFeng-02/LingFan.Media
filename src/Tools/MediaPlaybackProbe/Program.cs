@@ -63,8 +63,8 @@ internal static class Program
         Console.WriteLine();
 
         var services = new ServiceCollection();
-        // 🔴 关键差异：挂真实 Console Logger。测试工程用 NullLoggerFactory，
-        // 生产代码的背压超时告警等诊断信息全部不可见，这正是此前多轮误判的一个成因。
+        // 关键差异：挂真实 Console Logger。测试工程用 NullLoggerFactory，
+        // 生产代码的背压超时告警等诊断信息全部不可见，故此处挂真实 Console Logger 使其可见。
         services.AddLogging(b => b
             .AddSimpleConsole(o =>
             {
@@ -73,7 +73,7 @@ internal static class Program
             })
             .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
 
-        // 🔴 IVideoRendererFactory 必须显式注册：AddLingFanMedia() 只注册契约与工厂骨架，
+        // IVideoRendererFactory 必须显式注册：AddLingFanMedia() 只注册契约与工厂骨架，
         // 具体渲染器由 AddD3D11Renderer()/AddHeadlessRenderer() 等模块提供，缺失会在解析
         // IMediaPlayerFactory 时抛 "No service for type 'IVideoRendererFactory'"。
         // 本工具选 NoOp 无头渲染器：视频帧被丢弃、不建 GPU 设备，把变量收敛到音频链路
@@ -95,7 +95,7 @@ internal static class Program
         TimeSpan lastAudioTimestamp = TimeSpan.MinValue;
 
         // ---- 音频「内容」观测量（区分「有数据流过」与「数据里真有声音」）----
-        // 🔴 存在意义：提交计数只能证明「有字节流过」，证明不了「字节里有声音」。
+        // 存在意义：提交计数只能证明「有字节流过」，证明不了「字节里有声音」。
         // 逐窗口 RMS/峰值 + 原样落盘 WAV，可一次性定责：
         //   WAV 完整有声 ⇒ 解码链路无辜，问题在 WASAPI 渲染侧；
         //   WAV 后半段静音 ⇒ 责任在解码/源文件，与 WASAPI 无关。
@@ -193,7 +193,7 @@ internal static class Program
 
             if (duration <= TimeSpan.Zero)
             {
-                Console.WriteLine("⚠ Duration 为 0，后端未查到容器时长，后续判定不可靠。");
+                Console.WriteLine("Duration 为 0，后端未查到容器时长，后续判定不可靠。");
                 duration = TimeSpan.FromSeconds(40);
             }
 
@@ -287,9 +287,9 @@ internal static class Program
             Console.WriteLine($"  首次收到音频      : 墙钟 {firstAudioWallSec:F2}s，帧时间戳 {FormatTs(firstAudioTimestamp)}");
             Console.WriteLine($"  末次音频帧时间戳  : {FormatTs(lastAudioTimestamp)}");
             if (stallStartSec > 0)
-                Console.WriteLine($"  ⚠ 首个停供起点    : 墙钟 {stallStartSec:F2}s");
+                Console.WriteLine($"  首个停供起点    : 墙钟 {stallStartSec:F2}s");
             if (firstSilentSec > 0)
-                Console.WriteLine($"  ⚠ 静音数据起点    : 墙钟 {firstSilentSec:F2}s（有字节流过但电平 < -80dBFS）");
+                Console.WriteLine($"  静音数据起点    : 墙钟 {firstSilentSec:F2}s（有字节流过但电平 < -80dBFS）");
 
             // ---- 原样落盘：把链路里真实流过的 PCM 写成 WAV ----
             if (dumpBuffer is not null)
@@ -305,27 +305,27 @@ internal static class Program
                 }
                 catch (Exception wex)
                 {
-                    Console.WriteLine($"  ⚠ WAV 落盘失败    : {wex.Message}");
+                    Console.WriteLine($"  WAV 落盘失败    : {wex.Message}");
                 }
             }
 
             Console.WriteLine();
             Console.WriteLine("=== 判定 ===");
             if (firstAudioWallSec > 2.0)
-                Console.WriteLine($"  ⚠ 出声延迟异常：首帧音频在墙钟 {firstAudioWallSec:F2}s 才提交" +
+                Console.WriteLine($"  出声延迟异常：首帧音频在墙钟 {firstAudioWallSec:F2}s 才提交" +
                                   $"（正常应 <1s）。若帧时间戳同时约等于 0，说明是「供给侧启动阻塞」而非 seek 定位问题。");
             if (finalSubSec < duration.TotalSeconds - 2.0)
-                Console.WriteLine($"  ⚠ 音频供给不完整：{finalSubSec:F2}s / {duration.TotalSeconds:F2}s。" +
+                Console.WriteLine($"  音频供给不完整：{finalSubSec:F2}s / {duration.TotalSeconds:F2}s。" +
                                   (stallStartSec > 0 ? $"自墙钟 {stallStartSec:F2}s 起停供。" : ""));
             else
-                Console.WriteLine("  ✓ 音频供给覆盖完整时长。");
+                Console.WriteLine("  音频供给覆盖完整时长。");
             Console.WriteLine("  （下方 [WASAPI-DIAG] 由生产代码在 Dispose 时输出，含 droppedFrames——");
             Console.WriteLine("    若 droppedFrames 明显 >0，即背压超时丢帧，说明设备停止消费或供给节奏错配。）");
             if (dumpBuffer is not null)
             {
                 Console.WriteLine();
-                Console.WriteLine("  🔴 下一步（决定性定责）：用系统播放器打开上面那个 capture.wav。");
-                Console.WriteLine("     · WAV 完整有声 32s，而实听只响十几秒 ⇒ 解码链路无辜，问题 100% 在 WASAPI 渲染侧；");
+                Console.WriteLine("  下一步（决定性定责）：用系统播放器打开上面那个 capture.wav。");
+                Console.WriteLine("     · WAV 完整有声，而实听只响十几秒 ⇒ 解码链路无辜，问题 100% 在 WASAPI 渲染侧；");
                 Console.WriteLine("     · WAV 也只有十几秒有声 ⇒ 责任在解码/源文件，与 WASAPI 无关。");
             }
             Console.WriteLine();

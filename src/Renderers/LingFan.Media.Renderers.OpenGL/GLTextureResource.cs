@@ -7,7 +7,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// <para>桩实现——OpenGL 渲染器尚未实现（桌面兼容备用，Phase 2-3 目标）。</para>
 /// <para>与 D3D11/Vulkan/Metal 不同，OpenGL 纹理 ID 是 <c>uint</c> 整数（非指针），
 /// 不使用 SafeHandle 封装，使用显式 <see cref="Dispose"/>（<c>glDeleteTextures</c>）。
-/// 此设计遵循架构文档 SafeHandle 策略。</para>
+/// 此设计遵循 SafeHandle 策略。</para>
 /// <para>Apple 平台（macOS/iOS）已废弃 OpenGL，使用 Metal。</para>
 /// </remarks>
 public sealed class GLTextureResource : IFrameResource

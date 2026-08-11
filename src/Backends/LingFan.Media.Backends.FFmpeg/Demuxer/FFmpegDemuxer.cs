@@ -46,10 +46,10 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     private IReadOnlyList<MediaTrack> _tracks = Array.Empty<MediaTrack>();
     private MediaMetadata _metadata = new();
 
-    // 🔴 重播归零诊断（2026-08-07）：SeekAsync 设 _logFirstPacketAfterSeek=true，
+    // 重播归零诊断：SeekAsync 设 _logFirstPacketAfterSeek=true，
     // ReadPacketCore 在 seek 后首包打印其时间戳，用于确证「回到起点」seek 落点是否已回到 ≈0
     // （此前 matroska/webm 在 EOF 后 AVSEEK_FLAG_BACKWARD 到 ts=0 会回绕到末关键帧，
-    // 实测 m1.webm 落点≈10.267s → 重播视频冻结 ~10s）。一次性、零架构风险。
+    // 回绕到末关键帧 → 重播视频冻结较长时间）。一次性诊断，不影响控制流。
     private bool _logFirstPacketAfterSeek;
     private long _lastSeekTargetTs;
 
@@ -117,16 +117,16 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     {
         ct.ThrowIfCancellationRequested();
 
-        // 🔴 诊断：在每条原生调用前后打印到 stderr 并 flush，
+        // 诊断：在每条原生调用前后打印到 stderr 并 flush，
         // 若进程在原生调用内静默死亡（无托管异常），最后一条 [demux-trace] 即指出崩溃点。
         void Dbg(string s) { try { Console.Error.WriteLine($"  [demux-trace] {s}"); Console.Error.Flush(); } catch { } }
 
         try
         {
             // 本地真实文件 → ffmpeg 原生 file 协议；否则自定义 AVIO（内存/网络流）。
-            // 🔴 规避：自定义 AVIO 需手动写 fmtCtx->pb/flags，当 AutoGen 8.1.0 的 AVFormatContext
+            // 规避：自定义 AVIO 需手动写 fmtCtx->pb/flags，当 AutoGen 8.1.0 的 AVFormatContext
             // 布局与 BtbN master 的 avformat-62.dll 漂移时，该写会损坏原生结构体 → avformat_open_input
-            // 内部 0xC0000005。本地文件走 file 协议（传真实路径、让 ffmpeg 自分配上下文）彻底规避。
+            // 内部原生访问违规。本地文件走 file 协议（传真实路径、让 ffmpeg 自分配上下文）彻底规避。
             bool useFileProtocol = stream.Location != null
                 && stream.Location.IndexOf("://", StringComparison.Ordinal) < 0
                 && File.Exists(stream.Location);
@@ -299,7 +299,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 : TimeSpan.Zero;
             bool keyFrame = (pkt->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
 
-            // 🔴 重播归零诊断（2026-08-07）：SeekAsync 设 _logFirstPacketAfterSeek=true 后，
+            // 重播归零诊断：SeekAsync 设 _logFirstPacketAfterSeek=true 后，
             // 这里打印 seek 后首包的时间戳，确证「回到起点」落点已回到 ≈0（而非回绕到末关键帧）。
             // 一次性消费：打印后即刻复位，不影响后续读取性能。
             if (_logFirstPacketAfterSeek)
@@ -360,9 +360,9 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         int ret;
         if (targetTs <= 0)
         {
-            // 🔴 重播归零修正（2026-08-07）：matroska/webm 在流末 EOF 后对「ts=0 + AVSEEK_FLAG_BACKWARD」
-            // 会回绕到**末关键帧**（实测 m1.webm 落点≈10.267s 而非 0）→ 重播时解码器从 ~10s 处产出首帧，
-            // 视频比音频(主时钟=0)超前 ~10s，同步器令呈现线程 WaitUntilDue 休眠等主时钟追上 → 画面冻结。
+            // 重播归零修正：matroska/webm 在流末 EOF 后对「ts=0 + AVSEEK_FLAG_BACKWARD」
+            // 会回绕到**末关键帧**（而非起点 0）→ 重播时解码器从靠后的位置产出首帧，
+            // 视频比音频(主时钟=0)超前较多，同步器令呈现线程 WaitUntilDue 休眠等主时钟追上 → 画面冻结。
             // 改用 nearest（flags=0）：落点=最接近 0 的关键帧 = 文件首关键帧@0，杜绝回绕到末关键帧。
             // 兜底：nearest 仍失败则回退 BACKWARD（至少保证能 seek，由诊断日志暴露落点异常）。
             ret = ffmpeg.av_seek_frame(fmtCtx, -1, 0, 0);
@@ -425,7 +425,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     /// </remarks>
     private unsafe int ReadPacketCallback(void* opaque, byte* buf, int bufSize)
     {
-        // 🔴 同步边界：绝不允许托管异常逃逸进原生 ffmpeg（否则进程静默死亡、无托管栈迹）。
+        // 同步边界：绝不允许托管异常逃逸进原生 ffmpeg（否则进程静默死亡、无托管栈迹）。
         try
         {
             if (_stream == null || _disposed)
@@ -451,7 +451,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     /// </summary>
     private unsafe long SeekCallback(void* opaque, long offset, int whence)
     {
-        // 🔴 同步边界：同上，绝不允许托管异常逃逸进原生 ffmpeg。
+        // 同步边界：同上，绝不允许托管异常逃逸进原生 ffmpeg。
         try
         {
             if (_stream == null || _disposed || !_stream.CanSeek)
@@ -519,7 +519,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 ? TimeSpan.FromTicks((long)(avStream->duration * timeBase * TimeSpan.TicksPerSecond))
                 : TimeSpan.Zero;
 
-            // 🔴 流时间基（AVStream.time_base）：ffmpeg 解码帧的 pts/dts 以此为单位。须透传给解码器写入
+            // 流时间基（AVStream.time_base）：ffmpeg 解码帧的 pts/dts 以此为单位。须透传给解码器写入
             // ctx->pkt_timebase，否则解码后 avFrame->time_base / ctx->time_base 常为 0，帧时间戳全 0
             // （视频不节流突发提交、主时钟被 SyncTo(0) 钉死、pos 不前进）。den==0 表示无有效时间基，回落 default。
             AVRational rawTb = avStream->time_base;
@@ -542,7 +542,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                         FrameRate = GetFrameRate(avStream),
                         Duration = streamDuration,
                         TimeBase = trackTimeBase,
-                        // 🔴 透传编解码器私有配置（H264/H265 的 SPS+PPS 等）。解码器需据此设置 extradata，
+                        // 透传编解码器私有配置（H264/H265 的 SPS+PPS 等）。解码器需据此设置 extradata，
                         // 否则 MP4 中 length-prefixed 的 HEVC/H264 包无法被解码器解析（No start code）。
                         CodecConfiguration = CopyExtradata(codecPar)
                     }
@@ -561,7 +561,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                         Channels = codecPar->ch_layout.nb_channels,
                         BitsPerSample = codecPar->bits_per_coded_sample,
                         TimeBase = trackTimeBase,
-                        // 🔴 透传 AudioSpecificConfig 等。AAC 在 MP4 中为裸流，解码器必须据此设置 extradata。
+                        // 透传 AudioSpecificConfig 等。AAC 在 MP4 中为裸流，解码器必须据此设置 extradata。
                         CodecConfiguration = CopyExtradata(codecPar),
                         Duration = streamDuration
                     }

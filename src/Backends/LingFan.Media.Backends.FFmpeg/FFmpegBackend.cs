@@ -19,7 +19,7 @@ public sealed class FFmpegBackend : IDisposable
     /// 初始化 <see cref="FFmpegBackend"/> 的新实例。
     /// </summary>
     /// <remarks>
-    /// <para>🔴 原生初始化刻意放在此处（Singleton 首次被 FFmpeg 工厂解析时构造），而非 <c>AddFFmpeg()</c> 注册期。
+    /// <para>原生初始化刻意放在此处（Singleton 首次被 FFmpeg 工厂解析时构造），而非 <c>AddFFmpeg()</c> 注册期。
     /// 这样注册阶段保持纯 DI、绝不触碰原生库；只有真正用到 FFmpeg 后端（如其他后端不支持某源而回退）时才需要
     /// ffmpeg 原生 DLL 在场。注册一个后端 ≠ 马上要它的 native 库——这是“开箱即用 + 不侵入”的硬约束。</para>
     /// </remarks>
@@ -58,7 +58,7 @@ public sealed class FFmpegBackend : IDisposable
     /// <param name="path">原生库目录路径。</param>
     internal static void SetLibraryPath(string path)
     {
-        // 🔴 FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「无版本号」名（avutil/avcodec/...）加载原生库，
+        // FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「无版本号」名（avutil/avcodec/...）加载原生库，
         // 但 BtbN lgpl-shared 等常见共享构建只提供 avutil-60.dll 等带版本文件。若目录下仅存在带版本名，
         // AutoGen 加载失败 → 首个 ffmpeg.* 调用崩溃（静默退出码 127，无诊断）。
         // 此处 best-effort 补一份「无版本号别名」（硬链接优先、失败退化为复制），使本库对 BtbN 构建开箱即用；

@@ -15,7 +15,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Demuxer;
 /// </remarks>
 public sealed class MFDemuxerFactory : IMediaDemuxerFactory
 {
-    // 🔴 延迟原生：持有 Lazy<MFBackend> 而非 MFBackend 实例。MFBackend 构造会 MFStartup（原生），
+    // 延迟原生：持有 Lazy<MFBackend> 而非 MFBackend 实例。MFBackend 构造会 MFStartup（原生），
     // 且在非 Windows 直接抛 PlatformNotSupportedException。注意 MS DI 默认【不】自动解析 Lazy<T>
     // （仅自动支持 IEnumerable/IList/数组等集合类型），须由 AddLingFanMedia→AddLazySupport 注册通用 Lazy<> 解析；
     // 注册后 Lazy 仅在 .Value 首次访问时才从容器解析 MFBackend（=> MFStartup 原生延迟到真正 Open 用到 MF 时）。
@@ -25,11 +25,11 @@ public sealed class MFDemuxerFactory : IMediaDemuxerFactory
     private readonly ILoggerFactory _loggerFactory;
 
     // A 方案：SourceReader 自带硬解 + DXGI 出样所需的共享设备管理器（Singleton）。
-    // 🔴 同样用 Lazy 包裹：provider 本身构造期不碰原生（开箱即用铁律），但解析它会连带解析
+    // 同样用 Lazy 包裹：provider 本身构造期不碰原生（开箱即用原则），但解析它会连带解析
     // IGpuDeviceContext（其实现可能在有头场景绑定渲染器设备）。用 Lazy 保持「注册 ≠ 立刻要 native」语义一致。
     private readonly Lazy<MfDxgiDeviceManagerProvider> _dxgiManagerProvider;
 
-    // 纯 POCO 选项（AddMediaFoundation 时以 Singleton 注册），解析它不触碰任何原生 —— 不违背「开箱即用铁律」。
+    // 纯 POCO 选项（AddMediaFoundation 时以 Singleton 注册），解析它不触碰任何原生 —— 不违背「开箱即用原则」。
     private readonly MediaFoundationOptions? _options;
 
     /// <summary>

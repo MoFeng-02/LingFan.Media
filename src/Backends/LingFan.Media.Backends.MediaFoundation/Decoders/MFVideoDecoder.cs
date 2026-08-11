@@ -23,7 +23,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 /// <para><b>仅 Windows 可用</b>：非 Windows 平台 Initialize 抛 <see cref="PlatformNotSupportedException"/>。</para>
 /// <para><b>AOT 兼容</b>：sealed 类；COM 互操作走原始 vtable P/Invoke（<see cref="MfVTable"/> 委托封送）+ 真实导出的 MF 扁平 API，
 /// 不使用 <c>[ComImport]</c>/RCW，NativeAOT 兼容。</para>
-/// <para><b>vtable 槽位</b>：公式 <c>slotIndex = SDK 绝对槽 − 3</c>；全部关键槽位已本机运行时验证（2026-07-29，MFTDiag 全 S_OK）——
+/// <para><b>vtable 槽位</b>：公式 <c>slotIndex = SDK 绝对槽 − 3</c>；关键槽位已在运行时逐一验证（MFTDiag 全 S_OK）——
 /// IMFTransform：GetOutputStreamInfo=4, GetOutputAvailableType=11, SetInputType=12, SetOutputType=13,
 /// GetOutputCurrentType=15, ProcessMessage=20, ProcessInput=21, ProcessOutput=22（注意 GetAttributes=5 不可漏数）；
 /// IMFSample：GetBufferCount=36, ConvertToContiguousBuffer=38, AddBuffer=39；IMFAttributes：GetUINT64=5, SetGUID=21。</para>
@@ -60,7 +60,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
 
     private readonly ILogger<MFVideoDecoder> _logger;
     private bool _initialized;
-    // MFStartup/MFShutdown 配对标志（2026-07-31 审计修复）：Initialize 成功调用 MFStartup 后置 true，
+    // MFStartup/MFShutdown 配对标志：Initialize 成功调用 MFStartup 后置 true，
     // ReleaseComObjects 中配对 MFShutdown 并复位。原实现只 Startup 不 Shutdown → 进程级平台
     // 引用计数只增不减，MF 平台常驻进程永不释放（内存/句柄泄漏）。
     private bool _mfStartupAcquired;
@@ -70,9 +70,9 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private bool _leakedOnClose;   // drain 失败标记：已有意泄漏，禁止任何后续释放尝试
 
     // 防止 Dispose/DisposeAsync 重入。0=未关闭，1=已发起关闭。
-    // ⚠️ 必须是 Interlocked 原子量而非普通 bool（审计 A-2）：并发的 Dispose 与 DisposeAsync
+    // 必须是 Interlocked 原子量而非普通 bool：并发的 Dispose 与 DisposeAsync
     // 在普通 bool 上「读-判-写」非原子，可同时通过守卫 ⇒ 对同一 IMFTransform 二次 Marshal.Release
-    // ⇒ 引用计数下溢 / 访问违例（0x80131506 故障族）。
+    // ⇒ 引用计数下溢 / 访问违例（原生堆损坏故障族）。
     private int _closed;
 
     private Guid _inputSubtype;
@@ -85,8 +85,8 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private int _codedHeight;   // 编码高（宏块对齐，如 1088）——chroma 平面偏移依据
     private bool _loggedLayoutOnce; // 首帧布局诊断只打一次（display/coded 尺寸 + MF 源 buffer 真实长度）
 
-    // ── MFT 输出积压队列（2026-08-03 丢包根因修复）──────────────────────────────
-    // 🔴 H.264 解码 MFT 是 **N 进 M 出**：受 B 帧重排/DPB 影响，单次 ProcessInput 后可能
+    // ── MFT 输出积压队列（防丢包缓冲）──────────────────────────────
+    // H.264 解码 MFT 是 **N 进 M 出**：受 B 帧重排/DPB 影响，单次 ProcessInput 后可能
     //    产出 0 帧、也可能产出多帧；且在**输出未被取空前会以 MF_E_NOTACCEPTING 拒收新输入**。
     //    IVideoDecoder 契约是「一次调用最多返回一帧」，故多产出的帧暂存于此队列，由后续调用
     //    依次取走 —— 保证「入包数 == 出帧数」，绝不丢帧。
@@ -101,7 +101,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private int _pendingBacklogOverCount;  // 连续超过高水位的 DrainAvailableOutputs 次数（区分瞬态突发 vs 持续积压）
     private const int PendingBacklogHighWater = 24;     // 积压高水位（> 即异常；正常仅 DPB 深度 ≤16）
     private const int PendingBacklogSustainedLimit = 4;  // 连续超标次数上限，超过才视为「持续积压」真缺陷
-    // 🔴 (b)② 架构补短（2026-08-04）：稳态 _pendingOutputs 硬上限（EOS/DRAIN 模式豁免）。
+    // (b)② 架构补短：稳态 _pendingOutputs 硬上限（EOS/DRAIN 模式豁免）。
     // 仅限稳态 decode-ahead，防止个别大 GOP/重排瞬间把内部缓冲无界堆高（内存尖峰）；
     // 超限即停止继续从 MFT 取帧，未取走的帧留在 MFT 内部（绝不丢），下一次 DecodeAsync 借
     // NOTACCEPTING→Drain 路径自然取回。EOS 必须排空 DPB 残留以救尾帧，故 DRAIN 路径不受此限。
@@ -110,7 +110,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private const int MaxOutputsPerDrain = 64;     // 单轮最多取帧数，防异常 MFT 无限吐帧
 
     // ── 显示孔径偏移（MFVideoArea.OffsetX/OffsetY）─────────────────────────────
-    // 🔴 2026-08-03：旧代码只读 Area.cx/cy 而丢弃 Offset，并在注释里臆断「aperture 偏移为 0」。
+    // 旧代码只读 Area.cx/cy 而丢弃 Offset，并在注释里臆断「aperture 偏移为 0」。
     //    若 OffsetX != 0，从 (0,0) 起裁会使画面整体平移，左/上边缘吃进编码填充（宏块边缘扩展
     //    = 竖向拉丝），且奇数 OffsetX 在 4:2:0 下令色度错半像素（色噪）。此处改为实测并参与裁剪。
     private int _apertureOffsetX;
@@ -126,18 +126,18 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private IntPtr _dxvaManager;     // IMFDXGIDeviceManager*（DXVA 必需；Dispose 时 Release）
     private uint _dxvaResetToken;    // ResetDevice 配对 reset token
     private IntPtr _decoderActivate; // 经 MFTEnumEx 得到的 IMFActivate*（ActivateObject 激活后保留其上下文；Dispose 时 Release）
-    private long _gpuZeroCopyFrames;  // DXVA 零拷贝 GPU 纹理帧计数（验证铁证）
+    private long _gpuZeroCopyFrames;  // DXVA 零拷贝 GPU 纹理帧计数（验证计数）
     private long _cpuFallbackFrames;  // 软解 CPU 拷贝帧计数
     private bool _frameSummaryLogged; // 收尾帧路径统计仅打印一次
     private bool _loggedDxvaDiagOnce; // DXVA 纹理提取失败诊断仅打印一次（专用标志，勿复用软解布局标志）
 
-    // ── A 方案：SourceReader 自带硬解「直通包」路径（2026-08-07）──────────────────
+    // ── A 方案：SourceReader 自带硬解「直通包」路径──────────────────
     // MFDemuxer 建 SourceReader 时挂 MF_SOURCE_READER_D3D_MANAGER + ENABLE_HARDWARE_TRANSFORMS，
     // 并把视频流输出协商为 NV12 ⇒ ReadSample 直接吐【已解码】样本。此时 packet 携带：
     //   ① DecodedFrameResource（DXGI 纹理）  → 真·零拷贝，本类只做所有权移交，绝不再过 MFT；
     //   ② Width/Height/Stride + NV12 字节    → 「半 DXVA」回落，本类只做去 stride 紧凑化，仍省掉二次解码。
-    // 🔴 未命中直通（属性挂载失败/流未协商成功）时 packet 仍是压缩裸流，走原 MFT 路径 —— 行为完全不变。
-    private long _passthroughGpuFrames;   // 直通 GPU 纹理帧（零拷贝铁证）
+    // 未命中直通（属性挂载失败/流未协商成功）时 packet 仍是压缩裸流，走原 MFT 路径 —— 行为完全不变。
+    private long _passthroughGpuFrames;   // 直通 GPU 纹理帧（零拷贝验证计数）
     private long _passthroughCpuFrames;   // 直通 NV12 CPU 帧（半 DXVA 回落）
     private bool _loggedPassthroughOnce;  // 直通路径首帧诊断仅打印一次
     private bool _loggedPassthroughLayoutWarnOnce; // 直通 NV12 布局异常告警仅打印一次
@@ -173,14 +173,14 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             throw new PlatformNotSupportedException("MediaFoundation 后端仅支持 Windows。");
         if (_initialized)
             throw new InvalidOperationException("MF 视频解码器已初始化，请先 Dispose 再重新初始化。");
-        // 关闭不可逆（gate 一旦 BeginClose 便永久关闸，见 NativeCallGate 不变量 I1）。
+        // 关闭不可逆（gate 一旦 BeginClose 便永久关闸，见 NativeCallGate 关闭不变量）。
         // 已关闭实例若重新 Initialize，后续 DecodeAsync 的 TryEnter 恒失败 ⇒ 静默恒返回 null 帧（哑解码器）。
         // 故直接快速失败；Session 级对象按约定为 Transient，请新建实例。
         if (Volatile.Read(ref _closed) != 0)
             throw new InvalidOperationException("该 MF 视频解码器实例已关闭，不可重新初始化；请新建实例。");
 
         Codec = codec;
-        // 🔴 真检测（2026-08-04 修正）：原实现 = settings.EnableHardwareAcceleration 原样回显（假回显 bug）。
+        // 修正：原实现 = settings.EnableHardwareAcceleration 原样回显（假回显 bug）。
         // 现先置 false，待下方 DXVA 接入成功后再置 true；失败/无设备则保持 false（软件解码）。
         IsHardwareAccelerated = false;
 
@@ -190,12 +190,12 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         else
             throw new NotSupportedException($"MF 视频解码器不支持 {codec}（仅 H264/H265 经系统 MFT）。");
 
-        // ⚠️ 复审 C-1（2026-08-01 二轮审计）：整个原生建立段必须处于 gate 内，与 MFDemuxer.OpenCore 对称。
+        // 整个原生建立段必须处于 gate 内，与 MFDemuxer.OpenCore 对称。
         // 上面的 _closed 检查只是 TOCTOU 快速失败，**不构成互斥**。缺闸时的竞态：
         // 本线程通过检查后，并发的 Dispose/DisposeAsync 会因 _inFlight==0 立即判定「已排空」→ 执行
         // ReleaseComObjects（含 MFPlatform.Shutdown 使引用计数 −1），而本线程随后仍在
         // CoCreateInstance / SetInputType / SetOutputType / ProcessMessage 上跑原生 COM。后果三重：
-        //   ① 本解码器若是最后一个 MF 消费者，平台被真正 MFShutdown 拆除 ⇒ 原生访问违规 ⇒ 0x80131506；
+        //   ① 本解码器若是最后一个 MF 消费者，平台被真正 MFShutdown 拆除 ⇒ 原生访问违规 ⇒ 原生堆损坏；
         //   ② _closed 已置 1，此后任何 Close 都在 Interlocked 处直接返回 ⇒ 本方法建立的 _transform /
         //      _inputTypePtr / _outputTypePtr 永久泄漏，且 MF 引用计数永久失衡（多一次 Startup 无配对）；
         //   ③ gate 恒关 ⇒ DecodeAsync 的 TryEnter 恒 false ⇒ 退化为静默返回 null 帧的「哑解码器」（黑屏无报错）。
@@ -210,7 +210,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             // MFStartup（进程级引用计数，幂等；成功后须与 ReleaseComObjects 中的 MFShutdown 配对）。
             // 经 MFPlatform 引用计数封装：MF 平台仅在所有消费者（MFBackend 解封装 + 本解码器）全部释放后才真正拆除，
             // 避免某一侧先释放触发 MFShutdown 把正在另一线程 in-flight 的原生 ReadSample/ProcessInput 踩成 AV。
-            // 置于 gate 内（复审 C-1）：Startup 与 ReleaseComObjects 里的 Shutdown 必须被同一把闸串行化。
+            // 置于 gate 内：Startup 与 ReleaseComObjects 里的 Shutdown 必须被同一把闸串行化。
             MFPlatform.Startup();
             _mfStartupAcquired = true;
 
@@ -229,7 +229,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             _logger.LogInformation("[DECODER-ENUM] 已获得 {Codec} 解码 MFT transform={Transform:X}（输入 subtype={Subtype:B}）", codec, _transform, _inputSubtype);
 
             // 缓存 vtable 委托（slotIndex = 绝对槽 − 3；经 Windows SDK mftransform.h 声明顺序推得，
-            // 并已于本机 MFTDiag 运行时逐槽验证）。必须在任何 _processMessage 等调用之前缓存。
+            // 并已于运行时逐槽验证）。必须在任何 _processMessage 等调用之前缓存。
             // IMFTransform 顺序：GetStreamLimits=0 … GetAttributes=5 … SetInputType=12/SetOutputType=13/
             // ProcessMessage=20/ProcessInput=21/ProcessOutput=22
             _getOutputStreamInfo = MfVTable.Get<IMFTransform_GetOutputStreamInfo>(_transform, 4);   // 绝对 7
@@ -278,10 +278,10 @@ internal sealed class MFVideoDecoder : IVideoDecoder
 
             // ── DXVA 硬件解码零拷贝接入────────────────────────
             // 依赖契约层 IGpuDeviceContext（共享 D3D11 设备），不引用渲染器，严守依赖倒置。
-            // 🔴 时序铁律（§9.8/R39 + §9.9 SDK 实物）：SET_D3D_MANAGER 必须在 SetInputType **之前**发送
+            // 时序原则（对照 SDK 实现）：SET_D3D_MANAGER 必须在 SetInputType **之前**发送
             // （mftransform.h 权威值 0x2，MSDN 原文「必须在 SetInputType / SetOutputType 之前调用」）。MFT 在 SetInputType
             // 内部即查询 DXGI 管理器选 DXVA 配置；若此刻未收到，MFT 锁定软件路径 → 输出恒为系统内存
-            // （半 DXVA：硬解激活=True 但 GPU零拷贝=0）。R49 曾误改到「类型协商之后」，当前已订正回「之前」。
+            // （半 DXVA：硬解激活=True 但 GPU零拷贝=0）；该消息曾被放到「类型协商之后」，现订正回「SetInputType 之前」。
             // 失败一律回退软件解码，绝不抛异常阻断播放。
             _dxvaActive = false;
             if (settings.EnableHardwareAcceleration && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
@@ -289,7 +289,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 try
                 {
                     // ① 能力探测：MF_SA_D3D11_AWARE。
-                    // 🔴 必须先探测再发消息：MFT 对**不支持的消息按 IMFTransform 约定返回 S_OK 静默忽略**，
+                    // 必须先探测再发消息：MFT 对**不支持的消息按 IMFTransform 约定返回 S_OK 静默忽略**，
                     //    仅凭 ProcessMessage 的 HRESULT 无法区分「真接受」与「忽略」——这正是「硬解激活=True
                     //    却 GPU零拷贝=0」假绿能长期存在的原因。此处把 MFT 自报能力作为第一道判据。
                     if (!QueryD3D11Aware())
@@ -308,10 +308,10 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                     Marshal.ThrowExceptionForHR(dxhr);
 
                     // ④ 设备能力真值探测（决定性判据）：共享 D3D11 设备能否为当前编码解码到 NV12 分配 DXGI 表面。
-                    // 🔴 这是「半 DXVA（GPU 硬解但输出读回系统内存）」的唯一权威判据。若设备不支持
+                    // 这是「半 DXVA（GPU 硬解但输出读回系统内存）」的唯一权威判据。若设备不支持
                     //    该编码 DXVA 解码到 NV12，MFT 会**静默**把结果拷贝回系统内存 → 输出 buffer 是普通
                     //    IMFMediaBuffer（QI IMFDXGIBuffer=E_NOINTERFACE）→ 零拷贝永不生效。若不查，会陷入
-                    //    「硬解激活=True 却 GPU零拷贝=0」的假绿（与 R40 消息号假绿同源）。
+                    //    「硬解激活=True 却 GPU零拷贝=0」的假绿（与消息号假绿同源）。
                     //    探测失败的处置：不阻断初始化，仅打告警，让后续真实输出行为说话。
                     var dxvaProfile = MfDxvaInterop.DxvaProfileForCodec(codec);
                     if (!MfDxvaInterop.TryProbeDxvaSupport(_gpuContext.DeviceHandle, dxvaProfile, out bool dxvaCapable))
@@ -332,7 +332,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                     if (profDiag != null)
                         _logger.LogInformation("{Diag}", profDiag);
 
-                    // ⑤ 适配器身份探针（第二道根因探针）：确认共享设备是否落在 WARP/错误适配器上。
+                    // ⑤ 适配器身份探针（第二道成因探针）：确认共享设备是否落在 WARP/错误适配器上。
                     // CheckVideoDecoderFormat 仅验格式、不验真实硬件解码引擎；若设备是 WARP，
                     // 格式查询仍可能通过，但解码器在真正解码时无法建立硬件视频解码会话 ⇒ 静默读回系统内存。
                     string? adapterDiag = MfDxvaInterop.ProbeDeviceAdapter(_gpuContext.DeviceHandle);
@@ -340,11 +340,11 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                         _logger.LogInformation("{Diag}", adapterDiag);
 
                     // ③ MF DXGI 设备管理器已于上方创建并绑定（MFCreateDXGIDeviceManager + ResetDevice）。
-                    //    发送 MFT_MESSAGE_SET_D3D_MANAGER(=0x2) 的时机在下方「SetInputType 之前」（§9.8/R39 订正，
-                    //    非 R49 的「类型协商之后」）。
-                    // 🔴 消息号必须是 0x2：SDK mftransform.h 中根本不存在 SET_D3D11_MANAGER；D3D9/D3D11
-                    //    共用本消息，只靠 ulParam 接口类型区分。旧代码臆造 0x80000013 被 MFT 当未知消息
-                    //    返回 S_OK 忽略 = 假激活真根因（R40）。
+                    //    发送 MFT_MESSAGE_SET_D3D_MANAGER(=0x2) 的时机在下方「SetInputType 之前」（订正，
+                    //    非「类型协商之后」）。
+                    // 消息号必须是 0x2：SDK mftransform.h 中根本不存在 SET_D3D11_MANAGER；D3D9/D3D11
+                    //    共用本消息，只靠 ulParam 接口类型区分。旧代码误写 0x80000013 被 MFT 当未知消息
+                    //    返回 S_OK 忽略 = 假激活的成因。
                 }
                 catch (Exception ex)
                 {
@@ -359,12 +359,12 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 _logger.LogWarning("未提供 D3D11 设备上下文（IGpuDeviceContext），MF 无法启用 DXVA，回退软件解码");
             }
 
-            // ── DXVA：SET_D3D_MANAGER 必须在 SetInputType 之前发送（§9.8/R39 + §9.9 SDK 实物权威）──
+            // ── DXVA：SET_D3D_MANAGER 必须在 SetInputType 之前发送（SDK 实物权威）──
             // mftransform.h：MFT_MESSAGE_SET_D3D_MANAGER = 0x2，MSDN 明文「必须在 SetInputType /
             // SetOutputType 之前调用」。MFT 在 SetInputType 内部即查询 DXGI 设备管理器选择 DXVA 配置；
             // 若此刻尚未收到 manager，MFT 锁定软件路径 → 输出 buffer 恒为系统内存（半 DXVA：
-            // 硬解激活=True 但 GPU零拷贝=0）。R49 曾把它移到类型协商之后，正是当前「半 DXVA」的真因；
-            // 现按 SDK 订正回「之前」。消息号 0x2 已在 R40 修正，本组合（0x2 + SetInputType 前）此前从未被测。
+            // 硬解激活=True 但 GPU零拷贝=0）；此前被移到类型协商之后，正是当前「半 DXVA」的成因；
+            // 现按 SDK 订正回「SetInputType 之前」。消息号 0x2 已修正，本组合（0x2 + SetInputType 前）此前从未被测。
             if (_dxvaManager != IntPtr.Zero)
             {
                 try
@@ -407,7 +407,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             // 查询输出 sample 分配策略与所需大小
             QueryOutputStreamInfo();
 
-            // 🔴 DXVA 生效的**第二道也是决定性判据**：类型协商完成后 MFT 是否改报 PROVIDES_SAMPLES。
+            // DXVA 生效的**第二道也是决定性判据**：类型协商完成后 MFT 是否改报 PROVIDES_SAMPLES。
             // 系统 H264/H265 解码 MFT 在软件路径下由调用方分配输出 sample；一旦 DXVA 真正接管，
             // 它必须自行分配 DXGI 纹理 sample（纹理只能由 MFT 从 D3D11 解码器输出池取），
             // 于是 GetOutputStreamInfo 会置 MFT_OUTPUT_STREAM_PROVIDES_SAMPLES。
@@ -439,7 +439,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         }
         catch
         {
-            // ⚠️ 必须**先出闸、再走关闭协议**（复审 C-1）：CloseNativeSync 内的 WaitDrain 等待在途计数归零，
+            // 必须**先出闸、再走关闭协议**：CloseNativeSync 内的 WaitDrain 等待在途计数归零，
             // 而此刻唯一的在途计数正是本线程自己 —— 不先 Exit 就会自等满 NativeDrain(5s) 超时 ⇒ 误判「排空失败」
             // ⇒ 把本可安全释放的 _transform 错误地「有意泄漏」并打 Error 日志（直接污染关闭洁净度门控）。
             // 先 Exit 使计数归零后，Close 侧的 drain 立即成功，资源被真正释放。
@@ -451,7 +451,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         finally
         {
             // holdsGate 防多余 Exit：多余 Exit 会把他人的在途计数错误减到 0 ⇒ 提前判定排空 ⇒ use-after-free
-            //（NativeCallGate 不变量 I6 的「危险侧」失配，见该类 Exit 备注）。
+            //（NativeCallGate 的关闭不变量「危险侧」失配，见该类 Exit 备注）。
             if (holdsGate) _transformGate.Exit();
         }
     }
@@ -474,9 +474,9 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         try
         {
             // 0. 【A 方案 · 直通分支】SourceReader 已在 demuxer 内完成硬解 ⇒ 本类不得再过一遍 MFT。
-            //    🔴 必须置于下方 `packet.Data.Length == 0` 守卫【之前】：GPU 纹理直通包的 Data 恰是
+            //    必须置于下方 `packet.Data.Length == 0` 守卫【之前】：GPU 纹理直通包的 Data 恰是
             //       ReadOnlyMemory<byte>.Empty（帧全程在显存，没有系统内存副本），落到那条守卫上会被
-            //       整帧静默丢弃 ⇒ 画面全黑而日志无任何异常（正是宪法明令禁止的静默失效）。
+            //       整帧静默丢弃 ⇒ 画面全黑而日志无任何异常（正是设计原则明令禁止的静默失效）。
             //    未命中直通的压缩包（Width<=0 且无 DecodedFrameResource）原样落到下方 MFT 路径。
             var passthrough = TryBuildPassthroughFrame(packet);
             if (passthrough is not null)
@@ -494,7 +494,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 sample = CreateSampleWithData(packet);
 
                 // 2. ProcessInput。
-                // 🔴 MFT 契约铁律：MF_E_NOTACCEPTING 意为「**本包未被接收**」——MFT 内部尚有
+                // MFT 契约：MF_E_NOTACCEPTING 意为「**本包未被接收**」——MFT 内部尚有
                 //    未取走的输出占着位置，必须先 ProcessOutput 排空、再**重投同一 sample**。
                 //    它绝不是「非致命可忽略」：旧实现吞掉该码后 finally 直接 Release(sample)，
                 //    压缩包就此蒸发 ⇒ 参考帧缺失（花屏）+ PTS 缺口（卡顿/回弹）。
@@ -545,7 +545,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// <para><b>路径①（目标·零拷贝）</b>：<see cref="MediaPacket.HasDecodedFrameResource"/> 为真 ⇒ demuxer 已从
     /// <c>IMFDXGIBuffer</c> 取到 <c>ID3D11Texture2D</c>。此处仅调用 <see cref="MediaPacket.TakeDecodedFrameResource"/>
     /// <b>移交所有权</b>给 <see cref="VideoFrame"/>，全程无一字节内存拷贝。
-    /// 🔴 必须 Take 而非读 <see cref="MediaPacket.DecodedFrameResource"/>：否则 packet 释放时会销毁仍在渲染管线中的纹理。</para>
+    /// 必须 Take 而非读 <see cref="MediaPacket.DecodedFrameResource"/>：否则 packet 释放时会销毁仍在渲染管线中的纹理。</para>
     /// <para><b>路径②（半 DXVA 回落）</b>：无 GPU 资源但带 <c>Width/Height</c> + NV12 字节 ⇒ 去 stride 紧凑化后
     /// 包成 <see cref="SoftwareFrameResource"/>。仍比改造前好：省掉 MFT 的二次解码。</para>
     /// <para><b>硬解自报</b>：仅在拿到 <see cref="IGpuTextureResource"/> 时才把 <see cref="IsHardwareAccelerated"/>
@@ -575,13 +575,13 @@ internal sealed class MFVideoDecoder : IVideoDecoder
 
                 Interlocked.Increment(ref _passthroughGpuFrames);
                 if (resource is IGpuTextureResource)
-                    IsHardwareAccelerated = true;   // 真检测：拿到显存纹理才算硬解生效
+                    IsHardwareAccelerated = true;   // 拿到显存纹理才算硬解生效
 
                 if (!_loggedPassthroughOnce)
                 {
                     _loggedPassthroughOnce = true;
                     _logger.LogInformation(
-                        "[MF-PASSTHRU] ✅ 解码器直通模式：SourceReader 已硬解出 GPU 纹理 {W}x{H} NV12，MFT 完全旁路 —— 全程零拷贝",
+                        "[MF-PASSTHRU] 解码器直通模式：SourceReader 已硬解出 GPU 纹理 {W}x{H} NV12，MFT 完全旁路 —— 全程零拷贝",
                         w, h);
                 }
                 return new VideoFrame(w, h, PixelFormat.NV12, resource,
@@ -629,7 +629,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             {
                 _loggedPassthroughLayoutWarnOnce = true;
                 _logger.LogWarning(
-                    "[MF-PASSTHRU] ⚠️ NV12 直通布局校验失败：buffer={Len}B 但 display={W}x{H} stride={S} 推导 codedH={CH} " +
+                    "[MF-PASSTHRU] NV12 直通布局校验失败：buffer={Len}B 但 display={W}x{H} stride={S} 推导 codedH={CH} " +
                     "需要 Y≥{NeedY}B / UV尾≥{NeedUv}B ⇒ 布局假定破产，丢弃该帧（绝不按错误 stride 拷贝出错位画面）",
                     src.Length, width, height, stride, codedHeight, needY, needUv);
             }
@@ -762,7 +762,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// 排空 MFT **当前所有就绪输出**，全部压入 <see cref="_pendingOutputs"/>，返回本轮产出帧数。
     /// </summary>
     /// <remarks>
-    /// 🔴 每次 ProcessInput 之后必须循环 ProcessOutput 直到 <c>MF_E_TRANSFORM_NEED_MORE_INPUT</c>。
+    /// 每次 ProcessInput 之后必须循环 ProcessOutput 直到 <c>MF_E_TRANSFORM_NEED_MORE_INPUT</c>。
     /// 只取一帧会让输出在 MFT 内部积压，进而使后续 ProcessInput 持续返回
     /// <c>MF_E_NOTACCEPTING</c> ⇒ 输入包被拒 ⇒ 丢帧。这是 30fps 源只出 22fps 的直接原因。
     /// </remarks>
@@ -916,8 +916,8 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             }
 
             // DXVA 零拷贝路径：必须用 GetBufferByIndex 取 sample 原始 buffer，再 QI IMFDXGIBuffer。
-            // 🔴 绝不能改用 ConvertToContiguousBuffer：其契约就是「把 sample 合并并读回到连续系统内存」，
-            //    永远返回 CPU buffer、绝不可能承载 DXGI 纹理——用 slot38 做零拷贝在原理上注定失败（R41 已证伪）。
+            // 绝不能改用 ConvertToContiguousBuffer：其契约就是「把 sample 合并并读回到连续系统内存」，
+            //    永远返回 CPU buffer、绝不可能承载 DXGI 纹理——用 ConvertToContiguousBuffer 做零拷贝在原理上注定失败。
             // vtable 槽位（与运行时已验证的 ConvertToContiguousBuffer=38 / AddBuffer=39 一致，IMFSample 第 8 方法）：
             //   GetBufferByIndex = 绝对 40 → slotIndex 37
             IntPtr rawBuffer = IntPtr.Zero;
@@ -973,13 +973,13 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                     return null;
                 }
 
-                // 🔴 R5 配对铁律（2026-08-02 校准，与 MFDemuxer.ExtractPacket 同构）：
+                // COM 配对原则（与 MFDemuxer.ExtractPacket 同构）：
                 //    IMFMediaBuffer.Unlock 只能与【成功的】Lock 配对，且恰好一次。
                 //    下方「Lock → 拷贝 → Unlock」整体置于【嵌套 try】，所有提前 return
                 //    （currentLength==0 / 尺寸未知 / Lock 失败）都发生在进入该嵌套 try 之前，
                 //    故绝不会触发 Unlock。旧代码把 Unlock 放在外层 finally，导致未 Lock 即 Unlock
-                //    （2D/DXGI 临时拷贝实现的 Unlock 会野指针写）→ 滞后至下次 CLR 堆操作才以 0x80131506 暴露。
-                // 🔴 R5 配对铁律（2026-08-02 校准，与 MFDemuxer.ExtractPacket 同构）：
+                //    （2D/DXGI 临时拷贝实现的 Unlock 会野指针写）→ 滞后至下次 CLR 堆操作才以原生堆损坏暴露。
+                // COM 配对原则（与 MFDemuxer.ExtractPacket 同构）：
                 //    IMFMediaBuffer.Unlock 只能与【成功的】Lock 配对，且恰好一次。
                 //    错误链：经 InteropTrace 记录并（严格模式）校验 Lock/Unlock 配对。
                 hr = InteropTrace.LockBuffer(outBuffer, lockDel, out IntPtr pData, out _, out _,
@@ -1043,7 +1043,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                     {
                         // 显示孔径裁剪：NV12 编码布局 = Y[codedW×codedH] + UV[codedW×codedH/2]，
                         // 逐行拷贝到紧凑的 display 布局（stride 假定 = codedWidth，MFT 输出 NV12 无额外行距）。
-                        // 🔴 2026-08-03 修正：起点必须用 MFVideoArea.OffsetX/OffsetY，不得臆断为 0。
+                        // 修正：起点必须用 MFVideoArea.OffsetX/OffsetY，不得臆断为 0。
                         //    旧注释「H264 裁剪只发生在右/下边」是未经验证的假设——非对称裁剪（如 1920→1906
                         //    左右各去 7）会让 (0,0) 起裁的画面整体平移，左边缘吃进编码填充（宏块边缘扩展）。
                         // UV 列偏移须对齐到偶数：NV12 的 UV 是 U,V 交错对，一对覆盖 2 列 Y。
@@ -1095,7 +1095,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         if (hr < 0 || dxgi == IntPtr.Zero)
         {
             // 每帧都打 warning 会刷屏，故只深度诊断一次。
-            // ⚠️ 必须用**专用**标志：旧代码借 _loggedLayoutOnce（软解布局诊断标志）当守卫，
+            // 必须用**专用**标志：旧代码借 _loggedLayoutOnce（软解布局诊断标志）当守卫，
             //    该标志由软解路径设置，语义与生命周期都不对，属偶然可用。
             if (!_loggedDxvaDiagOnce)
             {
@@ -1119,7 +1119,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             hr = getSub(dxgi, out uint sub);
             if (hr < 0)
             {
-                Marshal.Release(tex); // R5 配对：GetResource 成功已 AddRef 纹理，getSub 失败须释放，否则纹理引用泄漏
+                Marshal.Release(tex); // COM 配对：GetResource 成功已 AddRef 纹理，getSub 失败须释放，否则纹理引用泄漏
                 _logger.LogWarning("[DXVA-DIAG] IMFDXGIBuffer.GetSubresourceIndex 失败：HRESULT=0x{HR:X8}", hr);
                 return null;
             }
@@ -1141,8 +1141,8 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// DXVA 已激活（PROVIDES_SAMPLES=True）但输出 buffer 不支持 <c>IMFDXGIBuffer</c> 时的一次性深度诊断。
     /// 说明 MFT 把 GPU 纹理读回到了系统内存（"半 DXVA"）：解码走硬解，但零拷贝提取失败。
     /// 本方法摊开 buffer 真实身份（是否仍是 IMFMediaBuffer / IMF2DBuffer / ID3D11Texture2D）与
-    /// 输出媒体类型属性（subtype / NominalRange / DefaultStride），用于定位"读回"的根因。
-    /// ⚠️ 全部诊断改用【已核验正确的 IID】+【Lock 实测】两类可信手段：
+    /// 输出媒体类型属性（subtype / NominalRange / DefaultStride），用于定位"读回"的成因。
+    /// 全部诊断改用【已核验正确的 IID】+【Lock 实测】两类可信手段：
     ///    - IID_IMFMediaBuffer 此前字节级错误（0x...3508→0x3507）曾令所有 QI 假阴性，现已订正；
     ///    - Lock 复用真实 CPU 路径的 vtable 槽位 0/1/2，绝不依赖 QI，故即使 QI 仍异常也能给出真值。
     /// </summary>
@@ -1160,7 +1160,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             if (isMb)
             {
                 // ② 真值校验：直接 Lock（复用 CPU 路径 vtable 槽位 0/1/2）取长度，确认是系统内存 NV12。
-                //    若 Lock 成功且长度≈_outputBufferSize(cbSize)，则坐实「解码器产出系统内存读回 buffer」。
+                //    若 Lock 成功且长度≈_outputBufferSize(cbSize)，则确认「解码器产出系统内存读回 buffer」。
                 try
                 {
                     var lockDel = MfVTable.Get<IMFMediaBuffer_Lock>(mb, 0);
@@ -1216,7 +1216,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// <summary>
     /// STREAM_CHANGE 后重新协商输出媒体类型，更新尺寸与输出 buffer 大小。
     /// MS 推荐流程：从 <c>GetOutputAvailableType</c> 枚举<b>新的</b>可用类型（优先 NV12）→ <c>SetOutputType</c>；
-    /// 不能把 <c>GetOutputCurrentType</c> 的旧类型原样设回（本机验证会返回 MF_E_INVALIDMEDIATYPE 0xC00D36B4）。
+    /// 不能把 <c>GetOutputCurrentType</c> 的旧类型原样设回（运行时验证会返回 MF_E_INVALIDMEDIATYPE）。
     /// </summary>
     private bool RenegotiateOutput()
     {
@@ -1287,7 +1287,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// 探测该解码 MFT 是否声明 <c>MF_SA_D3D11_AWARE</c>（支持 Direct3D 11 视频解码）。
     /// </summary>
     /// <remarks>
-    /// 🔴 为何必须探测：<c>IMFTransform::ProcessMessage</c> 的契约允许 MFT 对**不认识的消息直接返回 S_OK
+    /// 为何必须探测：<c>IMFTransform::ProcessMessage</c> 的契约允许 MFT 对**不认识的消息直接返回 S_OK
     /// 静默忽略**，因此「SET_D3D_MANAGER 返回 S_OK」**不能**证明 DXVA 已启用。MFT 自报的
     /// MF_SA_D3D11_AWARE 属性才是能力层面的权威判据。属性缺失（MF_E_ATTRIBUTENOTFOUND）即视为不支持。
     /// </remarks>
@@ -1366,7 +1366,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             var getAllocatedBlob = MfVTable.Get<IMFAttributes_GetAllocatedBlob>(_outputTypePtr, 13);
             if (getAllocatedBlob(_outputTypePtr, aperturePtr, out blobPtr, out uint blobSize) >= 0 && blobSize >= 16 && blobPtr != IntPtr.Zero)
             {
-                // 原始字节留证：结构布局若理解有误，只有 hex 能对证（宪法：vtable/结构必须照抄头文件，不臆测）
+                // 原始字节留证：结构布局若理解有误，只有 hex 能对证（vtable/结构必须照抄头文件，不凭空猜测）
                 var raw = new byte[16];
                 Marshal.Copy(blobPtr, raw, 0, 16);
                 _apertureBlobHex = Convert.ToHexString(raw);
@@ -1466,7 +1466,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     }
 
     // ── 两阶段关闭协议──
-    // ⚠️ 重入互斥（审计 A-2）：CloseNativeSync / CloseNativeAsync 共用 _closed 这一 Interlocked 令牌，
+    // 重入互斥：CloseNativeSync / CloseNativeAsync 共用 _closed 这一 Interlocked 令牌，
     //    先到者执行完整协议，后到者立即返回（不等待）。保证的是**绝不二次 Release**。
 
     private void CloseNativeSync()
@@ -1496,12 +1496,12 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     {
         if (_leakedOnClose) return;
         _leakedOnClose = true;
-        _logger.LogError("MFVideoDecoder 关闭超时：仍有在途原生调用。已【有意泄漏】IMFTransform 以避免原生堆损坏（0x80131506 COR_E_EXECUTIONENGINE）。");
+        _logger.LogError("MFVideoDecoder 关闭超时：仍有在途原生调用。已【有意保留】IMFTransform，避免因释放导致原生堆损坏（COR_E_EXECUTIONENGINE）。");
     }
 
     private void ReleaseComObjects()
     {
-        // 收尾帧路径统计（DXVA 零拷贝验证铁证）：先于字段复位打印一次，确认零拷贝是否真生效。
+        // 收尾帧路径统计（DXVA 零拷贝验证计数）：先于字段复位打印一次，确认零拷贝是否真生效。
         if (!_frameSummaryLogged)
         {
             _frameSummaryLogged = true;
@@ -1522,7 +1522,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             Marshal.Release(_transform);
             _transform = IntPtr.Zero;
 
-            // 复审 C-2：与 MFDemuxer.ReleaseNativeResources 置 _readSample=null 对称。
+            // 与 MFDemuxer.ReleaseNativeResources 置 _readSample=null 对称。
             // 缓存的 vtable 委托持有的是已释放对象的函数指针；置 null 后，万一有漏网调用点，
             // 得到的是可诊断的 NullReferenceException（`_processInput!` 处），而非静默的 use-after-free。
             _getOutputStreamInfo = null;
@@ -1561,7 +1561,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         _height = 0;
         _initialized = false;
 
-        // MFShutdown 配对（2026-07-31 审计修复 + 引用计数落地）：
+        // MFShutdown 配对（引用计数落地）：
         // MFStartup/MFShutdown 经 MFPlatform 做成进程级引用计数——本解码器每次 Initialize 都 +1，释放时 -1；
         // 平台真正拆除仅发生在计数归 0 时（即 MFBackend 解封装器也释放之后），配对本身安全，不再踩 in-flight 原生调用。
         if (_mfStartupAcquired)
@@ -1577,7 +1577,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
 
     private static void ThrowIfFailed(int hr) => Marshal.ThrowExceptionForHR(hr);
 
-    /// <summary>🔴 临时诊断：枚举全部已注册视频解码器（不过滤 subtype），打印每个 CLSID，确认 HEVC Store 解码器是否可枚举。</summary>
+    /// <summary>临时诊断：枚举全部已注册视频解码器（不过滤 subtype），打印每个 CLSID，确认 HEVC Store 解码器是否可枚举。</summary>
     private void DumpAllVideoDecoders()
     {
         Guid category = MFConstants.MFT_CATEGORY_VIDEO_DECODER;
@@ -1610,7 +1610,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// <remarks>
     /// HEVC 视频扩展（Store 安装）注册为<strong>异步 Store MFT</strong>，旧 <c>MFTEnum</c> 枚举不到，
     /// 必须用 <c>MFTEnumEx</c> 并包含 <c>ASYNCMFT | HARDWARE | UNTRUSTED_STOREMFT</c>。
-    /// 本机运行时验证（2026-07-29）：H264 → CLSID_MSH264DecoderMFT (62ce7e72-4c71-4d20-b15d-452831a87d9d)。
+    /// 运行时验证：H264 → CLSID_MSH264DecoderMFT (62ce7e72-4c71-4d20-b15d-452831a87d9d)。
     /// </remarks>
     /// <summary>实例化解码 MFT，返回已激活的 <c>IMFTransform*</c>（零表示未找到）。
     /// 策略：① 已知 stock CLSID + <c>CoCreateInstance</c>（H264 等同步 stock MFT）；
@@ -1737,7 +1737,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     /// ActivateObject hr / MF_SA_D3D11_AWARE 等细节（排查 Store HEVC MFT 枚举/激活问题时用），常态关闭避免生产日志噪声。</summary>
     private static bool DiagEnabled => Environment.GetEnvironmentVariable("LINGFAN_MF_DECODER_DIAG") == "1";
 
-    /// <summary>🔴 临时诊断：打印 transform 关键属性（异步标志、MF_SA_D3D11_AWARE、CLSID），确认 HEVC 解码器能力。</summary>
+    /// <summary>临时诊断：打印 transform 关键属性（异步标志、MF_SA_D3D11_AWARE、CLSID），确认 HEVC 解码器能力。</summary>
     private void LogTransformDiag(IntPtr transform, uint index)
     {
         var getAttrs = MfVTable.Get<IMFTransform_GetAttributes>(transform, 5);
@@ -1828,7 +1828,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
         int found = MFInterop.MFTEnum(
             ref category, 0, ref input,
             IntPtr.Zero, IntPtr.Zero, out IntPtr pClsidArray, out uint count);
-        // HRESULT 语义：S_OK=0 即成功——绝不能写 "<= 0"（会把成功误判为失败，制造"无注册 MFT"假象）
+        // HRESULT 语义：S_OK=0 即成功——绝不能写 "<= 0"（会让成功被当成失败，制造"无注册 MFT"假象）
         if (found < 0 || pClsidArray == IntPtr.Zero || count == 0)
             return Guid.Empty;
         try

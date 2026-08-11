@@ -6,7 +6,7 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!-- A-L1: ILogger/ILoggerFactory 为本项目直接使用的类型，必须显式声明，
+		<!-- ILogger/ILoggerFactory 为本项目直接使用的类型，必须显式声明，
          不能依赖 Extensions 的传递依赖（重构 Extensions 时会编译断裂） -->
 		<PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
 		<PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />

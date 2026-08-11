@@ -84,13 +84,13 @@ internal static class MFCodedFrameDump
 
             // ── 3. 判定：实测内容边界 vs 当前采用的 offset ────────────────────────
             string verdictX = leftEdge == offX
-                ? $"✓ 一致（起裁列 {offX} 正确）"
+                ? $"一致（起裁列 {offX} 正确）"
                 : $"★不一致：实测内容自第 {leftEdge} 列起，当前从第 {offX} 列起裁 ⇒ 画面平移 {offX - leftEdge} 列★";
             string verdictY = topEdge == offY
-                ? $"✓ 一致（起裁行 {offY} 正确）"
+                ? $"一致（起裁行 {offY} 正确）"
                 : $"★不一致：实测内容自第 {topEdge} 行起，当前从第 {offY} 行起裁 ⇒ 画面平移 {offY - topEdge} 行★";
             string verdictSize = contentW == displayW && contentH == displayH
-                ? $"✓ 实测内容尺寸 {contentW}x{contentH} == 显示孔径 {displayW}x{displayH}"
+                ? $"实测内容尺寸 {contentW}x{contentH} == 显示孔径 {displayW}x{displayH}"
                 : $"★实测内容尺寸 {contentW}x{contentH} ≠ 显示孔径 {displayW}x{displayH}★";
 
             logger.LogInformation(

@@ -34,7 +34,7 @@ public sealed class FallbackMediaPlayer : IMediaPlayer
     {
         var key = source.Identifier;
 
-        // 换源重新打开：先彻底释放上一轮选定的后端，避免原生资源泄漏（违反 NativeCallGate 纪律）与事件双发。
+        // 换源重新打开：先彻底释放上一次选定的后端，避免原生资源泄漏（违反 NativeCallGate 协议）与事件双发。
         if (_active is not null)
         {
             DetachEvents();
@@ -119,7 +119,7 @@ public sealed class FallbackMediaPlayer : IMediaPlayer
                 if (inner is not null)
                 {
                     try { await inner.DisposeAsync().ConfigureAwait(false); }
-                    catch { /* 吞掉清理异常，避免掩盖取消根因 */ }
+                    catch { /* 吞掉清理异常，避免掩盖取消成因 */ }
                 }
                 throw;
             }
@@ -129,7 +129,7 @@ public sealed class FallbackMediaPlayer : IMediaPlayer
                 if (inner is not null)
                 {
                     try { await inner.DisposeAsync().ConfigureAwait(false); }   // NativeCallGate 兜底清理原生资源
-                    catch { /* 吞掉清理异常，避免掩盖回退根因 */ }
+                    catch { /* 吞掉清理异常，避免掩盖回退成因 */ }
                 }
             }
         }

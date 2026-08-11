@@ -40,14 +40,14 @@ public static class GpuPresenterExtensions
         ArgumentNullException.ThrowIfNull(builder);
         var services = builder.Services;
 
-        // 🔴 与 AddD3D11Renderer 同一落法：具体类型作单一真源，两个契约服务都从它派生。
+        // 与 AddD3D11Renderer 同一落法：具体类型作单一真源，两个契约服务都从它派生。
         // 不得写 `(D3D11RendererFactory)sp.GetRequiredService<IVideoRendererFactory>()`——
         // 后注册的渲染器会胜出，强制转换直接 InvalidCastException。
         services.AddSingleton<D3D11RendererFactory>(sp =>
             new D3D11RendererFactory(sp.GetRequiredService<ILoggerFactory>()));
         services.AddSingleton<IVideoRendererFactory>(sp => sp.GetRequiredService<D3D11RendererFactory>());
 
-        // 第二轮审计修复：必须注册 IGpuDeviceContext，否则 FFmpegVideoDecoderFactory
+        // 修复：必须注册 IGpuDeviceContext，否则 FFmpegVideoDecoderFactory
         // 获取 null → D3D11VA 硬件解码静默禁用（与 AddD3D11Renderer 行为一致）
         services.AddSingleton<IGpuDeviceContext>(sp => sp.GetRequiredService<D3D11RendererFactory>().Context);
 
@@ -72,7 +72,7 @@ public static class GpuPresenterExtensions
             new D3D11RendererFactory(sp.GetRequiredService<ILoggerFactory>()));
         services.AddSingleton<IVideoRendererFactory>(sp => sp.GetRequiredService<D3D11RendererFactory>());
 
-        // 第二轮审计修复：同步注册 IGpuDeviceContext（与 AddD3D11Presenter 一致）
+        // 修复：同步注册 IGpuDeviceContext（与 AddD3D11Presenter 一致）
         services.AddSingleton<IGpuDeviceContext>(sp => sp.GetRequiredService<D3D11RendererFactory>().Context);
 
         services.AddSingleton<IGpuPresenterFactory>(sp =>

@@ -48,7 +48,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private AVCodecID _bsfCodecId;
     private ReadOnlyMemory<byte> _bsfCfg;
 
-    // 🔴 流时间基：解码帧 pts/dts 以「流 time_base」为单位。由 demuxer 透传，用于建立 ctx->pkt_timebase
+    // 流时间基：解码帧 pts/dts 以「流 time_base」为单位。由 demuxer 透传，用于建立 ctx->pkt_timebase
     // 并做时间戳换算（入向 pkt->pts、出向 frame.Timestamp）。解码后 avFrame->time_base / ctx->time_base
     // 常为 0，直接换算会使帧时间戳全 0（→ 视频不节流突发提交、主时钟 SyncTo(0) 钉死、pos 不前进）。
     private Rational _timeBase;
@@ -56,26 +56,26 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private bool _disposed;
     private bool _initialized;
 
-    // 🔴 完整重建所需参数（2026-08-07）：Reset() 在重播/seek 时关闭旧 AVCodecContext 并复用原 settings 重建，
+    // 完整重建所需参数：Reset() 在重播/seek 时关闭旧 AVCodecContext 并复用原 settings 重建，
     // 解决 D3D11VA/VP9 硬件解码器 EOF 排干后 avcodec_flush_buffers 无法重新对齐新流首关键帧的问题。
     private VideoCodec _lastCodec;
     private VideoSettings? _lastSettings;
 
-    // 🔴 复位后输出帧诊断计数（2026-08-07）：Reset() 置 4，DecodeCore 输出前 4 帧时打印 pts，
-    // 用于确证「重播首帧已回到 ≈0」（而非跳到 10.267s 末关键帧）。仅诊断，零架构风险。
+    // 复位后输出帧诊断计数：Reset() 置 4，DecodeCore 输出前 4 帧时打印 pts，
+    // 用于确证「重播首帧已回到 ≈0」（而非跳到末关键帧）。仅诊断。
     private int _decodeDiagCount;
 
-    // 🔴 解码器内部缓冲：修复 avcodec_send_packet 返回 EAGAIN（解码器输入满）时「放包」导致关键参考帧
+    // 解码器内部缓冲：修复 avcodec_send_packet 返回 EAGAIN（解码器输入满）时「放包」导致关键参考帧
     // 缺失、HEVC 重播整段 RPS 崩的问题。改为 FFmpeg 标准 send/receive 循环：待发送包入队、EAGAIN 时
     // 持有并重试，绝不丢弃；HEVC B 帧重排可能一包多帧时，多产出的帧也入队待返回，绝不丢弃。
     // 注：C# 泛型不接受指针类型参数（CS0306），故以 IntPtr 承载 AVPacket*。
     private readonly Queue<IntPtr> _pendingConv = new();
     private readonly Queue<VideoFrame> _pendingFrames = new();
 
-    // 🔴 帧路径统计（与 MFVideoDecoder 的 [DXVA-FRAMEPATH] 对称）：
+    // 帧路径统计（与 MFVideoDecoder 的 [DXVA-FRAMEPATH] 对称）：
     // 「硬解激活=True」只证明解码器跑在 GPU 上，不证明**出餐**也是 GPU 纹理。
     // 若硬件帧被下载回系统内存（hwframe transfer / sws 转换），硬件就成了摆设。
-    // 这两个计数器在 Dispose 时打印，作为「全程零拷贝」的日志铁证。
+    // 这两个计数器在 Dispose 时打印，作为「全程零拷贝」的日志佐证。
     private long _gpuZeroCopyFrames;  // D3D11VA / MediaCodec Surface 零拷贝帧（GPU 纹理直出）
     private long _cpuFallbackFrames;  // 软解 / CPU 内存帧
     private bool _frameSummaryLogged;
@@ -124,7 +124,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         _lastSettings = settings;
         AVCodecID codecId = MapVideoCodecToFFmpeg(codec);
 
-        // 🔴 硬解开关是「两级与」：会话级 VideoSettings.EnableHardwareAcceleration
+        // 硬解开关是「两级与」：会话级 VideoSettings.EnableHardwareAcceleration
         // 与后端级 FFmpegOptions.HardwareAcceleration 任一为 false 即禁用。
         // 此前 FFmpegOptions.HardwareAcceleration 声明了却从未被任何代码读取——宿主写
         // AddFFmpeg(o => o.HardwareAcceleration = false) 毫无效果（静默失效）。
@@ -158,7 +158,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         if (ctx == null)
             throw new InvalidOperationException("avcodec_alloc_context3 失败");
 
-        // 🔴 建立流时间基：解码帧 pts/dts 以流 time_base 为单位，须由调用方写入 ctx->pkt_timebase。
+        // 建立流时间基：解码帧 pts/dts 以流 time_base 为单位，须由调用方写入 ctx->pkt_timebase。
         // 解码后 avFrame->time_base / ctx->time_base 常为 0，直接用其换算会使帧时间戳全 0。
         // 故用 demuxer 透传的流 time_base 建立 pkt_timebase，并以同一秒值做时间戳换算。
         _timeBase = settings.TimeBase;
@@ -173,7 +173,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
 
-        // 🔴 应用编解码器私有配置（extradata）：MP4 中 HEVC/H264 为 length-prefixed，解码器需 hvcC/avcC 作为
+        // 应用编解码器私有配置（extradata）：MP4 中 HEVC/H264 为 length-prefixed，解码器需 hvcC/avcC 作为
         // extradata 才能解析参数集；并需 hevc_mp4toannexb/h264_mp4toannexb 比特流过滤器将包转为 Annex-B。
         ApplyCodecConfiguration(ctx, codec, codecId, settings.CodecConfiguration);
 
@@ -199,7 +199,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             // 零拷贝链路：硬解输出 ID3D11Texture2D → D3D11HardwareFrameResource → D3D11Renderer
             try
             {
-                // 🔴 §29 配套：硬解帧现在由 D3D11HardwareFrameResource 持引用保活切片（详见该类注释），
+                // 配套：硬解帧现在由 D3D11HardwareFrameResource 持引用保活切片（详见该类注释），
                 //    管线在途帧数 = VideoPipeline 有界队列(5) + 渲染中(1) + 呈现完成待回收(1) ≈ 7。
                 //    若不给 hw frames pool 留余量，解码器会因取不到空闲切片而 av_hwframe_get_buffer 失败
                 //    → 解码停摆（表现为 present 计数卡死、画面冻结而音频照常前进）。
@@ -217,9 +217,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
         else if (hwEnabled)
         {
-            // 🔴 硬解已请求但拿不到可用 GPU 设备上下文 → 只能软解。
+            // 硬解已请求但拿不到可用 GPU 设备上下文 → 只能软解。
             // 此处**必须出声**：静默回落会让宿主以为「硬解优先」已生效，实则全程 CPU 解码 + CPU 拷贝，
-            // 硬件彻底成摆设，且日志上毫无痕迹（与 §29「带默认实现的接口成员漏转发=静默失效」同类反模式）。
+            // 硬件彻底成摆设，且日志上毫无痕迹（与「带默认实现的接口成员漏转发=静默失效」同类反模式）。
             // 典型成因：只注册了 AddFFmpeg() + AddHeadlessRenderer()，而 IGpuDeviceContext 由
             // AddD3D11Renderer() 或 AddMediaFoundation()（自备窗口无关设备）注册——两者都没注册即为 null。
             IsHardwareAccelerated = false;
@@ -360,7 +360,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             return;
         }
 
-        // 🔴 解码器 extradata 必须与「经 BSF 转换后的包格式」配套，绝不能沿用原始 hvcC/avcC：
+        // 解码器 extradata 必须与「经 BSF 转换后的包格式」配套，绝不能沿用原始 hvcC/avcC：
         //   ffmpeg 的 hevc/h264 解码器按 extradata 首字节判定码流格式 —— hvcC/avcC（首字节 0x01）
         //   会令 is_nalff / is_avc = 1，解码器随后调用 ff_h2645_packet_split 按「长度前缀」拆 NAL；
         //   而包经 mp4toannexb 之后已是 Annex-B 起始码格式 ⇒ 两者矛盾，解码依旧失败
@@ -468,7 +468,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
     /// <summary>由已接收的 AVFrame 构造 <see cref="VideoFrame"/>（区分 D3D11VA/MediaCodec/软件路径）。</summary>
     /// <remarks>
-    /// 🔴 唯一帧路径分流点：三条支路各自计数（GPU 零拷贝 / CPU 拷贝），构造成功后才计数，
+    /// 唯一帧路径分流点：三条支路各自计数（GPU 零拷贝 / CPU 拷贝），构造成功后才计数，
     /// 避免异常路径污染统计。计数结果由 <see cref="Dispose"/> 打印 <c>[FFMPEG-FRAMEPATH]</c>。
     /// </remarks>
     private unsafe VideoFrame? MakeFrame(AVFrame* avFrame)
@@ -512,7 +512,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// 随后尽可能把队首包喂给解码器（<c>avcodec_send_packet</c> 返回 EAGAIN 表示输入缓冲满，
     /// 此时停发并留在队中，下次调用再重试——绝不放包）；最后排空解码器已产出的所有帧
     /// （HEVC B 帧重排可能一包多帧，多出的帧入 <c>_pendingFrames</c> 留待下次返回，绝不丢弃）。
-    /// 这样无论首播还是重播，都不会因 EAGAIN 丢弃关键参考帧，根治 HEVC 重播 RPS 崩。
+    /// 这样无论首播还是重播，都不会因 EAGAIN 丢弃关键参考帧，解决 HEVC 重播 RPS 崩。
     /// </remarks>
     private unsafe VideoFrame? DecodeCore(MediaPacket packet)
     {
@@ -569,7 +569,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 VideoFrame? f = MakeFrame(avFrame);
                 if (f != null)
                 {
-                    // 🔴 复位后输出帧诊断（2026-08-07）：前 4 帧打印 pts，确证重播首帧已回到 ≈0。
+                    // 复位后输出帧诊断：前 4 帧打印 pts，确证重播首帧已回到 ≈0。
                     if (_decodeDiagCount > 0)
                     {
                         --_decodeDiagCount;
@@ -650,7 +650,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 return null;
 
             // Flush 时同样需检查 D3D11VA 硬解输出格式（与 DecodeCore 一致）
-            // 🔴 同 DecodeCore：FFmpeg 8 产出 AV_PIX_FMT_D3D11，两种命名都接纳。
+            // 同 DecodeCore：FFmpeg 8 产出 AV_PIX_FMT_D3D11，两种命名都接纳。
             var hwFmtFlush = (AVPixelFormat)avFrame->format;
             if (hwFmtFlush is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
             {
@@ -682,7 +682,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// 清空 send/receive 内部队列：释放未发送的包、归还未交出的帧。
     /// </summary>
     /// <remarks>
-    /// 🔴 重播/seek 必调：上一轮残留的待发包属于旧时间线，若混入新流会造成参考帧错乱；
+    /// 重播/seek 必调：上一轮残留的待发包属于旧时间线，若混入新流会造成参考帧错乱；
     /// 残留帧未归还帧池则会导致 D3D11VA 硬件帧池枯竭（画面冻结但音频前进）。
     /// </remarks>
     private unsafe void ClearPendingQueues()
@@ -706,10 +706,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         // ★ 先丢弃旧时间线的残留包/帧，避免混入新流造成参考帧错乱或 D3D11VA 硬件帧池枯竭。
         ClearPendingQueues();
 
-        // 🔴 重播/seek 全量重建（2026-08-07）：D3D11VA/VP9 硬件解码器在流末 EOF 排干后，
+        // 重播/seek 全量重建：D3D11VA/VP9 硬件解码器在流末 EOF 排干后，
         // 仅 avcodec_flush_buffers 无法让其重新对齐到新流首关键帧——它会把重播首帧当旧流续帧
-        // 一路丢帧直到下一个真关键帧（实测 m1.webm 跳到 10.267s）→ 视频冻结 ~10s。
-        // 根因：硬件解码器内部参考帧/序列状态在 EOF 后未干净复位。
+        // 一路丢帧直到下一个真关键帧 → 视频冻结较长时间。
+        // 成因：硬件解码器内部参考帧/序列状态在 EOF 后未干净复位。
         // 唯一稳妥修复=关闭旧 AVCodecContext 并完整重建（同 Initialize 路径，复用原 settings）。
         // ★ 引用计数配对（不泄漏共享 D3D11 设备）：先 Dispose 旧 _hwDeviceCtx（av_buffer_unref 释放时
         //   ffmpeg 内部 Release 掉 InitializeD3D11VA 时对共享设备加的 2 个引用），再 avcodec_free_context，
@@ -748,7 +748,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         if (_disposed) return;
         _disposed = true;
 
-        // 收尾帧路径统计（零拷贝验证铁证）：与 MFVideoDecoder 的 [DXVA-FRAMEPATH] 对称。
+        // 收尾帧路径统计（零拷贝验证计数）：与 MFVideoDecoder 的 [DXVA-FRAMEPATH] 对称。
         // 判据：硬解激活(IsHardwareAccelerated) 且 GPU 零拷贝帧 > 0 才算「硬件没白用」；
         // 若硬解激活但 GPU=0，说明帧被下载回系统内存 —— 属于「半硬解」缺陷，必须暴露而非静默。
         if (!_frameSummaryLogged)
@@ -909,7 +909,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <remarks>
     /// <para>同步操作（sync 分类）：FFmpeg hwdevice_ctx API 和 COM 操作均为同步原生调用，无 I/O await。</para>
     /// <para>共享设备零拷贝链路：渲染器 ID3D11Device → FFmpeg D3D11VA → 硬解纹理 → D3D11Renderer CopySubresourceRegion。</para>
-    /// <para><b>🔴 引用计数所有权</b>：FFmpeg 在销毁 AVHWDeviceContext 时<b>必定</b> Release
+    /// <para><b>引用计数所有权</b>：FFmpeg 在销毁 AVHWDeviceContext 时<b>必定</b> Release
     /// <c>device</c> 与 <c>device_context</c>（官方文档明示，与是否用户提供无关）。因本方法借用的是
     /// 渲染器工厂持有的共享设备，故写入 hwctx 前对两者各 <c>Marshal.AddRef</c> 一次；否则工厂
     /// Dispose 时将在已销毁对象上 Release，产生确定性 AccessViolation。详见方法内注释。</para>
@@ -936,7 +936,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             AVHWDeviceContext* hwCtx = (AVHWDeviceContext*)hwRef->data;
             IntPtr* hwctxPtrs = (IntPtr*)hwCtx->hwctx;
 
-            // 🔴 FFmpeg 所有权契约（hwcontext_d3d11va.h 官方文档，device / device_context 两字段逐字相同）：
+            // FFmpeg 所有权契约（hwcontext_d3d11va.h 官方文档，device / device_context 两字段逐字相同）：
             //   "Deallocating the AVHWDeviceContext will always release this interface,
             //    and it does not matter whether it was user-allocated."
             //   即 av_buffer_unref 引用归零时 d3d11va_device_free() 会对 device 与 device_context
@@ -988,7 +988,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <remarks>
     /// <para>D3D11VA 帧布局：data[0] = ID3D11Texture2D*（纹理数组），data[1] = 纹理数组索引。</para>
     /// <para>输出 PixelFormat.NV12（D3D11VA 标准输出格式）。</para>
-    /// <para><b>🔴 切片保活（2026-08-06 §29）</b>：必须 <c>av_frame_clone</c> 持有 <c>buf[0]</c> 引用，
+    /// <para><b>切片保活</b>：必须 <c>av_frame_clone</c> 持有 <c>buf[0]</c> 引用，
     /// 否则调用方 <c>DecodeCore</c> 的 <c>finally { av_frame_free }</c> 会让切片立即回池，
     /// 解码器随后把新图像写进同一切片 ⇒ 渲染时拷到错帧（画面抽帧后跳场景）。
     /// 与软解 BGRA 零拷贝路径、MediaCodec 表面路径保持同一所有权模型。</para>
@@ -1006,7 +1006,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         if (texturePtr == IntPtr.Zero)
             throw new InvalidOperationException("D3D11VA 帧纹理指针为空");
 
-        // 🔴 切片保活：av_frame_clone = av_frame_alloc + av_frame_ref，对 buf[0]（池内切片）引用计数 +1。
+        // 切片保活：av_frame_clone = av_frame_alloc + av_frame_ref，对 buf[0]（池内切片）引用计数 +1。
         //    不拷贝任何显存，纯引用计数操作，零拷贝语义不变。
         AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
         if (clone == null)

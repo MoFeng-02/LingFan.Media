@@ -10,7 +10,7 @@ namespace LingFan.Media.Renderers.D3D11.Shaders;
 /// <para><b>职责</b>：帧尺寸 ≠ BackBuffer 尺寸（GPU 双线性缩放）或 YUV 像素格式
 /// （YUV420P/YUV422P/YUV444P/NV12/NV21）时，走全屏三角形 + PixelShader 采样呈现；
 /// 替代 CopyResource 尺寸一致限制。</para>
-/// <para><b>设计（相对任务示例的简化，均有依据）</b>：</para>
+/// <para><b>设计（相对示例的简化，均有依据）</b>：</para>
 /// <list type="bullet">
 /// <item>VS 用 <c>SV_VertexID</c> 生成全屏三角形 → 无需 InputLayout / VertexBuffer（少 2 个 COM 对象、零顶点上传）。</item>
 /// <item>RGBA32 直接建 <c>R8G8B8A8_UNorm</c> 纹理由 GPU 采样 → 消除 CPU R/B 通道交换循环。</item>

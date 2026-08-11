@@ -162,7 +162,7 @@ public sealed class FrameQueue
     /// </summary>
     /// <param name="pool">帧对象池（可为 null = Dispose 残留帧而非归还）。</param>
     /// <remarks>
-    /// 🔴 必须 Pool-aware：残留帧归还到池而非 Dispose，否则重播/多次 Seek 会持续消耗池容量直至饿死
+    /// 必须 Pool-aware：残留帧归还到池而非 Dispose，否则重播/多次 Seek 会持续消耗池容量直至饿死
     /// （帧池 maxSize=16，多次 Reset 直接 Dispose 会令后续解码无帧可取）。
     /// </remarks>
     public void Reset(IFramePool<VideoFrame>? pool = null)

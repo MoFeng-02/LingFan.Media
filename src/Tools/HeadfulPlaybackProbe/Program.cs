@@ -22,23 +22,18 @@ using Microsoft.Extensions.Logging;
 namespace HeadfulPlaybackProbe;
 
 /// <summary>
-/// 最小可验证程序 <b>b3</b>：<b>有头（Headful）全链路</b>——
-/// 真实 D3D11 SwapChain 上屏（GPU Present） + 真实 WASAPI 出声，二者共用真实 MediaPlayer + 真实 MF 解码。
+/// 有头（Headful）全链路验证程序：真实 D3D11 SwapChain 上屏（GPU Present）与真实 WASAPI 出声，
+/// 二者共用同一个 MediaPlayer 与 MF 解码链。
 /// </summary>
 /// <remarks>
-/// <para>对应单元测试 <c>HeadfulPlaybackEndToEndTests</c> 的两个 <c>[Fact]</c>：</para>
+/// <para>命令行开关用于隔离变量：</para>
 /// <list type="bullet">
-///   <item><c>PlayAsync_HeadfulVideo_D3D11Present_ReceivesFrames</c>：隐藏窗口 + D3D11 计数装饰器 + Present≥5。</item>
-///   <item><c>PlayAsync_HeadfulAudio_Wasapi_InitializesAndPlays</c>：纯音频文件 + 真实 WASAPI 持续出声 ≥9s。</item>
+///   <item><c>--visible</c>：窗口真正可见，便于肉眼确认上屏。</item>
+///   <item><c>--no-video</c>：只验 WASAPI 出声。</item>
+///   <item><c>--no-audio</c>：只验 D3D11 上屏。</item>
+///   <item><c>--category</c>：启用 IAudioClient2 会话分类做对照（默认 Movie）。</item>
 /// </list>
-/// 本程序把两者合并到「一个带真实窗口的进程」里跑，并支持隔离变量：</para>
-/// <list type="bullet">
-///   <item><c>--visible</c>：窗口真正可见（测试因 testhost 无窗口只能用隐藏窗口；本程序是真实进程，建议开可见亲眼确认上屏）。</item>
-///   <item><c>--no-video</c>：只验 WASAPI 出声（等价于第二个 Fact）。</item>
-///   <item><c>--no-audio</c>：只验 D3D11 上屏（等价于第一个 Fact）。</item>
-///   <item><c>--category</c>：启用 IAudioClient2 会话分类做对照（默认 Movie，避开 driver 对 BackgroundCapableMedia 的 0xC0000005）。</item>
-/// </list>
-/// <para>窗口代码用 <c>[LibraryImport]</c>（AOT 合规）重写，不复用测试里的 <c>[DllImport]</c> 版本。</para>
+/// <para>窗口代码使用 <c>[LibraryImport]</c> 以满足 AOT 要求。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal static class Program
@@ -52,9 +47,9 @@ internal static class Program
     {
         try
         {
-            // 🔴 必须在创建任何窗口之前：否则非 DPI-aware 进程下 DWM 会把 640x480 后备位图
-            // 按缩放比（125%/150%）非整数倍拉伸到物理像素——这层拉伸发生在 D3D11 之外，
-            // 会凭空造出竖条纹摩尔并随画面运动游走，且任何 backbuffer 回读都看不见它。
+            // 必须在创建任何窗口之前调用：非 DPI-aware 进程下 DWM 会把后备位图按缩放比
+            // （125%/150%）非整数倍拉伸到物理像素，这层拉伸发生在 D3D11 之外，
+            // 会造出随画面运动游走的竖条纹摩尔，且 backbuffer 回读看不见它。
             // --no-dpi-aware 保留反向对照能力。
             if (!HasFlag(args, "--no-dpi-aware"))
             {
@@ -85,40 +80,35 @@ internal static class Program
         bool visible = HasFlag(args, "--visible");
         bool enableCategory = HasFlag(args, "--category");
         bool softwareDecode = HasFlag(args, "--software-decode");
-        // —— WASAPI 模式对照开关（2026-08-03）——
-        // --exclusive：强制独占模式（默认共享）。--polling：关闭事件驱动改用 V1 轮询（默认事件驱动）。
+        // —— WASAPI 模式对照开关 ——
+        // --exclusive：强制独占模式（默认共享）。--polling：关闭事件驱动改用轮询（默认事件驱动）。
         // --audio-warmup：开启音频预热（默认关闭，见下方说明）。
         bool exclusiveMode = HasFlag(args, "--exclusive");
         bool pollingMode = HasFlag(args, "--polling");
         bool audioWarmup = HasFlag(args, "--audio-warmup");
         bool fullPlayback = HasFlag(args, "--full");
         bool repeat = HasFlag(args, "--repeat");
-        // 🔴 边界①重播验证：--full 或 --repeat 时默认启用（必须先到达 Ended 才能重播），--no-replay 可关闭。
+        // 重播验证：--full 或 --repeat 时默认启用（必须先到达 Ended 才能重播），--no-replay 可关闭。
         if (repeat) fullPlayback = true;   // --repeat 隐含 --full（重播要求先自然结束）
         bool replayTest = (fullPlayback || repeat) && !HasFlag(args, "--no-replay");
         Console.WriteLine($"[HEADFUL-WASAPI-MODE] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup} Full={fullPlayback} Replay={replayTest}");
-        // 🔴 音频相位诊断：--full 时打开 LINGFAN_AUDIO_DIAG，让 AudioPipeline 打点 ReadAsync/Decode/解码间隙，
-        // 定位 headful 断音根因（纯诊断、零架构风险）。须在构建播放器前设置（静态字段只读一次）。
+        // 诊断开关须在构建播放器前设置（相关静态字段只读取一次）。
         if (fullPlayback)
         {
+            // 音频相位诊断：让 AudioPipeline 打点 ReadAsync/Decode/解码间隙。
             Environment.SetEnvironmentVariable("LINGFAN_AUDIO_DIAG", "1");
-            // 🔴 EOS 时序诊断：让 Video/AudioPipeline 在「自然完成瞬间」打印主时钟位置，
-            // 用于抓偶发「提前结束」根因（完成是管线驱动、非时钟驱动；若 masterTime 明显 < Duration，
-            // 说明包队列/帧队列提前耗尽 → 上游 demux/MFT 早 EOF 或竞态）。
+            // EOS 时序诊断：让 Video/AudioPipeline 在自然完成瞬间打印主时钟位置。
+            // 完成由管线驱动而非时钟驱动；若 masterTime 明显小于 Duration，说明包队列/帧队列提前耗尽。
             Environment.SetEnvironmentVariable("LINGFAN_EOS_DIAG", "1");
-            // 🔴 A/V 同步诊断：让 VideoPipeline 在每次呈现瞬间打印 videoPTS − audioClock，
-            // 定量判断「音画偏差量级 / 是否随播放增长 / 是否仅起始段」——用于定位音画不同步根因。
-            // 纯诊断、零架构风险（仅 full 跑自动开，避免污染最小逻辑回归）。
+            // A/V 同步诊断：让 VideoPipeline 在每次呈现瞬间打印 videoPTS − audioClock，
+            // 用于定量观察音画偏差量级及其随播放时间的变化。
             Environment.SetEnvironmentVariable("LINGFAN_SYNC_DIAG", "1");
-            // 🔴 音频播放时钟（根治路径）：必须打开，否则 MediaPlayer.cs:253 的 SetMasterClockProvider
-            // 不执行、主时钟回落到旧的 OnAudioFrameSubmitted→SyncTo(frame.Timestamp)，我连改三轮的
-            // GetPlaybackPositionDirect 校准全成死代码、SYNC 日志测的也不是它。该开关默认关
-            // （ClockTuning.UseAudioPlaybackClock=false），交接文档标注「建议常开」。
+            // 音频播放时钟：不打开则 SetMasterClockProvider 不执行，主时钟回落到按提交帧时间戳同步，
+            // 播放位置校准不生效。该开关默认关（ClockTuning.UseAudioPlaybackClock=false），建议常开。
             Environment.SetEnvironmentVariable("LINGFAN_CLOCK_AUDIO_POS", "1");
         }
-        // 🔴 音画同步微调（2026-08-04）：--sync-lead=NN 把主时钟前移 N 毫秒以吸收视频呈现恒定领先
-        // （与 VLC 对齐用，默认 0=不补偿）。注入 LINGFAN_SYNC_LEAD_MS 供 WasapiRenderLoop 每次 Start 读取。
-        // 须在构建播放器前设置（静态字段只读一次）。
+        // 音画同步微调：--sync-lead=NN 把主时钟前移 N 毫秒以吸收视频呈现的恒定领先（默认 0=不补偿）。
+        // 注入 LINGFAN_SYNC_LEAD_MS 供 WasapiRenderLoop 每次 Start 读取，须在构建播放器前设置。
         double syncLeadMs = ParseDouble(args, "--sync-lead", 0);
         if (syncLeadMs != 0)
             Environment.SetEnvironmentVariable("LINGFAN_SYNC_LEAD_MS", syncLeadMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -127,14 +117,14 @@ internal static class Program
             ?? Path.Combine(Directory.GetCurrentDirectory(), "TestInfo", "Diagnostics", "HeadfulPlaybackProbe");
         string? file = ParseOption(args, "--file");
         double seconds = ParseDouble(args, "--seconds", 12);
-        // 🔴 缩小混叠对照实验：默认 640x480 对 1906x1080 是 2.98x 缩小；平面纹理已开 MipLevels=0 + GenerateMips（mipmap 三线性抑制摩尔纹），
-        // 双线性抽头在多倍缩小下必然高频欠采样 ⇒ 摩尔纹竖条 + 随运动游走。
-        // 传 --window-w 1906 --window-h 1080 做 1:1 对照：若 1:1 干净，则混叠坐实为根因。
+        // 缩小混叠对照实验：平面纹理已开 MipLevels=0 + GenerateMips（mipmap 三线性抑制摩尔纹）；
+        // 双线性抽头在多倍缩小下会高频欠采样，表现为随运动游走的摩尔纹竖条。
+        // 用 --window-w / --window-h 指定与源同尺寸可做 1:1 对照。
         int windowW = (int)ParseDouble(args, "--window-w", DefaultWindowW);
         int windowH = (int)ParseDouble(args, "--window-h", DefaultWindowH);
         if (windowW <= 0 || windowH <= 0)
         {
-            Console.Error.WriteLine($"⚠ 窗口尺寸非法：{windowW}x{windowH}");
+            Console.Error.WriteLine($"窗口尺寸非法：{windowW}x{windowH}");
             return 2;
         }
 
@@ -145,7 +135,7 @@ internal static class Program
 
         if (!doVideo && !doAudio)
         {
-            Console.Error.WriteLine("⚠ --no-video 与 --no-audio 不能同时使用。");
+            Console.Error.WriteLine("--no-video 与 --no-audio 不能同时使用。");
             return 2;
         }
 
@@ -153,7 +143,7 @@ internal static class Program
             file = ResolveDefaultMedia(doVideo);
         if (file is null || !File.Exists(file))
         {
-            Console.Error.WriteLine($"⚠ 找不到媒体文件：{file ?? "(null)"}");
+            Console.Error.WriteLine($"找不到媒体文件：{file ?? "(null)"}");
             return 2;
         }
 
@@ -163,18 +153,17 @@ internal static class Program
 
         var services = new ServiceCollection();
         services.AddSingleton<ILoggerFactory>(loggerFactory);
-        // 🔴 AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
-        // 必须接在 builder 链上调，不能对 ServiceCollection 直接调。捕获 builder 以便后续手动注册 + 扩展调用。
-        // 🔴 后端注册顺序 = 运行时回退优先级：MF → FFmpeg。
-        //    MF 只经系统 MFT 支持 H264/H265，遇 VP9/AV1（.webm）会在 OpenAsync 判定 Unknown 直接失败；
-        //    没有下家时整条链就是「没有已注册的后端能够打开该媒体源」——这正是有头探针放 webm 会 FAIL 的原因。
-        //    补 FFmpeg 作下家后，MP4/H264 仍由 MF 命中（继续用于 DXVA 零拷贝取证），WebM 自动落到 FFmpeg。
-        //    VLC 不在此注册：它需要 libvlc 原生（VideoLAN.LibVLC.Windows，百 MB 级）且要在 Main 里前置 PATH，
-        //    会把这个「MF 零拷贝诊断探针」拖重；VLC 有头验证走专用的 VlcHeadfulPlaybackProbe。
+        // AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
+        // 必须接在 builder 链上调用，不能对 ServiceCollection 直接调用。
+        // 后端注册顺序即运行时回退优先级：MF → FFmpeg。
+        //    MF 经系统 MFT 支持 H264/H265，遇 VP9/AV1（.webm）会在 OpenAsync 判定 Unknown 而失败；
+        //    补 FFmpeg 作下家后，MP4/H264 仍由 MF 命中，WebM 自动落到 FFmpeg。
+        //    VLC 不在此注册：它需要 libvlc 原生库且要在 Main 里前置 PATH，会显著加重本探针；
+        //    VLC 有头验证走专用的 VlcHeadfulPlaybackProbe。
         var builder = services.AddLingFanMedia().AddMediaFoundation(o =>
         {
-            // 🔴 诊断开关：强制软件解码，使帧为 CPU SoftwareFrameResource（NV12），
-            // 便于与 VLC 逐帧对照，且绕开 DXVA 纹理路径（落盘更干净）。
+            // 诊断开关：强制软件解码，使帧为 CPU SoftwareFrameResource（NV12），
+            // 便于逐帧对照，且绕开 DXVA 纹理路径。
             if (softwareDecode)
             {
                 o.EnableHardwareDecoding = false;
@@ -192,19 +181,19 @@ internal static class Program
         CountingVideoRendererFactory? countingFactory = null;
         if (doVideo)
         {
-            // 🔴 必须显式注册 D3D11 工厂（装饰器包裹）。AddLingFanMedia 只注册契约骨架，
-            // 不注册具体渲染器——缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
+            // 必须显式注册 D3D11 工厂（装饰器包裹）。AddLingFanMedia 只注册契约骨架，
+            // 不注册具体渲染器；缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
             // 装饰器包裹真实 D3D11RendererFactory 以精确统计 Present 调用。
             var d3d11Factory = new D3D11RendererFactory(loggerFactory);
             countingFactory = new CountingVideoRendererFactory(d3d11Factory, saveFrames, saveDir);
             builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
-            // 🔴 保住 IGpuDeviceContext 注册：AddD3D11Renderer() 原本会注册它（cast 回 D3D11RendererFactory），
-            // 手动装饰时必须补回，否则硬解路径失效（软件解码兜底虽能跑，但违背设计意图）。
+            // 保住 IGpuDeviceContext 注册：AddD3D11Renderer() 原本会注册它（cast 回 D3D11RendererFactory），
+            // 手动装饰时必须补回，否则硬解路径失效而退化为软件解码。
             builder.Services.AddSingleton<IGpuDeviceContext>(sp => d3d11Factory.Context);
         }
         else
         {
-            // 纯音频用例：NoOp 视频隔离变量（与 HeadfulPlaybackEndToEndTests 第二个 Fact 同款组合）
+            // 纯音频用例：用 NoOp 视频渲染器隔离变量
             builder.AddHeadlessRenderer();
         }
 
@@ -214,7 +203,7 @@ internal static class Program
             {
                 o.EnableBackgroundCapableSession = enableCategory;
                 o.ExclusiveMode = exclusiveMode;       // --exclusive 强制独占
-                o.EventDrivenMode = !pollingMode;       // --polling 退回 V1 轮询
+                o.EventDrivenMode = !pollingMode;       // --polling 退回轮询模式
             });
         else
             builder.AddSilentAudioOutput();
@@ -231,10 +220,9 @@ internal static class Program
             if (sampleRate == 0) sampleRate = f.SampleRate;
         };
 
-        // 🔴 音频间隙诊断（headful ~10s 断音定位）：对比「主时钟位置」与「已提交音频时长」。
-        //   backlog = pos - submittedSec（秒）：>0 表示音频落后主时钟 ⇒ 提交停滞/欠载 ⇒ 静音间隙；
-        //   stall = 主时钟前进 >100ms 但 submittedSamples 未变 ⇒ 音频管线停喂（确定静音）。
-        // 纯诊断、零架构风险；结论用于定位根因，而非盲改音频管线。
+        // 音频间隙诊断：对比「主时钟位置」与「已提交音频时长」。
+        //   backlog = pos - submittedSec（秒）：大于 0 表示音频落后主时钟，即提交停滞/欠载导致静音间隙；
+        //   stall = 主时钟前进超过 100ms 但 submittedSamples 未变，即音频管线停止喂数据。
         double maxAudioBacklogMs = 0;
         int audioGapCount = 0;
         int audioStallCount = 0;
@@ -245,14 +233,14 @@ internal static class Program
         int presentCount = 0;
         bool videoPass = !doVideo;
         bool audioPass = !doAudio;
-        // 🔴 边界①：重播 Ended→Playing 判定（外层声明，使 try 内的重播块与 try 外的 overall 共享作用域）。
+        // 重播 Ended→Playing 判定（外层声明，使 try 内的重播块与 try 外的 overall 共享作用域）。
         bool replayPass = !replayTest;
 
         try
         {
-            // —— MF 预热：把「解码器 MFT 首次激活」的 2~3s 冷启动成本挪到可见窗口出现之前 ——
-            // 否则窗口一出来就白/黑屏干等 3s。预热提前打开一次目标文件、强制激活 H.264/AAC 解码器，
-            // 正式 OpenAsync 复用已加载的解码器，几乎瞬时完成。窗口随后一出现即直接出画面。
+            // —— MF 预热：把「解码器 MFT 首次激活」的冷启动成本挪到可见窗口出现之前 ——
+            // 预热提前打开一次目标文件、强制激活 H.264/AAC 解码器，正式 OpenAsync 复用已加载的
+            // 解码器，几乎瞬时完成，窗口一出现即可出画面，避免窗口出现后长时间空屏。
             var warmSw = Stopwatch.StartNew();
             try
             {
@@ -266,12 +254,12 @@ internal static class Program
             }
 
             // —— WASAPI 预热（opt-in，--audio-warmup）——
-            // 真·修复：把「音频引擎/端点句柄」提取为 Infrastructure Singleton（IAudioEngine / WasapiAudioEngine）。
-            // 预热时在专用 STA 线程建立一条常驻 anchor 流（Initialize + 默认 Start），使 OS 音频引擎（audiodg）
-            // 在进程内保持热态；后续每个 Transient Session（WasapiOutput）的 IAudioClient.Initialize 走热路径，
-            // 免去 ~2.5s 冷启动。这与「host 持 WasapiOutput 单例」方案不同——Session 状态对象保持 Transient，
-            // 绝不升 Singleton（DI 宪法：长期原生资源 Singleton / Session 状态 Transient）。二者零耦合，
-            // 仅通过"OS 引擎已热"这一进程级副作用间接协作。预热失败一律降级为未预热，不影响播放。
+            // 音频引擎/端点句柄由 Infrastructure 层单例持有（IAudioEngine / WasapiAudioEngine）。
+            // 预热时在专用 STA 线程建立一条常驻 anchor 流（Initialize + 默认 Start），使 OS 音频引擎
+            // 在进程内保持热态；后续每个 Transient 会话（WasapiOutput）的 IAudioClient.Initialize 走热路径，
+            // 免去冷启动等待。会话状态对象保持 Transient，不升为单例：长期原生资源用单例、会话状态用
+            // Transient，二者仅通过「OS 引擎已热」这一进程级副作用间接协作。
+            // 预热失败一律降级为未预热，不影响播放。
             if (audioWarmup)
             {
                 var audioWarmSw = Stopwatch.StartNew();
@@ -289,17 +277,17 @@ internal static class Program
             }
             else
             {
-                Console.WriteLine("[HEADFUL-WASAPI] 未启用音频预热（加 --audio-warmup 开启；引擎常驻保活可消除 ~2.5s 冷启动）");
+                Console.WriteLine("[HEADFUL-WASAPI] 未启用音频预热（加 --audio-warmup 开启；引擎常驻保活可消除冷启动等待）");
             }
 
             if (doVideo)
             {
-                // 🔴 真实可见窗口：专用 STA 线程 + 消息泵（D3D11 SwapChain 需要有效 HWND + 消息循环）。
-                // 测试用隐藏窗口因 testhost 无窗口只能如此；本程序是真实进程，用 --visible 可肉眼确认上屏。
+                // 真实可见窗口：专用 STA 线程 + 消息泵（D3D11 SwapChain 需要有效 HWND + 消息循环）。
+                // 加 --visible 可肉眼确认上屏。
                 win = new RenderWindow(windowW, windowH, visible);
                 if (win.Hwnd == IntPtr.Zero)
                 {
-                    Console.WriteLine("⚠ 窗口创建失败（HWND=0），视频有头验证将不可靠。");
+                    Console.WriteLine("窗口创建失败（HWND=0），视频有头验证将不可靠。");
                 }
                 else
                 {
@@ -307,10 +295,10 @@ internal static class Program
                     bool clientMatches = win.ClientW == windowW && win.ClientH == windowH;
                     Console.WriteLine(
                         $"[HEADFUL-WND] 请求={windowW}x{windowH} 实测客户区={win.ClientW}x{win.ClientH} " +
-                        $"DPI={win.Dpi}({scale:P0}) | 客户区与请求{(clientMatches ? "一致" : "不一致⚠")} | " +
+                        $"DPI={win.Dpi}({scale:P0}) | 客户区与请求{(clientMatches ? "一致" : "不一致")} | " +
                         $"SwapChain 将按实测客户区建立");
                     if (!clientMatches)
-                        Console.WriteLine("[HEADFUL-WND] ⚠ 客户区≠请求：说明存在窗口几何虚拟化，DWM 会额外拉伸一层。");
+                        Console.WriteLine("[HEADFUL-WND] 客户区≠请求：说明存在窗口几何虚拟化，DWM 会额外拉伸一层。");
                 }
             }
 
@@ -324,13 +312,13 @@ internal static class Program
             if (doVideo && win is not null && win.Hwnd != IntPtr.Zero)
             {
                 if (countingFactory!.Last is null)
-                    Console.WriteLine("⚠ D3D11 渲染器未创建（环境无 GPU/显示），跳过视频有头验证。");
+                    Console.WriteLine("D3D11 渲染器未创建（环境无 GPU/显示），跳过视频有头验证。");
                 else
-                    // 🔴 用「实测客户区」而非构造入参：两者不等时按入参建 SwapChain 会让 DXGI 再叠一层拉伸。
+                    // 用「实测客户区」而非构造入参：两者不等时按入参建 SwapChain 会让 DXGI 再叠一层拉伸。
                     countingFactory.Last.Attach(new HwndRenderTarget(win.Hwnd,
                         win.ClientW > 0 ? win.ClientW : windowW,
                         win.ClientH > 0 ? win.ClientH : windowH));
-                // 收敛后 D3D11 经统一 FrameChannel 订阅 Present（与 D3D11GpuPresenter 行为一致；原 else 分支已移除）。
+                // D3D11 经统一 FrameChannel 订阅 Present（与 D3D11GpuPresenter 行为一致）。
                 // 不订阅则 PresentCount 恒为 0，验证失效。
                 player.VideoFrameAvailable += f => countingFactory.Last?.Present(f);
             }
@@ -340,7 +328,7 @@ internal static class Program
 
             var startPos = player.Position;
             var poll = Stopwatch.StartNew();
-            // 🔴 播放结束判定：--full 时播到真实结束（player.State == MediaState.Ended），
+            // 播放结束判定：--full 时播到真实结束（player.State == MediaState.Ended），
             // 否则按 --seconds（默认 12）计时。带安全上限防 Ended 未触发导致死循环。
             while (true)
             {
@@ -350,7 +338,7 @@ internal static class Program
                 if (visible || verbose)
                     Console.WriteLine($"  t={poll.Elapsed.TotalSeconds:F1}s pos={player.Position:g} " +
                                       $"present={presentCount} state={player.State}");
-                // 🔴 音频间隙检测：主时钟位置 vs 已提交音频时长
+                // 音频间隙检测：主时钟位置 vs 已提交音频时长
                 if (doAudio && sampleRate > 0 && player.State == MediaState.Playing)
                 {
                     double subSec = submittedSamples / (double)sampleRate;
@@ -377,9 +365,9 @@ internal static class Program
                 }
                 if (fullPlayback)
                 {
-                    // 🔴 --full：播到播放器自然发出的 Ended 为止。
-                    // 注意：pos 来自音频设备时钟，流末后仍会推进越过 Duration；若以 pos 提前退出会抢在
-                    // A/V 双管线 drain 完成（≈Duration 时刻）之前退出，看不到 Ended。故不以 pos 作结束信号，
+                    // --full：播到播放器自然发出的 Ended 为止。
+                    // 注意：pos 来自音频设备时钟，流末之后仍会推进并越过 Duration；若以 pos 提前退出，
+                    // 会抢在 A/V 双管线 drain 完成之前退出而看不到 Ended。故不以 pos 作结束信号，
                     // 仅用 Duration 之后 8s 作兜底，防播放完成检测失效时死等。
                     if (player.State == MediaState.Ended) break;
                     double cap = player.Duration.TotalSeconds + 8;
@@ -407,7 +395,7 @@ internal static class Program
                 videoPass = presentCount >= 5;
                 Console.WriteLine($"[HEADFUL-VIDEO] d3d11PresentCount={presentCount}  => " +
                                   $"{(videoPass ? "PASS" : "FAIL (present<5)")}");
-                // 🔴 诊断：视频丢帧数。若 ≈25（932→957 差值），即坐实末段尾帧被 Synchronizer 判 Drop 而非呈现
+                // 诊断：视频丢帧数。与 present 计数对照可判断尾帧是被 Synchronizer 判定丢弃还是已呈现。
                 Console.WriteLine($"[HEADFUL-VIDEO-DROP] droppedFrames={player.VideoDroppedFrames} present={presentCount}");
             }
             if (doAudio)
@@ -418,30 +406,27 @@ internal static class Program
                 audioPass = playedSec >= minPlayed;
                 Console.WriteLine($"[HEADFUL-AUDIO] played={playedSec:F1}s submitted≈{subSec:F1}s  => " +
                                   $"{(audioPass ? "PASS" : $"FAIL (played<{minPlayed:F0}s)")}");
-                // 🔴 间隙诊断摘要：唯一真欠载信号是「主时钟跑过已提交音频时长」即 backlog>150ms（设备把缓冲播干）。
-                // stalls（submittedSamples 跨轮未变）是批量提交的测量假象（SubmitBatch 整段 WaitForBufferSpace 期间
-                // submittedSamples 冻结而主时钟平滑前进），不能当欠载依据——故断言只认 maxBacklog。
+                // 间隙诊断摘要：真欠载信号只有「主时钟跑过已提交音频时长」，即 backlog>150ms（设备把缓冲播干）。
+                // stalls（submittedSamples 跨轮未变）是批量提交造成的测量假象：SubmitBatch 整段 WaitForBufferSpace
+                // 期间 submittedSamples 不变而主时钟平滑前进，故不能作欠载依据，断言只认 maxBacklog。
                 bool realAudioGap = maxAudioBacklogMs > 150;
                 Console.WriteLine($"[HEADFUL-AUDIO-GAP] maxBacklog={maxAudioBacklogMs:F0}ms " +
                                   $"gaps(>150ms)={audioGapCount} stalls={audioStallCount} " +
-                                  $"=> {(realAudioGap ? "⚠ 检测到音频间隙（真欠载）" : "未检测到间隙")}");
+                                  $"=> {(realAudioGap ? "检测到音频间隙（真欠载）" : "未检测到间隙")}");
                 if (audioStallCount > 0 && !realAudioGap)
                     Console.WriteLine($"  [HEADFUL-AUDIO-GAP] 注：stalls={audioStallCount} 均发生在 backlog=0 的连续播放中，" +
                                       $"属批量提交节奏（非欠载/断音）；真欠载以 backlog>150ms 为准。");
             }
 
-            // —— 边界①：重播 Ended→Playing 无缝从头 ——
+            // —— 重播：Ended→Playing 无缝从头（--repeat/--full 启用，--no-replay 关闭）——
             // 第一次自然结束后立即二次 PlayAsync，验证：
-            //   (a) 状态机 Ended→Playing 合法转换（PlaybackController 已补该转换）；
-            //   (b) 时钟归零、位置回绕到 0（MediaPlayer.PlayAsync 在 Ended 态走 SeekAsync(0)+_clock.Reset/Start 分支）；
-            //   (c) 双管线从排干态(_isRunning==false)重启，present 从 0 重新开始累计。
-            // 仅 --full 默认启用（需先到达 Ended），可用 --no-replay 关闭。
-            // 🔴 边界①：重播 Ended→Playing 无缝从头（--repeat/--full 启用）。
-            // 第一次自然结束后立即二次 PlayAsync，验证状态机合法转换、时钟归零、双管线从排干态重启。
+            //   (a) 状态机 Ended→Playing 的合法转换；
+            //   (b) 时钟归零、位置回绕到 0（PlayAsync 在 Ended 态走 SeekAsync(0) + 时钟重置分支）；
+            //   (c) 双管线从排干态重启，present 从 0 重新开始累计。
             if (replayTest)
             {
                 Console.WriteLine();
-                Console.WriteLine("[HEADFUL-REPLAY] 边界①：第一次播放已 Ended，立即二次 PlayAsync 验证重播无缝从头…");
+                Console.WriteLine("[HEADFUL-REPLAY] 第一次播放已 Ended，立即二次 PlayAsync 验证重播无缝从头…");
                 int presentBeforeReplay = presentCount;
                 double posBeforeReplay = player.Position.TotalSeconds;
                 await player.PlayAsync();
@@ -496,7 +481,7 @@ internal static class Program
         Console.WriteLine();
         if (saveFrames > 0)
             Console.WriteLine($"[HEADFUL-SAVE] 共落盘 {FrameDumper.DumpedCount} 张帧 -> {saveDir}");
-        Console.WriteLine(overall ? "✅ 总体 PASS" : "❌ 总体 FAIL");
+        Console.WriteLine(overall ? "总体 PASS" : "总体 FAIL");
         return overall ? 0 : 1;
     }
 
@@ -539,10 +524,9 @@ internal static class Program
         public void Present(VideoFrame frame)
         {
             int n = Interlocked.Increment(ref PresentCount);
-            // 🔴 诊断：把渲染器「收到的真实帧」落 PNG（在 _inner.Present 之前同步拷贝，
-            // 不持有帧引用）。CPU 软解帧→NV12/BGRA 转换；GPU 硬解纹理→ReadbackToCpu。
-            // 用途：若这些 PNG 干净但可见窗口花屏，则 bug 在 D3D11 上传/Present；
-            // 若这些 PNG 也花，则 bug 在上游解码。
+            // 诊断：把渲染器收到的真实帧落 PNG（在 _inner.Present 之前同步拷贝，不持有帧引用）。
+            // CPU 软解帧走 NV12/BGRA 转换；GPU 硬解纹理走 ReadbackToCpu。
+            // 若落盘图干净而窗口画面异常，问题在 D3D11 上传/Present；若落盘图同样异常，问题在上游解码。
             if (_saveFrames > 0 && n % _saveFrames == 0)
                 FrameDumper.DumpFrame(frame, n, _saveDir);
             _inner.Present(frame);
@@ -620,7 +604,7 @@ internal static class Program
                 return;
             }
             if (_visible) NativeMethods.ShowWindow(Hwnd, 1);
-            // 🔴 实测客户区与 DPI：Attach 必须用「实测客户区」，用构造入参会让 SwapChain 与窗口错位 ⇒ DXGI 再拉伸一层。
+            // 实测客户区与 DPI：Attach 必须用实测客户区，用构造入参会让 SwapChain 与窗口错位，DXGI 会再拉伸一层。
             if (NativeMethods.GetClientRect(Hwnd, out var rc))
             {
                 ClientW = rc.Right - rc.Left;
@@ -733,8 +717,8 @@ internal static class Program
     }
 }
 
-// 🔴 帧落盘诊断：把渲染器收到的真实帧（CPU 软解 / GPU 硬解回读）转 RGBA 后写极简 PNG。
-// 自包含零依赖（与 b2 ImageUtil.Png 同款），不引用任何渲染器/后端模块，严守探针独立证据地位。
+// 帧落盘诊断：把渲染器收到的真实帧（CPU 软解 / GPU 硬解回读）转 RGBA 后写极简 PNG。
+// 自包含零依赖，不引用任何渲染器/后端模块，保持探针的独立取证地位。
 internal static class FrameDumper
 {
     internal static int DumpedCount;
@@ -895,9 +879,9 @@ internal static class FrameDumper
     }
 }
 
-// 🔴 [LibraryImport] 源生成要求载体类型为「顶级 partial」（嵌套 partial 类会被 SYSLIB1050 拒绝，
-// 且错误信息会误报为外层 Program 未标记 partial），故 user32 P/Invoke 放在本顶级 partial 类。
-// 全部用 EntryPoint="XxxW" + Utf16 封送，AOT 合规（替代测试里的 [DllImport] 写法）。
+// [LibraryImport] 源生成要求载体类型为顶级 partial 类型：嵌套 partial 类会被 SYSLIB1050 拒绝，
+// 且错误信息会误报为外层 Program 未标记 partial，故 user32 P/Invoke 放在本顶级 partial 类。
+// 全部使用 EntryPoint="XxxW" + Utf16 封送以满足 AOT 要求。
 internal static partial class NativeMethods
 {
     [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]

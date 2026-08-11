@@ -12,7 +12,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Concurrency;
 /// <para>用途：把 Media Foundation <c>IMFSourceReader</c> 的全部 COM 调用（<c>ReadSample</c> / <c>SetCurrentPosition</c> /
 /// <c>GetNativeMediaType</c> 等）钉在同一条线程上。MF 的同步 <c>ReadSample</c> 会缓存与调用线程相关的内部状态，
 /// 若每次调用落在不同的线程池线程（<c>Task.Run</c> 默认行为），可能触发原生堆损坏
-/// （<c>COR_E_EXECUTIONENGINE</c> / <c>0x80131506</c>，非确定性、常在若干次成功读取后才爆发）。</para>
+/// （<c>COR_E_EXECUTIONENGINE</c>，原生堆损坏，非确定性、常在若干次成功读取后才爆发）。</para>
 /// <para>后台线程为 MTA（首次 COM 调用由 CLR 自动初始化），与 MF SourceReader 兼容。</para>
 /// <para><b>生命周期</b>：<see cref="Shutdown"/> / <see cref="ShutdownAsync"/>（<see cref="Dispose"/> 委托前者）
 /// 调用 <see cref="BlockingCollection{T}.CompleteAdding"/> 后等待线程排空队列退出（可配置超时）。
@@ -58,11 +58,11 @@ internal sealed class SingleThreadTaskScheduler : TaskScheduler, IDisposable
 
     private void Loop()
     {
-        // ⚠️ 显式初始化 COM 单元（MTA）——根因修复（2026-07-31）。
+        // 显式初始化 COM 单元（MTA）——消除裸线程无单元导致的原生堆损坏。
         // 本线程由 new Thread 手动创建，CLR 不会自动 CoInitializeEx（仅 RCW 互操作路径才自动初始化）。
         // 该线程承载 MFDemuxer 对 IMFSourceReader 的全部原始 vtable P/Invoke 调用；
-        // 裸线程（无 COM 单元）调用 MF 原生 COM 会间歇踩坏原生堆 → COR_E_EXECUTIONENGINE / 0x80131506
-        // （非确定性、常在若干次成功读后才爆发）——即 MF e2e 冷启动 flaky 崩溃的根因。
+        // 裸线程（无 COM 单元）调用 MF 原生 COM 会间歇踩坏原生堆 → COR_E_EXECUTIONENGINE（原生堆损坏）
+        // （非确定性、常在若干次成功读后才爆发）——即 MF 端到端冷启动偶发崩溃的成因。
         // 选用 MTA：无需消息泵，与裸 foreach 循环兼容（STA 需 pump，不可用于此）。
         int coInitHr = MFInterop.CoInitializeEx(IntPtr.Zero, MFInterop.COINIT_MULTITHREADED);
         bool coInitialized = coInitHr >= 0; // S_OK 或 S_FALSE 均视为本线程成功初始化
@@ -76,11 +76,11 @@ internal sealed class SingleThreadTaskScheduler : TaskScheduler, IDisposable
         {
             // 仅当本线程成功初始化后才反初始化；若返回 RPC_E_CHANGED_MODE（已被他人初始化）则不配对 CoUninitialize。
             //
-            // 🔴 单元亲和铁律（2026-08-01 二次根因修复，勿回退）：
+            // 单元亲和原则（勿回退）：
             // CoUninitialize 会关闭本线程的 COM 库、对本线程加载过的 in-proc server 逐个 DllCanUnloadNow 卸载，
             // 并在本线程是最后一个 MTA 成员时拆除整个 MTA。因此**在本线程上创建的一切 COM 对象，
             // 其最终 Release 必须先于此处执行**——否则那次 Release 会跳进已卸载/已失效的 vtable，
-            // 造成原生访问违例，CLR 报 `Fatal error. Internal CLR error. (0x80131506)`（确定性，非 flaky）。
+            // 造成原生访问违例，CLR 报 `Fatal error. Internal CLR error.`（原生堆损坏，确定性，非 flaky）。
             // 调用方通过 TryRunOnSchedulerThread(Async) 把 Marshal.Release 投递回本线程完成，
             // 之后才允许发起 Shutdown 让本线程退出（见 MFDemuxer 两阶段关闭协议步骤③）。
             if (coInitialized)
@@ -92,7 +92,7 @@ internal sealed class SingleThreadTaskScheduler : TaskScheduler, IDisposable
     }
 
     // 关闭竞态（CompleteAdding 后入队）会抛 InvalidOperationException；TPL 将其包装为 TaskSchedulerException，
-    // 由 MFDemuxer.ReadPacketAsync 在 StartNew 站点捕获并走 EOS 收尾（见修复方案 D4）。此处不吞掉该异常——
+    // 由 MFDemuxer.ReadPacketAsync 在 StartNew 站点捕获并走 EOS 收尾。此处不吞掉该异常——
     // 若吞掉，任务既不运行也不完成，反而令上游 await 永久挂死。
     protected override void QueueTask(Task task) => _tasks.Add(task);
 
@@ -139,8 +139,8 @@ internal sealed class SingleThreadTaskScheduler : TaskScheduler, IDisposable
     /// <param name="timeout">等待动作执行完成的上限。</param>
     /// <returns><see langword="true"/>=动作已在专用线程上执行完毕；<see langword="false"/>=无法保证已执行（关闭已发起 / 队列已关 / 超时），调用方应走泄漏路径。</returns>
     /// <remarks>
-    /// <para>存在意义见 <see cref="Loop"/> 中「单元亲和铁律」注释：本线程 <c>CoUninitialize</c> 之后再释放它创建的 COM 对象
-    /// 会导致确定性 <c>0x80131506</c>。故释放动作必须借本方法回到专用线程执行，且必须在 <see cref="Shutdown"/> 之前调用。</para>
+    /// <para>存在意义见 <see cref="Loop"/> 中「单元亲和原则」注释：本线程 <c>CoUninitialize</c> 之后再释放它创建的 COM 对象
+    /// 会导致确定性原生堆损坏。故释放动作必须借本方法回到专用线程执行，且必须在 <see cref="Shutdown"/> 之前调用。</para>
     /// <para><b>自调用安全</b>：若调用方本身就跑在专用线程上（如 <c>OpenCore</c> 内失败回滚），直接内联执行，绝不自投递死锁。</para>
     /// <para><b>关闭后拒绝</b>：一旦 <see cref="BeginShutdown"/> 已发起，队列可能已 <c>CompleteAdding</c>、线程可能已退出并 <c>CoUninitialize</c>，
     /// 此时无法再保证单元有效，一律返回 <see langword="false"/> 让调用方选择安全侧（泄漏）而非危险侧（跨单元释放）。</para>
@@ -208,7 +208,7 @@ internal sealed class SingleThreadTaskScheduler : TaskScheduler, IDisposable
     /// <returns>线程是否已退出（true=已退出；false=超时，线程仍可能卡在原生调用内）。</returns>
     /// <remarks>
     /// <para>调用方<b>必须</b>据返回值结合 <c>NativeCallGate</c> 的排空结果决定是否释放 COM 指针：
-    /// 返回 false 表示线程仍存活（极可能卡在 <c>IMFSourceReader</c> 的原生调用内），此时释放即为 use-after-free（<c>0x80131506</c>）。
+    /// 返回 false 表示线程仍存活（极可能卡在 <c>IMFSourceReader</c> 的原生调用内），此时释放即为 use-after-free（原生堆损坏）。
     /// 释放的唯一安全判据是 gate 排空成功，本返回值仅作辅助诊断。</para>
     /// <para>异步释放链请改用 <see cref="ShutdownAsync"/>，本方法会阻塞调用线程最长 <paramref name="timeout"/>。</para>
     /// </remarks>

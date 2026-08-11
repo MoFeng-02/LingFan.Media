@@ -9,7 +9,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// 原生互操作操作追踪器 —— 即「错误链 / 完整错误调度链」。
 /// </summary>
 /// <remarks>
-/// <para>动机：MF 冷启动 <c>0x80131506</c>（<c>COR_E_EXECUTIONENGINE</c>）本质是<b>原生堆损坏</b>，
+/// <para>动机：MF 冷启动触发 <c>COR_E_EXECUTIONENGINE</c>（原生堆损坏），
 /// 但堆损坏不在破坏点崩溃，而在「下一次 CLR 内部堆操作」才以滞后症状暴露，崩溃栈永远指向
 /// <c>Marshal.GetDelegateForFunctionPointer</c> 这种无辜调用 —— 看不到真正的错配 pair。</para>
 /// <para>本类把每一条原生配对操作（Lock/Unlock、GetBuffer/ReleaseBuffer、Map/Unmap、Marshal.Release、MfVTable.Get）
@@ -21,9 +21,9 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// <list type="bullet">
 /// <item>① <b>重复 Release（double-free）</b>：对同一地址执行第二次 <c>Marshal.Release</c>。
 /// 由 <see cref="OnAlloc"/> 在重新分配时清除该地址的陈旧「已释放」标记，杜绝 LFH 地址复用导致的误报，故判定严谨。</item>
-/// <item>② <b>未 Lock 即 Unlock / 重复 Unlock</b>（R5 同构违规）：按每缓冲 Lock 深度校验，确定性可判。</item>
+/// <item>② <b>未 Lock 即 Unlock / 重复 Unlock</b>（COM 配对同构违规）：按每缓冲 Lock 深度校验，确定性可判。</item>
 /// </list>
-/// <para>⚠️ <b>关于 use-after-free（UAF）</b>：朴素「已释放地址集合」判定会因 Windows LFH 堆地址复用
+/// <para><b>关于 use-after-free（UAF）</b>：朴素「已释放地址集合」判定会因 Windows LFH 堆地址复用
 /// 产生<b>误报</b>（新分配恰好复用已释放地址），且对「悬垂引用指向被复用地址」反而<b>漏报</b>，故 tracer 不在
 /// vtable 取用时硬抛 UAF。严谨的 UAF 定位交由 <b>Windows Application Verifier / PageHeap（GFlags）</b>在 OS 层完成——
 /// 它对原生堆设全页校验，任何 UAF/double-free 都在<b>违规那一条指令</b>当场崩，零误报且报出精确地址。
@@ -168,7 +168,7 @@ internal static class InteropTrace
     private static void Throw(string msg, string site, IntPtr ptr) =>
         throw new InteropViolationException(
             $"[InteropTrace] {msg}；调用点={site}；指针=0x{ptr:X}。" +
-            $"这是 0x80131506 类堆损坏的【可诊断前兆】（非滞后症状），据此定位即可。");
+            $"这是原生堆损坏类的【可诊断前兆】（非滞后症状），据此定位即可。");
 
     // ───────────────────────── Post-mortem ─────────────────────────
 

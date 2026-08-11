@@ -14,7 +14,7 @@ namespace LingFan.Media.Avalonia;
 /// <remarks>
 /// <para><b>关键原则</b>：不独立引用 SkiaSharp NuGet 包，通过 Avalonia 的 WriteableBitmap
 /// 复用底层 SkiaSharp 渲染实例，避免版本冲突、原生库冲突和 AOT 部署问题。</para>
-/// <para><b>线程模型修正（修复不出画/冻屏根因）</b>：</para>
+/// <para><b>线程模型修正（修复不出画/冻屏成因）</b>：</para>
 /// <list type="bullet">
 /// <item>WriteableBitmap 有线程亲缘性——<b>创建 / Lock 写入 / DrawImage 必须发生在同一线程</b>（Avalonia 渲染线程）。
 /// 旧实现在管线线程创建并写入位图、渲染线程 DrawImage，跨线程访问抛 InvalidOperationException 致渲染线程崩溃，

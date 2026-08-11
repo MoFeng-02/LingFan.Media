@@ -9,7 +9,7 @@ namespace LingFan.Media.Outputs.OpenAL;
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 OpenAL（alc* 设备/上下文 + al* 源/缓冲）播放 PCM 数据，作为跨平台统一回退输出。</para>
-/// <para><b>异步策略</b>（与 WASAPI/AAudio 范本一致，遵守总记忆第十二章）：</para>
+/// <para><b>异步策略</b>（与 WASAPI/AAudio 范本一致）：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，跨平台无限制，返回 <see cref="Task.CompletedTask"/>。无 I/O 可 await，非伪异步。</item>
 /// <item><see cref="Initialize"/>：同步（sync 分类），alcOpenDevice + alcCreateContext + alcMakeContextCurrent + alGenSources。</item>

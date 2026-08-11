@@ -7,7 +7,7 @@
 
   <PropertyGroup>
     <IsPackable>true</IsPackable>
-    <!-- 🔴 AOT：[LibraryImport] 源生成器需 AllowUnsafeBlocks（SYSLIB1062） -->
+    <!-- AOT：[LibraryImport] 源生成器需 AllowUnsafeBlocks（SYSLIB1062） -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 

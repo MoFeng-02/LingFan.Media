@@ -45,34 +45,33 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     /// <remarks>可通过 <c>LINGFAN_VIDEO_AHEAD</c> 覆盖（1~30，默认 6 ≈ 250ms@24fps 余量）。</remarks>
     private static readonly int TargetDepth = ParseTargetDepth();
-    // 🔴 EOS 时序诊断（LINGFAN_EOS_DIAG=1）：记录自然完成瞬间的「主时钟位置」，定位偶发提前结束根因。
-    // 纯诊断、零架构风险：仅 env 置 1 时开启；生产路径恒为 false，不改变任何控制流/时序。
+    // EOS 时序诊断（LINGFAN_EOS_DIAG=1）：记录自然完成瞬间的「主时钟位置」，定位偶发提前结束成因。
+    // 纯诊断：仅 env 置 1 时开启；生产路径恒为 false，不改变任何控制流/时序。
     private static readonly bool EosDiagEnabled =
         string.Equals(Environment.GetEnvironmentVariable("LINGFAN_EOS_DIAG"), "1", StringComparison.Ordinal);
-    // 🔴 A/V 同步诊断（LINGFAN_SYNC_DIAG=1）：呈现瞬间记录「视频帧 PTS − 音频主时钟」= 用户实际感知的音画偏差。
-    // delta>0 ⇒ 视频领先音频；delta<0 ⇒ 视频落后；全程单调增长 ⇒ 时钟速率漂移。纯诊断、零架构风险。
+    // A/V 同步诊断（LINGFAN_SYNC_DIAG=1）：呈现瞬间记录「视频帧 PTS − 音频主时钟」= 用户实际感知的音画偏差。
+    // delta>0 ⇒ 视频领先音频；delta<0 ⇒ 视频落后；全程单调增长 ⇒ 时钟速率漂移。纯诊断。
     private static readonly bool SyncDiagEnabled =
         string.Equals(Environment.GetEnvironmentVariable("LINGFAN_SYNC_DIAG"), "1", StringComparison.Ordinal);
     private volatile bool _isRunning;
     private volatile bool _isPaused;
     private volatile bool _pauseAcknowledged;
     private TaskCompletionSource<bool>? _pauseAckTcs;
-    // 🔴 重播衔接卡顿根治（2026-08-06 §33）：**首帧门控 + 视频预滚动**。
-    // 根因：MediaPipelineHost.StartAsync 原为「音频先启动 → 视频后启动」。首播时 BufferManager 在
-    // OpenAsync 阶段就已暖好包队列，视频首帧与音频同刻出现（实测 delta=0ms）；但**重播**路径下
-    // SeekAsync 会先 Stop 再重启 demuxer 读取线程、并 Reset 解码器，视频首帧要 ~800ms 才产出，
+    // 重播衔接卡顿解决：**首帧门控 + 视频预滚动**。
+    // 成因：MediaPipelineHost.StartAsync 原为「音频先启动 → 视频后启动」。首播时 BufferManager 在
+    // OpenAsync 阶段就已暖好包队列，视频首帧与音频同刻出现；但**重播**路径下
+    // SeekAsync 会先 Stop 再重启 demuxer 读取线程、并 Reset 解码器，视频首帧要较长时间才产出，
     // 而音频设备（= 主时钟源 GetPlaybackPositionDirect）已在 0ms 起跑 →
-    //   ① 0.0~0.5s 的帧全部被 Synchronizer 判 Drop；
-    //   ② 这 800ms 空窗内屏幕停在「上一次播放的末帧」，随后突跳到 0.5s 处
-    //   ⇒ 用户感知为「第二次播放先卡一下再继续」。（实测 1.txt/2.txt：软解 801ms、硬解 824ms，
-    //      首帧 present 均为 videoPTS=0.500、delta≈-160~-190ms。）
+    //   ① 起始一小段时间内的帧全部被 Synchronizer 判 Drop；
+    //   ② 这段空窗内屏幕停在「上一次播放的末帧」，随后突跳到视频首个可呈现位置
+    //   ⇒ 用户感知为「第二次播放先卡一下再继续」。
     // 修复：启动编排改为「视频先起 → 等预滚动 → 再启动音频设备 → 放行视频呈现」，
-    // 把 800ms 预热**吸收在 PlayAsync 内部**（主时钟尚未起跑，不计入播放时间线），
+    // 把首帧预热**吸收在 PlayAsync 内部**（主时钟尚未起跑，不计入播放时间线），
     // 音频就绪后首帧与音频同刻出现 → 无缝。首播时预滚动瞬时满足，零回归。
     private volatile bool _audioReadySignaled;   // 由 MediaPipelineHost 在音频设备启动后置位（跨线程写）
     private volatile bool _audioGateOpened;      // 呈现线程已通过门控（Start 复位，之后仅呈现线程读写）
     private volatile bool _firstFramePresented;  // 首帧已真正上屏（ProcessFrame 首次 Present 后置位，供 A/V 启动对齐）
-    private TaskCompletionSource<bool>? _firstFramePresentedTcs;  // 音频编排等待点（§33 补强，Start 重建）
+    private TaskCompletionSource<bool>? _firstFramePresentedTcs;  // 音频编排等待点（Start 重建）
     // 预滚动帧数下限：等帧队列预热到该深度再启动音频设备（吸收重播的重定位+解码开销）。
     // 取 2 而非 TargetDepth(6)：够消除首帧空窗即可，等太久会让「点播放到出声」的体感延迟变长。
     private const int VideoPrerollFrames = 2;
@@ -129,7 +128,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _frameQueue = frameQueue;
         _synchronizer = synchronizer;
         _clock = clock;
-        // 🔴 音画同步根治（2026-08-04）：呈现提前量 = 渲染后端真实「Present→上屏」端到端延迟
+        // 音画同步：呈现提前量 = 渲染后端真实「Present→上屏」端到端延迟
         // （IVideoRenderer.PresentationLatency，D3D11≈40ms@60Hz 含 vsync 相位+Present/消费者管线，无头=0），
         // 不再用 SyncThreshold(50ms) 作呈现偏移。LINGFAN_SYNC_LEAD_MS 仅作为叠加微调（默认 0，
         // 作用于正确的「呈现延迟」变量，而非音频时钟）。
@@ -201,16 +200,16 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
         _isRunning = true;
         _isPaused = false;
-        // 🔴 首帧门控复位（§33，仅全新启动/重播路径）：恢复暂停时上方已早退，门控保持已开启不受影响。
+        // 首帧门控复位（仅全新启动/重播路径）：恢复暂停时上方已早退，门控保持已开启不受影响。
         _audioReadySignaled = false;
         _audioGateOpened = false;
-        // 🔴 首帧上屏信号复位（§33 补强）：每次全新启动/重播重建 TCS（TCS 不可重置），
+        // 首帧上屏信号复位：每次全新启动/重播重建 TCS（TCS 不可重置），
         // 供 MediaPipelineHost 在启动音频前等待「视频首帧已真正上屏」。
         _firstFramePresented = false;
         _firstFramePresentedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _decodeDone = false;
         _eosReached = false;
-        // 🔴 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
+        // 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
         // 否则残留 true 会在后续 Stop/Dispose 的 finally 中误触发 Completed → 错误发出 Ended。
         _completedNaturally = false;
 
@@ -238,7 +237,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// 使主时钟（取自音频播放游标）在视频已有帧可呈现后才起跑。
     /// </summary>
     /// <remarks>
-    /// <para>这是 §33「重播先卡一下」的根治点：重播时 demuxer 重定位 + 解码器 Reset 需 ~800ms，
+    /// <para>这是「重播先卡一下」的解决点：重播时 demuxer 重定位 + 解码器 Reset 需较长时间，
     /// 若音频先起跑，这段空窗会被计入播放时间线，导致开头帧被判 Drop、画面停在上次末帧后突跳。
     /// 把等待前移到音频启动前，该开销就落在「点击播放到出声」之间，用户感知为正常起播延迟而非卡顿。</para>
     /// <para>首播路径下 <c>BufferManager</c> 已在 <c>OpenAsync</c> 阶段暖好包队列，本方法通常在
@@ -292,7 +291,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// <summary>
     /// 等待视频首帧真正上屏（<see cref="ProcessFrame"/> 首次 Present 调用返回）。供
     /// <see cref="MediaPipelineHost.StartAsync"/> 在启动音频前 await，使音频 WASAPI 出声不早于
-    /// 视频首帧上屏（A/V 启动对齐，§33 补强）。带超时兜底，绝不阻塞播放。
+    /// 视频首帧上屏（A/V 启动对齐）。带超时兜底，绝不阻塞播放。
     /// </summary>
     /// <remarks>无视频轨（<c>VideoPipeline</c> 为 null）或被提前释放时，调用方判空不会走到这里。</remarks>
     public async Task WaitForFirstFramePresentedAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
@@ -471,7 +470,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         {
 #if WINDOWS
             // 视频呈现是实时循环：提升专用线程优先级到 Highest，配合 Windows 多媒体调度显著降低
-            // OS/GC 抢占造成的帧间墙钟抖动（残余抖动根因）。LongRunning 专用线程上该优先级全程有效。
+            // OS/GC 抢占造成的帧间墙钟抖动（残余抖动成因）。LongRunning 专用线程上该优先级全程有效。
             try { System.Threading.Thread.CurrentThread.Priority = System.Threading.ThreadPriority.Highest; }
             catch { }
 #endif
@@ -485,7 +484,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     continue;
                 }
 
-                // 🔴 首帧门控（§33）：音频设备（主时钟源）启动前，**不做任何同步判定/呈现**。
+                // 首帧门控：音频设备（主时钟源）启动前，**不做任何同步判定/呈现**。
                 // 若不门控，此窗口内 GetCurrentMasterTime 恒为 0：第 0 帧会被立即 Present，
                 // 后续帧走 Wait 分支并触发 WaitUntilDue 的「主时钟停摆」看门狗（500ms 后降级直接出帧）
                 // → 画面按解码节奏爆发式推进，比原缺陷更糟。门控期间屏幕保持上一次播放的末帧，
@@ -543,14 +542,14 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 var headTimestamp = head.Timestamp;
                 var action = _synchronizer.CheckVideoFrame(head);
 
-                // 🔴 EOS（流末已到）覆盖（2026-08-04 修正）：原实现在 eos 下把 Wait/Drop 一律改为 Present，
+                // EOS（流末已到）覆盖：原实现在 eos 下把 Wait/Drop 一律改为 Present，
                 // 导致末段缓冲超前的帧（TargetDepth≈6 帧 + DRAIN 尾 GOP）被瞬间整批呈现 →
-                // "帧直接推进 / 画面突然变快"（用户实测痛点：末秒帧爆发式推进后骤停）。
+                // "帧直接推进 / 画面突然变快"（用户痛点：末秒帧爆发式推进后骤停）。
                 // 修正策略（仍保末帧绝不丢，但消除爆发）：
                 //   · eos && Drop（音频时钟已越界）→ 改 Present（绝不丢末帧）；
                 //   · eos && Wait（末段缓冲超前的帧）→ 保持 Wait，按各自 PTS 平滑收口；
                 //   · eos && Present → 保持 Present。
-                // 尾冻已由 DecodeLoop 的 EOS DRAIN 根治（末段 GOP 已入队），此处不再依赖强制呈现；
+                // 尾冻已由 DecodeLoop 的 EOS DRAIN 解决（末段 GOP 已入队），此处不再依赖强制呈现；
                 // 正常播放末段帧按各自节奏呈现，爆发消失，末帧仍常驻屏直到音频结束。
                 bool eos = _eosReached || _frameQueue.IsCompleted || _decodeDone;
                 if (eos && action == SyncAction.Drop)
@@ -652,7 +651,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                         _eosReached = true;
                         // 包源结束：必须先 DRAIN 解码器把末尾 B 帧重排缓冲（末段 GOP）全部取出入队，
                     // 再 Complete 帧队列 —— 顺序颠倒会让呈现侧提前收尾，末段 GOP 整批丢失。
-                    // 🔴 根因修复（2026-08-04）：原实现只 Complete 不 DRAIN，导致 H.264/H.265 尾部
+                    // 修复：原实现只 Complete 不 DRAIN，导致 H.264/H.265 尾部
                     // 重排帧滞留 MFT 内部缓冲永不吐出 → 最后呈现帧冻结（即"30s 画面不动"缺陷）。
                     // 音频无 B 帧（无 ctts）不受影响，故仅视频侧需此 EOS 排空。
                     try
@@ -772,12 +771,12 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             }
         }
 
-        // 🔴 A/V 同步诊断（LINGFAN_SYNC_DIAG=1）：**独立于 PacingDiagnostics**，呈现瞬间记录
+        // A/V 同步诊断（LINGFAN_SYNC_DIAG=1）：**独立于 PacingDiagnostics**，呈现瞬间记录
         // 「视频帧 PTS − 音频主时钟」= 用户实际感知到的音画偏差。delta>0 ⇒ 视频领先音频（画面先到）；
         // delta<0 ⇒ 视频落后音频（声音先到）。前 8 帧全采以暴露起始偏移；之后每 500ms 采样一次，
         // 观察是否单调增长（时钟速率漂移）或长期恒定≈某值（固定偏移 = 视频/音频时间线起点不齐，
         // 典型为 MF/MP4 edit list 使视频流 PTS 起点与音频时钟原点错开）。
-        // 纯观测、零架构风险：SyncDiagEnabled 恒 false 时整块跳过，且不依赖 PacingDiagnostics.Enabled。
+        // 纯观测：SyncDiagEnabled 恒 false 时整块跳过，且不依赖 PacingDiagnostics.Enabled。
         if (SyncDiagEnabled)
         {
             var masterNow = _synchronizer.GetCurrentMasterTime();
@@ -795,17 +794,17 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
         try
         {
-            // 唯一帧出口（🔴 帧契约）：所有帧经注入的 _videoFrameSink（生产路径中恒为非空 lambda，
+            // 唯一帧出口（帧契约）：所有帧经注入的 _videoFrameSink（生产路径中恒为非空 lambda，
             // MediaPlayer 注入为 frame => _frameChannel.Emit，内部再扇出到订阅的 Sink——
             // 无头计算 / Skia 软渲染 / D3D11 零拷贝 GPU 呈现三者互斥，由 Sink 内部路由）。
             // 绝不在管线内直接 _renderer.Present(frame)（曾经的 else 兜底分支已删除：它构成第二条
-            // 绕开 FrameChannel 扇出的呈现路径，违反「帧路由唯一、绝双路径」铁律）。
+            // 绕开 FrameChannel 扇出的呈现路径，违反「帧路由唯一、绝双路径」原则）。
             // 若 _videoFrameSink 为 null（仅测试/无 UI 且未接 Sink 的调用方），帧在此静默归池、不呈现。
             // 注意：路由决策在 Sink lambda 内完成，不可在此判 _videoFrameSink == null 来决定 D3D11——
             // 那样会让 D3D11 模式（无订阅方，但 lambda 非空）永不调用渲染器，导致视频不显示。
             _videoFrameSink?.Invoke(frame);
-            // 🔴 首帧已真正提交上屏：通知 A/V 启动编排等待点（§33 补强），
-            // 使音频 WASAPI 启动不早于视频首帧上屏 → 根治「声音比视频先出」。
+            // 首帧已真正提交上屏：通知 A/V 启动编排等待点，
+            // 使音频 WASAPI 启动不早于视频首帧上屏 → 解决「声音比视频先出」。
             if (!_firstFramePresented)
             {
                 _firstFramePresented = true;
@@ -829,14 +828,14 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private void WaitUntilDue(TimeSpan frameTimestamp, CancellationToken ct = default)
     {
         const double tailMs = 1.5;
-        // 🔴 呈现目标 = frameTimestamp − 真实上屏延迟：帧在 audioClock 到达 PTS 前「本延迟」时刻调用 Present，
+        // 呈现目标 = frameTimestamp − 真实上屏延迟：帧在 audioClock 到达 PTS 前「本延迟」时刻调用 Present，
         // 像素恰在 PTS 时可见（vsync）。此前错误用 SyncThreshold(50ms) → 视频系统性提前。
         var threshold = _synchronizer.PresentationLatency;
         long targetQpc = 0;
 
-        // 🔴 主时钟停摆看门狗（2026-08-05 §27）：主时钟取自音频设备游标，一旦音频侧异常
+        // 主时钟停摆看门狗：主时钟取自音频设备游标，一旦音频侧异常
         // （设备未启动、启动锚点未捕获、引擎停摆），GetCurrentMasterTime 会恒定不前进 →
-        // 本循环永久自旋 → 画面永久冻结（实测现象：present=1 dropped=0，整片只上屏首帧）。
+        // 本循环永久自旋 → 画面永久冻结（现象：present=1 dropped=0，整片只上屏首帧）。
         // 故记录进入时的主时钟与墙钟：墙钟已过 StallGraceMs 而主时钟前进不足 StallEpsilonMs，
         // 即判定主时钟停摆，放弃等待直接呈现——降级为「按解码节奏出帧」，宁可轻微不同步也绝不冻结。
         // 宽限期粘滞：首次判定用 500ms（足够长，绝不误伤正常抖动）；一旦确认停摆则降到 50ms，

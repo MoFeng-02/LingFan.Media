@@ -6,7 +6,7 @@ namespace LingFan.Media.Outputs.AVAudioEngine;
 /// <remarks>
 /// <para>使用模式：<code>services.AddLingFanMedia().AddAvAudioEngineOutput()</code></para>
 /// <para>注册的是工厂（Singleton），不是实例！<see cref="AvAudioEngineOutput"/> 是 Session 级对象，由工厂 Create() 每次新建。</para>
-/// <para>方法名保留 AVAudioEngine 字样以维持既有注册面不变；实现走 RemoteIO AudioUnit（用户 2026-07-28 拍板）。</para>
+/// <para>方法名保留 AVAudioEngine 字样以维持既有注册面不变；实现走 RemoteIO AudioUnit。</para>
 /// <para>此方法为同步配置（config 分类），无 I/O。</para>
 /// </remarks>
 public static class AvAudioEngineExtensions

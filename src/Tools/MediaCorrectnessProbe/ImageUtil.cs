@@ -236,11 +236,11 @@ internal static class ImageUtil
         double rowDiff = Math.Abs((evenRowCnt > 0 ? (double)evenRowSum / evenRowCnt : 0) -
                                   (oddRowCnt > 0 ? (double)oddRowSum / oddRowCnt : 0));
 
-        string verdict = ratio > 1.6 ? "⚠ 竖条纹（水平高频异常）"
-                       : ratio < 0.6 ? "⚠ 横条纹/隔行（垂直高频异常）"
+        string verdict = ratio > 1.6 ? "竖条纹（水平高频异常）"
+                       : ratio < 0.6 ? "横条纹/隔行（垂直高频异常）"
                        : "方向性正常";
-        if (colDiff > 2.0) verdict += $" + ⚠ 1px竖向交替(奇偶列差={colDiff:F2})";
-        if (rowDiff > 2.0) verdict += $" + ⚠ 1px横向交替(奇偶行差={rowDiff:F2})";
+        if (colDiff > 2.0) verdict += $" + 1px竖向交替(奇偶列差={colDiff:F2})";
+        if (rowDiff > 2.0) verdict += $" + 1px横向交替(奇偶行差={rowDiff:F2})";
 
         return $"[FREQ-{name}] {w}x{h} | 水平高频={hf:F3} 垂直高频={vf:F3} H/V={ratio:F3} | " +
                $"奇偶列差={colDiff:F2} 奇偶行差={rowDiff:F2} => {verdict}";

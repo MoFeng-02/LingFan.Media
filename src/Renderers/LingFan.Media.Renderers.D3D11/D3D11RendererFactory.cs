@@ -8,8 +8,8 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂。持有共享的 <c>ID3D11Device</c> + <c>ID3D11DeviceContext</c>，
 /// <see cref="Create"/> 返回<b>缓存单例</b> <see cref="D3D11Renderer"/>（共享 GPU Device 与唯一 SwapChain）。</para>
-/// <para><b>方案 A（P0 修复）</b>：缓存单例消除"双实例/双 SwapChain"——同一工厂多次 <see cref="Create"/>
-/// 返回同一渲染器实例（R1==R2）。Core 管线（<see cref="VideoPipeline"/>）与 UI 层（D3D11GpuPresenter）
+/// <para><b>方案 A</b>：缓存单例消除"双实例/双 SwapChain"——同一工厂多次 <see cref="Create"/>
+/// 返回同一渲染器实例。Core 管线（<see cref="VideoPipeline"/>）与 UI 层（D3D11GpuPresenter）
 /// 通过同一工厂解析到同一渲染器，UI 层 Attach(HWND) 后管线 Present 即命中已附着实例，视频帧真正经 GPU 呈现。</para>
 /// <para><b>单 HWND 限制</b>：单例渲染器一次仅能附加到<b>一个</b> HWND。同一应用内多个 VideoView 同时走 D3D11
 /// 后端时，后附加者会抢占前者的 HWND（先 Detach 再 Attach），仅最后一个生效。单窗口单 VideoView 为设计目标场景。</para>
@@ -28,7 +28,7 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
     private readonly object _singletonLock = new();
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
-    // 方案 A：缓存单例渲染器——同一工厂的多次 Create 返回同一实例（R1==R2）。
+    // 方案 A：缓存单例渲染器——同一工厂的多次 Create 返回同一实例。
     private D3D11Renderer? _singleton;
     private RenderContext? _renderContext;
     private bool _disposed;
@@ -54,7 +54,7 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
             if (_singleton is null || _singleton.IsDisposed)
             {
                 _singleton = new D3D11Renderer(_device!, _context!, _loggerFactory.CreateLogger<D3D11Renderer>());
-                _logger.LogDebug("D3D11 渲染器单例已创建（缓存复用，R1==R2）");
+                _logger.LogDebug("D3D11 渲染器单例已创建（缓存复用）");
             }
             return _singleton;
         }
@@ -92,7 +92,7 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
             }
             _context = _device.ImmediateContext;
 
-            // 🔴 §29（2026-08-06）：共享设备必须开启多线程保护。
+            // 共享设备必须开启多线程保护。
             //    本设备同时被「硬解线程（FFmpeg D3D11VA / MF DXVA 写解码纹理）」与
             //    「呈现线程（CopySubresourceRegion + Present）」使用，而 ID3D11DeviceContext 非线程安全。
             //    FFmpeg 内部那把 d3d11va_default_lock 只保护它自己的调用，渲染器不参与 ⇒ 并发操作同一

@@ -22,29 +22,27 @@ using Microsoft.Extensions.Logging;
 namespace VlcHeadfulPlaybackProbe;
 
 /// <summary>
-/// 最小可验证程序 <b>VLC 有头（Headful）全链路</b>——参照 <c>HeadfulPlaybackProbe</c>（MF）与
-/// <c>FfmpegHeadfulPlaybackProbe</c>（FFmpeg），把后端换成 <b>VLC</b>：真实 D3D11 SwapChain 上屏（GPU Present）
-/// + 真实 WASAPI 出声，二者共用真实 MediaPlayer + 真实 VLC 解码（经 SetVideoCallbacks 内存捕获 BGRA32 帧）。
+/// VLC 后端的有头（Headful）全链路验证程序：真实 D3D11 SwapChain 上屏（GPU Present）与真实 WASAPI 出声，
+/// 二者共用同一个 MediaPlayer 与 VLC 解码链（经 SetVideoCallbacks 内存捕获 BGRA32 帧）。
 /// </summary>
 /// <remarks>
-/// <para>VLC 服务端经 LibVLCSharp 驱动 VLC 引擎，内部一体化完成解封装+解码；通过 <c>SetVideoCallbacks</c>
-/// 把<b>已解码 BGRA32 帧</b>推给我们管线（直通解码器）。因此 VLC 路径<b>永远是 CPU 内存帧</b>，
-/// 走不到 ffmpeg D3D11VA 那样的 GPU 零拷贝——上屏由 D3D11Renderer 经 V1 CopyResource 快路径上传纹理完成。</para>
-/// <para><c>--vout=dummy</c>（<c>VLCOptions.Headless=true</c>）禁止 VLC 自建原生窗口，视频帧经回调全交给我们管线，
-/// 由 D3D11Renderer 的 Present Sink 上屏——即架构「有头=无头管线+订阅式 Present Sink」。区别于 <c>--no-video</c>
-/// （会停解码），Headless 仅屏蔽 VLC 自有绘图。</para>
+/// <para>VLC 引擎内部一体化完成解封装与解码，通过 <c>SetVideoCallbacks</c> 把已解码的 BGRA32 帧推给管线。
+/// 因此 VLC 路径始终交付 CPU 内存帧，不存在 GPU 零拷贝；上屏由 D3D11Renderer 经 CopyResource 快路径
+/// 上传纹理完成。</para>
+/// <para><c>--vout=dummy</c>（<c>VLCOptions.Headless=true</c>）禁止 VLC 自建原生窗口，视频帧经回调全部交给
+/// 本管线，由 D3D11Renderer 的 Present Sink 上屏。区别于 <c>--no-video</c>（会停止解码），Headless 仅屏蔽
+/// VLC 自有绘图。</para>
 /// <para>两套有头测试场景：</para>
 /// <list type="bullet">
-///   <item><b>默认（软件解码有头）</b>：不加 <c>--hw</c>。VLC 软件解码 → BGRA32 软件帧 → D3D11 上传上屏；
-///        真实 WASAPI 出声；开启 <c>LINGFAN_CLOCK_AUDIO_POS=1</c> → 主时钟由<b>音频设备硬件游标</b>驱动。</item>
-///   <item><b><c>--hw</c>（VLC 内部硬解有头）</b>：VLC 内部走 D3D11VA 硬解，但<b>回调仍交付 CPU BGRA32</b>
-///        （VLC 无零拷贝路径）；D3D11 上传上屏；同样硬件游标严格时钟。</item>
+///   <item>默认（软件解码有头）：不加 <c>--hw</c>。VLC 软件解码得到 BGRA32 软件帧，经 D3D11 上传上屏；
+///        真实 WASAPI 出声，开启 <c>LINGFAN_CLOCK_AUDIO_POS=1</c> 后主时钟由音频设备硬件游标驱动。</item>
+///   <item><c>--hw</c>（VLC 内部硬解有头）：VLC 内部走 D3D11VA 硬解，但回调仍交付 CPU BGRA32；
+///        上屏与时钟口径同上。</item>
 /// </list>
-/// <para>隔离变量（同 MF/FFmpeg）：<c>--no-video</c>/<c>--no-audio</c>/<c>--visible</c>/
+/// <para>隔离变量开关：<c>--no-video</c>/<c>--no-audio</c>/<c>--visible</c>/
 /// <c>--exclusive</c>/<c>--polling</c>/<c>--audio-warmup</c>/<c>--category</c>/<c>--full</c>/<c>--no-replay</c>。</para>
-/// <para>窗口与 P/Invoke 用 <c>[LibraryImport]</c>（AOT 合规），帧落盘零依赖（与 MF/FFmpeg 探针同款）。</para>
-/// <para>原生 libvlc 经 <b>VideoLAN.LibVLC.Windows</b> NuGet 包随输出目录自带分发（LGPL），启动期定位并前置进
-/// 当前进程 PATH，使 LibVLCSharp 原生加载器稳定找到 libvlc.dll。</para>
+/// <para>窗口与 P/Invoke 使用 <c>[LibraryImport]</c> 以满足 AOT 要求，帧落盘实现零第三方依赖。</para>
+/// <para>原生 libvlc 随输出目录自带分发，启动期定位并前置进当前进程 PATH，使原生加载器稳定找到 libvlc.dll。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal static class Program
@@ -58,7 +56,7 @@ internal static class Program
     {
         try
         {
-            // 🔴 必须在创建任何窗口之前（同 MF/FFmpeg 探针，避免 DWM 非整数倍位图拉伸造摩尔纹）。
+            // 必须在创建任何窗口之前调用，避免 DWM 非整数倍位图拉伸造成摩尔纹。
             if (!HasFlag(args, "--no-dpi-aware"))
             {
                 bool ok = NativeMethods.SetProcessDpiAwarenessContext(DpiAwarePerMonitorV2);
@@ -71,14 +69,14 @@ internal static class Program
                 Console.WriteLine("[HEADFUL-DPI] --no-dpi-aware：进程保持 DPI 非感知（DWM 位图拉伸对照组）。");
             }
 
-            // 🔴 VLC 原生库定位（必须在解析 VLCBackend Singleton 之前把 libvlc 目录前置 PATH，
-            // 使 LibVLCSharp 的原生加载器(LoadLibrary 搜 PATH)稳定找到 libvlc.dll）。
+            // VLC 原生库定位：必须在解析 VLC 后端单例之前把 libvlc 目录前置 PATH，
+            // 使原生加载器（LoadLibrary 搜 PATH）稳定找到 libvlc.dll。
             Console.WriteLine("VLC 原生库定位:");
             string? vlcDir = LocateLibVlc();
             if (vlcDir is null)
             {
-                Console.WriteLine("  [失败] 未找到原生 libvlc.dll（VideoLAN.LibVLC.Windows 原生包未随输出分发，且系统也未装 VLC）。");
-                Console.WriteLine("         请确认 VlcHeadfulPlaybackProbe.csproj 已引用 VideoLAN.LibVLC.Windows，或安装 VLC。");
+                Console.WriteLine("  [失败] 未找到原生 libvlc.dll（原生包未随输出分发，且系统也未安装 VLC）。");
+                Console.WriteLine("         请确认探针工程已引用 VLC 原生包，或在系统中安装 VLC。");
                 return 3;
             }
             var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
@@ -111,18 +109,18 @@ internal static class Program
         bool pollingMode = HasFlag(args, "--polling");
         bool audioWarmup = HasFlag(args, "--audio-warmup");
         bool fullPlayback = !HasFlag(args, "--no-full");   // 默认放满全程（--no-full 才截断 12s 采样窗口）
-        // 🔴 重播验证：需显式 --replay 才启用（默认只放满一次，避免默认跑两次让用户困惑）。
+        // 重播验证：需显式 --replay 才启用（默认只放满一次，避免默认跑两遍）。
         bool replayTest = fullPlayback && HasFlag(args, "--replay");
         Console.WriteLine($"[VLC-HEADFUL] 测试形态 = {(useHw ? "VLC 内部硬解(D3D11VA)有头(--hw，仍 CPU BGRA32 交付)" : "VLC 软件解码有头(默认)")}");
         Console.WriteLine($"[VLC-HEADFUL] 视频上屏={doVideo} 音频出声={doAudio} " +
                           $"时钟={(doAudio ? "真实WASAPI硬件游标(LINGFAN_CLOCK_AUDIO_POS=1)" : "无头软件主时钟")}");
         Console.WriteLine($"[VLC-HEADFUL] Exclusive={exclusiveMode} EventDriven={!pollingMode} AudioWarmup={audioWarmup} Full={fullPlayback} Replay={replayTest}");
-        // 🔴 音画同步主时钟（严格锚定根治路径）：接真实 WASAPI 设备时打开 LINGFAN_CLOCK_AUDIO_POS=1，
-        // 使 MediaPlayer.cs 的 SetMasterClockProvider 生效 → 主时钟直接读音频设备硬件游标（GetPlaybackPositionDirect），
-        // 即 MF/FFmpeg 那套「严格锚定」。纯无头(NoOp)不可开（会恒返回 0 反而搞坏调度），故仅 doAudio 时开。
+        // 音画同步主时钟：接真实 WASAPI 设备时打开 LINGFAN_CLOCK_AUDIO_POS=1，使 SetMasterClockProvider 生效，
+        // 主时钟直接读音频设备硬件游标。纯无头（NoOp 输出）下不可开启，否则位置恒为 0 会破坏调度，
+        // 故仅在 doAudio 时设置。
         if (doAudio)
             Environment.SetEnvironmentVariable("LINGFAN_CLOCK_AUDIO_POS", "1");
-        // 🔴 同步诊断（仅 full 开，零架构风险）：每次呈现打印 videoPTS − audioClock，定量判断音画偏差。
+        // 同步诊断（仅 full 开启）：每次呈现打印 videoPTS − audioClock，定量观察音画偏差。
         if (fullPlayback)
             Environment.SetEnvironmentVariable("LINGFAN_SYNC_DIAG", "1");
 
@@ -138,7 +136,7 @@ internal static class Program
         int windowH = (int)ParseDouble(args, "--window-h", DefaultWindowH);
         if (windowW <= 0 || windowH <= 0)
         {
-            Console.Error.WriteLine($"⚠ 窗口尺寸非法：{windowW}x{windowH}");
+            Console.Error.WriteLine($"窗口尺寸非法：{windowW}x{windowH}");
             return 2;
         }
 
@@ -147,7 +145,7 @@ internal static class Program
 
         if (!doVideo && !doAudio)
         {
-            Console.Error.WriteLine("⚠ --no-video 与 --no-audio 不能同时使用。");
+            Console.Error.WriteLine("--no-video 与 --no-audio 不能同时使用。");
             return 2;
         }
 
@@ -155,7 +153,7 @@ internal static class Program
             file = ResolveDefaultMedia(doVideo);
         if (file is null || !File.Exists(file))
         {
-            Console.Error.WriteLine($"⚠ 找不到媒体文件：{file ?? "(null)"}");
+            Console.Error.WriteLine($"找不到媒体文件：{file ?? "(null)"}");
             return 2;
         }
 
@@ -168,25 +166,24 @@ internal static class Program
         var builder = services.AddLingFanMedia()
             .AddVLCNative(o =>
             {
-                // 🔴 VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
-                // Headless=true → 注入 --vout=dummy，禁止 VLC 自建窗口；视频帧经回调全交给我们管线，
-                // 由下方 D3D11Renderer 的 Present Sink 上屏（有头=无头管线+订阅式 Present Sink）。
-                // 区别于「--no-video」（会停解码），Headless 仅屏蔽 VLC 自有绘图。
-                // --hw 仅让 VLC 内部走 D3D11VA，但回调仍交付 CPU BGRA32（与 ffmpeg D3D11VA 零拷贝不同）。
+                // VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
+                // Headless=true 会注入 --vout=dummy 禁止 VLC 自建窗口，视频帧经回调全部交给本管线，
+                // 由下方 D3D11Renderer 的 Present Sink 上屏。
+                // 区别于 --no-video（会停止解码），Headless 仅屏蔽 VLC 自有绘图。
+                // --hw 仅让 VLC 内部走 D3D11VA，回调仍交付 CPU BGRA32，与 ffmpeg 的 D3D11VA 零拷贝不同。
                 o.EnableHardwareDecoding = useHw;
                 o.Headless = true;
             });
 
-        // —— 视频侧（同 MF/FFmpeg 探针：手动装饰 D3D11RendererFactory 统计 Present，并补回 IGpuDeviceContext）——
-        // VLC 经回调交付 BGRA32 软件帧，D3D11Renderer 走 V1 CopyResource 快路径上传上屏（非零拷贝）。
+        // —— 视频侧：手动装饰 D3D11RendererFactory 统计 Present，并补回 IGpuDeviceContext ——
+        // VLC 经回调交付 BGRA32 软件帧，D3D11Renderer 走 CopyResource 快路径上传上屏（非零拷贝）。
         CountingVideoRendererFactory? countingFactory = null;
         if (doVideo)
         {
             var d3d11Factory = new D3D11RendererFactory(loggerFactory);
             countingFactory = new CountingVideoRendererFactory(d3d11Factory, saveFrames, saveDir);
             builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
-            // 🔴 保住 IGpuDeviceContext：VLC 帧为 BGRA32 CPU 内存，D3D11Renderer 用它自己的共享设备上传纹理上屏
-            //（VLC 无零拷贝路径，与 ffmpeg D3D11VA 零拷贝不同）。
+            // 保住 IGpuDeviceContext：VLC 帧为 BGRA32 CPU 内存，D3D11Renderer 用自己的共享设备上传纹理上屏。
             builder.Services.AddSingleton<IGpuDeviceContext>(sp => d3d11Factory.Context);
         }
         else
@@ -231,7 +228,7 @@ internal static class Program
 
         try
         {
-            // —— WASAPI 预热（opt-in，--audio-warmup；对应 #7 冷启动 3s 修复）——
+            // —— WASAPI 预热（opt-in，--audio-warmup）——
             if (audioWarmup)
             {
                 var audioWarmSw = Stopwatch.StartNew();
@@ -249,7 +246,7 @@ internal static class Program
             }
             else
             {
-                Console.WriteLine("[HEADFUL-WASAPI] 未启用音频预热（加 --audio-warmup 开启；引擎常驻保活可消除 ~2.5s 冷启动）");
+                Console.WriteLine("[HEADFUL-WASAPI] 未启用音频预热（加 --audio-warmup 开启；引擎常驻保活可消除冷启动等待）");
             }
 
             if (doVideo)
@@ -257,7 +254,7 @@ internal static class Program
                 win = new RenderWindow(windowW, windowH, visible);
                 if (win.Hwnd == IntPtr.Zero)
                 {
-                    Console.WriteLine("⚠ 窗口创建失败（HWND=0），视频有头验证将不可靠。");
+                    Console.WriteLine("窗口创建失败（HWND=0），视频有头验证将不可靠。");
                 }
                 else
                 {
@@ -265,9 +262,9 @@ internal static class Program
                     bool clientMatches = win.ClientW == windowW && win.ClientH == windowH;
                     Console.WriteLine(
                         $"[HEADFUL-WND] 请求={windowW}x{windowH} 实测客户区={win.ClientW}x{win.ClientH} " +
-                        $"DPI={win.Dpi}({scale:P0}) | 客户区与请求{(clientMatches ? "一致" : "不一致⚠")} | SwapChain 将按实测客户区建立");
+                        $"DPI={win.Dpi}({scale:P0}) | 客户区与请求{(clientMatches ? "一致" : "不一致")} | SwapChain 将按实测客户区建立");
                     if (!clientMatches)
-                        Console.WriteLine("[HEADFUL-WND] ⚠ 客户区≠请求：说明存在窗口几何虚拟化，DWM 会额外拉伸一层。");
+                        Console.WriteLine("[HEADFUL-WND] 客户区≠请求：说明存在窗口几何虚拟化，DWM 会额外拉伸一层。");
                 }
             }
 
@@ -284,12 +281,12 @@ internal static class Program
             if (doVideo && win is not null && win.Hwnd != IntPtr.Zero)
             {
                 if (countingFactory!.Last is null)
-                    Console.WriteLine("⚠ D3D11 渲染器未创建（环境无 GPU/显示），跳过视频有头验证。");
+                    Console.WriteLine("D3D11 渲染器未创建（环境无 GPU/显示），跳过视频有头验证。");
                 else
                     countingFactory.Last.Attach(new HwndRenderTarget(win.Hwnd,
                         win.ClientW > 0 ? win.ClientW : windowW,
                         win.ClientH > 0 ? win.ClientH : windowH));
-                // 🔴 收敛后 D3D11 经统一 VideoFrameAvailable 订阅 Present（与 MF/FFmpeg 探针同款；零拷贝是 Sink 能力差异，非分支）。
+                // D3D11 经统一的 VideoFrameAvailable 订阅 Present；是否零拷贝取决于 Sink 能力，不走额外分支。
                 player.VideoFrameAvailable += f => countingFactory.Last?.Present(f);
             }
 
@@ -306,7 +303,7 @@ internal static class Program
                 if (visible || verbose)
                     Console.WriteLine($"  t={poll.Elapsed.TotalSeconds:F1}s pos={player.Position:g} " +
                                       $"present={presentCount} state={player.State}");
-                // 🔴 音频间隙检测：主时钟位置 vs 已提交音频时长（与 MF/FFmpeg 探针同口径）
+                // 音频间隙检测：主时钟位置 vs 已提交音频时长
                 if (doAudio && sampleRate > 0 && player.State == MediaState.Playing)
                 {
                     double subSec = submittedSamples / (double)sampleRate;
@@ -356,7 +353,7 @@ internal static class Program
                                   $"{(videoPass ? "PASS" : "FAIL (present<5)")}");
                 Console.WriteLine($"[HEADFUL-VIDEO-DROP] droppedFrames={player.VideoDroppedFrames} present={presentCount}");
                 if (player.VideoDroppedFrames > 0)
-                    Console.WriteLine($"  [HEADFUL-VIDEO-DROP] ⚠ 仍有丢帧（通道未丢+同步器判 Drop 或 Present 滞后），需结合 SYNC_DIAG 定位。");
+                    Console.WriteLine($"  [HEADFUL-VIDEO-DROP] 存在丢帧（同步器判定丢弃或 Present 滞后），可结合 SYNC_DIAG 进一步定位。");
             }
             if (doAudio)
             {
@@ -368,12 +365,12 @@ internal static class Program
                                   $"{(audioPass ? "PASS" : $"FAIL (played<{minPlayed:F0}s)")}");
                 bool realAudioGap = maxAudioBacklogMs > 150;
                 Console.WriteLine($"[HEADFUL-AUDIO-GAP] maxBacklog={maxAudioBacklogMs:F0}ms gaps(>150ms)={audioGapCount} " +
-                                  $"stalls={audioStallCount} => {(realAudioGap ? "⚠ 检测到音频间隙（真欠载）" : "未检测到间隙")}");
+                                  $"stalls={audioStallCount} => {(realAudioGap ? "检测到音频间隙（真欠载）" : "未检测到间隙")}");
                 if (audioStallCount > 0 && !realAudioGap)
                     Console.WriteLine($"  [HEADFUL-AUDIO-GAP] 注：stalls={audioStallCount} 均发生在 backlog=0 的连续播放中，属批量提交节奏（非欠载）。");
             }
 
-            // —— 重播验证（边界①：Ended→Playing 无缝从头；回答「首次启动后能否重播无缝」）——
+            // —— 重播验证：Ended→Playing 无缝从头 ——
             if (replayTest)
             {
                 Console.WriteLine();
@@ -429,7 +426,7 @@ internal static class Program
         Console.WriteLine();
         if (saveFrames > 0)
             Console.WriteLine($"[HEADFUL-SAVE] 共落盘 {FrameDumper.DumpedCount} 张帧 -> {saveDir}");
-        Console.WriteLine(overall ? "✅ 总体 PASS" : "❌ 总体 FAIL");
+        Console.WriteLine(overall ? "总体 PASS" : "总体 FAIL");
         return overall ? 0 : 1;
     }
 
@@ -651,7 +648,7 @@ internal static class Program
         return null;
     }
 
-    /// <summary>定位原生 libvlc 目录（libvlc.dll 所在目录）：优先探针自带分发的 NuGet 原生包，其次本机已装 VLC。</summary>
+    /// <summary>定位原生 libvlc 目录（libvlc.dll 所在目录）：优先探针自带分发的 NuGet 原生包，其次系统已安装的 VLC。</summary>
     private static string? LocateLibVlc()
     {
         string baseDir = AppContext.BaseDirectory;
@@ -745,7 +742,7 @@ internal static class Program
     }
 }
 
-// 🔴 帧落盘诊断：把渲染器收到的真实帧（CPU 软解 / GPU 硬解回读）转 RGBA 后写极简 PNG。自包含零依赖。
+// 帧落盘诊断：把渲染器收到的真实帧（CPU 软解 / GPU 硬解回读）转 RGBA 后写极简 PNG。自包含零依赖。
 internal static class FrameDumper
 {
     internal static int DumpedCount;
@@ -903,7 +900,7 @@ internal static class FrameDumper
     }
 }
 
-// 🔴 [LibraryImport] 源生成要求载体类型为「顶级 partial」，故 user32 P/Invoke 放在本顶级 partial 类（与 MF/FFmpeg 探针同款）。
+// [LibraryImport] 源生成要求载体类型为顶级 partial 类型，故 user32 P/Invoke 放在本顶级 partial 类。
 internal static partial class NativeMethods
 {
     [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]

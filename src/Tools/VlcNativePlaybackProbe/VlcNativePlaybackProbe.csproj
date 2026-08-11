@@ -8,7 +8,7 @@
     <RootNamespace>VlcNativePlaybackProbe</RootNamespace>
     <AssemblyName>VlcNativePlaybackProbe</AssemblyName>
     <IsPackable>false</IsPackable>
-    <!-- 3.1 最小探针：仅验证自写 Apache-2.0 P/Invoke 能 libvlc_new 并打出 3.0.23.1。
+    <!-- 最小探针：仅验证自写 Apache-2.0 P/Invoke 能 libvlc_new。
          原生 libvlc 运行时由 VideoLAN.LibVLC.Windows 随探针输出自带（LGPL，仅探针携带，不污染库本体）。 -->
   </PropertyGroup>
 

@@ -11,7 +11,7 @@ namespace LingFan.Media.Abstractions;
 /// 帧所有权始终由 VideoPipeline 的 ReturnFrame 闭环。</para>
 /// <para><b>B-CTR2 池化支持</b>：生产者可经池化构造传入 <see cref="System.Buffers.ArrayPool{T}"/> 租借数组，
 /// <see cref="Dispose"/> 时自动归还——消除每帧回读的大数组分配（1080p ≈ 8MB/帧 → LOH 压力）。
-/// <see cref="System.Buffers.ArrayPool{T}"/> 为 BCL 中立类型，契约层零外部引用铁律不受影响。
+/// <see cref="System.Buffers.ArrayPool{T}"/> 为 BCL 中立类型，契约层零外部引用约束不受影响。
 /// 消费方必须在 <c>using</c> 作用域内完成对 <see cref="Data"/> 的读取（归还后数据失效）。</para>
 /// </remarks>
 public sealed class GpuTextureReadback : IDisposable

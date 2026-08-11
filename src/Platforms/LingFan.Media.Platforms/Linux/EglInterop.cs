@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace LingFan.Media.Platforms.Linux;
 
 /// <summary>
-/// EGL 互操作——DMABuf → EGLImage → GL 纹理零拷贝路径（R13）。
+/// EGL 互操作——DMABuf → EGLImage → GL 纹理零拷贝路径。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 <c>EGL_EXT_image_dma_buf_import</c> 扩展从 dmabuf 创建 EGLImage，

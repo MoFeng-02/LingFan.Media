@@ -59,7 +59,7 @@ public interface ISharedGpuSurfaceSource : IDisposable
 /// <c>IEnumerable&lt;ISharedGpuSurfaceSourceFactory&gt;</c>，选中第一个
 /// <see cref="IsAvailable"/> 且句柄类型被宿主合成器支持的工厂。
 /// 因此 UI 层不含任何「优先 D3D11 / 其次 Vulkan」的硬编码分支。</para>
-/// <para><b>开箱即用铁律</b>：<see cref="IsAvailable"/> 应为轻量判定（平台/DI 可用性），
+/// <para><b>开箱即用原则</b>：<see cref="IsAvailable"/> 应为轻量判定（平台/DI 可用性），
 /// <b>不得</b>在此触碰原生资源；真正的设备/纹理创建延迟到 <see cref="Create"/>。</para>
 /// </remarks>
 public interface ISharedGpuSurfaceSourceFactory

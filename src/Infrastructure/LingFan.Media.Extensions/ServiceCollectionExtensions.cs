@@ -58,7 +58,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         // 通用 Lazy<T> 解析支持：MS DI 默认不自动解析 Lazy<T>（仅集合类型）。
-        // 注册后 Lazy<T>.Value 才延迟解析 T，用于把后端原生初始化延迟到 Open（宪法纪律）。
+        // 注册后 Lazy<T>.Value 才延迟解析 T，用于把后端原生初始化延迟到 Open（保持注册阶段不触碰原生库）。
         services.AddLazySupport();
 
         var options = new MediaOptions();

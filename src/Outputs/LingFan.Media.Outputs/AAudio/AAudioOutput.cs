@@ -10,7 +10,7 @@ namespace LingFan.Media.Outputs.AAudio;
 /// <remarks>
 /// <para>职责：通过 Android NDK AAudio API 播放 PCM 数据（libaaudio.so）。
 /// Android 8.1（API 27）起稳定；低版本由 DI 侧回退到 OpenSL ES（见 AAudioExtensions）。</para>
-/// <para><b>异步策略</b>（与 WASAPI/OpenSL ES 范本一致，遵守总记忆第十二章）：</para>
+/// <para><b>异步策略</b>（与 WASAPI/OpenSL ES 范本一致）：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，平台校验后返回 <see cref="Task.CompletedTask"/>。
 /// 无 I/O 可 await，<b>非伪异步</b>（不加 <c>async</c> 关键字、方法体无 <c>await</c>）。</item>

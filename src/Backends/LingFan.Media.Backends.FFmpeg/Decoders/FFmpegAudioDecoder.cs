@@ -32,7 +32,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     private SafeSwrContextHandle? _swrContext;
     private IntPtr _extradataBuffer;          // ctx->extradata 原生缓冲（含 64B padding），本类拥有，Dispose 释放
 
-    // 🔴 流时间基：解码帧 pts 以「流 time_base」为单位。demuxer 透传，用于建立 ctx->pkt_timebase 并做时间戳换算。
+    // 流时间基：解码帧 pts 以「流 time_base」为单位。demuxer 透传，用于建立 ctx->pkt_timebase 并做时间戳换算。
     // 解码后 ctx->time_base 常为 0，直接换算会使音频帧时间戳全 0（主时钟 SyncTo(0) 钉死、pos 不前进）。
     private Rational _timeBase;
     private double _tbSeconds;
@@ -90,7 +90,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         if (ctx == null)
             throw new InvalidOperationException("avcodec_alloc_context3 失败");
 
-        // 🔴 建立流时间基：解码帧 pts 以流 time_base 为单位，须由调用方写入 ctx->pkt_timebase。
+        // 建立流时间基：解码帧 pts 以流 time_base 为单位，须由调用方写入 ctx->pkt_timebase。
         // 解码后 ctx->time_base 常为 0，直接用其换算会使音频帧时间戳全 0（主时钟 SyncTo(0) 钉死、pos 不前进）。
         _timeBase = settings.TimeBase;
         _tbSeconds = _timeBase.ToDouble();
@@ -104,7 +104,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
 
         _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
 
-        // 🔴 应用编解码器私有配置（extradata）：AAC 在 MP4 中为裸流，需 AudioSpecificConfig 才能解码，
+        // 应用编解码器私有配置（extradata）：AAC 在 MP4 中为裸流，需 AudioSpecificConfig 才能解码，
         // 否则 avcodec_send_packet 返回 Invalid data。
         ApplyCodecConfiguration(ctx, settings.CodecConfiguration);
 
@@ -351,7 +351,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         int sampleRate = avFrame->sample_rate;
         AVSampleFormat sampleFmt = (AVSampleFormat)avFrame->format;
 
-        // 🔴 AAC 等解码器在 avcodec_open2 后 ctx->sample_rate 可能仍为 0（采样率仅在首帧解出后可知）。
+        // AAC 等解码器在 avcodec_open2 后 ctx->sample_rate 可能仍为 0（采样率仅在首帧解出后可知）。
         // 用首帧 avFrame->sample_rate / 声道数回填 OutputSampleRate/OutputChannels，使解码器向外导出正确采样率
         // （供 WASAPI 等设备打开、NoOp 实时背压等；Initialize 时刻读到的 0 是 ffmpeg 延迟填充所致）。
         if (OutputSampleRate <= 0 && sampleRate > 0) OutputSampleRate = sampleRate;

@@ -148,7 +148,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
         _isRunning = true;
         _isPaused = false;
-        // 🔴 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
+        // 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
         // 否则残留 true 会在后续 Stop/Dispose 的 finally 中误触发 Completed → 错误发出 Ended。
         _completedNaturally = false;
 
@@ -339,20 +339,20 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     // 前瞻窗口（预解码帧数）：让提交阶段能成批提交，折叠逐帧 STA 跨线程往返的固定开销（修复听感卡顿/掉速）。
     private const int PrerollFrames = 16;
 
-    // 🔴 (b)① 架构补短（2026-08-04）：小量子连续提交。
+    // (b)① 架构补短：小量子连续提交。
     // 旧逻辑一次性把 _sampleQueue 全部帧灌入设备（单批 ~750ms 阻塞），管线离场解码时 submittedSamples
     // 冻结、主时钟平滑前进 → 诊断仪误报"音频间隙/stall"。改为每次最多提交 ~MaxSubmitChunkMs 的音频，
-    // 使渲染线程的 submittedSamples 连续推进（根治假 stall），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时）。
+    // 使渲染线程的 submittedSamples 连续推进（解决假 stall），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时）。
     private const int MaxSubmitChunkMs = 40;   // 单批提交上限（毫秒）；远小于诊断仪 100ms stall 阈值，留足余量
     private const int MinChunkSamples = 1024;  // 单批下限（采样数，≈23ms@44.1k/21ms@48k），避免过小批导致提交开销占比上升
     private int _submitChunkSamples;           // 懒初始化：首次提交时按帧采样率换算（采样率跨流可能变化，故每流首帧确定）
 
-    // 🔴 诊断（LINGFAN_AUDIO_DIAG=1）：打点音频循环各相位时长，定位 headful 断音根因。
-    // 纯诊断、零架构风险：仅在 env 置 1 时开启，生产路径恒为 false，不改变任何控制流/时序。
+    // 诊断（LINGFAN_AUDIO_DIAG=1）：打点音频循环各相位时长，定位 headful 断音成因。
+    // 纯诊断：仅在 env 置 1 时开启，生产路径恒为 false，不改变任何控制流/时序。
     private static readonly bool AudioDiagEnabled =
         string.Equals(Environment.GetEnvironmentVariable("LINGFAN_AUDIO_DIAG"), "1", StringComparison.Ordinal);
 
-    // 🔴 EOS 时序诊断（LINGFAN_EOS_DIAG=1）：记录自然完成瞬间的「主时钟位置」，定位偶发提前结束根因。
+    // EOS 时序诊断（LINGFAN_EOS_DIAG=1）：记录自然完成瞬间的「主时钟位置」，定位偶发提前结束成因。
     private static readonly bool EosDiagEnabled =
         string.Equals(Environment.GetEnvironmentVariable("LINGFAN_EOS_DIAG"), "1", StringComparison.Ordinal);
 
@@ -372,7 +372,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
                 // 1. 提交阶段：小量子连续提交（(b)① 架构补短）
                 //    每次最多提交 ~MaxSubmitChunkMs 的音频，使渲染线程的 submittedSamples 连续推进
-                //    （根治诊断仪"假 stall"），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时、抗 decode 抖动）。
+                //    （解决诊断仪"假 stall"），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时、抗 decode 抖动）。
                 if (_sampleQueue.Count > 0)
                 {
                     // 关闭/停止：不再向渲染线程阻塞提交，直接归还剩余帧。

@@ -9,12 +9,12 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// 使操作系统音频引擎（audiodg.exe）在进程生命周期内保持热态。
 /// </summary>
 /// <remarks>
-/// <para><b>解决的问题</b>：本机实测，进程内首个 <c>IAudioClient.Initialize</c> 需约 <b>2.5s</b>
+/// <para><b>解决的问题</b>：实测，进程内首个 <c>IAudioClient.Initialize</c> 需约 <b>2.5s</b>
 /// （audiodg 冷启动，与共享/独占/事件驱动/轮询模式全部无关）。此前的 throwaway 预热
 /// （建一个临时客户端 → Initialize → Dispose）已被数据证伪：Dispose 后设备回冷，
 /// 正式播放的客户端照样再付一次 2.5s。<b>唯一有效的形态是让一个客户端持续存活</b>，
 /// 这正是本类的职责。</para>
-/// <para><b>分层依据（DI 宪法）</b>：长期原生资源 → Infrastructure Singleton；Session 状态 → Transient。
+/// <para><b>分层依据（DI 设计原则）</b>：长期原生资源 → Infrastructure Singleton；Session 状态 → Transient。
 /// 与 GPU 侧完全同构：<c>ID3D11Device</c> 是 Singleton 共享，<c>SwapChain</c>/<c>RenderTarget</c> 是 Session 级。
 /// 对应到音频：<b>引擎/端点句柄 Singleton，<see cref="WasapiOutput"/> 每次 OpenAsync 经工厂 new</b>。
 /// 绝不把 Session 对象升 Singleton（它持有播放线程、缓冲区、音量，升单例会跨播放互相污染）。</para>
@@ -22,7 +22,7 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// 暴露任何 COM 指针，二者也不引用本类。Session 只是<b>间接</b>受益于"OS 音频引擎已热"这个进程级事实。
 /// 这样多轨播放（N 个并发 Session、各自 <c>ChannelMask</c>/音量）天然由 DI 各自 new/dispose，
 /// 无需任何手工引用计数，也不存在跨会话状态污染。</para>
-/// <para>🔴 <b>COM 单元亲和（I7）</b>：全部 COM 对象都在 <see cref="StaComWorker"/> 的专用 STA 线程上创建，
+/// <para><b>COM 单元亲和</b>：全部 COM 对象都在 <see cref="StaComWorker"/> 的专用 STA 线程上创建，
 /// 并在同一线程、先于 <c>CoUninitialize</c> 释放。</para>
 /// <para><b>anchor 为什么用 mix format + 共享模式</b>：mix format 必被引擎接受（无需 AUTOCONVERTPCM），
 /// 共享模式保证不抢占设备（独占会让其他应用与后续 Session 全部失声）。anchor 不写任何数据，
@@ -95,7 +95,7 @@ internal sealed class WasapiAudioEngine : IAudioEngine
 
         if (worker is not null)
         {
-            // 🔴 I7：释放动作交给 worker，在 STA 线程内执行完毕后线程 proc 才 CoUninitialize。
+            // 释放动作交给 worker，在 STA 线程内执行完毕后线程 proc 才 CoUninitialize。
             worker.Shutdown(ReleaseOnWorker);
             worker.Dispose();
         }
@@ -182,7 +182,7 @@ internal sealed class WasapiAudioEngine : IAudioEngine
                 ReleaseOnWorker();
                 return;
             }
-            // 🔴 R5：CoTaskMemFree 只与「成功的」GetMixFormat 配对，且恰好一次。
+            // CoTaskMemFree 只与「成功的」GetMixFormat 配对，且恰好一次。
             long tInit;
             try
             {
@@ -244,7 +244,7 @@ internal sealed class WasapiAudioEngine : IAudioEngine
     {
         if (_anchorClientPtr != IntPtr.Zero)
         {
-            // 🔴 Start/Stop 配对：只有成功 Start 过才 Stop。
+            // Start/Stop 配对：只有成功 Start 过才 Stop。
             if (_anchorStarted && _anchorStop is not null)
             {
                 try { _anchorStop(_anchorClientPtr); } catch { /* 关闭期忽略 */ }

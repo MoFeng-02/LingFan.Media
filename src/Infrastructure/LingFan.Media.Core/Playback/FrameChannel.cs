@@ -9,7 +9,7 @@ namespace LingFan.Media.Core;
 /// 单一管线线程投递为主，订阅稳定后快照复用、热路径零分配。
 /// </summary>
 /// <remarks>
-/// 设计约束（帧路由宪法）：管线始终在 <see cref="Emit"/> 调用后于 <c>finally</c> 中
+/// 设计约束：管线始终在 <see cref="Emit"/> 调用后于 <c>finally</c> 中
 /// <c>ReturnFrame</c> 释放帧——<b>本通道与所有 Sink 均为只读借用，绝不 Dispose</b>。
 /// 通道只负责扇出；多播下任一 Sink 在 <see cref="IFrameSink.OnFrame"/> 内 Dispose 会让后续订阅方
 /// 读到已释放帧（use-after-free），故 Sink 一律不得 Dispose。

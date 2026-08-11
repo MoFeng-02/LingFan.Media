@@ -13,10 +13,10 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// 后 <c>MFDemuxer</c> 也需在读样阶段提取纹理，故抽为无状态静态助手供两侧共用，避免两份分叉实现漂移。</para>
 /// <para><b>路径</b>：<c>QueryInterface(IMFDXGIBuffer)</c> → <c>GetResource(ID3D11Texture2D)</c> +
 /// <c>GetSubresourceIndex</c> → 包成 <see cref="MfD3D11TextureResource"/>（<see cref="IGpuTextureResource"/> 中立契约）。</para>
-/// <para>🔴 <b>R5 COM 配对</b>：<c>GetResource</c> 成功即已 AddRef 纹理；后续任一步失败必须 <c>Marshal.Release(tex)</c>，
+/// <para><b>COM 配对</b>：<c>GetResource</c> 成功即已 AddRef 纹理；后续任一步失败必须 <c>Marshal.Release(tex)</c>，
 /// 否则纹理引用泄漏（GPU 显存不回收）。QI 得到的 <c>IMFDXGIBuffer</c> 无论成败都在 finally 释放。</para>
 /// <para><b>失败语义</b>：一律返回 <see langword="null"/> 并回填 HRESULT，绝不抛异常——
-/// 调用方据此回落 CPU 路径（宪法：硬解优先、软解兜底，失败不得炸链路）。</para>
+/// 调用方据此回落 CPU 路径（设计原则：硬解优先、软解兜底，失败不得炸链路）。</para>
 /// <para><b>AOT 兼容</b>：原始 vtable 委托 + <c>Marshal.QueryInterface</c>，无反射、无 <c>[ComImport]</c>。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
@@ -84,7 +84,7 @@ internal static class MfDxgiTextureExtractor
         }
         finally
         {
-            // R5 配对：未成功转移所有权的纹理引用必须释放，否则显存泄漏
+            // COM 配对：未成功转移所有权的纹理引用必须释放，否则显存泄漏
             if (tex != IntPtr.Zero) Marshal.Release(tex);
             Marshal.Release(dxgi);
         }

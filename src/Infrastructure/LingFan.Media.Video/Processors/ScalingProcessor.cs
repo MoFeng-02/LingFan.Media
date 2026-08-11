@@ -8,7 +8,7 @@ namespace LingFan.Media.Video.Processors;
 /// 平面/YUV 与 GPU 资源直接透传（不 Dispose，不创建新帧）。</para>
 /// <para><b>所有权转移</b>：执行实际缩放时输入帧被 Dispose，返回新帧。
 /// 透传路径不 Dispose、不创建新帧。</para>
-/// <para>同步热路径（总记忆十二第3条），无 async。</para>
+/// <para>同步热路径，无 async。</para>
 /// </remarks>
 public sealed class ScalingProcessor : IVideoProcessor
 {

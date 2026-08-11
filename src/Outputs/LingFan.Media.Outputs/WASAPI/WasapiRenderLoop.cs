@@ -7,15 +7,15 @@ namespace LingFan.Media.Outputs.Wasapi;
 
 /// <summary>
 /// WASAPI 渲染线程（STA 独占）。Phase 1 从 <see cref="WasapiOutput"/> 提取：
-/// 把全部 WASAPI COM 调用收进一个常驻 STA 线程，消除逐帧 <c>RunOnSta</c> 跨线程封送税（F1 根因），
+/// 把全部 WASAPI COM 调用收进一个常驻 STA 线程，消除逐帧 <c>RunOnSta</c> 跨线程封送税，
 /// 为 Phase 2 的生产者/消费者解耦（<c>AudioSampleRing</c>）奠定线程模型基础。
 /// </summary>
 /// <remarks>
 /// <para><b>线程模型</b>：构造后由 <see cref="InitializeAsync"/> 启动唯一 STA 线程（COINIT_APARTMENTTHREADED）。
 /// 该线程在 <c>CoInitializeEx</c> 之后进入渲染循环：消费控制消息（Initialize/Pause/...）与音频帧，
 /// 所有 COM 调用（CoCreateInstance/GetMixFormat/Initialize/GetBuffer/ReleaseBuffer/GetPosition）均在同一线程。
-/// WASAPI 要求 IAudioClient 在 STA 公寓创建与使用，MTA 下 GetMixFormat/Initialize 会触发 native AV（0xC0000005），
-/// 故 STA 线程唯一性不可破坏（F3 关联）。</para>
+/// WASAPI 要求 IAudioClient 在 STA 公寓创建与使用，MTA 下 GetMixFormat/Initialize 会触发原生访问违规（ACCESS_VIOLATION），
+/// 故 STA 线程唯一性不可破坏。</para>
 /// <para><b>异步策略</b>（与提取前一致，未改变契约语义）：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，内部启动 STA 线程 + 在渲染线程执行 InitializeCore，返回 <see cref="Task.CompletedTask"/>。
@@ -87,19 +87,19 @@ internal sealed class WasapiRenderLoop
     private const int BufferWaitTimeoutMs = 200;
     private const int BufferPollIntervalMs = 5;   // 轮询模式（设备不支持事件驱动）下缓冲满的重试间隔
     private double _streamLatencySec; // IAudioClient.GetStreamLatency() 返回的「提交→可闻」延迟（秒），用于主时钟校准
-    // 🔴 音画同步（2026-08-04 实测校准，数据坐实前版 anchor/padding 修复为 no-op）：
-    // 共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」（Start 后瞬间预取 ~0.5s
+    // 音画同步校准（以墙钟为锚，消除设备游标偏移）：
+    // 共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」（Start 后瞬间预取
     // 进系统混音缓冲），该领先对 GetCurrentPadding（仅本 IAudioClient 设备缓冲，≤bufferSize≈100ms）
-    // 与 GetStreamLatency（本机返回 0）均不可见，故直接减锚点/填充/延迟整段无效。
+    // 与 GetStreamLatency（本地返回 0）均不可见，故直接减锚点/填充/延迟整段无效。
     // 改为以墙钟为锚：起播 >100ms 后锁定 bias = rawSec - wallElapsed（引擎领先+常偏），
     // 主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。三者跨线程（渲染线程写、时钟线程读）均用 Volatile 访问。
     private System.Diagnostics.Stopwatch? _startStopwatch;
     private double _calibratedBias;
     private bool _biasLatched;
-    // 🔴 重播（Ended→Playing）主时钟武装标志：音频尚未为本遍播放 Start 前，GetPlaybackPositionDirect 须返回 0
+    // 重播（Ended→Playing）主时钟武装标志：音频尚未为本遍播放 Start 前，GetPlaybackPositionDirect 须返回 0
     // （设备尚未起跑，此时读出的游标是上一遍播放残留的陈旧值）。Resume/BeginStreaming 自动 Start 时经
     // CaptureStartAnchor 置 true；重播起点经 ResetPlaybackClock 置 false。缺此标志时，重播预滚动/门控窗口
-    // 会沿用第一遍播放的 Start 锚点返回 ~34s，导致重播 PTS=0 首帧被错判「落后 34s → Drop」，画面冻结到 ~10s 才切入。
+    // 会沿用第一遍播放的 Start 锚点返回陈旧值，导致重播 PTS=0 首帧被错判落后、遭 Drop，画面冻结较长时间才切入。
     private volatile bool _clockArmed;
     // 注：LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
     // 本音频时钟只暴露纯可闻位置，不再做任何前移补偿。
@@ -115,13 +115,13 @@ internal sealed class WasapiRenderLoop
     // 绝不空等超时（否则 Pause 后的残留帧会逐帧空耗 BufferWaitTimeoutMs，拖慢控制消息响应）。
     private volatile bool _deviceRunning;
 
-    // 诊断计数器（纯观察，不影响音频逻辑）：定位"听感卡顿/断续"根因。
+    // 诊断计数器（纯观察，不影响音频逻辑）：定位"听感卡顿/断续"成因。
     // submittedSamples = 实际成功写入 WASAPI 的累计采样帧数；droppedFrames = 缓冲满(available==0)丢弃的帧数。
     private long _submittedSamples;
     private int _submittedFrames;
     private long _droppedFrames;
 
-    // 冷启动诊断（WASAPI_OPEN_DIAG=1 时启用）：拆开 InitializeAsync/Initialize 各 COM 步耗时，定位 OpenAsync 2.8s 真凶。
+    // 冷启动诊断（WASAPI_OPEN_DIAG=1 时启用）：拆开 InitializeAsync/Initialize 各 COM 步耗时，定位 OpenAsync 启动耗时来源。
     private readonly bool _openDiag = System.Environment.GetEnvironmentVariable("WASAPI_OPEN_DIAG") == "1";
     private Stopwatch? _initDiagSw;
 
@@ -129,7 +129,7 @@ internal sealed class WasapiRenderLoop
     private SampleFormat _deviceSampleFormat = SampleFormat.F32;
 
     // 设备原生 mix format 的采样率/声道数（GetMixFormat 检测）。
-    // ⚠️ 审计修正（2026-07-31）：此前注释称"初始化 WAVEFORMATEX 必须用它而非解码器输出格式"，这是错的
+    // 此前注释称"初始化 WAVEFORMATEX 必须用它而非解码器输出格式"，这是错的
     // ——那样会让 Submit 侧的解码器格式帧被按设备速率播出。现仅用于诊断日志与 AUTOCONVERTPCM 判断，
     // 实际初始化格式一律用客户端（解码器）采样率/声道数。详见 NegotiateSharedFormat 步骤 4。
     private int _mixSampleRate;
@@ -246,7 +246,7 @@ internal sealed class WasapiRenderLoop
             catch (OperationCanceledException)
             {
                 // 取消（Stop/Dispose）是正常退出路径：立即放弃剩余帧提交，使音频管线快速退出，
-                // 不再冒泡成 fail 日志（回归修复 2026-08-03）。
+                // 不再冒泡成 fail 日志。
                 break;
             }
             if (item.Exception is TimeoutException tex)
@@ -271,7 +271,7 @@ internal sealed class WasapiRenderLoop
         {
             int hr = _audioClientStop!(_audioClientPtr);
             _deviceRunning = false;
-            // 审计修复：0x88890004 实际是 AUDCLNT_E_DEVICE_INVALIDATED（设备移除），非 AUDCLNT_E_NOT_INITIALIZED（0x88890001）。
+            // 修复：0x88890004 实际是 AUDCLNT_E_DEVICE_INVALIDATED（设备移除），非 AUDCLNT_E_NOT_INITIALIZED（0x88890001）。
             // 两者在 Stop() 上下文中均可安全忽略。
             if (hr < 0
                 && hr != WasapiInterop.AUDCLNT_E_DEVICE_INVALIDATED
@@ -284,7 +284,7 @@ internal sealed class WasapiRenderLoop
 
     /// <inheritdoc cref="WasapiOutput.Resume"/>
     /// <remarks>
-    /// 🔴 重播（Ended→Playing）健壮性：自然 Ended 时客户端仍 Running（尾音由设备自然放完，不主动 Stop），
+    /// 重播（Ended→Playing）健壮性：自然 Ended 时客户端仍 Running（尾音由设备自然放完，不主动 Stop），
     /// 重播若直接 Start 会得 <c>AUDCLNT_E_NOT_STOPPED</c>(0x88890005)。故先 Stop（幂等，已停止亦 S_OK）
     /// 再 Reset（丢弃残留未播缓冲，避免重播开头混入上一次尾音）最后 Start，形成确定的「停止→清空→启动」序列。
     /// 首次播放（从未 Start）与恢复暂停（Pause 已 Stop）场景下 Stop 均为幂等空操作，无副作用。
@@ -311,9 +311,9 @@ internal sealed class WasapiRenderLoop
             _prerollPending = false;
             _primeTcs = null;
 
-            // 🔴 音画同步修复（2026-08-04）：捕获启动锚点。Start 后立刻读一次设备游标作为本流
+            // 捕获启动锚点。Start 后立刻读一次设备游标作为本流
             // 「已播放量」的零点，主时钟后续用 (devicePosition - 锚点) 得到本流真实播放秒数，
-            // 消除共享模式 devicePosition 启动即 ~0.5s 的任意累计偏移。重播时 Stop→Reset→Start
+            // 消除共享模式 devicePosition 启动即带的任意累计偏移。重播时 Stop→Reset→Start
             // 会重新调用本方法，锚点随之刷新（Reset 后游标归零，新锚点≈旧锚点，差值连续）。
             CaptureStartAnchor();
         });
@@ -321,8 +321,8 @@ internal sealed class WasapiRenderLoop
 
     /// <inheritdoc cref="WasapiOutput.BeginStreamingAsync"/>
     /// <remarks>
-    /// 根治起播静默窗（2026-08-04）：WASAPI 共享模式下，若在空缓冲上直接 Start，音频引擎会瞬间
-    /// 抓取 ~0.5s 静音进系统混音缓冲，真实 PCM 排在其后才可闻 → 起播出现静默窗。
+    /// 解决起播静默窗：WASAPI 共享模式下，若在空缓冲上直接 Start，音频引擎会瞬间
+    /// 抓取静音进系统混音缓冲，真实 PCM 排在其后才可闻 → 起播出现静默窗。
     /// 本方法只做 Stop→Reset 并 arm preroll（不 Start）；提交循环把真实 PCM 写满设备缓冲后，
     /// <see cref="WriteFrame"/> 在 padding 达标时自动 Start，引擎抓取的是真实数据 → 无静默窗。
     /// 返回的任务在自动 Start 后完成（或由超时兜底强制 Start，防无音频轨/极短片段挂起 PlayAsync）。
@@ -330,7 +330,7 @@ internal sealed class WasapiRenderLoop
     public ValueTask BeginStreamingAsync(CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        // 🔴 修复（2026-08-05）：preroll 必须在 OpenAsync 之后、首帧之前 arm，即使设备尚未 Initialize
+        // preroll 必须在 OpenAsync 之后、首帧之前 arm，即使设备尚未 Initialize
         // （如 FFmpeg+AAC 采样率延迟到首帧回填的场景）。原逻辑在 !_initialized 时 early-return 导致
         // _prerollPending 从未置位；渲染线程首帧惰性 Initialize 后才到 WriteFrame，此时已错过 arm →
         // 设备永不 Start → 音频饥饿死锁（日志: 需要 2048 帧/可用 314 帧，卡死退不出）。
@@ -360,7 +360,7 @@ internal sealed class WasapiRenderLoop
         if (completed != tcs.Task)
         {
             // 超时兜底：强制启动，避免 PlayAsync 在"无音频轨/极短片段"场景挂起。
-            // 🔴 守卫（2026-08-05）：惰性初始化场景下 600ms 兜底可能在设备尚未 Initialize 前触发，
+            // 守卫：惰性初始化场景下 600ms 兜底可能在设备尚未 Initialize 前触发，
             // 此时 _audioClientStart 委托为 null，调用会 NRE；仅在 _initialized 下强制 Start。
             RunControl(() =>
             {
@@ -411,7 +411,7 @@ internal sealed class WasapiRenderLoop
             if (hr < 0)
                 return TimeSpan.Zero;
 
-            // ⚠️ 审计修复（2026-07-31，真 bug）：devicePosition 的单位由设备定义，【不是】帧数。
+            // 修复（真 bug）：devicePosition 的单位由设备定义，【不是】帧数。
             // 官方换算：秒 = position / frequency（IAudioClock::GetFrequency，见 _audioClockFrequency）。
             if (_audioClockFrequency > 0)
                 return TimeSpan.FromSeconds((double)devicePosition / _audioClockFrequency);
@@ -430,10 +430,10 @@ internal sealed class WasapiRenderLoop
     /// <remarks>
     /// <para><b>为什么不需要跨线程</b>：<c>IAudioClock::GetPosition</c> 按 MSDN 可由任意线程调用，
     /// 它只读设备维护的原生播放游标，且只被设备自身写入；读取是稳定的单值读取。</para>
-    /// <para><b>为什么用它是根治方案</b>：该游标随真实播放平滑前进，且音频缓冲耗尽时天然停摆 ——
+    /// <para><b>为什么用它是合适方案</b>：该游标随真实播放平滑前进，且音频缓冲耗尽时天然停摆 ——
     /// 不会像"已提交末端时间"那样在批提交时被瞬间预支、又在两批间自由运行超调后猛拽回退。
     /// 视频主时钟应以此为准（</para>
-    /// <para><b>为什么用它根治</b>：该游标随真实播放平滑前进，且音频缓冲耗尽时天然停摆 ——
+    /// <para><b>为什么用它</b>：该游标随真实播放平滑前进，且音频缓冲耗尽时天然停摆 ——
     /// 不会像"已提交末端时间"那样在批提交时被瞬间预支、又在两批间自由运行超调后猛拽回退。
     /// 视频主时钟应以此为准。</para>
     /// <para>字段读取：<c>_audioClockPtr</c> / <c>_audioClockFrequency</c> / <c>_audioClockGetPosition</c>
@@ -447,14 +447,14 @@ internal sealed class WasapiRenderLoop
         if (clockPtr == IntPtr.Zero || freq == 0 || getPos is null)
             return TimeSpan.Zero;
 
-        // 🔴 重播（Ended→Playing）主时钟武装：音频尚未为本遍播放 Start 时返回 0，使视频门控窗口内主时钟恒定=0，
-        // 重播 PTS=0 首帧得以立即呈现（否则沿用上一遍锚点 → 返回 ~34s → 首帧被错判落后 → 整段 Drop 直到 ~10s 才追上）。
+        // 重播（Ended→Playing）主时钟武装：音频尚未为本遍播放 Start 时返回 0，使视频门控窗口内主时钟恒定=0，
+        // 重播 PTS=0 首帧得以立即呈现（否则沿用上一遍锚点 → 返回陈旧的播放秒数 → 首帧被错判落后 → 整段 Drop 直到解码器推进、首帧追上主时钟才切入）。
         if (!_clockArmed)
             return TimeSpan.Zero;
 
         // WASAPI 回传 pu64QPCPosition（QPC 计数，100ns ticks），是本次 devicePosition 读数时刻的高精度
-        // 时间锚点。用 QPC 插值出「现在」的平滑播放位置，消除音频引擎周期(~10ms)的离散量化阶梯——
-        // 之前丢弃该值(out _)导致主时钟按 ~10ms 跳变，直接钉死 WaitUntilDue 的呈现时刻相位（残留墙钟抖动根因）。
+        // 时间锚点。用 QPC 插值出「现在」的平滑播放位置，消除音频引擎刷新周期的离散量化阶梯——
+        // 之前丢弃该值(out _)导致主时钟按引擎周期跳变，直接钉死 WaitUntilDue 的呈现时刻相位（残留墙钟抖动成因）。
         int hr = getPos(clockPtr, out ulong devicePosition, out ulong qpcPosition);
         if (hr < 0)
             return TimeSpan.Zero;
@@ -466,20 +466,17 @@ internal sealed class WasapiRenderLoop
 
         double pendingSec = _sampleRate > 0 ? GetCurrentPaddingFrames() / (double)_sampleRate : 0.0;
 
-        // 🔴 音画同步修复（2026-08-04 实测校准，数据坐实前版 anchor/padding 修复为 no-op）：
-        // 共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」（Start 后瞬间预取
-        // ~0.5s 进系统混音缓冲）。该领先对 GetCurrentPadding（仅本 IAudioClient 设备缓冲，≤bufferSize≈100ms）
-        // 与 GetStreamLatency（本机返回 0）均不可见，故前版减 anchor(0)/padding(~0)/latency(0) 整段无效
-        // （log 证 start delta 仍为 -182ms、steady +45ms，与修复前完全一致）。
-        // 现以墙钟为锚：引擎领先稳定后（起播 >100ms）锁定 bias = rawSec - wallElapsed = 引擎领先+常偏，
-        // 主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。瞬态期（≤100ms）devicePosition≈墙钟，
-        // 直接以墙钟为准，避免相位跳变。零架构风险、纯本地可闻校准。
-        // 🔴 音画同步根治（2026-08-04 R34）：稳态锁定引擎领先，消除起播瞬态污染。
-        // 旧实现（CalibWindowSec=0.1）在「devicePosition 尚未与墙钟锁步」的起播瞬态就捕获 bias 并永久减回，
-        // 而此刻 devicePosition 落后墙钟 ~29ms（bias 为负）→ 减负数 = 变相给主时钟加 29ms →
-        // 音频时钟比真实可闻位置快 ~29ms → 视频按此时钟提前 ~29ms 呈现 → 用户感知「声音晚一点点」。
-        // 真根：主时钟应反映真实可闻位置。devicePosition→可闻 的延迟（引擎领先 L）在稳态时
-        // 等于 (devicePosition − 墙钟) 的锁定值；起播瞬态该值为负且持续收敛，故必须等其稳定后再锁定。
+        // 音画同步校准：共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」
+        // （Start 后瞬间预取一段数据进系统混音缓冲）。该领先对 GetCurrentPadding（仅本 IAudioClient
+        // 设备缓冲，≤bufferSize≈100ms）与 GetStreamLatency（返回 0）均不可见，故直接减锚点/
+        // 填充/延迟整段无效。现以墙钟为锚：引擎领先稳定后（起播 >100ms）锁定 bias = rawSec -
+        // wallElapsed（引擎领先+常偏），主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。
+        // 瞬态期（≤100ms）devicePosition≈墙钟，直接以墙钟为准，避免相位跳变。
+        // 稳态锁定引擎领先：若在「devicePosition 尚未与墙钟锁步」的起播瞬态就捕获 bias 并永久减回，
+        // 此刻 devicePosition 落后墙钟约 29ms（bias 为负）→ 减负数 = 变相给主时钟加 29ms →
+        // 音频时钟比真实可闻位置快约 29ms → 视频按此时钟提前约 29ms 呈现。因此必须等偏差稳定后再锁定：
+        // 主时钟应反映真实可闻位置。devicePosition→可闻 的延迟（引擎领先 L）在稳态时
+        // 等于 (devicePosition − 墙钟) 的锁定值；起播瞬态该值为负且持续收敛，故须等其稳定后再锁定。
         // 稳定判据：连续两次采样偏差 < 1ms，即引擎已与墙钟锁步、L 不再漂移。锁定后 bias 即为稳态 L，
         // 主时钟减此值即得真实可闻位置（与视频 PTS 同源）， skew 归零。
         double wallElapsed = _startStopwatch?.Elapsed.TotalSeconds ?? 0.0;
@@ -529,10 +526,10 @@ internal sealed class WasapiRenderLoop
         _startStopwatch = System.Diagnostics.Stopwatch.StartNew();
         Volatile.Write(ref _biasLatched, false);
         Volatile.Write(ref _calibratedBias, 0.0);
-        // 🔴 主时钟武装：本遍播放音频已 Start，GetPlaybackPositionDirect 自此返回真实可闻位置。
+        // 主时钟武装：本遍播放音频已 Start，GetPlaybackPositionDirect 自此返回真实可闻位置。
         // （重播起点经 ResetPlaybackClock 置 false，确保预滚动/门控窗口内主时钟恒定=0。）
         _clockArmed = true;
-        // 🔴 LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
+        // LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
         // 此处音频时钟保持纯可闻位置，不再做任何前移补偿。
         _logger.LogInformation("[WASAPI-ANCHOR] 启动墙钟基准已记录（用于校准引擎领先偏移）");
     }
@@ -540,10 +537,10 @@ internal sealed class WasapiRenderLoop
     /// <summary>
     /// 重播（Ended→Playing）主时钟归零：解除武装并清校准，使 <see cref="GetPlaybackPositionDirect"/>
     /// 在音频重新 Start 之前恒定返回 0。
-    /// <para><b>根因</b>：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），<c>_startStopwatch</c>
-    /// 持续累计到 ~34s；而重播的视频门控（MediaPipelineHost.StartAsync 第③步 SignalAudioReady）早于音频
-    /// Start（第⑤步），预滚动窗口内同步器据此读到的主时钟是 ~34s 陈旧值，把 PTS=0 重播首帧判为「落后 34s → Drop」，
-    /// 直到解码器把流推进到 ~10s、首帧追上主时钟才切入（日志 present 卡到 10.267 才解冻）。</para>
+    /// <para><b>成因</b>：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），<c>_startStopwatch</c>
+    /// 持续累计（未随 Ended 归零）；而重播的视频门控（MediaPipelineHost.StartAsync 第③步 SignalAudioReady）早于音频
+    /// Start（第⑤步），预滚动窗口内同步器据此读到的主时钟是陈旧值，把 PTS=0 重播首帧判为「落后过多 → Drop」，
+    /// 直到解码器把流推进、首帧追上主时钟才切入。</para>
     /// <para>本方法在 MediaPlayer 重播分支（SeekAsync 后、StartAsync 前）调用，使该窗口主时钟=0，首帧立即呈现，无缝重播。</para>
     /// </summary>
     internal void ResetPlaybackClock()
@@ -758,7 +755,7 @@ internal sealed class WasapiRenderLoop
                     {
                         if (item.Kind == ItemKind.Frame)
                         {
-                            // 🔴 惰性初始化（采样率延迟填充场景，如 FFmpeg+AAC）：OpenAsync 时刻
+                            // 惰性初始化（采样率延迟填充场景，如 FFmpeg+AAC）：OpenAsync 时刻
                             // OutputSampleRate 可能为 0，无法提前打开 WASAPI 设备。首个音频帧到达渲染
                             // 线程时按帧的真实采样率/声道数打开设备。必须在渲染线程内直接调用
                             // InitializeImpl（禁止 RunControl，否则自死锁）。
@@ -795,7 +792,7 @@ internal sealed class WasapiRenderLoop
 
                 // 无待处理项时等待唤醒（新帧 / 控制消息 / Shutdown 均会 Set _workAvailable）。
                 // AutoResetEvent 保证：若在 TryDequeue 排空后、WaitAny 前发生 Enqueue+Set，等待会立即返回，无丢失唤醒。
-                // 🔴 修复（2026-08-05）：事件驱动模式下必须同时等待引擎缓冲事件(_bufferEvent)，否则引擎欠载时
+                // 事件驱动模式下必须同时等待引擎缓冲事件(_bufferEvent)，否则引擎欠载时
                 // 发出的缓冲信号被错过 → 引擎暂停拉取 → 缓冲恒满 → 音频饥饿死锁。轮询模式(_bufferEvent==null)仅等新帧。
                 if (_bufferEvent != null)
                     WaitHandle.WaitAny(new WaitHandle[] { _workAvailable, _bufferEvent });
@@ -894,14 +891,14 @@ internal sealed class WasapiRenderLoop
             //   0 Initialize | 1 GetBufferSize | 2 GetStreamLatency(未使用) | 3 GetCurrentPadding
             //   | 4 IsFormatSupported | 5 GetMixFormat | 6 GetDevicePeriod(未使用)
             //   | 7 Start | 8 Stop | 9 Reset | 10 SetEventHandle | 11 GetService
-            // ⚠️ 审计修复（2026-07-30 第二轮，真机 DIAG 探针坐实）：此前基线注释抄漏了相对槽 2 的
+            // 此前基线注释抄漏了相对槽 2 的
             //    GetStreamLatency，导致 GetCurrentPadding 起整体 -1 错位——GetMixFormat(误取槽4)
-            //    实际调到 IsFormatSupported，x64 下垃圾 pFormat 被解引用 → 原生 AV 0xC0000005。
+            //    实际调到 IsFormatSupported，x64 下垃圾 pFormat 被解引用 → 原生访问违规。
             _audioClientInitialize = ComVTable.Get<IAudioClient_Initialize>(pAudioClient, 0);
             _audioClientGetBufferSize = ComVTable.Get<IAudioClient_GetBufferSize>(pAudioClient, 1);
-            // 🔴 2026-08-04 音画同步修复：补上被刻意跳过的 slot 2 GetStreamLatency（不扰动后续槽位，
+            // 补上此前未接入的 slot 2 GetStreamLatency（不扰动后续槽位，
             // 因为 GetCurrentPadding 仍在 slot 3，相对索引未变）。用于把主时钟从「设备渲染游标」校准到
-            // 「真实可闻位置」——之前不减数百 ms 延迟导致视频比听到的声音整体提前 ~0.5s。
+            // 「真实可闻位置」——之前不减数百 ms 延迟导致视频比听到的声音整体提前。
             _audioClientGetStreamLatency = ComVTable.Get<IAudioClient_GetStreamLatency>(pAudioClient, 2);
             _audioClientGetCurrentPadding = ComVTable.Get<IAudioClient_GetCurrentPadding>(pAudioClient, 3);
             _audioClientIsFormatSupported = ComVTable.Get<IAudioClient_IsFormatSupported>(pAudioClient, 4);
@@ -916,11 +913,11 @@ internal sealed class WasapiRenderLoop
             // 1.5 O10：在 Initialize 之前，通过 IAudioClient2.SetClientProperties 设置会话分类，
             // 防止 Windows 将后台/非前台/隐藏窗口的音频会话在播放数秒后挂起（声音 ~15s 中断）。
             // 全程 try/guard：任何不支持/失败都只记日志，不影响后续正常 Initialize（最坏退回旧行为）。
-            // ⚠️ 2026-08-02 结案：曾长期 0xC0000005，真因是本文件 TrySetSessionCategory 的 vtable 槽位算错一格
-            // （误调 IAudioClient2::IsOffloadCapable —— 它多一个 BOOL* 出参，导致向未初始化寄存器指向的野地址写入）。
-            // 槽位已修正为 slotIndex 13（绝对槽 16），官方 COM 探针九个分类均 S_OK，调用本身不再崩。
+            // 此处槽位须为 13（绝对槽 16），算错一格会直接导致原生访问违规：若误取 12（绝对槽 15），
+            // 实际调到 IAudioClient2::IsOffloadCapable —— 它多一个 BOOL* 出参，向未初始化寄存器指向的野地址写入。
+            // 槽位已修正为 13，COM 探针九个分类均 S_OK，调用本身不再崩。
             // 但 EnableBackgroundCapableSession 仍默认 false：启用它的原始动机（防 OS 挂起后台会话）未被证实，
-            // 且实测启用后出现「约 30s 静音后才出声」的回归。详见 WasapiOptions 上的说明。
+            // 且启用后出现「长时间静音（数十秒级）后才出声」的现象。详见 WasapiOptions 上的说明。
             if (_options.EnableBackgroundCapableSession)
                 TrySetSessionCategory(pAudioClient);
 
@@ -949,7 +946,7 @@ internal sealed class WasapiRenderLoop
                 ? WasapiInterop.AUDCLNT_STREAMFLAGS_EVENTCALLBACK
                 : 0;
 
-            // ⚠️ 审计修复（2026-07-31，真 bug 配套修复）：共享模式下必须显式要求音频引擎
+            // 共享模式下必须显式要求音频引擎
             //    插入声道矩阵器 + 采样率转换器，否则客户端格式（解码器 44.1kHz/2ch）与引擎
             //    mix format（常见 48kHz/2ch，多声道设备可能 6ch）不一致时，引擎【不会】自动转换。
             if (!_exclusiveMode)
@@ -990,7 +987,7 @@ internal sealed class WasapiRenderLoop
                         : $"共享模式已启用 AUTOCONVERTPCM，设备 mix 为 {_mixSampleRate}Hz/{_mixChannels}ch；" +
                           "若仍失败，请调整 WasapiOptions.PreferredSampleFormat。"));
             }
-            // 审计修复（2026-07-31）：给出可诊断的错误，而不是笼统的 HRESULT。
+            // 给出可诊断的错误，而不是笼统的 HRESULT。
             if (hr == WasapiInterop.AUDCLNT_E_INVALID_STREAM_FLAG)
             {
                 throw new NotSupportedException(
@@ -1028,7 +1025,7 @@ internal sealed class WasapiRenderLoop
             Marshal.ThrowExceptionForHR(hr);
             _bufferSize = (int)bufferFrames;
 
-            // 5.5 🔴 音画同步修复（2026-08-04）：获取「提交→可闻」流延迟，用于主时钟校准。
+            // 5.5 音画同步校准：获取「提交→可闻」流延迟，用于主时钟校准。
             // GetStreamLatency 必须在 Initialize 成功后调用（slot 2 已接）。返回值单位 100ns。
             // 失败不影响播放，仅退回 0（主时钟不校准，保持旧行为）。
             _streamLatencySec = 0.0;
@@ -1086,7 +1083,7 @@ internal sealed class WasapiRenderLoop
                 _audioClockGetFrequency = ComVTable.Get<IAudioClock_GetFrequency>(pClock, 0);
                 _audioClockGetPosition = ComVTable.Get<IAudioClock_GetPosition>(pClock, 1);
 
-                // ⚠️ 审计修复（2026-07-31）：频率在流的生命周期内恒定，初始化时取一次即可。
+                // 频率在流的生命周期内恒定，初始化时取一次即可。
                 int freqHr = _audioClockGetFrequency(_audioClockPtr, out ulong clockFrequency);
                 if (freqHr >= 0 && clockFrequency > 0)
                 {
@@ -1135,7 +1132,7 @@ internal sealed class WasapiRenderLoop
             _sampleRate = 0;
             _channels = 0;
             _deviceSampleFormat = SampleFormat.F32;
-            // 审计修复：重置 _eventDrivenMode 到用户配置值。
+            // 修复：重置 _eventDrivenMode 到用户配置值。
             _eventDrivenMode = _options.EventDrivenMode;
             throw;
         }
@@ -1179,14 +1176,13 @@ internal sealed class WasapiRenderLoop
                 $"音频帧数据不足：期望 {expectedDataSize} 字节，实际 {frame.Data.Length} 字节。", nameof(frame));
         }
 
-        // 🔴 修复（2026-08-05 §27）：分段写入 + 缓冲事件续写，既不丢样本也不死锁。三代演进：
-        //  ①原版 WaitForBufferSpace(frame.FrameCount)：要求「整帧连续空间」且硬阻塞 2000ms。配合
-        //    BeginStreamingAsync 在 !_initialized 时 early-return（preroll 从未 arm）→ 设备永不 Start →
-        //    引擎不消费 → 缓冲恒满（日志「需要 2048 帧，可用 314 帧」）→ 每帧超时 2s → 音频饥饿死锁；
-        //    且启动锚点永不捕获 → 主时钟恒 0 → 视频管线永久 Wait（实测 present=1 dropped=0，画面全程冻结）。
-        //  ②§25 改为「只写 available、写不下的直接丢弃」：解了死锁，却把背压变成了采样丢弃 →
-        //    持续跳样 → 电音 / 音频加速（实测 submitted≈1.0s 而 played=40.0s，gaps=79 stalls=68）。
-        //  ③本版：循环分段写入直至整帧写完；空间不足时在渲染线程内等一次引擎缓冲事件后续写。
+        // 分段写入 + 缓冲事件续写，既不丢样本也不死锁。要点：
+        //  ①若要求「整帧连续空间」并硬阻塞，配合 BeginStreamingAsync 在 !_initialized 时 early-return
+        //    （preroll 从未 arm）→ 设备永不 Start → 引擎不消费 → 缓冲恒满 → 每帧超时 → 音频饥饿死锁；
+        //    且启动锚点永不捕获 → 主时钟恒 0 → 视频管线永久 Wait（现象：present=1、dropped=0，画面全程冻结）。
+        //  ②若改为「只写 available、写不下的直接丢弃」：解了死锁，却把背压变成了采样丢弃 →
+        //    持续跳样 → 电音 / 音频加速（现象：submitted≈1.0s 而 played=40.0s）。
+        //  ③本实现：循环分段写入直至整帧写完；空间不足时在渲染线程内等一次引擎缓冲事件后续写。
         //    Submit 本就阻塞等待渲染线程完成，故此举等价于「把音频管线节流到设备实时速率」——正确的背压形态，
         //    一个采样都不丢。等待有 BufferWaitTimeoutMs 上限 + _shutdownEvent 立即放弃，绝不退化为无界阻塞。
         //    帧大小可超过设备缓冲区（分段天然支持），故不再限制 frame.FrameCount <= _bufferSize。
@@ -1351,7 +1347,7 @@ internal sealed class WasapiRenderLoop
                 WasapiInterop.CoTaskMemFree(pMixFormat);
             _logger.LogWarning("GetMixFormat 失败 (HRESULT=0x{HR:X8})，回退到 F32 格式", hr);
             _deviceSampleFormat = SampleFormat.F32;
-            // 审计修复（2026-07-31）：mix 参数未知时记为客户端参数，避免后续日志出现 0Hz/0ch 误导。
+            // mix 参数未知时记为客户端参数，避免后续日志出现 0Hz/0ch 误导。
             _mixSampleRate = sampleRate;
             _mixChannels = channels;
             return BuildWaveFormat(sampleRate, channels, SampleFormat.F32);
@@ -1374,7 +1370,7 @@ internal sealed class WasapiRenderLoop
 
                 unsafe
                 {
-                    // 审计修复：ppClosestMatch 传 IntPtr.Zero（按值），避免 WASAPI 分配 CoTaskMem 内存后泄漏
+                    // 修复：ppClosestMatch 传 IntPtr.Zero（按值），避免 WASAPI 分配 CoTaskMem 内存后泄漏
                     hr = _audioClientIsFormatSupported!(
                         _audioClientPtr,
                         WasapiInterop.AUDCLNT_SHAREMODE_SHARED,
@@ -1395,7 +1391,7 @@ internal sealed class WasapiRenderLoop
             }
 
             // 4. 共享模式：以【客户端（解码器）采样率 / 声道数】+ 设备 mix 的采样格式打开。
-            // ⚠️ 审计修复（2026-07-31，真 bug）：原返回 BuildWaveFormat(_mixSampleRate, _mixChannels, ...)，
+            // 原返回 BuildWaveFormat(_mixSampleRate, _mixChannels, ...)，
             //    即拿设备 mix format 打开设备，而 Submit 侧按解码器格式写入 → 44.1kHz 解码流被 48kHz 设备按 48kHz 播放
             //    （音高偏高约 8.8%）。修法：格式改回客户端参数 + 共享模式加 AUTOCONVERTPCM|SRC_DEFAULT_QUALITY。
             if (sampleRate != _mixSampleRate || channels != _mixChannels)
@@ -1611,16 +1607,16 @@ internal sealed class WasapiRenderLoop
     /// </summary>
     /// <remarks>
     /// IAudioClient2 由 IAudioClient 指针 QI 获得（vtable 绝对槽 0 = IUnknown.QueryInterface）。
-    /// 🔴 vtable 绝对槽位（逐方法照抄 audioclient.h，勿凭记忆推算）：
+    /// vtable 绝对槽位（逐方法照抄 audioclient.h，勿凭记忆推算）：
     ///   IUnknown      : QueryInterface(0) AddRef(1) Release(2)
     ///   IAudioClient  : Initialize(3) GetBufferSize(4) GetStreamLatency(5) GetCurrentPadding(6)
     ///                   IsFormatSupported(7) GetMixFormat(8) GetDevicePeriod(9) Start(10)
     ///                   Stop(11) Reset(12) SetEventHandle(13) GetService(14)   —— 共 12 个方法
     ///   IAudioClient2 : IsOffloadCapable(15) SetClientProperties(16) GetBufferSizeLimits(17)
     /// 故 SetClientProperties 绝对槽 = 16，ComVTable slotIndex = 16 - 3 = 13。
-    /// ⚠️ 曾误写为 slotIndex=12（绝对槽 15），实际调到 IsOffloadCapable —— 它有 3 个参数
-    /// (self, Category, BOOL* pbOffloadCapable)，我们只传 2 个，x64 下 R8 是未初始化垃圾值，
-    /// 原生侧向该野地址写 BOOL ⇒ 确定性 0xC0000005。官方 [ComImport] 探针九个分类全 S_OK 已反证 driver 无恙。
+        /// 若误写为 slotIndex=12（绝对槽 15），实际调到 IsOffloadCapable —— 它有 3 个参数
+        /// (self, Category, BOOL* pbOffloadCapable)，我们只传 2 个，x64 下 R8 是未初始化垃圾值，
+        /// 原生侧向该野地址写 BOOL ⇒ 确定性原生访问违规。
     /// 释放时调用 IUnknown.Release（绝对槽 2）。
     /// </remarks>
     private void TrySetSessionCategory(IntPtr audioClientPtr)
@@ -1642,9 +1638,9 @@ internal sealed class WasapiRenderLoop
 
             try
             {
-                // 🔴 SetClientProperties 绝对槽 = 16（IUnknown 3 + IAudioClient 12 方法占 3..14
+                // SetClientProperties 绝对槽 = 16（IUnknown 3 + IAudioClient 12 方法占 3..14
                 // + IAudioClient2 首方法 IsOffloadCapable 占 15），故 slotIndex = 16 - 3 = 13。
-                // 绝不能是 12（=IsOffloadCapable，参数个数不同，误调 ⇒ 野指针写 ⇒ 0xC0000005）。
+                // 绝不能是 12（=IsOffloadCapable，参数个数不同，误调 ⇒ 野指针写 ⇒ 原生访问违规）。
                 // 取函数指针后判空：若槽位异常（理论上不会），跳过而非崩进程。
                 IntPtr setPropsPtr = ComVTable.GetMethodPointer(pClient2, 13);
                 if (setPropsPtr == IntPtr.Zero)
@@ -1655,9 +1651,8 @@ internal sealed class WasapiRenderLoop
                 var setProps = Marshal.GetDelegateForFunctionPointer<IAudioClient2_SetClientProperties>(setPropsPtr);
 
                 // 候选分类链：优先用户配置值，其次同族媒体类兜底（某些 driver 只认部分分类）。
-                // 历史注记：曾因 vtable 槽位算错（调到 IsOffloadCapable）导致任意分类都 0xC0000005，
-                // 一度误判为「driver 对 BackgroundCapableMedia 损坏」并将其排除；槽位修正后
-                // 官方 COM 探针九个分类全部 S_OK，该规避已撤销。
+                // 注意：SetClientProperties 槽位若算错（误调 IsOffloadCapable），任意分类都会触发原生访问违规；
+                // 上文已固定为 slotIndex 13，可规避此问题。
                 var candidates = new System.Collections.Generic.List<AudioClientCategory>(4)
                 {
                     _options.SessionCategory
@@ -1671,7 +1666,7 @@ internal sealed class WasapiRenderLoop
                     var props = new AudioClientProperties
                     {
                         cbSize = (uint)Marshal.SizeOf<AudioClientProperties>(), // = 16（含 bIsOffload）
-                        bIsOffload = 0, // 🔴 必须 FALSE：本库走常规共享模式；置 TRUE 会申请硬件卸载流并崩溃
+                        bIsOffload = 0, // 必须 FALSE：本库走常规共享模式；置 TRUE 会申请硬件卸载流并崩溃
                         eCategory = cat,
                         eStreamOptions = 0
                     };

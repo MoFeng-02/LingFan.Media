@@ -12,7 +12,7 @@
   <ItemGroup>
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
-    <!-- R4: HLSL 运行时编译（P/Invoke 系统 d3dcompiler_47.dll，AOT 安全，零 .NET 动态代码） -->
+    <!-- HLSL 运行时编译（P/Invoke 系统 d3dcompiler_47.dll，AOT 安全，零 .NET 动态代码） -->
     <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
   </ItemGroup>
 

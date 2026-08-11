@@ -7,17 +7,17 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VLCNative 3.1 骨架验证探针
+// VLCNative 集成验证探针
 //
 // 分六步递进，任一步失败都能直接定位环节：
 //   ① 原生模块定位与加载（NativeLibrary.Load + SetDllImportResolver）
 //   ② P/Invoke 解析与 Cdecl 调用约定（libvlc_get_version，无需引擎实例）
 //   ③ libvlc_new(0, NULL)（引擎起来 = plugins 目录被 libvlc 自身推导成功）
 //   ④ libvlc_new(argc, argv)（UTF-8 argv 手工封送的 ABI 正确性）
-//   ⑤ VLCNativeBackend 构造（3.1 #4 交付：真实 VLCOptions args 路径 + 单例化生命周期）
+//   ⑤ VLCNativeBackend 构造（真实 VLCOptions args 路径 + 单例化生命周期）
 //   ⑥ VLCNativeDemuxer 播放验证（地址式打开本地 m1.mp4，读帧计数）
 //
-// 🔴 判据：六步全绿，且 ③④⑤ 版本号打出 3.0.23.x；⑥ 须取出视频帧≥1 或音频包≥1。
+// 要求：六步均成功，且 ⑥ 须取出视频帧≥1 或音频包≥1。
 // ─────────────────────────────────────────────────────────────────────────────
 
 var step = 0;
@@ -69,7 +69,7 @@ try
     Console.WriteLine("      OK（UTF-8 argv 封送 ABI 正确）");
 
     step = 5;
-    // 3.1 #4 交付验证：构造 VLCNativeBackend，确认真实 VLCOptions → args 注入路径与单例化生命周期。
+    // 构造 VLCNativeBackend，确认真实 VLCOptions → args 注入路径与单例化生命周期。
     // 默认 VLCOptions：Headless=true → --vout=dummy，EnableHardwareDecoding=true → --avcodec-hw=any。
     Console.WriteLine("[5/6] VLCNativeBackend 构造（真实 VLCOptions args 路径）...");
     var backendOptions = new VLCOptions();
@@ -78,17 +78,17 @@ try
         Console.WriteLine($"      backend 引擎版本 = {backend.Version}");
         Console.WriteLine($"      Headless={backendOptions.Headless} EnableHw={backendOptions.EnableHardwareDecoding}");
     }
-    Console.WriteLine("      OK（backend 单例化 + args 注入成功 = 3.1 #4 交付可用）");
+    Console.WriteLine("      OK（backend 单例化 + args 注入成功）");
 
     step = 6;
-    // 3.1 #5 交付验证：经 DI 构造 VLCNativeDemuxer，地址式打开本地样本，确认真实取帧（视频帧 + 音频包）。
+    // 经 DI 构造 VLCNativeDemuxer，地址式打开本地样本，确认真实取帧（视频帧 + 音频包）。
     Console.WriteLine("[6/6] VLCNativeDemuxer 播放验证（地址式打开本地 m1.mp4，读帧计数）...");
     var mediaFile = Path.Combine(AppContext.BaseDirectory, "m1.mp4");
     if (!File.Exists(mediaFile))
         throw new FileNotFoundException("样本视频未复制到输出目录（检查 csproj 的 Content 包含）", mediaFile);
 
     var services = new ServiceCollection();
-    // 🔴 项目约定：日志基础设施由宿主注册，库扩展（AddVLCNative）不自行 AddLogging()
+    // 日志基础设施由宿主注册，库扩展（AddVLCNative）不自行 AddLogging()
     //    （与 AddVLC / AddFFmpeg / AddMediaFoundation 同构，见 MediaOptions.cs:10）。
     //    探针是诊断型 exe（宿主），此处挂 Console provider 把库内 ILogger 诊断（含 codec 原始值）打到控制台。
     services.AddLogging(builder => builder.AddConsole());
@@ -135,8 +135,9 @@ try
         Console.WriteLine($"      6s 窗口内：视频帧 {videoFrames}，音频包 {audioPackets}，其它 {other}");
         demuxer.Close();
 
-        // 🔴 真阳性判据：本地样本 m1.mp4 为「视频+音频」文件，必须同时取出视频帧≥1 与音频包≥1。
-        // 此前曾因 0 帧仍打印 OK 而漏判（假阳性）；也出现过 tracks_get 漏列视频轨导致视频帧全丢。
+        // 本地样本 m1.mp4 为「视频+音频」文件，须同时取出视频帧≥1 与音频包≥1。
+        // 视频帧为 0 须核查播放前 tracks_get 是否漏列视频轨（须播放后重取）与视频回调注册；
+        // 音频包为 0 须核查 :amem-format=s16l 与音频回调注册。
         if (videoFrames == 0)
             throw new InvalidOperationException(
                 $"demuxer 未取出视频帧（视频帧 0，音频包 {audioPackets}）；轨道数={demuxer.Tracks.Count}。" +
@@ -146,16 +147,16 @@ try
                 $"demuxer 未取出音频包（视频帧 {videoFrames}，音频包 0）；轨道数={demuxer.Tracks.Count}。" +
                 "音频回调未触发：检查 :amem-format=s16l 与音频回调注册。");
 
-        Console.WriteLine($"      OK（demuxer 经自写 P/Invoke 取出 视频帧 {videoFrames} + 音频包 {audioPackets} = 3.1 #5 交付可用）");
+        Console.WriteLine($"      OK（demuxer 经自写 P/Invoke 取出 视频帧 {videoFrames} + 音频包 {audioPackets}）");
     }
 
     Console.WriteLine();
-    Console.WriteLine("✅ 3.1 骨架验证全部通过：自写 Apache-2.0 P/Invoke 可独立驱动 libvlc，零 LibVLCSharp；VLCNativeBackend + VLCNativeDemuxer 均可用。");
+    Console.WriteLine("VLCNative 集成验证全部通过：自写 Apache-2.0 P/Invoke 可独立驱动 libvlc，VLCNativeBackend + VLCNativeDemuxer 均可用。");
 }
 catch (Exception ex)
 {
     Console.Error.WriteLine();
-    Console.Error.WriteLine($"❌ 第 {step} 步失败：{ex.GetType().Name}: {ex.Message}");
+    Console.Error.WriteLine($"第 {step} 步失败：{ex.GetType().Name}: {ex.Message}");
     Console.Error.WriteLine();
     Console.Error.WriteLine(ex.ToString());
     Environment.Exit(1);

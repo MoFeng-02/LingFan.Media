@@ -12,7 +12,7 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <summary>音频会话分类（IAudioClient2.SetClientProperties 使用，audioclient.h AudioClientCategory）。
 /// 媒体播放器应设为 <see cref="BackgroundCapableMedia"/> / <see cref="Movie"/> / <see cref="GameMedia"/>，
 /// 使 Windows 不将其当作可挂起的后台会话——否则控制台/隐藏窗口/非前台窗口的会话会在播放数秒后
-/// 被系统暂停音频（典型表现：声音 ~10-15s 后中断，视频却继续）。</summary>
+/// 被系统暂停音频（典型表现：声音一段时间后中断，视频却继续）。</summary>
 public enum AudioClientCategory
 {
     /// <summary>未指定分类（与不设等价）。</summary>
@@ -101,7 +101,7 @@ internal static partial class WasapiInterop
     /// and the audio engine mix format."
     /// </para>
     /// <para>
-    /// ⚠️ 审计修复（2026-07-31）：仅共享模式有效。不设此标志时，传给 Initialize 的格式
+    /// 修复：仅共享模式有效。不设此标志时，传给 Initialize 的格式
     /// 必须与引擎 mix format 一致，否则要么 AUDCLNT_E_UNSUPPORTED_FORMAT，要么（本项目此前的做法）
     /// 被迫用 mix format 打开设备 —— 而 Submit 侧仍按解码器采样率/声道数写入，导致
     /// 44.1kHz 解码流被 48kHz 设备按 48kHz 播放（音高偏高约 8.8%），或 2ch 数据写进 6ch 缓冲区。
@@ -151,17 +151,17 @@ internal static partial class WasapiInterop
         new("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
 
     // Audioclient.h: MIDL_INTERFACE("726778CD-F60A-4eda-82DE-E47610CD78AA") IAudioClient2 : public IAudioClient
-    // 🔴 vtable 绝对槽（逐方法照抄头文件，勿凭记忆推算）：
+    // vtable 绝对槽（逐方法照抄头文件，勿凭记忆推算）：
     //   IUnknown(0..2) + IAudioClient 12 方法(3..14)
     //   + IAudioClient2: IsOffloadCapable(15) / SetClientProperties(16) / GetBufferSizeLimits(17)
     // 即 SetClientProperties 是绝对槽 16（ComVTable slotIndex 13），不是 15。
-    // 曾误写为 15 ⇒ 实际调到 IsOffloadCapable（多一个 BOOL* 出参）⇒ 野指针写 ⇒ 0xC0000005。
+    // 写成 15 会实际调到 IsOffloadCapable（多一个 BOOL* 出参）⇒ 野指针写 ⇒ 原生访问违规。
     // 用于把音频会话分类为媒体类，避免 Windows 对后台/非前台会话施加节流或挂起策略。
     public static readonly Guid IID_IAudioClient2 =
         new("726778CD-F60A-4eda-82DE-E47610CD78AA");
 
     // Audioclient.h: MIDL_INTERFACE("F294ACFC-3146-4483-A7BF-ADDCA7C260E2") IAudioRenderClient
-    // ⚠️ 此 GUID 曾误写为 ...-ADD077DB4D09，导致 GetService 恒返回 E_NOINTERFACE(0x80004002)，
+    // 此 GUID 若误写为 ...-ADD077DB4D09，会导致 GetService 恒返回 E_NOINTERFACE(0x80004002)，
     // 被上层误判为「设备不支持格式」而跳过有头音频测试。改动前务必比对 Windows SDK 头文件原文。
     public static readonly Guid IID_IAudioRenderClient =
         new("F294ACFC-3146-4483-A7BF-ADDCA7C260E2");
@@ -263,7 +263,7 @@ internal delegate int IAudioClient_GetCurrentPadding(IntPtr self, out uint pNumP
 /// 独占模式必须传 IntPtr.Zero/NULL）。</param>
 /// <returns>S_OK=完全支持；S_FALSE=不完全支持但返回最接近格式；AUDCLNT_E_UNSUPPORTED_FORMAT=不支持。</returns>
 /// <remarks>
-/// 审计修复：参数从 <c>out IntPtr</c> 改为 <c>IntPtr</c>（按值传递）。
+/// 修复：参数从 <c>out IntPtr</c> 改为 <c>IntPtr</c>（按值传递）。
 /// 原因：1) <c>out</c> 总是传递非 NULL 指针，违反独占模式 ppClosestMatch 必须为 NULL 的 API 约定；
 /// 2) 共享模式返回 S_FALSE 时 WASAPI 通过 ppClosestMatch 分配 CoTaskMem 内存，
 /// 用 <c>out _</c> 丢弃后无法释放→内存泄漏。改为按值传 IntPtr.Zero 后 WASAPI 不分配内存。
@@ -299,12 +299,11 @@ internal delegate int IAudioClient2_SetClientProperties(IntPtr self, ref AudioCl
 /// <summary>IAudioClient2.SetClientProperties 的属性结构（audioclient.h AudioClientProperties）。
 /// <para>官方布局（Win8.1+，16 字节，字段顺序不可变）：
 /// <c>UINT32 cbSize; BOOL bIsOffload; AUDIO_STREAM_CATEGORY eCategory; AUDCLNT_STREAMOPTIONS Options;</c></para>
-/// <para>🔴 2026-08-02 根因修正：此前本结构<b>漏掉了 bIsOffload（BOOL，偏移 4）</b>，导致原生按官方布局解析时
+/// <para>成因修正：此前本结构<b>漏掉了 bIsOffload（BOOL，偏移 4）</b>，导致原生按官方布局解析时
 /// 整体错位一格——托管写入的 <c>eCategory=2</c> 被读作 <c>bIsOffload=TRUE</c>（<b>误申请硬件卸载流</b>），
 /// 托管写入的 <c>eStreamOptions=0</c> 被读作 <c>eCategory=Other</c>（会话分类实际从未生效）。
 /// 普通声卡不支持 offload，且 Win10 起 offload 流必须配合 <c>AUDCLNT_STREAMFLAGS_EVENTCALLBACK</c>，
-/// 于是 SetClientProperties 在原生侧触发 0xC0000005。此前三轮「vtable 槽位 / QI 改 BCL / 默认关闭」
-/// 均未触及该根因，故崩溃栈三次完全一致。</para>
+    /// 于是 SetClientProperties 在原生侧触发原生访问违规。</para>
 /// <para>顺序布局，成员全部 blittable（UINT32 / int / int 枚举 / int），AOT 友好。
 /// BOOL 用 <see cref="int"/> 表达（0 = FALSE），<b>不得改成 bool</b>——那会引入非 blittable 封送。</para></summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -348,7 +347,7 @@ internal delegate int ISimpleAudioVolume_SetMasterVolume(IntPtr self, float fLev
 /// <summary>
 /// IAudioClock::GetFrequency（audioclient.h:1366，IUnknown 之后相对槽 0）。
 /// <para>
-/// ⚠️ 审计修复（2026-07-31）：<see cref="IAudioClock_GetPosition"/> 返回的 pu64DevicePosition
+/// 修复：<see cref="IAudioClock_GetPosition"/> 返回的 pu64DevicePosition
 /// 单位由设备定义，<b>不是</b>「已播放帧数」。官方换算是
 /// <c>秒 = position / frequency</c>，两者单位必须成对使用。
 /// 共享模式下 frequency 通常等于 <c>nSamplesPerSec * nBlockAlign</c>（即字节/秒），

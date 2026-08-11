@@ -20,7 +20,7 @@ public static class D3D11Extensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        // 🔴 先以具体类型注册共享工厂，再由它派生两个契约服务。
+        // 先以具体类型注册共享工厂，再由它派生两个契约服务。
         // 绝不要写 `(D3D11RendererFactory)sp.GetRequiredService<IVideoRendererFactory>()`：
         // 那样 IGpuDeviceContext 就被绑死在「D3D11 必须是最后注册的渲染器」这个隐含前提上——
         // 一旦宿主之后再注册别的渲染器（如无头探针 AddHeadlessRenderer()，或装饰器包裹），

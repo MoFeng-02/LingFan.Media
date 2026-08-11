@@ -52,7 +52,7 @@ public sealed class WasapiOptions
     /// <remarks>
     /// <para>O10。需在 IAudioClient.Initialize 之前通过 IAudioClient2 设置；不支持 IAudioClient2 的旧系统自动跳过。</para>
     /// <para>设置失败（负 HRESULT）时自动降级到同族候选（BackgroundCapableMedia → Movie → Media），全部失败则静默跳过。</para>
-    /// <para>历史注记（2026-08-02）：曾出现任意分类值都 <c>0xC0000005</c> 的现象，一度误判为「driver 全面损坏」。
+    /// <para>任意分类值都触发<c>原生访问违规</c>的现象，
     /// 真因是 <c>TrySetSessionCategory</c> 的 vtable 槽位算错一格（slotIndex 12 = 绝对槽 15 = <c>IsOffloadCapable</c>，
     /// 它比 SetClientProperties 多一个 <c>BOOL*</c> 出参，误调导致向未初始化寄存器指向的野地址写入）。
     /// 修正为 slotIndex 13（绝对槽 16）后，独立官方 COM 探针九个分类全部 <c>S_OK</c>。</para>
@@ -64,13 +64,13 @@ public sealed class WasapiOptions
     /// <para>用途：把会话标记为媒体类，供音量混合器与电源策略参考；在确实会挂起后台会话的系统上可作为规避手段。</para>
     /// <para>失败保护：QI 拿不到 IAudioClient2 时静默跳过；某分类返回负 HRESULT 时降级试下一个候选；全部失败仅记 Warning，
     /// 不影响后续 <c>Initialize</c>。</para>
-    /// <para>🔴 2026-08-02 定案（两条独立结论，勿混淆）：</para>
-    /// <para>① <b>调用路径的 bug 已修</b>：此前任意分类都 <c>0xC0000005</c>，真因是 vtable 槽位算错一格
+    /// <para>定案（两条独立结论，勿混淆）：</para>
+    /// <para>① <b>调用路径的 bug 已修</b>：此前任意分类都触发<c>原生访问违规</c>，真因是 vtable 槽位算错一格
     /// （误调 <c>IsOffloadCapable</c>，它多一个 <c>BOOL*</c> 出参 ⇒ 向未初始化寄存器指向的野地址写入）。
     /// 修正为 slotIndex 13（绝对槽 16）后调用本身合法，独立官方 COM 探针九个分类全部 <c>S_OK</c>。</para>
     /// <para>② <b>但默认仍为 false</b>：启用它的原始动机是「防止 OS 挂起后台会话」，而该前提<b>并未被证实</b>
-    /// （诊断探针的停滞判定在欠供给场景下恒不触发，属无效判定）；且用户本机实测默认启用后出现回归——
-    /// <b>约 30s 静音后才出声</b>。在动机未证实而副作用确凿的情况下，按「不引入未经验证的默认行为」原则保持 opt-in。</para>
+    /// （诊断探针的停滞判定在欠供给场景下恒不触发，属无效判定）；且实测默认启用后出现回归——
+    /// <b>长时间静音后才出声</b>。在动机未证实而副作用确凿的情况下，按「不引入未经验证的默认行为」原则保持 opt-in。</para>
     /// <para>修改默认值后务必先做 <c>dotnet clean</c> + 全量重建再跑测试。</para>
     /// </remarks>
     public bool EnableBackgroundCapableSession { get; set; } = false;
@@ -82,10 +82,10 @@ public sealed class WasapiOptions
     /// <para>仅影响 <see cref="IAudioEngine.Warmup"/> 建立的<b>保活流</b>，与任何播放会话无关。</para>
     /// <para><c>true</c>（默认）：anchor 流 <c>Initialize</c> 后再 <c>Start</c>，成为一条活跃但<b>不写任何数据</b>
     /// （因而完全静音）的流，最大化"OS 音频引擎不回休眠"的概率——这正是让后续 Session 的
-    /// <c>IAudioClient.Initialize</c> 走热路径、免掉 ~2.5s 冷启动的关键。</para>
+    /// <c>IAudioClient.Initialize</c> 走热路径、免掉冷启动延迟的关键。</para>
     /// <para><c>false</c>：anchor 只 <c>Initialize</c> 不 <c>Start</c>。用于对照实验——若某些驱动上
     /// "仅 Initialize"已足够保活，可关掉以彻底避免一条常驻活跃流。</para>
-    /// <para>注意：本项默认值改动会影响冷启动实测结论，调整前请先跑 <c>[WASAPI-ENGINE]</c> / <c>[WASAPI-OPEN]</c> 对照。</para>
+    /// <para>注意：本项默认值改动会影响冷启动结论，调整前请先跑 <c>[WASAPI-ENGINE]</c> / <c>[WASAPI-OPEN]</c> 对照。</para>
     /// </remarks>
     public bool KeepEngineAnchorRunning { get; set; } = true;
 }

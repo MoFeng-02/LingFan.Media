@@ -12,8 +12,8 @@ namespace LingFan.Media.Platforms.Windows;
 /// </summary>
 /// <remarks>
 /// <para>管理 <c>IDXGIResource::GetSharedHandle</c> 返回的 HANDLE，Dispose / GC 终结时 <c>CloseHandle</c> 释放，防止句柄泄漏。</para>
-/// <para><b>分工</b>：创建共享纹理与 KeyedMutex 同步由 <see cref="D3D11Interop"/> 负责（R12），
-/// 本类只封装共享句柄的生命周期（R14 核心目标：<b>正确管理共享句柄生命周期</b>）。</para>
+/// <para><b>分工</b>：创建共享纹理与 KeyedMutex 同步由 <see cref="D3D11Interop"/> 负责，
+/// 本类只封装共享句柄的生命周期（核心目标：<b>正确管理共享句柄生命周期</b>）。</para>
 /// <para><b>异步策略</b>：全部同步（sync 分类）——原生句柄释放是 COM/Win32 同步边界，无 I/O await。</para>
 /// <para>AOT 兼容：<c>CloseHandle</c> 用 <see langword="LibraryImport"/> 源生成 P/Invoke（零反射、NativeAOT 友好）。</para>
 /// </remarks>

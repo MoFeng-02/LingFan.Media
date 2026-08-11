@@ -24,7 +24,7 @@ public sealed class MediaFoundationOptions
     /// <c>MFVideoDecoder</c> 退化为直通——少一次 MFT 往返，是默认的高效路径。
     /// </para>
     /// <para>
-    /// 🔴 <b>置为 <see langword="false"/> 的唯一用途是零拷贝根因定界</b>：跳过上述协商，让视频流继续输出压缩裸流，
+    /// <b>置为 <see langword="false"/> 的唯一用途是零拷贝定界</b>：跳过上述协商，让视频流继续输出压缩裸流，
     /// 强制走「<c>MFVideoDecoder</c> 自管 MFT + 自行 SET_D3D_MANAGER」老路径。两条路径的帧落点对照即可定性：
     /// </para>
     /// <list type="bullet">

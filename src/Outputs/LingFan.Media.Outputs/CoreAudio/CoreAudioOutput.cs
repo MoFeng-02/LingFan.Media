@@ -8,8 +8,8 @@ namespace LingFan.Media.Outputs.CoreAudio;
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 AudioToolbox AudioUnit（kAudioUnitSubType_DefaultOutput）播放交错 S16 PCM，
-/// 实现委托共用引擎 <see cref="AudioUnitEngine"/>（与 iOS RemoteIO 路径共用，用户 2026-07-28 拍板）。</para>
-/// <para><b>异步策略</b>（与 WASAPI/AAudio 范本一致，遵守总记忆第十二章）：</para>
+/// 实现委托共用引擎 <see cref="AudioUnitEngine"/>（与 iOS RemoteIO 路径共用）。</para>
+/// <para><b>异步策略</b>（与 WASAPI/AAudio 范本一致）：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，平台校验后返回 <see cref="Task.CompletedTask"/>。
 /// 无 I/O 可 await，<b>非伪异步</b>（不加 <c>async</c> 关键字、方法体无 <c>await</c>）。</item>

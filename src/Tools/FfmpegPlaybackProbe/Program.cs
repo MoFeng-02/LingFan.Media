@@ -40,7 +40,7 @@ internal static class Program
     private static async Task<int> Main(string[] args)
     {
         // ---- 全局异常/故障兜底（诊断用）----
-        // 🔴 已知症状：预检通过后仍静默死亡、无 [FATAL]、无栈迹。最可能是解码 worker 线程上的原生 AV
+        // 已知症状：预检通过后仍静默死亡、无 [FATAL]、无栈迹。最可能是解码 worker 线程上的原生 AV
         // （ffmpeg 在自有线程崩溃）或不被 Main 的 try/catch 捕获的故障。此处兜底打印，避免静默死。
         System.AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
@@ -86,7 +86,7 @@ internal static class Program
         Console.WriteLine();
 
         // ---- FFmpeg 原生库预检（调试用）----
-        // 🔴 目的：FFmpeg.AutoGen 的惰性加载会在首个 ffmpeg.* 调用时才真正加载原生 DLL，
+        // 目的：FFmpeg.AutoGen 的惰性加载会在首个 ffmpeg.* 调用时才真正加载原生 DLL，
         // 一旦失败（缺运行库 / ABI 不匹配 / 依赖解析失败）表现为「只打印头部 + 静默退出码 127」，
         // 毫无诊断信息。此处显式按依赖顺序加载并报告真实 Win32 错误码，把静默死亡变成可读错误。
         string ffmpegDir = AppContext.BaseDirectory;
@@ -117,7 +117,7 @@ internal static class Program
         if (!nativeOk)
         {
             Console.WriteLine();
-            Console.WriteLine("✗ FFmpeg 原生库加载失败。排查方向：");
+            Console.WriteLine("FFmpeg 原生库加载失败。排查方向：");
             Console.WriteLine("  1) 目标机是否安装 Microsoft Visual C++ 2015-2022 Redistributable (x64)（vcruntime140.dll 等）；");
             Console.WriteLine("  2) ThirdParty/ffmpeg 共享 DLL 与 FFmpeg.AutoGen 绑定版本是否匹配（均为 8.1）；");
             Console.WriteLine("  3) FFmpegOptions.FFmpegLibraryPath 是否指向含上述 DLL 的目录。");
@@ -125,7 +125,7 @@ internal static class Program
         }
 
         // ---- FFmpeg.AutoGen 绑定核验（决定性诊断）----
-        // 🔴 FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「无版本号」名（avutil/avcodec/...）加载原生库，
+        // FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「无版本号」名（avutil/avcodec/...）加载原生库，
         // 但 BtbN 共享构建只提供 avutil-60.dll 等带版本号文件。上一步 NativeLibrary.TryLoad 成功仅证明
         // 「文件可加载」，不代表 AutoGen 能找到它要的无版本名。此处直接触发首个 AutoGen 调用核验绑定：
         // 若 AutoGen 找不到无版本名 avutil.dll，ffmpeg.av_log_set_level 委托为 null → 调用抛异常（被捕获）。
@@ -133,17 +133,17 @@ internal static class Program
         {
             ffmpeg.RootPath = ffmpegDir;
             ffmpeg.av_log_set_level(16 /* AV_LOG_ERROR */);
-            Console.WriteLine("  ✓ FFmpeg.AutoGen 原生绑定就绪（无版本别名到位）。");
+            Console.WriteLine("  FFmpeg.AutoGen 原生绑定就绪（无版本别名到位）。");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"  [失败] FFmpeg.AutoGen 绑定失败: {ex.GetType().Name}: {ex.Message}");
-            Console.WriteLine("         根因通常是找不到无版本名 avutil.dll（BtbN 仅提供 avutil-60.dll）。");
+            Console.WriteLine("         通常是找不到无版本名 avutil.dll（BtbN 仅提供 avutil-60.dll）。");
             Console.WriteLine("         须由复制步骤同时产出 avutil.dll / avcodec.dll 等无版本别名（见 CopyFFmpegNative）。");
             return 3;
         }
 
-        Console.WriteLine("  ✓ FFmpeg 原生库预检通过。");
+        Console.WriteLine("  FFmpeg 原生库预检通过。");
         Console.WriteLine();
 
         Trace("DI：开始构建 ServiceCollection");
@@ -169,7 +169,7 @@ internal static class Program
         Trace("DI：AddLingFanMedia + AddFFmpeg + AddSilentAudioOutput OK");
 
         // --hw：只为拿到 IGpuDeviceContext（窗口无关的共享 ID3D11Device），供 FFmpeg D3D11VA 取设备。
-        // 🔴 注册顺序有意为之：D3D11 在前、无头渲染器在后 —— 后注册者赢得 IVideoRendererFactory，
+        // 注册顺序有意为之：D3D11 在前、无头渲染器在后 —— 后注册者赢得 IVideoRendererFactory，
         // 于是「呈现走 NoOp（无窗口、不上屏）」与「解码走 D3D11VA 零拷贝」两件事同时成立。
         // 这依赖 AddD3D11Renderer 里 IGpuDeviceContext 由具体类型 D3D11RendererFactory 派生
         // （而非从 IVideoRendererFactory 强转），否则此处会 InvalidCastException。
@@ -222,7 +222,7 @@ internal static class Program
 
             if (duration <= TimeSpan.Zero)
             {
-                Console.WriteLine("⚠ Duration 为 0，后端未查到容器时长，后续判定不可靠。");
+                Console.WriteLine("Duration 为 0，后端未查到容器时长，后续判定不可靠。");
                 duration = TimeSpan.FromSeconds(40);
             }
 
@@ -265,16 +265,16 @@ internal static class Program
             Console.WriteLine("=== 判定 ===");
             long vf = Interlocked.Read(ref videoFrames);
             if (vf < 30)
-                Console.WriteLine($"  ⚠ 视频帧数过少({vf})：解码链路可能未跑通，检查上方 [FFmpeg] 解码器日志。");
+                Console.WriteLine($"  视频帧数过少({vf})：解码链路可能未跑通，检查上方 [FFmpeg] 解码器日志。");
             else
-                Console.WriteLine("  ✓ 视频解码链路跑通（帧数覆盖时长）。");
+                Console.WriteLine("  视频解码链路跑通（帧数覆盖时长）。");
             if (useHw)
             {
                 long gz = Interlocked.Read(ref gpuZeroCopyFrames);
                 if (gz > 0)
-                    Console.WriteLine($"  ✓ D3D11VA 零拷贝生效：{gz}/{vf} 帧为 GPU 纹理（未读回系统内存）。");
+                    Console.WriteLine($"  D3D11VA 零拷贝生效：{gz}/{vf} 帧为 GPU 纹理（未读回系统内存）。");
                 else
-                    Console.WriteLine("  ⚠ --hw 下零拷贝帧为 0：D3D11VA 未生效（可能设备不可用或回落软件，见解码器日志硬件加速=False）。");
+                    Console.WriteLine("  --hw 下零拷贝帧为 0：D3D11VA 未生效（可能设备不可用或回落软件，见解码器日志硬件加速=False）。");
             }
             else
             {

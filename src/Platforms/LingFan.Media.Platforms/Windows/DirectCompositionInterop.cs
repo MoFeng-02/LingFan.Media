@@ -86,7 +86,7 @@ public sealed partial class DirectCompositionInterop : IDisposable
         if (swapChainPtr == IntPtr.Zero)
             throw new ArgumentException("SwapChain 指针无效。", nameof(swapChainPtr));
 
-        // 第二轮审计修复：重置 _disposed 标志，允许 Initialize 失败后重试
+        // 修复：重置 _disposed 标志，允许 Initialize 失败后重试
         // （catch 块调用 Dispose 会设 _disposed=true，若不重置，成功重试后的 Dispose 会被跳过 → COM 泄漏）
         _disposed = false;
 

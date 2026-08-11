@@ -34,7 +34,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 🔴 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布：AOT 不会自动携带构建期复制的原生 DLL，
+    <!-- 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布：AOT 不会自动携带构建期复制的原生 DLL，
          否则运行目录为空 → EnsureUnversionedAliases 建不出无版本别名 → AutoGen 桩抛 NotSupportedException。
          无版本别名由 FFmpegBackend.EnsureUnversionedAliases 运行时兜底创建。 -->
     <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll"
@@ -50,13 +50,13 @@
     - 路径显式可控（FFmpegOptions.FFmpegLibraryPath 默认指向 AppContext.BaseDirectory），
       用户可替换/升级这些 DLL 而不重编译本库。
     原生 DLL 来自 ThirdParty/ffmpeg/<解压目录>/bin，不入库（gitignore）。
-    🔴 AOT 发布关键：dotnet publish 不会自动把「构建期复制」的原生 ffmpeg DLL 带进 publish/，
+    AOT 发布关键：dotnet publish 不会自动把「构建期复制」的原生 ffmpeg DLL 带进 publish/，
        须显式复制到 $(PublishDir)，否则发布版运行时空目录 → NotSupportedException 桩崩溃。
   -->
   <Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
     <ItemGroup>
       <FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
-      <!-- 🔴 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载
+      <!-- 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载
            （已用二进制字符串核验 Bindings.DynamicallyLoaded.dll 确含 "avutil" 字面量，无版本号、无 .dll 后缀），
            但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名，否则 AutoGen 加载失败
            → 首个 ffmpeg.* 调用崩溃（静默退出码 127）。别名 = 去掉文件名末尾 -<数字>（如 avutil-60 → avutil）。 -->

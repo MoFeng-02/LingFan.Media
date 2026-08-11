@@ -254,7 +254,7 @@ public sealed class MediaPlayer : IMediaPlayer
             _frameQueue = new FrameQueue();
             _sampleQueue = new SampleQueue();
             _synchronizer = new Synchronizer(_clock);
-            // 根治方案（LINGFAN_CLOCK_AUDIO_POS=1）：用音频设备真实播放游标驱动视频主时钟，
+            // 解决方案（LINGFAN_CLOCK_AUDIO_POS=1）：用音频设备真实播放游标驱动视频主时钟，
             // 取代批提交内逐帧 SyncTo 的突发锯齿。闭包延后读取 _audioOutput（此时尚未 Create，调用时已就绪）。
             if (ClockTuning.UseAudioPlaybackClock)
                 _synchronizer.SetMasterClockProvider(() => _audioOutput?.GetPlaybackPositionDirect() ?? TimeSpan.Zero);
@@ -287,7 +287,7 @@ public sealed class MediaPlayer : IMediaPlayer
                     OutputSampleRate = _options.AudioOutputSampleRate,
                     OutputChannels = _options.AudioOutputChannels,
                     OutputSampleFormat = _options.AudioOutputSampleFormat,
-                    // 🔴 透传轨道 extradata（AAC 的 AudioSpecificConfig）。AAC 在 MP4 中为裸流，
+                    // 透传轨道 extradata（AAC 的 AudioSpecificConfig）。AAC 在 MP4 中为裸流，
                     // 解码器必须据此设置 ctx->extradata 才能解码，否则 avcodec_send_packet 返回 Invalid data。
                     CodecConfiguration = audioTrack.AudioInfo?.CodecConfiguration ?? default,
                     TimeBase = audioTrack.AudioInfo?.TimeBase ?? default,
@@ -342,7 +342,7 @@ public sealed class MediaPlayer : IMediaPlayer
                 // 契约对称（InitializeAsync 必须先于 Initialize，WASAPI 强制——设备枚举/COM 准备前置）。
                 // 无 I/O 的实现返回 Task.CompletedTask（非伪异步）。
                 await _audioOutput.InitializeAsync(ct);
-                // 🔴 采样率可能在首帧解码后才知道（AAC 经 FFmpeg 时 OutputSampleRate 初始化为 0）。
+                // 采样率可能在首帧解码后才知道（AAC 经 FFmpeg 时 OutputSampleRate 初始化为 0）。
                 // 仅当 OpenAsync 时刻已知合法采样率才在此显式初始化设备；否则延迟到首个音频帧
                 // Submit 时由输出（如 WasapiRenderLoop）按真实采样率惰性打开，避免 0Hz 触发
                 // ArgumentOutOfRangeException（WASAPI 设备必须以固定率打开）。
@@ -364,7 +364,7 @@ public sealed class MediaPlayer : IMediaPlayer
                 _videoTransforms,
                 _videoTransformsReset,
                 // 统一帧投递：所有帧经 FrameChannel 扇出至订阅的 Sink（无头计算 / Skia 软渲染 / D3D11 零拷贝 GPU 呈现）。
-                // 有头与无头同饮此通道；D3D11 经 D3D11GpuPresenter 订阅同一通道 Present，零拷贝不变（T19 收敛修复）。
+                // 有头与无头同饮此通道；D3D11 经 D3D11GpuPresenter 订阅同一通道 Present，零拷贝不变。
                 videoFrameSink: frame => _frameChannel.Emit(frame));
             }
 
@@ -439,22 +439,22 @@ public sealed class MediaPlayer : IMediaPlayer
         {
             if (_controller.CurrentState == MediaState.Ended)
             {
-                // 🔴 重播（Ended → Playing 无缝从头）：流已自然排干，解码/呈现双管线循环已退出
+                // 重播（Ended → Playing 无缝从头）：流已自然排干，解码/呈现双管线循环已退出
                 // （PipelineLoop/DecodeLoop break，_isRunning=false）。重播需：
                 //   1) SeekAsync(0) 回绕 demuxer 到起点、重填缓冲通道、重置解码器/时钟基准；
                 //   2) 时钟先归零并启动（用归零后的基准做同步判定，避免首帧被判「过去太久」被 Drop）；
                 //   3) _pipelineHost.Start() 因 _isRunning==false 会重建 CTS 并重启双管线循环
                 //      （VideoPipeline/AudioPipeline 的 Start 已支持从排干态重启）。
                 await SeekAsync(TimeSpan.Zero);
-                // 🔴 重播（Ended→Playing）主时钟武装归零：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），
-                // _startStopwatch 持续累计到 ~34s；而重播视频门控（MediaPipelineHost.StartAsync 第③步 SignalAudioReady）
-                // 早于音频 Start（第⑤步），若不在此解除武装，预滚动/门控窗口内同步器读到的主时钟是上一遍的 ~34s 陈旧值，
-                // 会把 PTS=0 重播首帧判为「落后 34s → Drop」，画面冻结到 ~10s 才切入。此处解除武装后，该窗口主时钟恒为 0，
-                // 首帧立即呈现；音频 Start（CaptureStartAnchor）会重新武装。此为「present 卡 10s 才解冻」真根因修复。
+                // 重播（Ended→Playing）主时钟武装归零：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），
+                // _startStopwatch 持续累计（数值不随重播归零）；而重播视频门控（MediaPipelineHost.StartAsync 第③步 SignalAudioReady）
+                // 早于音频 Start（第⑤步），若不在此解除武装，预滚动/门控窗口内同步器读到的主时钟是上一遍的陈旧值，
+                // 会把 PTS=0 重播首帧判为「落后过多 → Drop」，画面冻结较长时间才切入。此处解除武装后，该窗口主时钟恒为 0，
+                // 首帧立即呈现；音频 Start（CaptureStartAnchor）会重新武装。
                 _audioOutput?.ResetPlaybackClock();
-                // 🔴 归零必须先于 StartAsync（§33）：新启动编排会在 StartAsync 内部等视频预滚动，
-                // 门控放行瞬间就已有帧可判定。若此时 _clock 仍停在上一轮的结束位置（如 32s），
-                // 无音频轨场景（主时钟回退到 _clock.Position）会把 PTS=0 的首帧判成落后 32s → 全部 Drop。
+                // 归零必须先于 StartAsync：新启动编排会在 StartAsync 内部等视频预滚动，
+                // 门控放行瞬间就已有帧可判定。若此时 _clock 仍停在上一次播放的结束位置，
+                // 无音频轨场景（主时钟回退到 _clock.Position）会把 PTS=0 的首帧判成落后过多 → 全部 Drop。
                 // SeekAsync 内 OnSeek→SeekTo(0) 已归零，此处为显式不变量加固（幂等）。
                 _clock?.Reset();
                 if (_pipelineHost != null) await _pipelineHost.StartAsync();   // 视频预滚动 → 启动音频 → 放行呈现
@@ -546,7 +546,7 @@ public sealed class MediaPlayer : IMediaPlayer
             {
                 await _bufferManager.StartAsync(ct);
 
-                // 🔴 重播（Ended→Playing）修复（2026-08-04）：流末 EOF 后 BufferManager.StartAsync 会
+                // 重播（Ended→Playing）修复：流末 EOF 后 BufferManager.StartAsync 会
                 // 经 ResetQueues() 重建全新的包通道实例（旧通道已 Complete 不可重开）。两条管线在 OpenAsync
                 // 构造时按值捕获了旧通道引用，此处必须把其内部 _packetQueue 重新指向新通道——
                 // 否则重播的解码循环会从已 Complete 的旧通道瞬间 EOF，排空 0 帧，二次播放呈现 0 帧。
@@ -660,7 +660,7 @@ public sealed class MediaPlayer : IMediaPlayer
         _disposed = true;
 
         // 同步快速释放兜底——做自己的同步清理路径
-        // 铁律：禁止调用 DisposeAsync().GetAwaiter().GetResult()（伪异步）
+        // 硬性规定：禁止调用 DisposeAsync().GetAwaiter().GetResult()（伪异步）
         try
         {
             _positionTimer?.Dispose();
@@ -682,7 +682,7 @@ public sealed class MediaPlayer : IMediaPlayer
                     tasks.Add(_audioPipeline.PipelineTask);
                 if (_subtitleProcessor?.ProcessTask != null)
                     tasks.Add(_subtitleProcessor.ProcessTask);
-                // M1：补齐 BufferManager 读取线程——缺口 P1，原先不等它直接释放 Demuxer（跨线程 UAF 隐患）。
+                // 补齐 BufferManager 读取线程——原先不等它直接释放 Demuxer（跨线程 UAF 隐患）。
                 if (_bufferManager?.ReaderTask != null)
                     tasks.Add(_bufferManager.ReaderTask);
                 if (tasks.Count > 0)
@@ -809,8 +809,8 @@ public sealed class MediaPlayer : IMediaPlayer
                 }
                 catch (TimeoutException)
                 {
-                    // §12 诊断纪律：精确记录是哪个任务没退出，避免盲猜（未来复现可直接定位）。
-                    // 超时即潜在泄漏（管线线程未退出→原生资源未释放），按 NativeCallGate 铁律以 LogError 上报。
+                    // 诊断：精确记录是哪个任务没退出，避免盲猜，便于复现时直接定位。
+                    // 超时即潜在泄漏（管线线程未退出→原生资源未释放），按 NativeCallGate 协议以 LogError 上报。
                     var pending = new List<string>();
                     if (_bufferManager?.ReaderTask is { } bt && !bt.IsCompleted) pending.Add("BufferManager.ReaderTask");
                     if (_videoPipeline?.PipelineTask is { } vt && !vt.IsCompleted) pending.Add("VideoPipeline.PipelineTask");
@@ -894,7 +894,7 @@ public sealed class MediaPlayer : IMediaPlayer
 
     // 方案 A（P0 修复）共享单例渲染器生命周期说明：
     // _videoRenderer 是 D3D11RendererFactory 的缓存单例，Core 视频管线与 UI 层 D3D11GpuPresenter
-    // 通过同一工厂解析到同一 D3D11Renderer 实例（R1==R2）。其生命周期由工厂（DI Singleton）持有，
+    // 通过同一工厂解析到同一 D3D11Renderer 实例。其生命周期由工厂（DI Singleton）持有，
     // SwapChain 与 HWND 的绑定由 UI Presenter.Detach 管理。
     // 因此 MediaPlayer 绝不能 Detach/Dispose 共享单例——否则会释放 UI 层正在使用（或待重开复用）的
     // 同一实例，导致重开后管线 Present 命中未附加/已释放的渲染器（D3D11 不显示）。
@@ -972,7 +972,7 @@ public sealed class MediaPlayer : IMediaPlayer
             tasks.Add(_audioPipeline.PipelineTask);
         if (_subtitleProcessor?.ProcessTask != null)
             tasks.Add(_subtitleProcessor.ProcessTask);
-        // M2：补齐 BufferManager 读取线程（与 M1 对称）。
+        // 补齐 BufferManager 读取线程（与上处对称）。
         if (_bufferManager?.ReaderTask != null)
             tasks.Add(_bufferManager.ReaderTask);
         if (tasks.Count > 0)

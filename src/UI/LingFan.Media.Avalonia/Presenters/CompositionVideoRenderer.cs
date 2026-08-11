@@ -94,7 +94,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
         var compositor = ElementComposition.GetElementVisual(visual)?.Compositor
             ?? throw new NotSupportedException("无法从控件取得 Compositor（当前非组合渲染后端）。");
 
-        // 🔴 受 IVideoRenderer.Attach 同步 void 契约约束，必须同步解析 ValueTask。
+        // 受 IVideoRenderer.Attach 同步 void 契约约束，必须同步解析 ValueTask。
         // Avalonia 12 的 TryGetCompositionGpuInterop 实现为同步判定（仅查询当前渲染后端是否支持
         // GPU 互操作，无真实 I/O/await），ValueTask 退化为即时完成，无死锁风险。此为契约强制的同步点。
         ICompositionGpuInterop? interop = compositor.TryGetCompositionGpuInterop().GetAwaiter().GetResult();

@@ -46,7 +46,7 @@ internal static class Program
         bool useGpu = args.Contains("--gpu");
         bool repeat = args.Contains("--repeat");
         bool verbose = args.Contains("-v") || args.Contains("--verbose");
-        // 🔴 零拷贝根因定界开关：关闭 SourceReader「解封装+解码一体」，强制走 MFVideoDecoder 自管 MFT。
+        // 零拷贝定界开关：关闭 SourceReader「解封装+解码一体」，强制走 MFVideoDecoder 自管 MFT。
         //    自管 MFT 若能出 DXGI ⇒ 读回在 SourceReader 封装层；若同样出系统内存 ⇒ 读回在 MFT/驱动层。
         bool noFusion = args.Contains("--no-fusion");
         double seconds = ParseDouble(args, "--seconds") ?? 8.0;
@@ -94,7 +94,7 @@ internal static class Program
         TimeSpan firstVidTs = TimeSpan.MinValue, lastVidTs = TimeSpan.MinValue;
         long lastVidDurMs = -1;
 
-        // 🔴 出餐端帧路径检视（「全程零拷贝」的端到端铁证）：
+        // 出餐端帧路径检视（「全程零拷贝」的端到端证据）：
         // 解码器内部的 [FFMPEG-FRAMEPATH]/[DXVA-FRAMEPATH] 只能证明「解码器产出了 GPU 纹理」；
         // 这里检视的是**出餐那一刻**帧携带的资源类型——只有 IGpuTextureResource 才说明
         // 纹理一路借到了消费者手上，中途没有被下载回系统内存。两者都为 GPU 才算全链路零拷贝。
@@ -180,10 +180,10 @@ internal static class Program
         Console.WriteLine($"GPU 纹理帧   : {gpuServed}   (IGpuTextureResource，格式 {gpuFmt})");
         Console.WriteLine($"CPU 内存帧   : {cpuServed}");
         Console.WriteLine(gpuServed > 0 && cpuServed == 0
-            ? "判定         : ✅ 全程零拷贝——每一帧出餐时都是 GPU 纹理，解码到消费者之间无系统内存往返"
+            ? "判定         : 全程零拷贝——每一帧出餐时都是 GPU 纹理，解码到消费者之间无系统内存往返"
             : gpuServed > 0
-                ? $"判定         : ⚠️ 部分零拷贝——{cpuServed} 帧回落到了 CPU 内存（常见于起播前若干软解帧 / 硬解中途失败）"
-                : "判定         : ❌ 全程 CPU 帧——硬件没被用上。请查上方是否有「已请求硬件解码，但…」告警，" +
+                ? $"判定         : 部分零拷贝——{cpuServed} 帧回落到了 CPU 内存（常见于起播前若干软解帧 / 硬解中途失败）"
+                : "判定         : 全程 CPU 帧——硬件没被用上。请查上方是否有「已请求硬件解码，但…」告警，" +
                   "或用 --gpu 注册 D3D11 渲染器与解码器共享设备");
         Console.WriteLine("解码器侧统计请见上方 [FFMPEG-FRAMEPATH] / [DXVA-FRAMEPATH] 日志（两侧都为 GPU 才是真·全链路零拷贝）");
         Console.WriteLine();

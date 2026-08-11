@@ -42,7 +42,7 @@ internal static partial class D3D11Diagnostics
 
     /// <summary>
     /// 开始落盘前先跳过的 Present 次数，默认 0。
-    /// <para>🔴 用途：消除「只抓到开头几帧」的采样偏差。默认从第 1 帧起连抓 N 帧，
+    /// <para>用途：消除「只抓到开头几帧」的采样偏差。默认从第 1 帧起连抓 N 帧，
     /// 全部落在视频头 1 秒内；若画质问题在中后段才显现（运动剧烈场景、码率切换、GOP 边界），
     /// 前几帧一律拍不到，会得出「一切正常」的错误结论。</para>
     /// </summary>
@@ -183,9 +183,9 @@ internal static partial class D3D11Diagnostics
         double colDiff = Math.Abs((ecN > 0 ? (double)ec / ecN : 0) - (ocN > 0 ? (double)oc / ocN : 0));
         double rowDiff = Math.Abs((erN > 0 ? (double)er / erN : 0) - (orN > 0 ? (double)orr / orN : 0));
 
-        string v2 = ratio > 1.6 ? "⚠竖条纹" : ratio < 0.6 ? "⚠横条纹/隔行" : "方向性正常";
-        if (colDiff > 2.0) v2 += $" +⚠1px竖向交替({colDiff:F2})";
-        if (rowDiff > 2.0) v2 += $" +⚠1px横向交替({rowDiff:F2})";
+        string v2 = ratio > 1.6 ? "竖条纹" : ratio < 0.6 ? "横条纹/隔行" : "方向性正常";
+        if (colDiff > 2.0) v2 += $" +1px竖向交替({colDiff:F2})";
+        if (rowDiff > 2.0) v2 += $" +1px横向交替({rowDiff:F2})";
 
         return $"[FREQ-BB] 水平高频={hf:F3} 垂直高频={vf:F3} H/V={ratio:F3} | " +
                $"奇偶列差={colDiff:F2} 奇偶行差={rowDiff:F2} => {v2}";

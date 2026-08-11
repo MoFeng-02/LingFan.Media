@@ -10,7 +10,7 @@ namespace LingFan.Media.Outputs.OpenSLES;
 /// <remarks>
 /// <para>职责：通过 Android NDK OpenSL ES API 直接播放 PCM 数据（libOpenSLES.so）。
 /// 作为 AAudio 的低版本回退（API &lt; 27 无 AAudio）。</para>
-/// <para><b>异步策略</b>（与 WASAPI 范本一致，遵守总记忆第十二章）：</para>
+/// <para><b>异步策略</b>（与 WASAPI 范本一致）：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，同步执行引擎/混音/播放器创建后返回 <see cref="Task.CompletedTask"/>。
 /// 全部为 NDK 同步原生调用，无 I/O 可 await，<b>非伪异步</b>（不加 <c>async</c> 关键字、方法体无 <c>await</c>）。</item>

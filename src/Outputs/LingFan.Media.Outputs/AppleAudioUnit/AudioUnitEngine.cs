@@ -11,11 +11,11 @@ namespace LingFan.Media.Outputs.AppleAudioUnit;
 /// <para>职责：通过 AudioToolbox AudioUnit v2 C API 播放交错 S16 PCM。
 /// <see cref="CoreAudio.CoreAudioOutput"/>（macOS，kAudioUnitSubType_DefaultOutput）与
 /// <see cref="AVAudioEngine.AvAudioEngineOutput"/>（iOS，kAudioUnitSubType_RemoteIO）共用本引擎
-/// （用户 2026-07-28 拍板：O3 走 RemoteIO 共用 AudioUnit 路径，不走 Obj-C AVAudioEngine 封装）。</para>
+/// （O3 走 RemoteIO 共用 AudioUnit 路径，不走 Obj-C AVAudioEngine 封装）。</para>
 /// <para><b>数据模型</b>：AudioUnit 为拉模式——注册 <c>AURenderCallback</c>，CoreAudio 实时线程回调拉取 PCM；
 /// <see cref="Submit"/> 推入托管环形缓冲（500ms 容量），缓冲满时阻塞等待（带 2 秒超时）自带背压；
 /// 回调侧数据不足补零（静音，underrun 不抛错）。</para>
-/// <para><b>异步策略</b>（与 WASAPI/AAudio/OpenSL ES 范本一致，遵守总记忆第十二章）：
+/// <para><b>异步策略</b>（与 WASAPI/AAudio/OpenSL ES 范本一致）：
 /// 全部成员为同步（native/sync 分类）——AudioUnit C API 均为同步原生调用，无真实 I/O 可 await。
 /// InitializeAsync/DisposeAsync 契约语义由外层包装类承担。</para>
 /// <para><b>音量</b>：软件增益（S16 样本缩放，写入环形缓冲前应用），与 AAudio 一致，避免依赖平台差异化音量 API。</para>

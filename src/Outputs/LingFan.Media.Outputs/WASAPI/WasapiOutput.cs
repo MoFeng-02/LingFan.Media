@@ -58,14 +58,14 @@ internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 🔴 §29（2026-08-06）：本转发<b>曾经缺失</b>，是「起播 ~2s 静默 + 主时钟迟迟不锚定」的真根因。
+    /// 本转发<b>曾经缺失</b>，是「起播静默 + 主时钟迟迟不锚定」的成因。
     /// <see cref="IAudioOutput.BeginStreamingAsync"/> 带<b>默认接口实现</b>（返回
     /// <c>ValueTask.CompletedTask</c>），而 <c>AudioPipeline</c> 是<b>经接口</b>调用的；
     /// 本类漏写转发时编译器不会有任何提示，调用直接命中那个空的默认实现 ⇒
     /// <c>WasapiRenderLoop.BeginStreamingAsync</c> 从未被执行 ⇒ <c>_prerollPending</c> 恒 false ⇒
     /// <c>TryStartPreroll</c> 每次早退 ⇒ 设备只能等缓冲写满后由 <c>EnsureDeviceStarted</c> 兜底 Start
     /// （日志「设备缓冲已满但引擎从未启动，已强制 Start」）。
-    /// 此前几轮针对 <c>WasapiRenderLoop.BeginStreamingAsync</c> 的修复因此全部作用在<b>死代码路径</b>上。
+    /// 此前针对 <c>WasapiRenderLoop.BeginStreamingAsync</c> 的修复因此全部作用在<b>死代码路径</b>上。
     /// <b>教训</b>：带默认实现的接口成员，在包装/委托类里漏转发是静默失效，不会报错——
     /// 新增此类成员时必须同步检查所有 <c>IAudioOutput</c> 实现的转发完整性。
     /// </remarks>

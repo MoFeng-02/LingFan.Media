@@ -15,9 +15,9 @@ public sealed class Synchronizer
     private readonly TimeSpan _audioLatency;
     private bool _realTimeSync = true;
 
-    // 🔴 音画同步根治（2026-08-04）：视频帧「提前多少调用 Present」= 渲染后端真实「Present→上屏」延迟，
+    // 音画同步：视频帧「提前多少调用 Present」= 渲染后端真实「Present→上屏」延迟，
     // 由 VideoPipeline 按 IVideoRenderer.PresentationLatency 注入（D3D11=刷新周期，无头=0）。
-    // 不再用时钟的 SyncThreshold(50ms) 作呈现偏移——那只是同步门限，错当提前量会让视频系统性提前 ~25ms。
+    // 不再用时钟的 SyncThreshold(50ms) 作呈现偏移——那只是同步门限，错当提前量会让视频系统性提前。
     private TimeSpan _presentationLatency = TimeSpan.FromMilliseconds(1000.0 / 60.0);
 
     /// <summary>
@@ -88,7 +88,7 @@ public sealed class Synchronizer
     /// </remarks>
     public void OnAudioFrameSubmitted(AudioFrame frame)
     {
-        // 已切到真实播放位置主时钟：批提交内的逐帧硬跳是锯齿根因，直接跳过。
+        // 已切到真实播放位置主时钟：批提交内的逐帧硬跳是锯齿成因，直接跳过。
         if (_masterClockProvider != null)
             return;
 

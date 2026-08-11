@@ -10,7 +10,7 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <remarks>
 /// <para><b>唯一职责</b>：线程与 COM 单元的生命周期管理 + 工作项投递。本类<b>不认识任何 WASAPI 概念</b>，
 /// 不持有任何 COM 指针——持有者是使用它的组件（如 <see cref="WasapiAudioEngine"/>）。</para>
-/// <para>🔴 <b>COM 单元亲和铁律（I7）</b>：在专用线程上创建的 COM 对象，其 <c>Release</c> 必须
+/// <para><b>COM 单元亲和</b>：在专用线程上创建的 COM 对象，其 <c>Release</c> 必须
 /// ①在同一线程执行、②先于该线程的 <c>CoUninitialize</c>。本类通过
 /// <see cref="Shutdown"/> 的 <c>releaseOnWorker</c> 回调保证这一顺序：回调在工作线程内执行完毕后，
 /// 线程 proc 的 <c>finally</c> 才调用 <c>CoUninitialize</c>。</para>
@@ -150,7 +150,7 @@ internal sealed class StaComWorker : IDisposable
                 {
                     if (item.IsShutdown)
                     {
-                        // 🔴 I7：COM 释放必须同线程且先于 CoUninitialize（由本 return → finally 保证顺序）。
+                        // COM 释放必须同线程且先于 CoUninitialize（由本 return → finally 保证顺序）。
                         try { item.Action?.Invoke(); } catch { /* 关闭期忽略 */ }
                         item.Done.Set();
                         item.Completion?.TrySetResult();

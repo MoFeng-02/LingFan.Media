@@ -236,7 +236,7 @@ public class FormatDetector : IFormatDetector
     /// MPEG-TS 同步字节 0x47（ASCII 'G'）每 188 字节重复一次。
     /// 扫描探测窗口内所有偏移（不仅是 offset 0），
     /// 以识别从非零偏移开始的录制文件（仅检测 offset 0，存在漏报）。
-    /// 为降低误报，要求从某偏移起连续至少 3 个同步字节（间隔 188 字节），与任务规格一致。
+    /// 为降低误报，要求从某偏移起连续至少 3 个同步字节（间隔 188 字节），与检测规格一致。
     /// </remarks>
     /// <param name="data">探测数据。</param>
     /// <returns>是 MPEG-TS 返回 true。</returns>
@@ -257,7 +257,7 @@ public class FormatDetector : IFormatDetector
             if (data[offset] != sync)
                 continue;
 
-            // 从本偏移起，校验后续 sync byte（间隔 packetSize），连续至少 3 个命中降低误报（对齐任务规格）
+            // 从本偏移起，校验后续 sync byte（间隔 packetSize），连续至少 3 个命中降低误报（对齐检测规格）
             int validCount = 1;
             for (int i = 1; i < 5 && offset + i * packetSize < data.Length; i++)
             {

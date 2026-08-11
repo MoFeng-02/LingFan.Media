@@ -14,7 +14,7 @@ namespace LingFan.Media.Extensions;
 /// <see cref="Func{TResult}"/>。若直接注入 <c>Lazy&lt;T&gt;</c> 会抛 "Unable to resolve service for type 'System.Lazy`1[...]'"。</para>
 /// <para><b>用途</b>：注册后，<c>Lazy&lt;T&gt;</c> 仅在首次访问 <see cref="Lazy{T}.Value"/> 时才从容器解析 T，
 /// 即把构造延迟到真正使用时。本库用此机制把后端原生初始化（MFBackend→MFStartup / VLCBackend→new LibVLC）
-/// 严格延迟到 Session 创建（Open），满足「注册一个后端 ≠ 马上要它的 native 库」的宪法纪律。</para>
+/// 严格延迟到 Session 创建（Open），满足「注册一个后端 ≠ 马上要它的 native 库」的约定。</para>
 /// </remarks>
 public static class LazySupport
 {

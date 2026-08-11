@@ -1,7 +1,7 @@
 // Global using directives for LingFan.Media.Renderers.Vulkan
 // Abstractions 命名空间全局引入
 global using LingFan.Media.Abstractions;
-// Logging 命名空间全局引入（A-L1: csproj 已显式声明 Microsoft.Extensions.Logging.Abstractions）
+// Logging 命名空间全局引入（csproj 已显式声明 Microsoft.Extensions.Logging.Abstractions）
 global using Microsoft.Extensions.Logging;
 // DI 命名空间全局引入（AddSingleton 扩展方法）
 global using Microsoft.Extensions.DependencyInjection;

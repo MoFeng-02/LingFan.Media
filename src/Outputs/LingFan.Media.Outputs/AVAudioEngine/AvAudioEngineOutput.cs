@@ -9,10 +9,10 @@ namespace LingFan.Media.Outputs.AVAudioEngine;
 /// <remarks>
 /// <para>职责：通过 AudioToolbox AudioUnit（kAudioUnitSubType_RemoteIO）播放交错 S16 PCM，
 /// 实现委托共用引擎 <see cref="AudioUnitEngine"/>（与 macOS DefaultOutput 路径共用）。</para>
-/// <para><b>技术选型</b>（用户 2026-07-28 拍板）：不走 Obj-C AVAudioEngine 封装（需 objc_msgSend 大量互操作且无 C API），
+/// <para><b>技术选型</b>：不走 Obj-C AVAudioEngine 封装（需 objc_msgSend 大量互操作且无 C API），
 /// 改走 RemoteIO AudioUnit——iOS 上与 macOS 完全同构的 C API，仅组件子类型不同（'rioc' vs 'def '），
 /// 类名保留 AvAudioEngineOutput 以维持既有 DI 注册面（AddAvAudioEngineOutput）不变。</para>
-/// <para><b>异步策略</b>（与 WASAPI/AAudio 范本一致，遵守总记忆第十二章）：</para>
+/// <para><b>异步策略</b>（与 WASAPI/AAudio 范本一致）：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，平台校验后返回 <see cref="Task.CompletedTask"/>。
 /// 无 I/O 可 await，<b>非伪异步</b>（不加 <c>async</c> 关键字、方法体无 <c>await</c>）。</item>
