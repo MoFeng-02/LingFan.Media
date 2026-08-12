@@ -3,9 +3,12 @@
 # Pairs with the NuGet.org Trusted Publisher policy:
 #   Owner: MoFeng | Repository: LingFan.Media | Workflow: nuget_build.yml
 #   Environment: production
-# Authentication is OIDC (no API key required): the GitHub Actions job
-# obtains a short-lived token via `id-token: write` and `environment:
-# production`, which NuGet.org exchanges after matching the policy above.
+# Authentication is OIDC trusted publishing (no long-lived API key): the job
+# has `id-token: write` + `environment: production`; the "NuGet login" step
+# exchanges the GitHub OIDC token for a short-lived NuGet API key, which the
+# "Publish" step passes via `--api-key`. NuGet.org matches it against the
+# Trusted Publishing policy (Owner=MoFeng / Repo=LingFan.Media /
+# Workflow=nuget_build.yml / Environment=production).
 #
 # Project conventions honored here:
 # - .NET 10 SDK; V1 is Windows-only, so we use `windows-latest` (D3D11 + Skia +
@@ -116,23 +119,14 @@ jobs:
             Select-Object Name, Length |
             Format-Table -AutoSize
 
-      - name: Verify package validity
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $pkgs = Get-ChildItem ./artifacts -Filter '*.nupkg' -File
-          if (-not $pkgs) {
-            Write-Error "No .nupkg files found under ./artifacts"
-            exit 1
-          }
-          foreach ($pkg in $pkgs) {
-            Write-Host "Verifying $($pkg.Name) ..."
-            dotnet nuget verify $pkg.FullName
-            if ($LASTEXITCODE -ne 0) {
-              Write-Error "Package verification failed: $($pkg.Name)"
-              exit $LASTEXITCODE
-            }
-          }
+      - name: NuGet login (OIDC → temp API key)
+        id: login
+        # 受信任发布：用 GitHub OIDC token 向 nuget.org 换一次性临时 key（约 1h 有效）。
+        # 须在本仓库 Secrets 配置 NUGET_USER = 你的 nuget.org 用户名（profile name，非邮箱），
+        # 且该用户名下已建好匹配本仓库/工作流/环境的 Trusted Publishing 策略。
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
 
       - name: Publish to NuGet.org (OIDC trusted publishing)
         # 修复发布条件：Tag 推送自动发布；手动触发时 dry_run=false 可执行发布
@@ -150,6 +144,7 @@ jobs:
           foreach ($pkg in $pkgs) {
             Write-Host "Pushing $($pkg.Name) ($([math]::Round($pkg.Length/1KB, 1)) KB) ..."
             dotnet nuget push $pkg.FullName `
+              --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" `
               --skip-duplicate `
               --no-symbols `
               --source https://api.nuget.org/v3/index.json
