@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
-using Silk.NET.Vulkan;
 
 namespace LingFan.Media.Renderers.Vulkan;
 
