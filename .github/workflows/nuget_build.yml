@@ -14,17 +14,21 @@
 #   under src/Tools/* for local validation; xunit is disabled.
 # - NuGet brand metadata (authors / license / icon / readme) is centralized in
 #   Directory.Build.props and inherited by every IsPackable=true project.
+# - We build/pack `nuget.slnx` (library projects only). The `src/Tools/*` sample
+#   apps / Probes are excluded on purpose: they produce no NuGet package and the
+#   mobile targets (Android / iOS / Browser) fail Release trimming on CI.
+#   Local dev can still open `LingFan.Media.slnx` to build/run the Tools in Debug.
 
 name: NuGet Build & Publish
 
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Pack only (skip publish to NuGet.org)'
+        description: "Pack only (skip publish to NuGet.org)"
         type: boolean
         default: false
 
@@ -51,13 +55,14 @@ jobs:
       - name: Setup .NET 10 SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: "10.0.x"
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          # 纳入所有影响依赖的配置文件，确保修改后缓存自动失效
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props', '**/nuget.config') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
@@ -72,21 +77,34 @@ jobs:
           "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
           Write-Host "Resolved PACKAGE_VERSION=$version"
 
+          # 提取纯数字版本（去掉 -alpha/-beta/-rc 等预发布后缀）
+          # 专门用于 AssemblyVersion / FileVersion，解决 CS7034/CS7035 编译错误
+          $cleanVersion = $version -replace '-.*$', ''
+          # 补全为 主.次.生成.修订 四段格式，不足补 .0
+          $parts = $cleanVersion.Split('.')
+          while ($parts.Count -lt 4) {
+            $cleanVersion += '.0'
+            $parts = $cleanVersion.Split('.')
+          }
+          "ASSEMBLY_VERSION=$cleanVersion" >> $env:GITHUB_ENV
+          Write-Host "Resolved ASSEMBLY_VERSION=$cleanVersion"
+
       - name: Restore
-        run: dotnet restore LingFan.Media.slnx
+        run: dotnet restore nuget.slnx
 
       - name: Build
         run: >-
-          dotnet build LingFan.Media.slnx -c Release --no-restore
+          dotnet build nuget.slnx -c Release --no-restore
           -p:Version=${{ env.PACKAGE_VERSION }}
-          -p:AssemblyVersion=${{ env.PACKAGE_VERSION }}
-          -p:FileVersion=${{ env.PACKAGE_VERSION }}
+          -p:InformationalVersion=${{ env.PACKAGE_VERSION }}
+          -p:AssemblyVersion=${{ env.ASSEMBLY_VERSION }}
+          -p:FileVersion=${{ env.ASSEMBLY_VERSION }}
           -p:ContinuousIntegrationBuild=true
           -p:Deterministic=true
 
       - name: Pack
         run: >-
-          dotnet pack LingFan.Media.slnx -c Release --no-build --no-restore
+          dotnet pack nuget.slnx -c Release --no-build --no-restore
           -o ./artifacts
           -p:Version=${{ env.PACKAGE_VERSION }}
           -p:PackageVersion=${{ env.PACKAGE_VERSION }}
@@ -98,10 +116,32 @@ jobs:
             Select-Object Name, Length |
             Format-Table -AutoSize
 
-      - name: Publish to NuGet.org (OIDC trusted publishing)
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run
+      - name: Verify package validity
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $pkgs = Get-ChildItem ./artifacts -Filter '*.nupkg' -File
+          if (-not $pkgs) {
+            Write-Error "No .nupkg files found under ./artifacts"
+            exit 1
+          }
+          foreach ($pkg in $pkgs) {
+            Write-Host "Verifying $($pkg.Name) ..."
+            dotnet nuget verify $pkg.FullName
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Package verification failed: $($pkg.Name)"
+              exit $LASTEXITCODE
+            }
+          }
+
+      - name: Publish to NuGet.org (OIDC trusted publishing)
+        # 修复发布条件：Tag 推送自动发布；手动触发时 dry_run=false 可执行发布
+        if: |
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+          (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           $pkgs = Get-ChildItem ./artifacts -Filter '*.nupkg' -File
           if (-not $pkgs) {
             Write-Error "No .nupkg files found under ./artifacts"
@@ -113,4 +153,9 @@ jobs:
               --skip-duplicate `
               --no-symbols `
               --source https://api.nuget.org/v3/index.json
+            # 显式检查推送退出码，失败立即终止，杜绝静默失败
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to push package: $($pkg.Name)"
+              exit $LASTEXITCODE
+            }
           }
