@@ -21,16 +21,14 @@
 		<!-- GLSL 源与预编译 SPIR-V 仅作构建期输入；经 GenerateVulkanShaderByteArrays 生成
 		     Shaders.g.cs（byte[] 字面量）编译进程序集，运行时零反射。不进 NuGet 包。 -->
 		<None Include="Shaders\*.vert;Shaders\*.frag;Shaders\*.spv" />
+		<Compile Remove="obj\Debug\net10.0\Shaders.g.cs" />
 		<!-- 生成的字节数组源参与编译，编译进程序集（进 NuGet 包），下游消费者无需重跑任何工具。 -->
 		<Compile Include="$(IntermediateOutputPath)Shaders.g.cs" />
 	</ItemGroup>
 
 	<!-- SPIR-V → C# 字节数组自动生成（BeforeTargets=CoreCompile 确保在编译前就绪）。
 	     增量：仅当 .spv/.vert/.frag 变化时才重新生成。 -->
-	<Target Name="GenerateVulkanShaderByteArrays"
-	        BeforeTargets="CoreCompile"
-	        Inputs="@(None->WithMetadataValue('Extension','.spv'));@(None->WithMetadataValue('Extension','.vert'));@(None->WithMetadataValue('Extension','.frag'))"
-	        Outputs="$(IntermediateOutputPath)Shaders.g.cs">
+	<Target Name="GenerateVulkanShaderByteArrays" BeforeTargets="CoreCompile" Inputs="@(None-&gt;WithMetadataValue('Extension','.spv'));@(None-&gt;WithMetadataValue('Extension','.vert'));@(None-&gt;WithMetadataValue('Extension','.frag'))" Outputs="$(IntermediateOutputPath)Shaders.g.cs">
 
 		<!-- 可选：若 glslang 可用，则重新编译 .spv（最佳努力，缺失不阻断构建，回退用仓库已提交的 .spv）。
 		     多候选定位 glslang（Vulkan SDK / 仓库 Tools / 本机 E:\Tools / PATH）；任一存在即用，
@@ -40,13 +38,10 @@
 			<_GlslangExe Condition="'$(_GlslangExe)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\..\..\Tools\glslang\bin\glslang.exe')">$(MSBuildThisFileDirectory)..\..\..\..\Tools\glslang\bin\glslang.exe</_GlslangExe>
 			<_GlslangExe Condition="'$(_GlslangExe)' == '' And Exists('E:\Tools\glslang\bin\glslang.exe')">E:\Tools\glslang\bin\glslang.exe</_GlslangExe>
 		</PropertyGroup>
-		<Exec Condition="'$(_GlslangExe)' != ''"
-		      Command="&quot;$(_GlslangExe)&quot; -V &quot;$(MSBuildThisFileDirectory)Shaders\yuv.vert&quot; -o &quot;$(MSBuildThisFileDirectory)Shaders\yuv.vert.spv&quot; &amp; &quot;$(_GlslangExe)&quot; -V &quot;$(MSBuildThisFileDirectory)Shaders\yuv.frag&quot; -o &quot;$(MSBuildThisFileDirectory)Shaders\yuv.frag.spv&quot;"
-		      ContinueOnError="true" StandardOutputImportance="low" />
+		<Exec Condition="'$(_GlslangExe)' != ''" Command="&quot;$(_GlslangExe)&quot; -V &quot;$(MSBuildThisFileDirectory)Shaders\yuv.vert&quot; -o &quot;$(MSBuildThisFileDirectory)Shaders\yuv.vert.spv&quot; &amp; &quot;$(_GlslangExe)&quot; -V &quot;$(MSBuildThisFileDirectory)Shaders\yuv.frag&quot; -o &quot;$(MSBuildThisFileDirectory)Shaders\yuv.frag.spv&quot;" ContinueOnError="true" StandardOutputImportance="low" />
 
 		<!-- 始终：由 .spv 生成 Shaders.g.cs（不依赖 glslang，仓库已提交 .spv）。 -->
-		<Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Shaders\generate-shader-bytes.ps1&quot; -InputDir &quot;$(MSBuildThisFileDirectory)Shaders&quot; -OutputFile &quot;$(IntermediateOutputPath)Shaders.g.cs&quot;"
-		      StandardOutputImportance="low" />
+		<Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Shaders\generate-shader-bytes.ps1&quot; -InputDir &quot;$(MSBuildThisFileDirectory)Shaders&quot; -OutputFile &quot;$(IntermediateOutputPath)Shaders.g.cs&quot;" StandardOutputImportance="low" />
 	</Target>
 
 </Project>
