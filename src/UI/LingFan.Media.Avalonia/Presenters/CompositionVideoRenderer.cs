@@ -709,6 +709,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     {
         SharedGpuSemaphoreKind.VulkanOpaqueNtHandle => KnownPlatformGraphicsExternalSemaphoreHandleTypes.VulkanOpaqueNtHandle,
         SharedGpuSemaphoreKind.VulkanOpaquePosixFileDescriptor => KnownPlatformGraphicsExternalSemaphoreHandleTypes.VulkanOpaquePosixFileDescriptor,
+        SharedGpuSemaphoreKind.MetalSharedEvent => KnownPlatformGraphicsExternalSemaphoreHandleTypes.MetalSharedEvent,
         _ => throw new NotSupportedException($"不支持的共享 GPU 信号量句柄类型：{kind}。"),
     };
 }

@@ -37,6 +37,7 @@
 	<ItemGroup>
 		<ProjectReference Include="..\..\..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
 		<ProjectReference Include="..\..\..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+		<ProjectReference Include="..\..\..\..\Renderers\LingFan.Media.Renderers.Vulkan\LingFan.Media.Renderers.Vulkan.csproj" />
 		<ProjectReference Include="..\..\..\..\UI\LingFan.Media.Avalonia\LingFan.Media.Avalonia.csproj" />
 		<!-- 三后端（含 GPU 加速）+ D3D11 渲染/呈现器 + WASAPI 音频；Windows 专属项在注册处用 OperatingSystem.IsWindows 守卫 -->
 		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />

@@ -15,9 +15,9 @@ public interface IRendererProfiler
 /// Vulkan 视频渲染器。将 <see cref="VideoFrame"/> 呈现到 Vulkan SwapChain。
 /// </summary>
 /// <remarks>
-/// <para>跨平台 GPU 渲染器（Windows / Linux / Android；macOS/MoltenVK <b>待开发</b>——
-/// 缺 VK_EXT_metal_surface 分支与 portability enumeration 标志）。
-/// Surface 创建用 Vulkan 自己的 WSI 扩展（VK_KHR_*_surface），不需要平台互操作文件。</para>
+/// <para>跨平台 GPU 渲染器（Windows / Linux / Android；macOS/iOS 经 MoltenVK 覆盖——
+/// 仅引入 MoltenVK 让 Vulkan 后端在 Apple 平台初始化/跑 SwapChain，无空域零拷贝上屏属第二类，待 Apple 合成栈落地）。
+/// Surface 创建用 Vulkan 自己的 WSI 扩展（VK_KHR_*_surface / VK_EXT_metal_surface），不需要平台互操作文件。</para>
 /// <para>WSI 扩展（Surface/Swapchain/Present）由 <c>VulkanNative</c> 零反射绑定在运行时经三阶段解析
 /// （实例句柄解析实例级 / WSI 实例扩展，设备句柄解析设备级 / WSI 设备扩展），
 /// 不依赖 Silk.NET 的 <c>Khr*</c> 扩展对象与加载层。</para>
@@ -925,7 +925,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     [System.Runtime.InteropServices.LibraryImport("kernel32")]
     private static partial nint GetModuleHandleW(nint lpModuleName);
 
-    private void CreateSurface(IntPtr handle)
+    private unsafe void CreateSurface(IntPtr handle)
     {
         SurfaceKHR[] surfArr = new SurfaceKHR[1];
         Result result;
@@ -953,6 +953,19 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 Window = (nint*)handle,
             };
             result = VulkanNative.CreateAndroidSurfaceKHR(_instance, ref info, null, out surfArr[0]);
+        }
+        else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+        {
+            // MoltenVK 路径：handle 应为宿主提供的 CAMetalLayer*（由 Apple 合成栈 / VideoView 注入）。
+            // VK_EXT_metal_surface 须已在实例启用（VulkanRendererFactory.GetPlatformExtensions 已加 Apple 分支）。
+            // MetalSurfaceCreateInfoEXT.PLayer 是 IntPtr*（指向 CAMetalLayer*），故取局部副本的地址传入。
+            IntPtr layer = handle;
+            var info = new MetalSurfaceCreateInfoEXT
+            {
+                SType = StructureType.MetalSurfaceCreateInfoExt,
+                PLayer = &layer,
+            };
+            result = VulkanNative.CreateMetalSurfaceEXT(_instance, ref info, null, out surfArr[0]);
         }
         else if (OperatingSystem.IsLinux())
         {

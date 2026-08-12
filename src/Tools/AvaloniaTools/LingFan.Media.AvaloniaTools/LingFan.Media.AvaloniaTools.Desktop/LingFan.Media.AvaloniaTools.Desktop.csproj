@@ -48,4 +48,39 @@
     <Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll-&gt;Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
     <Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
   </Target>
+
+  <!-- 原生 MoltenVK 库随 dotnet run / publish 一并复制进输出目录（仅 macOS/iOS / MoltenVK 平台）：
+       VulkanNative 在 Apple 上经 NativeLibrary.SetDllImportResolver 把顶层 vulkan-1 重定向到
+       libvulkan.1.dylib / libMoltenVK.dylib；这些库由 MoltenVK SDK 提供、不在系统 loader 路径，
+       须由宿主打包到应用目录，否则运行期 DllNotFoundException。
+       源：仓库根 ThirdParty/moltenvk/<版本>/lib/*.dylib（放 libMoltenVK.dylib；可选另装 Vulkan Loader 的 libvulkan.1.dylib）。
+       NativeAOT 下 dotnet publish 不会自动携带构建期复制的原生 dylib，须显式复制到 $(PublishDir)。
+       仅 Apple 构建触发；Windows/Linux 跳过（Vulkan loader 由系统/驱动提供，无需此库）。 -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib"
+          Link="%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish"
+          Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <ItemGroup>
+      <MoltenVKDylib Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" />
+    </ItemGroup>
+    <!-- 构建输出（dotnet run / Debug） -->
+    <Copy SourceFiles="@(MoltenVKDylib)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="'@(MoltenVKDylib)' != ''" />
+    <!-- 发布输出（dotnet publish / AOT） -->
+    <Copy SourceFiles="@(MoltenVKDylib)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
+    <Message Condition="'@(MoltenVKDylib)' != ''"
+             Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
+    <Message Condition="'@(MoltenVKDylib)' == ''"
+             Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
+  </Target>
 </Project>

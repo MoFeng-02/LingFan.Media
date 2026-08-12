@@ -11,8 +11,9 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <c>VkPhysicalDevice</c>、<c>VkDevice</c>、<c>VkQueue</c>；
 /// <see cref="Create"/> 返回<b>缓存单例</b> <see cref="VulkanRenderer"/>
 /// （共享 GPU Device，与 D3D11RendererFactory 模式一致）。</para>
-/// <para>Vulkan 是跨平台 API（Windows / Linux / Android；macOS/MoltenVK 待开发），
-/// 不需要平台互操作文件——Surface 创建用 Vulkan 自己的 WSI 扩展。</para>
+/// <para>Vulkan 是跨平台 API（Windows / Linux / Android；macOS/iOS 经 MoltenVK 覆盖——
+/// 仅引入 MoltenVK 让 Vulkan 后端在 Apple 平台初始化/跑 SwapChain，无空域零拷贝上屏属第二类，待 Apple 合成栈落地）。
+/// Surface 创建用 Vulkan 自己的 WSI 扩展（Win32 / Android / Metal），不需要平台互操作文件。</para>
     /// <para>WSI 扩展（Surface/Swapchain）由 <c>VulkanNative</c> 零反射绑定经三阶段解析
     /// （实例句柄解析实例级 / WSI 实例扩展，设备句柄解析设备级 / WSI 设备扩展），
     /// 不使用 Silk.NET 的 <c>Vk</c> / <c>Khr*</c> 对象与加载层。</para>
@@ -40,6 +41,8 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     private byte[] _physicalDeviceLuid = [];
     // 是否已为 no-airspace 共享表面启用外部内存/信号量扩展。
     private bool _externalSharingEnabled;
+    // Apple / MoltenVK：是否已启用 VK_EXT_metal_objects（无空域零拷贝经其导出 IOSurface / MTLSharedEvent）。
+    private bool _metalObjectsSharingEnabled;
 
     // 无锁快路径发布哨兵（volatile，最后赋值，保证其余字段写入全部可见）
     private volatile bool _deviceReady;
@@ -77,6 +80,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     internal ReadOnlyMemory<byte> PhysicalDeviceUuid => _physicalDeviceUuid;
     internal ReadOnlyMemory<byte> PhysicalDeviceLuid => _physicalDeviceLuid;
     internal bool ExternalSharingEnabled => _externalSharingEnabled;
+    internal bool MetalObjectsSharingEnabled => _metalObjectsSharingEnabled;
 
     /// <inheritdoc/>
     public IVideoRenderer Create()
@@ -137,6 +141,11 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     EnabledExtensionCount = (uint)extensions.Length,
                     PpEnabledExtensionNames = (byte**)extPtr,
                 };
+
+                // MoltenVK 要求实例创建时带 VK_KHR_portability_enumeration 标志，
+                // 否则 vkCreateInstance 返回 VK_ERROR_INCOMPATIBLE_DRIVER。
+                if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+                    instInfo.Flags = InstanceCreateFlags.EnumeratePortabilityBitKhr;
 
                 Result result;
                 // try-finally 保护 extPtr 内存释放，防止 CreateInstance 异常时泄漏
@@ -281,6 +290,10 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     ? Array.IndexOf(devExts, "VK_KHR_external_memory_win32") >= 0
                     : (Array.IndexOf(devExts, "VK_KHR_external_memory_fd") >= 0);
                 _externalSharingEnabled = hasExternalMem;
+                // Apple / MoltenVK：无空域零拷贝经 VK_EXT_metal_objects 导出 IOSurface / MTLSharedEvent，
+                // 与 Windows / Linux·Android 的 external_memory 路径并行；供源在 Create 时干净回退。
+                bool hasMetalObjects = Array.IndexOf(devExts, "VK_EXT_metal_objects") >= 0;
+                _metalObjectsSharingEnabled = hasMetalObjects;
 
                 // ── KHR WSI 扩展由 VulkanNative 三阶段零反射解析
                 //    （InitInstance 解析实例级 / WSI 实例扩展，InitDevice 解析设备级 / WSI 设备扩展），
@@ -412,6 +425,12 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
             AddIfAvail("VK_KHR_external_memory_fd");
             AddIfAvail("VK_KHR_external_semaphore_fd");
         }
+        else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+        {
+            // Apple / MoltenVK：无空域零拷贝经 VK_EXT_metal_objects 把 Vulkan 图像/信号量
+            // 导出为 IOSurface / MTLSharedEvent（不使用 external_memory/external_semaphore 扩展）。
+            AddIfAvail("VK_EXT_metal_objects");
+        }
         return exts.ToArray();
     }
 
@@ -458,6 +477,14 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         }
         else if (OperatingSystem.IsAndroid())
             AddIfAvailable("VK_KHR_android_surface");
+        else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+        {
+            // Apple / MoltenVK：Metal Surface + portability enumeration 扩展。
+            // VK_KHR_portability_enumeration 须与工厂创建实例时的
+            // InstanceCreateFlags.EnumeratePortabilityBitKhr 配对。
+            AddIfAvailable("VK_EXT_metal_surface");
+            AddIfAvailable("VK_KHR_portability_enumeration");
+        }
         return exts.ToArray();
     }
 

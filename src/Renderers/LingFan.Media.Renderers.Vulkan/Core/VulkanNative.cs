@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using Silk.NET.Vulkan;
@@ -12,11 +13,16 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// 不调用 <c>Silk.NET.Core.Loader</c>（IL3000/IL3002）、不使用 SharpGen 运行时 vtable 包装（IL2067/IL2072）。
 /// NativeAOT 下零 IL2xxx。</para>
 /// <para><b>机制</b>：仅两处顶层 <c>[LibraryImport("vulkan-1")]</c> 取得引导符号
-/// <c>vkGetInstanceProcAddr</c> / <c>vkGetDeviceProcAddr</c>，再分三阶段解析全部函数指针——
+/// <c>vkGetInstanceProcAddr</c> / <c>vkGetDeviceProcAddr</c>。在 Windows 上 <c>vulkan-1</c> 即官方 loader DLL 名；
+/// 在 macOS/iOS（MoltenVK）上 Vulkan loader 由 MoltenVK 提供、原生库名非 <c>vulkan-1</c>，
+/// 故经 <c>NativeLibrary.SetDllImportResolver</c> 把 <c>vulkan-1</c> 重定向到
+/// <c>libvulkan.1.dylib</c>（标准 loader 命名）/ <c>libMoltenVK.dylib</c>（SDK 直打包兜底）。
+/// 解析全部函数指针的其余逻辑仍分三阶段——
 /// <see cref="InitBootstrap"/> 经 <c>vkGetInstanceProcAddr(NULL, …)</c> 解析引导子集
 /// （<c>vkCreateInstance</c> 等）；<see cref="InitInstance(Instance)"/> 经实例句柄解析实例级函数与 KHR 实例扩展；
 /// <see cref="InitDevice(Device)"/> 经设备句柄解析设备级函数与 VK_KHR_swapchain 设备扩展。
-/// 函数指针统一 <c>delegate* unmanaged[Stdcall]</c>（Vulkan 的 <c>VKAPI_PTR</c> 在 Windows 即 <c>__stdcall</c>；V1 仅 Windows）。
+/// 函数指针统一 <c>delegate* unmanaged[Stdcall]</c>（Vulkan 的 <c>VKAPI_PTR</c> 在 Windows 即 <c>__stdcall</c>，
+/// 在 macOS/iOS（MoltenVK）单一 ABI 下 .NET 同样映射为平台默认调用约定，可正确互操作）。
 /// 结构体 / 枚举 / 句柄类型复用 Silk.NET 的纯数据定义（<c>[StructLayout]</c> 值类型 + <c>enum</c>，本身零反射、ABI 精确）。</para>
 /// <para><b>为何不能一次全局派发解析全部</b>：Vulkan 规范要求 <c>vkGetInstanceProcAddr(NULL, …)</c> 只保证返回
 /// 引导子集；其余函数（含 <c>vkDestroyInstance</c> / <c>vkCreateDevice</c>）经 NULL 派发会静默返回 <c>NULL</c>
@@ -26,6 +32,36 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// </remarks>
 internal static unsafe partial class VulkanNative
 {
+    // ── 平台库名重定向：macOS/iOS（MoltenVK）上 Vulkan loader 原生库名非 vulkan-1 ──
+    static VulkanNative()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(VulkanNative).Assembly, ResolveVulkanLoader);
+    }
+
+    /// <summary>
+    /// 把顶层 <c>vulkan-1</c> 引导符号重定向到 Apple 平台实际的 Vulkan loader 库。
+    /// Windows 上 <c>vulkan-1.dll</c> 即官方 loader 名，交回默认解析；
+    /// macOS/iOS 由 MoltenVK 提供 loader，优先 <c>libvulkan.1.dylib</c>、兜底 <c>libMoltenVK.dylib</c>。
+    /// </summary>
+    private static nint ResolveVulkanLoader(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+    {
+        // 仅处理 vulkan-1；其余名字交回默认解析（保持 Windows 现状）。
+        if (!string.Equals(libraryName, "vulkan-1", StringComparison.Ordinal))
+            return nint.Zero;
+
+        // Windows：vulkan-1.dll 为官方 loader 名，默认解析即可。
+        if (OperatingSystem.IsWindows())
+            return nint.Zero;
+
+        // macOS / iOS：Vulkan loader 由 MoltenVK 提供，原生库名非 vulkan-1。
+        // 优先标准 loader 命名 libvulkan.1.dylib，兜底 SDK 直打包的 libMoltenVK.dylib。
+        if (NativeLibrary.TryLoad("libvulkan.1.dylib", assembly, searchPath, out nint h))
+            return h;
+        if (NativeLibrary.TryLoad("libMoltenVK.dylib", assembly, searchPath, out h))
+            return h;
+        return nint.Zero;
+    }
+
     // ── 引导符号：仅此两处顶层 P/Invoke（vkGetInstanceProcAddr / vkGetDeviceProcAddr）──
     // 其余函数指针全部经这两个引导符号，分别用「实例句柄」/「设备句柄」解析。
     [LibraryImport("vulkan-1", EntryPoint = "vkGetInstanceProcAddr", StringMarshalling = StringMarshalling.Utf8)]
@@ -82,6 +118,8 @@ internal static unsafe partial class VulkanNative
             // ── KHR WSI 实例扩展（须实例已启用对应扩展）──
             _createWin32SurfaceKHR = (delegate* unmanaged[Stdcall]<Instance, Win32SurfaceCreateInfoKHR*, AllocationCallbacks*, SurfaceKHR*, Result>)vkGetInstanceProcAddr(h, "vkCreateWin32SurfaceKHR");
             _createAndroidSurfaceKHR = (delegate* unmanaged[Stdcall]<Instance, AndroidSurfaceCreateInfoKHR*, AllocationCallbacks*, SurfaceKHR*, Result>)vkGetInstanceProcAddr(h, "vkCreateAndroidSurfaceKHR");
+            // ── VK_EXT_metal_surface（Apple / MoltenVK；Silk.NET 静态包装不含 vkCreateMetalSurfaceEXT，须运行时经 vkGetInstanceProcAddr 解析）──
+            _createMetalSurfaceEXT = (delegate* unmanaged[Stdcall]<Instance, MetalSurfaceCreateInfoEXT*, AllocationCallbacks*, SurfaceKHR*, Result>)vkGetInstanceProcAddr(h, "vkCreateMetalSurfaceEXT");
             _destroySurfaceKHR = (delegate* unmanaged[Stdcall]<Instance, SurfaceKHR, AllocationCallbacks*, void>)vkGetInstanceProcAddr(h, "vkDestroySurfaceKHR");
             _getPhysicalDeviceSurfaceCapabilitiesKHR = (delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, SurfaceCapabilitiesKHR*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
             _getPhysicalDeviceSurfaceFormatsKHR = (delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, uint*, SurfaceFormatKHR*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceSurfaceFormatsKHR");
@@ -179,6 +217,8 @@ internal static unsafe partial class VulkanNative
             _getMemoryFdKHR = (delegate* unmanaged[Stdcall]<Device, MemoryGetFdInfoKHR*, int*, Result>)vkGetDeviceProcAddr(h, "vkGetMemoryFdKHR");
             _getSemaphoreWin32HandleKHR = (delegate* unmanaged[Stdcall]<Device, SemaphoreGetWin32HandleInfoKHR*, void*, Result>)vkGetDeviceProcAddr(h, "vkGetSemaphoreWin32HandleKHR");
             _getSemaphoreFdKHR = (delegate* unmanaged[Stdcall]<Device, SemaphoreGetFdInfoKHR*, int*, Result>)vkGetDeviceProcAddr(h, "vkGetSemaphoreFdKHR");
+            // ── VK_EXT_metal_objects（仅 Apple / MoltenVK；非 Apple 平台为 null，调用方自检）──
+            _exportMetalObjectsEXT = (delegate* unmanaged[Stdcall]<Device, ExportMetalObjectsInfoEXT*, void>)vkGetDeviceProcAddr(h, "vkExportMetalObjectsEXT");
             AssertDevice();
             _deviceReady = true;
         }
@@ -209,10 +249,18 @@ internal static unsafe partial class VulkanNative
         Check("vkEnumeratePhysicalDevices", (nint)_enumeratePhysicalDevices);
         Check("vkGetPhysicalDeviceProperties", (nint)_getPhysicalDeviceProperties);
         Check("vkGetPhysicalDeviceQueueFamilyProperties", (nint)_getPhysicalDeviceQueueFamilyProperties);
-        Check("vkCreateWin32SurfaceKHR", (nint)_createWin32SurfaceKHR);
         Check("vkDestroySurfaceKHR", (nint)_destroySurfaceKHR);
         Check("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", (nint)_getPhysicalDeviceSurfaceCapabilitiesKHR);
         Check("vkGetPhysicalDeviceSurfaceFormatsKHR", (nint)_getPhysicalDeviceSurfaceFormatsKHR);
+        // WSI 表面创建函数是平台相关的：仅校验当前平台对应的那个；
+        // 其余平台对应函数为 null（扩展未启用）属正常，不可硬判失败。
+        if (OperatingSystem.IsWindows())
+            Check("vkCreateWin32SurfaceKHR", (nint)_createWin32SurfaceKHR);
+        else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            Check("vkCreateMetalSurfaceEXT", (nint)_createMetalSurfaceEXT);
+        else if (OperatingSystem.IsAndroid())
+            Check("vkCreateAndroidSurfaceKHR", (nint)_createAndroidSurfaceKHR);
+        // Linux 不在 InitInstance 解析任何 Surface 创建函数，跳过该校验。
     }
 
     private static unsafe void AssertDevice()
@@ -322,6 +370,7 @@ internal static unsafe partial class VulkanNative
 
     private static unsafe delegate* unmanaged[Stdcall]<Instance, Win32SurfaceCreateInfoKHR*, AllocationCallbacks*, SurfaceKHR*, Result> _createWin32SurfaceKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Instance, AndroidSurfaceCreateInfoKHR*, AllocationCallbacks*, SurfaceKHR*, Result> _createAndroidSurfaceKHR;
+    private static unsafe delegate* unmanaged[Stdcall]<Instance, MetalSurfaceCreateInfoEXT*, AllocationCallbacks*, SurfaceKHR*, Result> _createMetalSurfaceEXT;
     private static unsafe delegate* unmanaged[Stdcall]<Instance, SurfaceKHR, AllocationCallbacks*, void> _destroySurfaceKHR;
     private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, SurfaceCapabilitiesKHR*, Result> _getPhysicalDeviceSurfaceCapabilitiesKHR;
     private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, uint*, SurfaceFormatKHR*, Result> _getPhysicalDeviceSurfaceFormatsKHR;
@@ -337,6 +386,7 @@ internal static unsafe partial class VulkanNative
     private static unsafe delegate* unmanaged[Stdcall]<Device, MemoryGetFdInfoKHR*, int*, Result> _getMemoryFdKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, SemaphoreGetWin32HandleInfoKHR*, void*, Result> _getSemaphoreWin32HandleKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, SemaphoreGetFdInfoKHR*, int*, Result> _getSemaphoreFdKHR;
+    private static unsafe delegate* unmanaged[Stdcall]<Device, ExportMetalObjectsInfoEXT*, void> _exportMetalObjectsEXT;
 
     // ── 包装方法（签名对齐 Silk.NET Vk / Khr*，调用点仅改名）──
 
@@ -525,6 +575,19 @@ internal static unsafe partial class VulkanNative
     public static unsafe void DestroyImageView(Device device, ImageView imageView, AllocationCallbacks* pAllocator)
         => _destroyImageView(device, imageView, pAllocator);
 
+    /// <summary>
+    /// 经 <c>VK_EXT_metal_objects</c> 把底层 Metal 对象（IOSurface / MTLSharedEvent 等）从 Vulkan 对象导出。
+    /// <c>pMetalObjectsInfo-&gt;pNext</c> 链承载具体的导出请求结构体（<c>ExportMetalIOSurfaceInfoEXT</c> /
+    /// <c>ExportMetalSharedEventInfoEXT</c>），对应输出字段由本调用填充。
+    /// </summary>
+    /// <remarks>仅 Apple / MoltenVK 启用 <c>VK_EXT_metal_objects</c> 后可用；其它平台该指针为 null。</remarks>
+    public static unsafe void ExportMetalObjectsEXT(Device device, ExportMetalObjectsInfoEXT* pMetalObjectsInfo)
+    {
+        if (_exportMetalObjectsEXT == null)
+            throw new InvalidOperationException("vkExportMetalObjectsEXT 不可用（VK_EXT_metal_objects 未启用或不支持）。");
+        _exportMetalObjectsEXT(device, pMetalObjectsInfo);
+    }
+
     public static unsafe Result CreateBuffer(Device device, ref BufferCreateInfo pCreateInfo, AllocationCallbacks* pAllocator, out Buffer pBuffer)
     {
         fixed (BufferCreateInfo* p = &pCreateInfo)
@@ -700,6 +763,21 @@ internal static unsafe partial class VulkanNative
         {
             SurfaceKHR tmp;
             var r = _createAndroidSurfaceKHR(instance, p, pAllocator, &tmp);
+            pSurface = tmp;
+            return r;
+        }
+    }
+
+    // ── VK_EXT_metal_surface（Apple / MoltenVK）：Silk.NET 静态包装不含 vkCreateMetalSurfaceEXT，
+    //    经 vkGetInstanceProcAddr 运行时解析（见 InitInstance）。PLayer 指向宿主提供的 CAMetalLayer*。 ──
+    public static unsafe Result CreateMetalSurfaceEXT(Instance instance, ref MetalSurfaceCreateInfoEXT pCreateInfo, AllocationCallbacks* pAllocator, out SurfaceKHR pSurface)
+    {
+        if (_createMetalSurfaceEXT == null)
+            throw new InvalidOperationException("VulkanNative 未解析 vkCreateMetalSurfaceEXT（请确认已在 Apple 平台启用 VK_EXT_metal_surface 扩展）。");
+        fixed (MetalSurfaceCreateInfoEXT* p = &pCreateInfo)
+        {
+            SurfaceKHR tmp;
+            var r = _createMetalSurfaceEXT(instance, p, pAllocator, &tmp);
             pSurface = tmp;
             return r;
         }

@@ -12,6 +12,7 @@ using LingFan.Media.Backends.VLCNative;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
 using LingFan.Media.Renderers.D3D11;
+using LingFan.Media.Renderers.Vulkan;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -46,7 +47,7 @@ public partial class App : Application
         var services = new ServiceCollection();
         var builder = services
             .AddLingFanMedia()
-            
+            .AddVulkanRenderer()
             .AddAvaloniaControls()
             .AddSkiaPresenter();
 
@@ -67,7 +68,7 @@ public partial class App : Application
                 .AddCompositionRenderer()
                 .AddWasapiOutput();
         }
-        builder//.AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
+        builder.AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
                 .AddVLCNative();
                 // composer 工厂需要 ILoggerFactory；独立运行的 App 手动 AddLogging 提供。
         services.AddLogging(options =>

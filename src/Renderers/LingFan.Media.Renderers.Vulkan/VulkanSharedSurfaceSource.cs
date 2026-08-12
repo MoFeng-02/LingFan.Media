@@ -43,6 +43,7 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
     private readonly uint _queueFamilyIndex;
     private readonly ILogger<VulkanSharedSurfaceSource> _logger;
     private readonly bool _isWindows;
+    private readonly bool _isApple;
     private readonly SharedGpuHandleKind _handleKind;
     private readonly SharedGpuSemaphoreKind _semaphoreKind;
     private readonly ExternalMemoryHandleTypeFlags _memHandleType;
@@ -87,6 +88,7 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
         _queue = factory.SharedQueue;
         _queueFamilyIndex = factory.SharedQueueFamilyIndex;
         _isWindows = OperatingSystem.IsWindows();
+        _isApple = OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
 
         if (_isWindows)
         {
@@ -94,6 +96,16 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
             _semaphoreKind = SharedGpuSemaphoreKind.VulkanOpaqueNtHandle;
             _memHandleType = ExternalMemoryHandleTypeFlags.OpaqueWin32Bit;
             _semHandleType = ExternalSemaphoreHandleTypeFlags.OpaqueWin32Bit;
+        }
+        else if (_isApple)
+        {
+            // Apple / MoltenVK：无空域零拷贝经 VK_EXT_metal_objects 导出 IOSurface（图像）
+            // 与 MTLSharedEvent（信号量），不使用 external_memory / external_semaphore 扩展。
+            // 这两个 Vulkan 标志字段在 Apple 路径下不被使用（保持 0）。
+            _handleKind = SharedGpuHandleKind.IOSurfaceRef;
+            _semaphoreKind = SharedGpuSemaphoreKind.MetalSharedEvent;
+            _memHandleType = 0;
+            _semHandleType = 0;
         }
         else
         {
@@ -247,6 +259,12 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
     // ── 信号量对（导出 + 握手初始化）──
     private void CreateSemaphores()
     {
+        if (_isApple)
+        {
+            CreateSemaphoresApple();
+            return;
+        }
+
         ExportSemaphoreCreateInfo extSemInfo = new()
         {
             SType = StructureType.ExportSemaphoreCreateInfo,
@@ -322,6 +340,64 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
         VulkanNative.QueueWaitIdle(_queue);
     }
 
+    // ── Apple / MoltenVK：经 VK_EXT_metal_objects 把 Vulkan 信号量导出为 MTLSharedEvent ──
+    private void CreateSemaphoresApple()
+    {
+        // 创建信号量时 pNext 链 ExportMetalObjectCreateInfoEXT（SharedEvent 位），
+        // 告知 MoltenVK 该信号量应作为 Metal 共享事件创建。
+        ExportMetalObjectCreateInfoEXT exportInfo = new()
+        {
+            SType = StructureType.ExportMetalObjectCreateInfoExt,
+            ExportObjectType = ExportMetalObjectTypeFlagsEXT.SharedEventBitExt,
+        };
+        SemaphoreCreateInfo semInfo = new()
+        {
+            SType = StructureType.SemaphoreCreateInfo,
+            PNext = (void*)&exportInfo,
+        };
+        Result r1 = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _consumerWaitSem);
+        Result r2 = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _consumerSignalSem);
+        if (r1 != Result.Success || r2 != Result.Success)
+            throw new InvalidOperationException($"vkCreateSemaphore（Apple 共享表面信号量）失败: {r1}/{r2}");
+
+        _consumerWaitHandle = ExportMtlSharedEvent(_consumerWaitSem);
+        _consumerSignalHandle = ExportMtlSharedEvent(_consumerSignalSem);
+        if (_consumerWaitHandle == IntPtr.Zero || _consumerSignalHandle == IntPtr.Zero)
+            throw new InvalidOperationException("vkExportMetalObjectsEXT 未能导出 MTLSharedEvent（VK_EXT_metal_objects 可能未启用）。");
+
+        // 握手初始化：以一次 signal-only 提交把 ConsumerSignal 置为信号态，否则生产者首帧永久阻塞。
+        Semaphore bootstrapSem = _consumerSignalSem;
+        SubmitInfo bootstrap = new()
+        {
+            SType = StructureType.SubmitInfo,
+            SignalSemaphoreCount = 1,
+            PSignalSemaphores = &bootstrapSem,
+        };
+        Result bootR = VulkanNative.QueueSubmit(_queue, 1, &bootstrap, default);
+        if (bootR != Result.Success)
+            throw new InvalidOperationException($"vkQueueSubmit（Apple 信号量握手初始化）失败: {bootR}");
+        VulkanNative.QueueWaitIdle(_queue);
+    }
+
+    private nint ExportMtlSharedEvent(Semaphore sem)
+    {
+        // 每次调用单独导出：pNext 链中同一结构体类型不应出现两次（规避 Vulkan valid usage），
+        // 故两个信号量各走一次 vkExportMetalObjectsEXT。
+        ExportMetalSharedEventInfoEXT evt = new()
+        {
+            SType = StructureType.ExportMetalSharedEventInfoExt,
+            Semaphore = sem,
+            Event = default,
+        };
+        ExportMetalObjectsInfoEXT metalsInfo = new()
+        {
+            SType = StructureType.ExportMetalObjectsInfoExt,
+            PNext = (void*)&evt,
+        };
+        VulkanNative.ExportMetalObjectsEXT(_device, &metalsInfo);
+        return evt.MtlSharedEvent;
+    }
+
     /// <summary>
     /// 确保可外部导出离屏图像就绪，尺寸变化时重建底层图像并重新导出句柄（_version 递增）。
     /// </summary>
@@ -332,6 +408,12 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
 
         // 拆除旧图像（保留 _version 语义：重建才 +1）
         ReleaseSharedSurface();
+
+        if (_isApple)
+        {
+            EnsureSharedSurfaceApple(w, h);
+            return;
+        }
 
         // 图像创建：启用外部内存导出（pNext=ExternalMemoryImageCreateInfo）。
         ExternalMemoryImageCreateInfo extImageInfo = new()
@@ -435,6 +517,99 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
         _texW = w;
         _texH = h;
         _version++;
+    }
+
+    // ── Apple / MoltenVK：经 VK_EXT_metal_objects 把 Vulkan 离屏图像导出为 IOSurface ──
+    private void EnsureSharedSurfaceApple(int w, int h)
+    {
+        // 图像创建：pNext 链 ExportMetalObjectCreateInfoEXT（IOSurface 位），告知 MoltenVK
+        // 此图像可经 vkExportMetalObjectsEXT 导出为 IOSurface。当前 VK_EXT_metal_objects
+        // 不再要求 VK_IMAGE_CREATE_METAL_COMPATIBLE_BIT_EXT 创建标志（已从 VkImageCreateFlagBits 移除）。
+        ExportMetalObjectCreateInfoEXT metalImageInfo = new()
+        {
+            SType = StructureType.ExportMetalObjectCreateInfoExt,
+            ExportObjectType = ExportMetalObjectTypeFlagsEXT.IosurfaceBitExt,
+        };
+        ImageCreateInfo imageInfo = new()
+        {
+            SType = StructureType.ImageCreateInfo,
+            ImageType = ImageType.Type2D,
+            Format = Format.B8G8R8A8Unorm,
+            Extent = new Extent3D((uint)w, (uint)h, 1),
+            MipLevels = 1,
+            ArrayLayers = 1,
+            Samples = SampleCountFlags.Count1Bit,
+            Tiling = ImageTiling.Optimal,
+            Usage = ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferDstBit,
+            SharingMode = SharingMode.Exclusive,
+            InitialLayout = ImageLayout.Undefined,
+            PNext = (void*)&metalImageInfo,
+        };
+        Result result = VulkanNative.CreateImage(_device, &imageInfo, null, out _sharedImage);
+        if (result != Result.Success)
+            throw new InvalidOperationException($"vkCreateImage（Apple 共享表面离屏）失败: {result}");
+
+        MemoryRequirements memReq;
+        VulkanNative.GetImageMemoryRequirements(_device, _sharedImage, &memReq);
+        uint memType = FindMemoryType(memReq.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit);
+
+        // MoltenVK 自行管理 IOSurface 底层内存，普通设备本地分配即可（无需 ExportMemoryAllocateInfo）。
+        MemoryAllocateInfo allocInfo = new()
+        {
+            SType = StructureType.MemoryAllocateInfo,
+            AllocationSize = memReq.Size,
+            MemoryTypeIndex = memType,
+        };
+        result = VulkanNative.AllocateMemory(_device, &allocInfo, null, out _sharedMemory);
+        if (result != Result.Success)
+            throw new InvalidOperationException($"vkAllocateMemory（Apple 共享表面离屏）失败: {result}");
+        result = VulkanNative.BindImageMemory(_device, _sharedImage, _sharedMemory, 0);
+        if (result != Result.Success)
+            throw new InvalidOperationException($"vkBindImageMemory（Apple 共享表面离屏）失败: {result}");
+
+        // 导出 IOSurface（持久，随图像生命周期；消费方 Avalonia 经 IOSurfaceRef 直接导入采样）。
+        _exportedMemoryHandle = ExportIOSurface(_sharedImage);
+        if (_exportedMemoryHandle == IntPtr.Zero)
+            throw new InvalidOperationException("vkExportMetalObjectsEXT 未能导出 IOSurface（VK_EXT_metal_objects 可能未启用）。");
+
+        ImageViewCreateInfo viewInfo = new()
+        {
+            SType = StructureType.ImageViewCreateInfo,
+            Image = _sharedImage,
+            ViewType = ImageViewType.Type2D,
+            Format = Format.B8G8R8A8Unorm,
+            SubresourceRange = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1,
+            },
+        };
+        result = VulkanNative.CreateImageView(_device, &viewInfo, null, out _sharedImageView);
+        if (result != Result.Success)
+            throw new InvalidOperationException($"vkCreateImageView（Apple 共享表面离屏）失败: {result}");
+
+        _texW = w;
+        _texH = h;
+        _version++;
+    }
+
+    private nint ExportIOSurface(Image image)
+    {
+        ExportMetalIOSurfaceInfoEXT iosurf = new()
+        {
+            SType = StructureType.ExportMetalIOSurfaceInfoExt,
+            Image = image,
+        };
+        ExportMetalObjectsInfoEXT metalsInfo = new()
+        {
+            SType = StructureType.ExportMetalObjectsInfoExt,
+            PNext = (void*)&iosurf,
+        };
+        VulkanNative.ExportMetalObjectsEXT(_device, &metalsInfo);
+        return iosurf.IoSurface;
     }
 
     private void ReleaseSharedSurface()

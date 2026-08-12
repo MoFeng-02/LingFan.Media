@@ -16,7 +16,8 @@ namespace LingFan.Media.Renderers.Vulkan;
 public static class VulkanExtensions
 {
     /// <summary>
-    /// 注册 Vulkan 渲染器（跨平台 GPU 渲染：Windows / Linux / Android；macOS/MoltenVK 待开发）。
+    /// 注册 Vulkan 渲染器（跨平台 GPU 渲染：Windows / Linux / Android；macOS/iOS 经 MoltenVK 覆盖——
+    /// 仅引入 MoltenVK 让 Vulkan 后端在 Apple 平台初始化/跑 SwapChain 的有头路径；无空域零拷贝上屏属第二类，待 Apple 合成栈落地）。
     /// </summary>
     /// <param name="builder">媒体构建器。</param>
     /// <returns>构建器（链式调用）。</returns>

@@ -44,6 +44,9 @@ public enum SharedGpuSemaphoreKind
 
     /// <summary>Vulkan 外部信号量 POSIX 文件描述符（Linux/Android）。</summary>
     VulkanOpaquePosixFileDescriptor = 1,
+
+    /// <summary>Apple MTLSharedEvent（经 <c>VK_EXT_metal_objects</c> 从 Vulkan 信号量导出，仅 macOS/iOS / MoltenVK）。</summary>
+    MetalSharedEvent = 2,
 }
 
 /// <summary>
