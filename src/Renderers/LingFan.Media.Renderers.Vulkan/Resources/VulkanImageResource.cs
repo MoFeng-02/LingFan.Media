@@ -9,11 +9,10 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <para><b>资源所有权</b>：构造时不 AddRef（Vulkan 句柄无引用计数），
 /// <see cref="Dispose"/> 调用 <c>vk.DestroyImage</c> + <c>vk.FreeMemory</c> 显式释放。</para>
 /// <para><b>异步策略</b>：<see cref="Dispose"/> 为同步（native 分类）——Vulkan 资源释放是同步原生调用，无 I/O await。</para>
-/// <para>AOT 兼容：sealed 类，无反射。</para>
+/// <para>AOT 兼容：sealed 类，无反射、无 Silk.NET 运行期依赖（销毁走 <c>VulkanNative</c> 零反射绑定）。</para>
 /// </remarks>
 public sealed unsafe class VulkanImageResource : IFrameResource
 {
-    private readonly Vk _vk;
     private readonly Device _device;
     private readonly Image _image;
     private readonly DeviceMemory _memory;
@@ -45,16 +44,14 @@ public sealed unsafe class VulkanImageResource : IFrameResource
     /// <summary>
     /// 初始化 <see cref="VulkanImageResource"/> 的新实例。
     /// </summary>
-    /// <param name="vk">Vulkan API（共享，不由本类释放）。</param>
-    /// <param name="device">Vulkan 逻辑设备（共享，不由本类释放）。</param>
+    /// <param name="device">Vulkan 逻辑设备（共享，不由本类释放；销毁时经 <c>VulkanNative</c> 调用）。</param>
     /// <param name="image">VkImage 句柄。</param>
     /// <param name="memory">VkDeviceMemory 句柄。</param>
     /// <param name="width">图像宽度。</param>
     /// <param name="height">图像高度。</param>
     /// <param name="format">像素格式。</param>
-    public VulkanImageResource(Vk vk, Device device, Image image, DeviceMemory memory, int width, int height, PixelFormat format, ImageLayout currentLayout = ImageLayout.TransferSrcOptimal)
+    public VulkanImageResource(Device device, Image image, DeviceMemory memory, int width, int height, PixelFormat format, ImageLayout currentLayout = ImageLayout.TransferSrcOptimal)
     {
-        _vk = vk;
         _device = device;
         _image = image;
         _memory = memory;
@@ -73,9 +70,9 @@ public sealed unsafe class VulkanImageResource : IFrameResource
         _disposed = true;
 
         if (_image.Handle != 0)
-            _vk.DestroyImage(_device, _image, null);
+            VulkanNative.DestroyImage(_device, _image, null);
 
         if (_memory.Handle != 0)
-            _vk.FreeMemory(_device, _memory, null);
+            VulkanNative.FreeMemory(_device, _memory, null);
     }
 }

@@ -82,6 +82,12 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
     public ulong ConsumerReleaseKey => ProducerAcquireKey;
 
     /// <inheritdoc/>
+    public SharedGpuSyncMode SyncMode => SharedGpuSyncMode.KeyedMutex;
+
+    /// <inheritdoc/>
+    public SharedGpuSemaphorePair? Semaphores => null;
+
+    /// <inheritdoc/>
     public bool TryWriteFrame(VideoFrame frame, out SharedGpuSurfaceDescriptor descriptor)
     {
         descriptor = default;
@@ -182,7 +188,8 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
             SharedGpuHandleKind.D3D11TextureGlobalSharedHandle,
             w, h,
             SharedGpuSurfaceFormat.B8G8R8A8UNorm,
-            _version);
+            _version,
+            SharedGpuSyncMode.KeyedMutex);
         return true;
     }
 

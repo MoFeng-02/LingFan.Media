@@ -49,6 +49,7 @@
     <Project Path="src/Tools/PlaybackProbe/PlaybackProbe.csproj" />
     <Project Path="src/Tools/VlcHeadfulPlaybackProbe/VlcHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/VlcNativePlaybackProbe/VlcNativePlaybackProbe.csproj" />
+    <Project Path="src/Tools/VulkanHeadfulPlaybackProbe/VulkanHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/WasapiDriverProbe/WasapiDriverProbe.csproj" />
     <Project Path="src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
   </Folder>

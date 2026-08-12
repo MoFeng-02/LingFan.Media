@@ -22,9 +22,13 @@ namespace LingFan.Media.Avalonia;
 /// <para><b>解耦</b>：本类只碰 Avalonia Composition API，<b>不引用任何 GPU 库</b>；中立
 /// <see cref="SharedGpuHandleKind"/> 经一次 <see cref="MapHandleKind"/> switch 映射到
 /// <see cref="KnownPlatformGraphicsExternalImageHandleTypes"/>，渲染器层零 GPU 耦合。</para>
-/// <para><b>回退</b>：在 <c>VideoView</c> 回退链中位于 D3D11 SwapChain 之后、Skia 之前；
-/// <see cref="Attach"/> 失败（合成器不可用 / 无匹配句柄类型 / 共享表面源创建失败）即抛
-/// <see cref="NotSupportedException"/>，由 <c>VideoView</c> 自动回退 Skia。</para>
+    /// <para><b>回退</b>：在 <c>VideoView</c> 回退链中位于 D3D11 SwapChain 之后、Skia 之前；
+    /// <see cref="Attach"/> 失败时（合成器不可用 / 无匹配句柄类型 / 共享表面源 Create 或导入自检失败）
+    /// 抛 <see cref="NotSupportedException"/>，由 <c>VideoView</c> 自动回退 Skia。</para>
+    /// <para><b>有序回退 + 记忆</b>：候选工厂按注册序（Vulkan→D3D11→…）逐家 <c>Create</c> + 导入自检，
+    /// 任一家失败即跳过试下一家，全失败才回退 Skia；成功者经 <see cref="SharedGpuSurfaceSourceSelector"/>
+    /// 进程级记忆，后续挂载优先命中、不再每次从头部逐个探测（对标后端 <c>Lazy&lt;*Backend&gt;</c> 模式）。
+    /// OpenGL 等未实现后端自然不在候选内，不阻塞链。</para>
     /// <para><b>线程</b>：Attach/Detach 在 UI 线程（合成器/子视觉创建、事件订阅）；
     /// <see cref="Present"/> 在管线线程被调用，仅负责把帧渲染进独立共享纹理（GPU 拷贝，与解码帧解耦）；
     /// 真正的导入与上屏（<c>ImportImage</c> / <c>UpdateWithKeyedMutexAsync</c> / <c>Visual</c> 属性）必须经
@@ -37,6 +41,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     private static readonly TimeSpan PresentLatency = TimeSpan.FromMilliseconds(16);
 
     private readonly IEnumerable<ISharedGpuSurfaceSourceFactory> _surfaceFactories;
+    private readonly SharedGpuSurfaceSourceSelector _selector;
     private readonly ILogger<CompositionVideoRenderer> _logger;
 
     private ICompositionGpuInterop? _interop;
@@ -45,6 +50,8 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     private Visual? _attachedVisual;
     private ISharedGpuSurfaceSource? _source;
     private ICompositionImportedGpuImage? _imported;
+    private ICompositionImportedGpuSemaphore? _waitSem;
+    private ICompositionImportedGpuSemaphore? _signalSem;
     private string? _handleType;
     private ulong _lastVersion;
     private Task? _lastPresent;
@@ -70,9 +77,11 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     /// <param name="logger">日志。</param>
     internal CompositionVideoRenderer(
         IEnumerable<ISharedGpuSurfaceSourceFactory> surfaceFactories,
+        SharedGpuSurfaceSourceSelector selector,
         ILogger<CompositionVideoRenderer> logger)
     {
         _surfaceFactories = surfaceFactories ?? throw new ArgumentNullException(nameof(surfaceFactories));
+        _selector = selector ?? throw new ArgumentNullException(nameof(selector));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -107,30 +116,97 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             "CompositionVideoRenderer 合成器支持句柄类型=[{HandleTypes}]。",
             string.Join(", ", interop.SupportedImageHandleTypes));
 
-        // 选定首个可用且句柄类型被合成器支持的共享表面源工厂（UI 层无「优先 D3D11」硬编码分支）。
+        // _interop 须在导入自检（选择循环内调用）前就绪。
+        _interop = interop;
+
+        // 把宿主合成器所在的物理 GPU 身份透传给工厂，供生产者优选同一设备
+        // （跨设备共享纹理/信号量导入要求生产者与合成器位于同一物理 GPU，否则静默黑屏）。
+        ReadOnlyMemory<byte> uuidMem = interop.DeviceUuid is { Length: 16 } ? interop.DeviceUuid : default(ReadOnlyMemory<byte>);
+        ReadOnlyMemory<byte> luidMem = interop.DeviceLuid is { Length: 8 } ? interop.DeviceLuid : default(ReadOnlyMemory<byte>);
+        SharedGpuAdapterIdentity? identity = (uuidMem.IsEmpty && luidMem.IsEmpty)
+            ? null
+            : new SharedGpuAdapterIdentity(uuidMem, luidMem);
+
+        // —— 选定共享表面源：逐工厂 Create + 导入自检，失败即跳过试下一个（Vulkan→D3D11→…→软渲）——
+        // 进程级记忆（SharedGpuSurfaceSourceSelector）：命中缓存胜出厂优先尝试，避免每次从注册序头部
+        // 逐个探测；缓存项本次失败则失效，强制下次全扫描。OpenGL 等未实现后端自然不在候选内。
+        string selectionKey = BuildSelectionKey(interop);
+        _selector.TryGet(selectionKey, _surfaceFactories, out var cached);
+        var candidates = new List<ISharedGpuSurfaceSourceFactory>(_surfaceFactories);
+        if (cached is not null && candidates.Contains(cached))
+        {
+            candidates.Remove(cached);
+            candidates.Insert(0, cached);
+        }
+
         ISharedGpuSurfaceSourceFactory? selected = null;
+        ISharedGpuSurfaceSource? source = null;
         string? handleType = null;
-        foreach (var f in _surfaceFactories)
+        bool cachedFailed = false;
+
+        foreach (var f in candidates)
         {
             if (!f.IsAvailable)
                 continue;
             string? ht = MapHandleKind(f.HandleKind);
-            if (ht is not null && interop.SupportedImageHandleTypes.Contains(ht))
+            if (ht is null || !interop.SupportedImageHandleTypes.Contains(ht))
+                continue;
+
+            ISharedGpuSurfaceSource? candidate = null;
+            try
             {
+                candidate = f.Create(identity);
+                // 临时落字段，供循环内 SelfTestImport 读取；成功后保留。
+                _source = candidate;
+                _handleType = ht;
+                if (!SelfTestImport())
+                {
+                    _logger.LogWarning(
+                        "CompositionVideoRenderer 共享表面源工厂 {Factory} 导入自检失败，尝试下一个候选。",
+                        f.GetType().Name);
+                    if (cached is not null && ReferenceEquals(f, cached))
+                        cachedFailed = true;
+                    continue;
+                }
+
                 selected = f;
+                source = candidate;
                 handleType = ht;
+                _selector.Record(selectionKey, f);
                 break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex, "CompositionVideoRenderer 共享表面源工厂 {Factory} 创建失败，尝试下一个候选。",
+                    f.GetType().Name);
+                if (cached is not null && ReferenceEquals(f, cached))
+                    cachedFailed = true;
+                continue;
+            }
+            finally
+            {
+                // 失败分支：释放候选并清空临时字段，避免残留指向已弃用源。
+                if (selected is null)
+                {
+                    candidate?.Dispose();
+                    _source = null;
+                    _handleType = null;
+                }
             }
         }
 
-        if (selected is null)
+        if (cachedFailed)
+            _selector.Invalidate(selectionKey);
+
+        if (selected is null || source is null)
             throw new NotSupportedException("无可用且被合成器支持的共享表面源工厂（回退 Skia）。");
 
         _logger.LogInformation(
-            "CompositionVideoRenderer 选定共享表面源工厂={Factory}，句柄类型={HandleType}。",
-            selected.GetType().Name, handleType);
+            "CompositionVideoRenderer 选定共享表面源工厂={Factory}，句柄类型={HandleType}（缓存命中={Cached}）。",
+            selected.GetType().Name, handleType, cached is not null && ReferenceEquals(selected, cached));
 
-        // 创建绘制表面 + 子视觉（无空域，挂在控件 Visual 下）。
+        // —— 选定成功：创建绘制表面 + 子视觉（无空域，挂在控件 Visual 下）——
         // CompositionSurfaceVisual 没有 Stretch 属性，目标尺寸/偏移由本类按 VideoView.Stretch 手动计算。
         _drawingSurface = compositor.CreateDrawingSurface();
         _surfaceVisual = compositor.CreateSurfaceVisual();
@@ -161,29 +237,11 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             }
         });
 
-        // 创建共享表面源（延迟到此处以确保共享 D3D11 设备就绪；失败抛异常触发回退）。
-        ISharedGpuSurfaceSource source;
-        try
-        {
-            source = selected.Create();
-        }
-        catch (Exception ex)
-        {
-            throw new NotSupportedException("共享表面源创建失败（回退 Skia）。", ex);
-        }
-
         _attachedVisual = visual;
-        _interop = interop;
+        // _interop 已在选择前置（供 SelfTestImport）；_source / _handleType 已在成功分支落定。
         _source = source;
         _handleType = handleType;
         _lastVersion = 0;
-
-        // 导入能力自检：用 1×1 软件探针帧走完整「写入共享纹理 → 合成器导入」路径，
-        // 验证本共享 D3D11 设备纹理能被 Avalonia 合成器跨设备导入。
-        // 失败即抛 NotSupportedException → VideoView 在挂载期干净回退 Skia，
-        // 把「Attach 成功但运行期静默空白」提前变成「挂载期可诊断的回退」。
-        if (!SelfTestImport())
-            throw new NotSupportedException("Composition 共享纹理导入自检失败（回退 Skia）。");
 
         _logger.LogInformation(
             "CompositionVideoRenderer 导入自检通过，启用零拷贝上屏路径（句柄类型={HandleType}）。",
@@ -319,6 +377,31 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                 _lastVersion = desc.Version;
             }
 
+            // 信号量（仅 Semaphores 模型）：与源同生命周期，导入一次（非每帧），供 UpdateWithSemaphoresAsync 使用。
+            if (_source.SyncMode == SharedGpuSyncMode.Semaphores && _waitSem is null)
+            {
+                var sem = _source.Semaphores;
+                if (sem is not { IsValid: true })
+                {
+                    _logger.LogWarning("CompositionVideoRenderer Semaphores 模型但信号量无效，跳过本帧。");
+                    PostNoteSkip();
+                    return;
+                }
+                string semType = MapSemaphoreKind(sem.Value.Kind);
+                _waitSem = _interop.ImportSemaphore(new PlatformHandle(sem.Value.ConsumerWaitHandle, semType));
+                _signalSem = _interop.ImportSemaphore(new PlatformHandle(sem.Value.ConsumerSignalHandle, semType));
+                if (_waitSem is null || _signalSem is null)
+                {
+                    _logger.LogWarning("CompositionVideoRenderer 信号量导入失败（句柄类型={SemType}），跳过本帧。", semType);
+                    _waitSem?.DisposeAsync();
+                    _signalSem?.DisposeAsync();
+                    _waitSem = null;
+                    _signalSem = null;
+                    PostNoteSkip();
+                    return;
+                }
+            }
+
             // 帧尺寸变化或首次呈现时，按 VideoView.Stretch 重新计算子视觉目标尺寸与偏移。
             // 必须在 UpdateWithKeyedMutexAsync 之前完成，确保合成器采样到正确布局。
             var newFrameSize = new Vector(desc.Width, desc.Height);
@@ -336,10 +419,19 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                 UpdateSurfaceLayout();
             }
 
-            // 消费者（Avalonia 合成线程）以 ConsumerAcquireKey 取锁采样、以 ConsumerReleaseKey 归还。
             _surfaceVisual!.Opacity = 1;
-            _lastPresent = _drawingSurface.UpdateWithKeyedMutexAsync(
-                _imported, (uint)_source.ConsumerAcquireKey, (uint)_source.ConsumerReleaseKey);
+
+            // 按源的同步模型选择提交方式：各后端只用自己 API 的原生机制，互不跨界、不伪造句柄。
+            if (_source.SyncMode == SharedGpuSyncMode.Semaphores && _waitSem is not null && _signalSem is not null)
+            {
+                _lastPresent = _drawingSurface.UpdateWithSemaphoresAsync(_imported, _waitSem, _signalSem);
+            }
+            else
+            {
+                // 消费者（Avalonia 合成线程）以 ConsumerAcquireKey 取锁采样、以 ConsumerReleaseKey 归还。
+                _lastPresent = _drawingSurface.UpdateWithKeyedMutexAsync(
+                    _imported, (uint)_source.ConsumerAcquireKey, (uint)_source.ConsumerReleaseKey);
+            }
 
             NoteSuccess();
         }
@@ -364,6 +456,8 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
         SoftwareFrameResource? probe = null;
         VideoFrame? frame = null;
         ICompositionImportedGpuImage? imported = null;
+        ICompositionImportedGpuSemaphore? waitSem = null;
+        ICompositionImportedGpuSemaphore? signalSem = null;
         try
         {
             // 1×1 BGRA 探针（4 字节）——仅验证导入可达性，尺寸任意。
@@ -380,7 +474,22 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                 Format = PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm,
             };
             imported = _interop!.ImportImage(new PlatformHandle(desc.Handle, _handleType!), props);
-            return imported is not null;
+            if (imported is null)
+                return false;
+
+            // Semaphores 模型：同步导入信号量，验证完整「写入 → 信号量 → 合成器导入」路径。
+            if (_source.SyncMode == SharedGpuSyncMode.Semaphores)
+            {
+                var sem = _source.Semaphores;
+                if (sem is not { IsValid: true })
+                    return false;
+                string semType = MapSemaphoreKind(sem.Value.Kind);
+                waitSem = _interop.ImportSemaphore(new PlatformHandle(sem.Value.ConsumerWaitHandle, semType));
+                signalSem = _interop.ImportSemaphore(new PlatformHandle(sem.Value.ConsumerSignalHandle, semType));
+                if (waitSem is null || signalSem is null)
+                    return false;
+            }
+            return true;
         }
         catch (Exception ex)
         {
@@ -392,9 +501,13 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             // 级联释放探针 CPU 资源（释放顺序：先 VideoFrame 再其 Resource）。
             frame?.Dispose();
             probe?.Dispose();
-            // 探针导入图像为一次性探测，释放即可；失败回退链不依赖此导入实例。
+            // 探针导入图像/信号量为一次性探测，释放即可；失败回退链不依赖这些导入实例。
             if (imported is not null)
                 _ = imported.DisposeAsync();
+            if (waitSem is not null)
+                _ = waitSem.DisposeAsync();
+            if (signalSem is not null)
+                _ = signalSem.DisposeAsync();
         }
     }
 
@@ -471,12 +584,22 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
         _surfaceVisual = null;
 
         // 合成器资源释放本身是「排入合成批次队列」的操作，与之前提交的
-        // UpdateWithKeyedMutexAsync 在同一队列上串行，故无需阻塞等待其完成。
+        // UpdateWithKeyedMutexAsync / UpdateWithSemaphoresAsync 在同一队列上串行，故无需阻塞等待其完成。
         // 需要确定性等待（例如宿主退出前）请改用 DisposeAsync。
         var imported = _imported;
         _imported = null;
         if (imported is not null)
             _ = imported.DisposeAsync();
+
+        // 信号量（Semaphores 模型）与源同生命周期，随源一并释放导入实例。
+        var waitSem = _waitSem;
+        _waitSem = null;
+        if (waitSem is not null)
+            _ = waitSem.DisposeAsync();
+        var signalSem = _signalSem;
+        _signalSem = null;
+        if (signalSem is not null)
+            _ = signalSem.DisposeAsync();
 
         _lastPresent = null;
         _source?.Dispose();
@@ -548,6 +671,24 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     }
 
     /// <summary>
+    /// 构建选择记忆键：合成器支持的句柄类型集合 + 合成器所在 GPU 身份（UUID/LUID）。
+    /// 同一机器同一合成器恒定命中；跨 GPU / 远程桌面合成器切换则自然重新探测。
+    /// </summary>
+    private static string BuildSelectionKey(ICompositionGpuInterop interop)
+    {
+        var sb = new System.Text.StringBuilder();
+        var handles = interop.SupportedImageHandleTypes;
+        if (handles is not null)
+            foreach (var h in handles)
+                sb.Append(h).Append(';');
+        if (interop.DeviceUuid is { } uuid && uuid.Length == 16)
+            sb.Append("U:").Append(Convert.ToHexString(uuid));
+        if (interop.DeviceLuid is { } luid && luid.Length == 8)
+            sb.Append("L:").Append(Convert.ToHexString(luid));
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// 中立 <see cref="SharedGpuHandleKind"/> → Avalonia <see cref="KnownPlatformGraphicsExternalImageHandleTypes"/> 的一次映射。
     /// </summary>
     private static string? MapHandleKind(SharedGpuHandleKind kind) => kind switch
@@ -558,5 +699,16 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
         SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor => KnownPlatformGraphicsExternalImageHandleTypes.VulkanOpaquePosixFileDescriptor,
         SharedGpuHandleKind.IOSurfaceRef => KnownPlatformGraphicsExternalImageHandleTypes.IOSurfaceRef,
         _ => null,
+    };
+
+    /// <summary>
+    /// 中立 <see cref="SharedGpuSemaphoreKind"/> → Avalonia
+    /// <see cref="KnownPlatformGraphicsExternalSemaphoreHandleTypes"/> 的一次映射。
+    /// </summary>
+    private static string MapSemaphoreKind(SharedGpuSemaphoreKind kind) => kind switch
+    {
+        SharedGpuSemaphoreKind.VulkanOpaqueNtHandle => KnownPlatformGraphicsExternalSemaphoreHandleTypes.VulkanOpaqueNtHandle,
+        SharedGpuSemaphoreKind.VulkanOpaquePosixFileDescriptor => KnownPlatformGraphicsExternalSemaphoreHandleTypes.VulkanOpaquePosixFileDescriptor,
+        _ => throw new NotSupportedException($"不支持的共享 GPU 信号量句柄类型：{kind}。"),
     };
 }

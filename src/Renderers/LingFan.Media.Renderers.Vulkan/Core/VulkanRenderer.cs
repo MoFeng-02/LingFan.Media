@@ -1,4 +1,15 @@
+using System.Diagnostics;
+
 namespace LingFan.Media.Renderers.Vulkan;
+
+/// <summary>
+/// 渲染器诊断接口（本程序集 public，供探针跨程序集读取分相计时，不污染契约层 IVideoRenderer）。
+/// </summary>
+public interface IRendererProfiler
+{
+    /// <summary>返回 CPU 转换耗时与 GPU 同步耗时的分相统计摘要。</summary>
+    string GetProfile();
+}
 
 /// <summary>
 /// Vulkan 视频渲染器。将 <see cref="VideoFrame"/> 呈现到 Vulkan SwapChain。
@@ -7,8 +18,9 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <para>跨平台 GPU 渲染器（Windows / Linux / Android；macOS/MoltenVK <b>待开发</b>——
 /// 缺 VK_EXT_metal_surface 分支与 portability enumeration 标志）。
 /// Surface 创建用 Vulkan 自己的 WSI 扩展（VK_KHR_*_surface），不需要平台互操作文件。</para>
-/// <para>WSI 扩展方法（Surface/Swapchain/Present）在 KhrSurface/KhrSwapchain 等扩展对象上，
-/// 由工厂通过 Vk.TryGetInstanceExtension/TryGetDeviceExtension 加载后注入。</para>
+/// <para>WSI 扩展（Surface/Swapchain/Present）由 <c>VulkanNative</c> 零反射绑定在运行时经三阶段解析
+/// （实例句柄解析实例级 / WSI 实例扩展，设备句柄解析设备级 / WSI 设备扩展），
+/// 不依赖 Silk.NET 的 <c>Khr*</c> 扩展对象与加载层。</para>
 /// <para><b>异步策略</b>：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：contract，返回 <see cref="Task.CompletedTask"/></item>
@@ -22,28 +34,27 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// 这是「有限超时替代无限等待」权衡的已知副作用，属预期行为而非死锁。</para>
 /// <para><b>已知性能限制</b>：<see cref="RecordAndSubmitFrame"/> 中使用 <c>vkQueueWaitIdle</c>
 /// 每帧同步 GPU——确保 Command Buffer 可安全复用但消除 GPU 并行。将改用 Fence 或环形 Command Buffer。</para>
-/// <para><b>已知功能限制</b>：不支持帧尺寸与 SwapChain 尺寸不匹配的缩放（需 Shader/Blit）。
-/// Linux X11/Wayland Surface 创建缺少 Display 指针——明确抛 <see cref="PlatformNotSupportedException"/>（扩展契约后支持）。
+/// <para><b>已知功能限制</b>：Linux X11/Wayland Surface 创建缺少 Display 指针——明确抛
+/// <see cref="PlatformNotSupportedException"/>（扩展契约后支持）。
+/// 软帧 YUV 平面格式（NV12/NV21/YUV420P/YUV422P/YUV444P）走 GPU Shader 路径：由 Fragment Shader
+/// 采样 Y/U/V 平面并完成 YUV→RGB（与 D3D11 Shader 路径共用 BT.601 全范围矩阵），CPU 仅做原始平面搬运；
+/// 缩放支持三种 <see cref="AspectRatioMode"/>（见 <see cref="ScaleMode"/>）。</para>
 /// ErrorOutOfDateKhr 已由 <c>RecreateSwapchain</c> 就地重建（含信号量重建，消除 signaled 残留）；
 /// 其余 QueuePresent 硬失败仍抛异常，由会话层重新 Attach 恢复（信号量在重 Attach 时重建，无 double-signal 风险）。</para>
 /// <para>AOT 兼容：sealed unsafe 类，无反射，pattern matching。</para>
 /// </remarks>
-internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
+internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererProfiler
 {
     // ── 共享资源（工厂注入，不由本类释放）──
-    private readonly Vk _vk;
     private readonly Instance _instance;
     private readonly PhysicalDevice _physicalDevice;
     private readonly Device _device;
     private readonly Queue _queue;
     private readonly uint _queueFamilyIndex;
-    private readonly KhrSurface _khrSurface;
-    private readonly KhrSwapchain _khrSwapchain;
-    private readonly KhrWin32Surface? _khrWin32Surface;
-    private readonly KhrXlibSurface? _khrXlibSurface;
-    private readonly KhrWaylandSurface? _khrWaylandSurface;
-    private readonly KhrAndroidSurface? _khrAndroidSurface;
     private readonly ILogger<VulkanRenderer> _logger;
+
+    // GPU Shader 管线（软帧 YUV 路径）
+    private VulkanShaderPipeline? _shaderPipeline;
 
     // ── Session 级资源 ──
     private SurfaceKHR _surface;
@@ -69,6 +80,35 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     private Buffer _stagingBuffer;
     private DeviceMemory _stagingMemory;
     private ulong _stagingBufferSize;
+    // staging 为 HOST_COHERENT 内存（见 EnsureStagingBuffer），整段映射一次后长期复用，
+    // 免去每帧 MapMemory/UnmapMemory 的仪式开销；写入经一致性语义自动对 GPU 可见。
+    private void* _stagingMapped;
+
+    // 缩放模式（契约层 AspectRatioMode）：软帧尺寸与 SwapChain 不一致时据此适配。
+    // 默认 Uniform（信箱）——无畸变、留黑边，与 VideoView/Pipeline 默认一致。
+    public AspectRatioMode ScaleMode { get; set; } = AspectRatioMode.Uniform;
+
+    // ── 缩放 blit 用暂存图像（软帧 1:1 不匹配时经此中转）──
+    private Image _stagingImage;
+    private DeviceMemory _stagingImageMem;
+    private uint _stagingImageW;
+    private uint _stagingImageH;
+    private Format _stagingImageFormat;
+
+    // ── 诊断计时（A1 验证用：定位每帧 ~92ms 开销归属）──
+    // 累加 CPU 转换耗时（UploadSoftwareFrame 全程）与 GPU 同步耗时（QueueWaitIdle 全程），
+    // 收尾由探针读取打印，指导进一步优化方向（不改热路径逻辑）。
+    private long _profConvertTicks;
+    private long _profGpuTicks;
+    private int _profFrames;
+    public string GetProfile()
+    {
+        double convMs = _profFrames == 0 ? 0
+            : (double)_profConvertTicks / _profFrames / TimeSpan.TicksPerMillisecond;
+        double gpuMs = _profFrames == 0 ? 0
+            : (double)_profGpuTicks / _profFrames / TimeSpan.TicksPerMillisecond;
+        return $"帧数={_profFrames} 平均CPU转换={convMs:F2}ms 平均GPU同步(QueueWaitIdle)={gpuMs:F2}ms";
+    }
 
     private bool _disposed;
     private bool _attached;
@@ -78,25 +118,15 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     private const ulong AcquireTimeoutNs = 2_000_000_000;
 
     internal VulkanRenderer(
-        Vk vk, Instance instance, PhysicalDevice physicalDevice,
+        Instance instance, PhysicalDevice physicalDevice,
         Device device, Queue queue, uint queueFamilyIndex,
-        KhrSurface khrSurface, KhrSwapchain khrSwapchain,
-        KhrWin32Surface? khrWin32Surface, KhrXlibSurface? khrXlibSurface,
-        KhrWaylandSurface? khrWaylandSurface, KhrAndroidSurface? khrAndroidSurface,
         ILogger<VulkanRenderer> logger)
     {
-        _vk = vk;
         _instance = instance;
         _physicalDevice = physicalDevice;
         _device = device;
         _queue = queue;
         _queueFamilyIndex = queueFamilyIndex;
-        _khrSurface = khrSurface;
-        _khrSwapchain = khrSwapchain;
-        _khrWin32Surface = khrWin32Surface;
-        _khrXlibSurface = khrXlibSurface;
-        _khrWaylandSurface = khrWaylandSurface;
-        _khrAndroidSurface = khrAndroidSurface;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -135,6 +165,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 _targetHeight = (uint)target.Height;
                 CreateSurface(handle);
                 CreateSwapchain((uint)target.Width, (uint)target.Height);
+                CreateShaderPipeline();
                 CreateCommandPoolAndBuffer();
                 CreateSemaphores();
                 _attached = true;
@@ -161,7 +192,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             // 1. 获取下一张 SwapChain 图像
             // 2 秒超时在 _gate 锁内阻塞，并发 Dispose/Detach 最坏等约 2 秒（预期行为，见类级注释）
             Span<uint> imageIndexSpan = stackalloc uint[1];
-            Result result = _khrSwapchain.AcquireNextImage(
+            Result result = VulkanNative.AcquireNextImageKHR(
                 _device, _swapchain, AcquireTimeoutNs,
                 _imageAvailableSemaphore, default, imageIndexSpan);
             if (result == Result.Timeout)
@@ -217,7 +248,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 PImageIndices = &idx,
             };
 
-            result = _khrSwapchain.QueuePresent(_queue, _presentInfoArr);
+            result = VulkanNative.QueuePresentKHR(_queue, _presentInfoArr);
             if (result == Result.ErrorOutOfDateKhr)
             {
                 // Present 阶段过期——丢弃本帧并重建 SwapChain。
@@ -247,38 +278,54 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
         };
         // 检查 BeginCommandBuffer 返回值
-        Result result = _vk.BeginCommandBuffer(_commandBuffer, ref beginInfo);
+        Result result = VulkanNative.BeginCommandBuffer(_commandBuffer, ref beginInfo);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkBeginCommandBuffer 失败: {result}");
 
-        // Undefined→TransferDst 首屏障 srcStage 必须等于信号量 waitDstStageMask（TransferBit），
-        // 才能与 _imageAvailableSemaphore 的等待形成依赖链（Khronos Synchronization Examples
-        // 「Swapchain image acquire」范式）。若用 TopOfPipe（srcScope 为空），布局转换（对图像的写）
-        // 与 presentation engine 的读取之间没有执行依赖 → 规范级数据竞争。srcAccess 保持 None。
-        TransitionImageLayout(swapchainImage, ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
-            AccessFlags.None, AccessFlags.TransferWriteBit,
-            PipelineStageFlags.TransferBit, PipelineStageFlags.TransferBit);
+        bool swapchainIsBgra = _swapchainFormat == Format.B8G8R8A8Unorm;
+        bool usedShaderPath = false;
 
-        switch (frame.Resource)
+        // YUV 软帧走 GPU Shader 路径：由 Fragment Shader 采样 Y/U/V 平面并完成 YUV→RGB 转换，
+        // 彻底消除 CPU 端逐像素转换。该路径使用 RenderPass，不需要 Transfer 布局屏障。
+        if (frame.Resource is SoftwareFrameResource swYuv && IsYuvFormat(swYuv.Format))
         {
-            case SoftwareFrameResource sw:
-                UploadSoftwareFrame(sw, swapchainImage);
-                break;
-            case VulkanImageResource vk:
-                BlitVulkanImageResource(vk, swapchainImage);
-                break;
-            default:
-                throw new NotSupportedException(
-                    $"不支持的帧资源类型：{frame.Resource?.GetType().Name ?? "null"}。");
+            usedShaderPath = true;
+            long tConv = Stopwatch.GetTimestamp();
+            RenderYuvSoftwareFrame(swYuv, imageIndex, swapchainIsBgra);
+            _profConvertTicks += Stopwatch.GetTimestamp() - tConv;
+        }
+        else
+        {
+            // Transfer 路径：BGRA/RGBA 软帧与 GPU 纹理零拷贝 Present。
+            // Undefined→TransferDst 首屏障 srcStage 必须等于信号量 waitDstStageMask（TransferBit），
+            // 才能与 _imageAvailableSemaphore 的等待形成依赖链。
+            TransitionImageLayout(swapchainImage, ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
+                AccessFlags.None, AccessFlags.TransferWriteBit,
+                PipelineStageFlags.TransferBit, PipelineStageFlags.TransferBit);
+
+            switch (frame.Resource)
+            {
+                case SoftwareFrameResource sw:
+                    long tConv = Stopwatch.GetTimestamp();
+                    UploadSoftwareFrame(sw, swapchainImage);
+                    _profConvertTicks += Stopwatch.GetTimestamp() - tConv;
+                    break;
+                case VulkanImageResource vk:
+                    BlitVulkanImageResource(vk, swapchainImage);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"不支持的帧资源类型：{frame.Resource?.GetType().Name ?? "null"}。");
+            }
+
+            // TransferDst→PresentSrc，srcStage=Transfer（前一阶段写入），dstStage=BottomOfPipe（presentation engine 读取）
+            TransitionImageLayout(swapchainImage, ImageLayout.TransferDstOptimal, ImageLayout.PresentSrcKhr,
+                AccessFlags.TransferWriteBit, AccessFlags.MemoryReadBit,
+                PipelineStageFlags.TransferBit, PipelineStageFlags.BottomOfPipeBit);
         }
 
-        // TransferDst→PresentSrc，srcStage=Transfer（前一阶段写入），dstStage=BottomOfPipe（presentation engine 读取）
-        TransitionImageLayout(swapchainImage, ImageLayout.TransferDstOptimal, ImageLayout.PresentSrcKhr,
-            AccessFlags.TransferWriteBit, AccessFlags.MemoryReadBit,
-            PipelineStageFlags.TransferBit, PipelineStageFlags.BottomOfPipeBit);
-
         // 检查 EndCommandBuffer 返回值
-        result = _vk.EndCommandBuffer(_commandBuffer);
+        result = VulkanNative.EndCommandBuffer(_commandBuffer);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkEndCommandBuffer 失败: {result}");
 
@@ -286,10 +333,11 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
         CommandBuffer cmd = _commandBuffer;
         Semaphore imgAvail = _imageAvailableSemaphore;
         Semaphore renderFin = _renderFinishedSemaphore;
-        // WaitDstStageMask 必须为 TransferBit——命令缓冲仅含 Transfer 操作（CopyBufferToImage + LayoutTransition），
-        // Transfer 阶段在管线中早于 ColorAttachmentOutput。若用 ColorAttachmentOutputBit，Transfer 操作
-        // 不在等待范围内，可能在信号量信号前执行，导致写入尚未被 Acquire 的 SwapChain 图像（数据竞争）。
-        PipelineStageFlags waitStage = PipelineStageFlags.TransferBit;
+        // Shader 路径首阶段为 ColorAttachmentOutput（RenderPass 写 color attachment），
+        // Transfer 路径首阶段为 Transfer（Copy/Blit/LayoutTransition）。waitStage 必须与首阶段一致。
+        PipelineStageFlags waitStage = usedShaderPath
+            ? PipelineStageFlags.ColorAttachmentOutputBit
+            : PipelineStageFlags.TransferBit;
 
         SubmitInfo submitInfo = new()
         {
@@ -303,7 +351,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             PSignalSemaphores = &renderFin,
         };
 
-        result = _vk.QueueSubmit(_queue, 1, &submitInfo, default);
+        result = VulkanNative.QueueSubmit(_queue, 1, &submitInfo, default);
         ThrowIfDeviceLost(result, "vkQueueSubmit"); // QueueSubmit 是 TDR 设备丢失最常见的浮现点
         if (result != Result.Success)
             throw new InvalidOperationException($"vkQueueSubmit 失败: {result}");
@@ -312,75 +360,61 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
         // 将改用 vkCreateFence + vkWaitForFences 或环形 Command Buffer 消除此阻塞。
         // 「提交成功、GPU 执行中 TDR」的设备丢失恰从 WaitIdle 浮现——必须检测。
         // 其余失败码（OOM 等）保持既有忽略语义不变。
-        ThrowIfDeviceLost(_vk.QueueWaitIdle(_queue), "vkQueueWaitIdle");
+        long tGpu = Stopwatch.GetTimestamp();
+        ThrowIfDeviceLost(VulkanNative.QueueWaitIdle(_queue), "vkQueueWaitIdle");
+        _profGpuTicks += Stopwatch.GetTimestamp() - tGpu;
+        _profFrames++;
     }
 
     private void UploadSoftwareFrame(SoftwareFrameResource sw, Image dstImage)
     {
         int width = sw.Width;
         int height = sw.Height;
-
-        // 帧尺寸超过 SwapChain 尺寸时拒绝拷贝——vkCmdCopyBufferToImage 越界会触发 validation error
-        if ((uint)width > _swapchainExtent.Width || (uint)height > _swapchainExtent.Height)
-            throw new NotSupportedException(
-                $"帧尺寸 {width}x{height} 超过 SwapChain 尺寸 {_swapchainExtent.Width}x{_swapchainExtent.Height}。" +
-                "Vulkan 渲染器 不支持帧缩放。");
-
-        int dataSize = width * height * 4;
         int rowBytes = width * 4;
-        int rowPitch = sw.Stride > 0 ? sw.Stride : rowBytes;
+        int dataSize = width * height * 4;
 
-        // Stride 合法性——stride 不得小于一行像素字节数，否则行内数据不完整
-        if (rowPitch < rowBytes)
-            throw new InvalidOperationException(
-                $"帧 Stride {rowPitch} 小于行字节数 {rowBytes}（{width}x{height} BGRA32）。");
+        if (IsYuvFormat(sw.Format))
+            throw new NotSupportedException("YUV 软帧已迁移到 GPU Shader 路径，不应再走 CPU UploadSoftwareFrame。");
 
-        // 按 stride 公式校验源数据长度——Stride > width*4 时实际需要
-        // (height-1)*Stride + width*4（最后一行只需 rowBytes，不含尾部填充）。
-        // 旧校验只查 width*height*4，strided 帧会「校验通过却在拷贝中途 Span 越界」——失败点后移。
-        long requiredSrcLen = (long)(height - 1) * rowPitch + rowBytes;
-        if (sw.Data.Length < requiredSrcLen)
-            throw new InvalidOperationException(
-                $"帧数据长度 {sw.Data.Length} 不足以填充 {width}x{height} BGRA32 帧" +
-                $"（Stride={rowPitch}，需要 {requiredSrcLen} 字节）。");
-
+        // staging 已持久映射（HOST_COHERENT 内存，见 EnsureStagingBuffer），直接写 _stagingMapped，
+        // 免去每帧 MapMemory/UnmapMemory 仪式开销。BGRA/RGBA 单平面路径把源数据拷入 staging 后上传。
         EnsureStagingBuffer((ulong)dataSize);
-
-        void* pData = null;
-        // 检查 MapMemory 返回值
-        Result mapResult = _vk.MapMemory(_device, _stagingMemory, 0, (ulong)dataSize, 0, &pData);
-        if (mapResult != Result.Success)
-            throw new InvalidOperationException($"vkMapMemory 失败: {mapResult}");
-        try
+        if (_stagingMapped == null)
+            throw new InvalidOperationException("staging 缓冲未映射（持久映射初始化失败）。");
+        Span<byte> dst = new(_stagingMapped, dataSize);
         {
-            Span<byte> dst = new(pData, dataSize);
-            var src = sw.Data.Span;
-
-            // SwapChain 可能是 BGRA8（首选）或 RGBA8（回退）。
-            // 源格式与 SwapChain 格式 R/B 顺序一致 → 直拷；不一致 → R/B 交换拷贝。
             bool swapchainIsBgra = _swapchainFormat == Format.B8G8R8A8Unorm;
+
+            // 非 YUV（BGRA32/RGBA32 单平面）：直接拷入 staging，stride / R-B 互换在此处理
+            var src = sw.Data.Span;
+            int srcRowPitch = sw.Stride > 0 ? sw.Stride : rowBytes;
+            if (srcRowPitch < rowBytes)
+                throw new InvalidOperationException(
+                    $"帧 Stride {srcRowPitch} 小于行字节数 {rowBytes}（{width}x{height}）。");
+            long requiredSrcLen = (long)(height - 1) * srcRowPitch + rowBytes;
+            if (src.Length < requiredSrcLen)
+                throw new InvalidOperationException(
+                    $"帧数据长度 {src.Length} 不足以填充 {width}x{height} 帧" +
+                    $"（Stride={srcRowPitch}，需要 {requiredSrcLen} 字节）。");
+
             bool sameChannelOrder = sw.Format switch
             {
                 PixelFormat.BGRA32 => swapchainIsBgra,
                 PixelFormat.RGBA32 => !swapchainIsBgra,
                 _ => throw new NotSupportedException($"Vulkan 渲染器不支持像素格式 {sw.Format}。"),
             };
-
             if (sameChannelOrder)
             {
-                // sw.Data.Span 可能比 dataSize 长（ArrayPool 租借的数组更长），
-                // 用 Slice 确保只拷贝实际帧数据量
-                if (rowPitch == rowBytes)
+                if (srcRowPitch == rowBytes)
                     src.Slice(0, dataSize).CopyTo(dst);
                 else
-                    CopyStrided(src, dst, width, height, rowPitch);
+                    CopyStrided(src, dst, width, height, srcRowPitch);
             }
             else
             {
-                SwapRbAndCopy(src, dst, width, height, rowPitch);
+                SwapRbAndCopy(src, dst, width, height, srcRowPitch);
             }
         }
-        finally { _vk.UnmapMemory(_device, _stagingMemory); }
 
         BufferImageCopy copyRegion = new()
         {
@@ -398,8 +432,218 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             ImageExtent = new Extent3D((uint)width, (uint)height, 1),
         };
 
-        _vk.CmdCopyBufferToImage(_commandBuffer, _stagingBuffer, dstImage,
+        uint swW = _swapchainExtent.Width;
+        uint swH = _swapchainExtent.Height;
+
+        // 尺寸匹配 → 直拷快路径（零缩放，零回归）
+        bool exactMatch = (uint)width == swW && (uint)height == swH;
+        if (exactMatch)
+        {
+            VulkanNative.CmdCopyBufferToImage(_commandBuffer, _stagingBuffer, dstImage,
+                ImageLayout.TransferDstOptimal, 1, &copyRegion);
+            return;
+        }
+
+        // 尺寸不匹配 → 经 staging image + vkCmdBlitImage 缩放适配（与 BlitVulkanImageResource 同源手法）。
+        // 软帧经上方分支已转成 BGRA32/RGBA32 单平面格式，BGRA8/RGBA8 均为
+        // Vulkan 规范保证可 blit 的格式，无需着色器，AOT 安全。
+        EnsureStagingImage((uint)width, (uint)height, _swapchainFormat);
+        // staging buffer → staging image（TRANSFER_DST）
+        TransitionImageLayout(_stagingImage, ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
+            AccessFlags.None, AccessFlags.TransferWriteBit,
+            PipelineStageFlags.TransferBit, PipelineStageFlags.TransferBit);
+        VulkanNative.CmdCopyBufferToImage(_commandBuffer, _stagingBuffer, _stagingImage,
             ImageLayout.TransferDstOptimal, 1, &copyRegion);
+        // staging image → TRANSFER_SRC 供 blit 源
+        TransitionImageLayout(_stagingImage, ImageLayout.TransferDstOptimal, ImageLayout.TransferSrcOptimal,
+            AccessFlags.TransferWriteBit, AccessFlags.TransferReadBit,
+            PipelineStageFlags.TransferBit, PipelineStageFlags.TransferBit);
+
+        ComputeBlitRects(width, height, (int)swW, (int)swH, ScaleMode,
+            out int sX, out int sY, out int sW, out int sH,
+            out int dX, out int dY, out int dW, out int dH, out bool clearBars);
+
+        if (clearBars)
+        {
+            // 信箱模式：先清黑底，再 blit 居中 fit 矩形，四周留黑边
+            ClearColorValue cc = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 0 };
+            ImageSubresourceRange range = new()
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1,
+            };
+            VulkanNative.CmdClearColorImage(_commandBuffer, dstImage, ImageLayout.TransferDstOptimal, &cc, 1, &range);
+        }
+
+        ImageSubresourceLayers layers = new()
+        {
+            AspectMask = ImageAspectFlags.ColorBit,
+            MipLevel = 0,
+            BaseArrayLayer = 0,
+            LayerCount = 1,
+        };
+        ImageBlit blit = new()
+        {
+            SrcSubresource = layers,
+            DstSubresource = layers,
+        };
+        blit.SrcOffsets[0] = new Offset3D(sX, sY, 0);
+        blit.SrcOffsets[1] = new Offset3D(sX + sW, sY + sH, 1);
+        blit.DstOffsets[0] = new Offset3D(dX, dY, 0);
+        blit.DstOffsets[1] = new Offset3D(dX + dW, dY + dH, 1);
+        VulkanNative.CmdBlitImage(_commandBuffer, _stagingImage, ImageLayout.TransferSrcOptimal,
+            dstImage, ImageLayout.TransferDstOptimal, 1, &blit, Filter.Linear);
+    }
+
+    /// <summary>
+    /// GPU Shader 路径：上传 YUV 平面并由 Fragment Shader 完成转换/缩放，替代 <see cref="UploadSoftwareFrame"/> 的 CPU 转换。
+    /// </summary>
+    private void RenderYuvSoftwareFrame(SoftwareFrameResource sw, uint imageIndex, bool swapchainIsBgra)
+    {
+        if (_shaderPipeline is null)
+            throw new InvalidOperationException("Shader 管线未初始化。");
+
+        int w = sw.Width, h = sw.Height;
+        int stagingSize = CalculateYuvStagingSize(sw);
+        EnsureStagingBuffer((ulong)stagingSize);
+
+        ComputeBlitRects(w, h, (int)_swapchainExtent.Width, (int)_swapchainExtent.Height, ScaleMode,
+            out int sX, out int sY, out int sW, out int sH,
+            out int dX, out int dY, out int dW, out int dH, out _);
+
+        float u0 = (w <= 0 || sW <= 0) ? 0f : (float)sX / w;
+        float v0 = (h <= 0 || sH <= 0) ? 0f : (float)sY / h;
+        float u1 = (w <= 0) ? 1f : (float)(sX + sW) / w;
+        float v1 = (h <= 0) ? 1f : (float)(sY + sH) / h;
+
+        _shaderPipeline.Present(
+            sw, imageIndex,
+            (dX, dY, dW, dH),
+            (u0, v0, u1, v1),
+            _stagingBuffer, _stagingMapped, _stagingBufferSize,
+            _commandBuffer, swapchainIsBgra);
+    }
+
+    private static int CalculateYuvStagingSize(SoftwareFrameResource sw)
+    {
+        int w = sw.Width, h = sw.Height;
+        return sw.Format switch
+        {
+            PixelFormat.BGRA32 or PixelFormat.RGBA32 => w * h * 4,
+            PixelFormat.NV12 or PixelFormat.NV21 =>
+                w * h + (((w + 1) >> 1) * ((h + 1) >> 1) * 2),
+            PixelFormat.YUV420P =>
+                w * h + 2 * (((w + 1) >> 1) * ((h + 1) >> 1)),
+            PixelFormat.YUV422P =>
+                w * h + 2 * (((w + 1) >> 1) * h),
+            PixelFormat.YUV444P => w * h * 3,
+            _ => w * h * 4,
+        };
+    }
+
+    private static bool IsYuvFormat(PixelFormat f) => f is
+        PixelFormat.YUV420P or PixelFormat.YUV422P or PixelFormat.YUV444P or
+        PixelFormat.NV12 or PixelFormat.NV21;
+
+    /// <summary>
+    /// 按 <see cref="ScaleMode"/> 计算软帧→SwapChain 的 blit 源/目标矩形。
+    /// Fill=拉伸填满（不保比例）；Uniform=信箱（保比例居中留黑边，clearBars=true）；
+    /// UniformToFill=高保真全屏（保比例裁剪溢出铺满）。源/目标矩形均为含下界的像素区间。
+    /// </summary>
+    private static void ComputeBlitRects(
+        int srcW, int srcH, int dstW, int dstH, AspectRatioMode mode,
+        out int sX, out int sY, out int sW, out int sH,
+        out int dX, out int dY, out int dW, out int dH, out bool clearBars)
+    {
+        sX = 0; sY = 0; sW = srcW; sH = srcH;
+        dX = 0; dY = 0; dW = dstW; dH = dstH;
+        clearBars = false;
+
+        if (srcW <= 0 || srcH <= 0) return;
+
+        switch (mode)
+        {
+            case AspectRatioMode.Fill:
+                // 拉伸填满目标区域（不保比例，可变畸）
+                break;
+            case AspectRatioMode.Uniform:
+                // 信箱模式：保比例、居中、留黑边
+                clearBars = true;
+                double fit = Math.Min((double)dstW / srcW, (double)dstH / srcH);
+                dW = Math.Max(1, (int)(srcW * fit + 0.5));
+                dH = Math.Max(1, (int)(srcH * fit + 0.5));
+                dX = (dstW - dW) / 2;
+                dY = (dstH - dH) / 2;
+                break;
+            case AspectRatioMode.UniformToFill:
+                // 高保真全屏：保比例、裁剪溢出、铺满（cover）
+                double cover = Math.Max((double)dstW / srcW, (double)dstH / srcH);
+                int cw = Math.Max(1, (int)(dstW / cover + 0.5));
+                int ch = Math.Max(1, (int)(dstH / cover + 0.5));
+                sX = (srcW - cw) / 2;
+                sY = (srcH - ch) / 2;
+                sW = cw;
+                sH = ch;
+                dW = dstW;
+                dH = dstH;
+                break;
+        }
+    }
+
+    private void EnsureStagingImage(uint w, uint h, Format fmt)
+    {
+        if (_stagingImage.Handle != 0 && _stagingImageW == w && _stagingImageH == h && _stagingImageFormat == fmt)
+            return;
+
+        if (_stagingImage.Handle != 0)
+        {
+            VulkanNative.DestroyImage(_device, _stagingImage, null);
+            VulkanNative.FreeMemory(_device, _stagingImageMem, null);
+            _stagingImage = default;
+            _stagingImageMem = default;
+        }
+
+        ImageCreateInfo imgInfo = new()
+        {
+            SType = StructureType.ImageCreateInfo,
+            ImageType = ImageType.Type2D,
+            Format = fmt,
+            Extent = new Extent3D(w, h, 1),
+            MipLevels = 1,
+            ArrayLayers = 1,
+            Samples = SampleCountFlags.Count1Bit,
+            Tiling = ImageTiling.Optimal,
+            Usage = ImageUsageFlags.TransferDstBit | ImageUsageFlags.TransferSrcBit,
+            SharingMode = SharingMode.Exclusive,
+            InitialLayout = ImageLayout.Undefined,
+        };
+
+        Result result = VulkanNative.CreateImage(_device, ref imgInfo, null, out _stagingImage);
+        if (result != Result.Success)
+            throw new InvalidOperationException($"vkCreateImage(staging) 失败: {result}");
+
+        MemoryRequirements memReq;
+        VulkanNative.GetImageMemoryRequirements(_device, _stagingImage, &memReq);
+        uint memType = FindMemoryType(memReq.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit);
+        MemoryAllocateInfo memInfo = new()
+        {
+            SType = StructureType.MemoryAllocateInfo,
+            AllocationSize = memReq.Size,
+            MemoryTypeIndex = memType,
+        };
+        result = VulkanNative.AllocateMemory(_device, &memInfo, null, out _stagingImageMem);
+        if (result != Result.Success)
+            throw new InvalidOperationException($"vkAllocateMemory(staging) 失败: {result}");
+        result = VulkanNative.BindImageMemory(_device, _stagingImage, _stagingImageMem, 0);
+        if (result != Result.Success)
+            throw new InvalidOperationException($"vkBindImageMemory(staging) 失败: {result}");
+
+        _stagingImageW = w;
+        _stagingImageH = h;
+        _stagingImageFormat = fmt;
     }
 
     /// <summary>
@@ -461,7 +705,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 DstOffset = new Offset3D(0, 0, 0),
                 Extent = new Extent3D((uint)srcW, (uint)srcH, 1),
             };
-            _vk.CmdCopyImage(_commandBuffer, src.Image, ImageLayout.TransferSrcOptimal,
+            VulkanNative.CmdCopyImage(_commandBuffer, src.Image, ImageLayout.TransferSrcOptimal,
                 dstImage, ImageLayout.TransferDstOptimal, 1, &region);
         }
         else
@@ -488,7 +732,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             blit.SrcOffsets[1] = new Offset3D(srcW, srcH, 1);
             blit.DstOffsets[0] = new Offset3D(0, 0, 0);
             blit.DstOffsets[1] = new Offset3D((int)dstW, (int)dstH, 1);
-            _vk.CmdBlitImage(_commandBuffer, src.Image, ImageLayout.TransferSrcOptimal,
+            VulkanNative.CmdBlitImage(_commandBuffer, src.Image, ImageLayout.TransferSrcOptimal,
                 dstImage, ImageLayout.TransferDstOptimal, 1, &blit, Filter.Linear);
         }
     }
@@ -508,7 +752,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
 
             // 有限超时
             Span<uint> imageIndexSpan = stackalloc uint[1];
-            Result result = _khrSwapchain.AcquireNextImage(
+            Result result = VulkanNative.AcquireNextImageKHR(
                 _device, _swapchain, AcquireTimeoutNs,
                 _imageAvailableSemaphore, default, imageIndexSpan);
             if (result == Result.Timeout)
@@ -542,7 +786,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                     Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
                 };
                 // 检查 BeginCommandBuffer 返回值
-        result = _vk.BeginCommandBuffer(_commandBuffer, ref beginInfo);
+        result = VulkanNative.BeginCommandBuffer(_commandBuffer, ref beginInfo);
                 if (result != Result.Success)
                     throw new InvalidOperationException($"vkBeginCommandBuffer 失败: {result}");
 
@@ -561,7 +805,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                     LayerCount = 1,
                 };
 
-                _vk.CmdClearColorImage(_commandBuffer, swapchainImage,
+                VulkanNative.CmdClearColorImage(_commandBuffer, swapchainImage,
                     ImageLayout.TransferDstOptimal, &clearColor, 1, &range);
 
                 // TransferDst→PresentSrc
@@ -570,7 +814,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                     PipelineStageFlags.TransferBit, PipelineStageFlags.BottomOfPipeBit);
 
                 // 检查 EndCommandBuffer 返回值
-                result = _vk.EndCommandBuffer(_commandBuffer);
+                result = VulkanNative.EndCommandBuffer(_commandBuffer);
                 if (result != Result.Success)
                     throw new InvalidOperationException($"vkEndCommandBuffer 失败: {result}");
 
@@ -593,7 +837,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 };
 
                 // 检查 QueueSubmit 返回值
-                result = _vk.QueueSubmit(_queue, 1, &submitInfo, default);
+                result = VulkanNative.QueueSubmit(_queue, 1, &submitInfo, default);
                 // Clear 的 QueueSubmit 同样须类型化——否则设备丢失变泛化异常
                 // 被下方 catch 过滤器捕获吞掉（对称于 Present 侧 RecordAndSubmitFrame）。
                 ThrowIfDeviceLost(result, "vkQueueSubmit/Clear");
@@ -602,7 +846,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
 
                 // 已知性能限制——同 RecordAndSubmitFrame
                 // 同 Present——GPU 执行中 TDR 从 WaitIdle 浮现
-                ThrowIfDeviceLost(_vk.QueueWaitIdle(_queue), "vkQueueWaitIdle/Clear");
+                ThrowIfDeviceLost(VulkanNative.QueueWaitIdle(_queue), "vkQueueWaitIdle/Clear");
 
                 // 复用预分配数组
                 SwapchainKHR swap = _swapchain;
@@ -618,7 +862,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 };
 
                 // 检查 QueuePresent 返回值
-                result = _khrSwapchain.QueuePresent(_queue, _presentInfoArr);
+                result = VulkanNative.QueuePresentKHR(_queue, _presentInfoArr);
                 if (result == Result.ErrorOutOfDateKhr)
                 {
                     // Clear 的 Present 阶段过期——重建（信号量一并重建，无残留）
@@ -686,7 +930,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
         SurfaceKHR[] surfArr = new SurfaceKHR[1];
         Result result;
 
-        if (OperatingSystem.IsWindows() && _khrWin32Surface is not null)
+        if (OperatingSystem.IsWindows())
         {
             // VUID-VkWin32SurfaceCreateInfoKHR-hinstance-01307 要求有效 HINSTANCE，
             // 不能默认 0 靠驱动宽容（validation layer 必报错）。GetModuleHandleW(null) = 进程模块句柄。
@@ -696,9 +940,9 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 Hinstance = GetModuleHandleW(0),
                 Hwnd = handle,
             };
-            result = _khrWin32Surface.CreateWin32Surface(_instance, &info, (AllocationCallbacks*)null, surfArr);
+            result = VulkanNative.CreateWin32SurfaceKHR(_instance, ref info, null, out surfArr[0]);
         }
-        else if (OperatingSystem.IsAndroid() && _khrAndroidSurface is not null)
+        else if (OperatingSystem.IsAndroid())
         {
             // handle 本身就是 ANativeWindow*（IRenderTarget 传来的原生窗口指针）。
             // 绝不能写 &handle——那是「指向栈局部变量的指针」，驱动会把栈地址当 ANativeWindow* 解引用（UB）。
@@ -708,7 +952,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 SType = StructureType.AndroidSurfaceCreateInfoKhr,
                 Window = (nint*)handle,
             };
-            result = _khrAndroidSurface.CreateAndroidSurface(_instance, &info, (AllocationCallbacks*)null, surfArr);
+            result = VulkanNative.CreateAndroidSurfaceKHR(_instance, ref info, null, out surfArr[0]);
         }
         else if (OperatingSystem.IsLinux())
         {
@@ -718,8 +962,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             // 按平台范围决策 Linux 原生 Surface 不在范围——明确抛 PNS，快速失败优于 UB。
             // 若排期：需扩展 IRenderTarget 契约（复合句柄/ExtraFields）携带 Display* 后再实现。
             _logger.LogWarning(
-                "Linux Vulkan Surface 创建被拒绝（Xlib 扩展可用: {HasXlib}, Wayland 扩展可用: {HasWayland}）——缺少 Display* 传递通道。",
-                _khrXlibSurface is not null, _khrWaylandSurface is not null);
+                "Linux Vulkan Surface 创建被拒绝（Xlib/Wayland 原生 Surface 暂未集成）——缺少 Display* 传递通道。");
             throw new PlatformNotSupportedException(
                 "Linux 原生 Vulkan Surface 需要 Display* 指针（X11 Dpy / wl_display*），" +
                 "当前 IRenderTarget.NativeHandle 仅单一窗口句柄无法携带，扩展契约后才支持。");
@@ -738,14 +981,14 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     {
         SurfaceCapabilitiesKHR[] capsArr = new SurfaceCapabilitiesKHR[1];
         // 检查 GetPhysicalDeviceSurfaceCapabilities 返回值
-        Result capsResult = _khrSurface.GetPhysicalDeviceSurfaceCapabilities(_physicalDevice, _surface, capsArr);
+        Result capsResult = VulkanNative.GetPhysicalDeviceSurfaceCapabilitiesKHR(_physicalDevice, _surface, capsArr);
         if (capsResult != Result.Success)
             throw new InvalidOperationException($"vkGetPhysicalDeviceSurfaceCapabilitiesKHR 失败: {capsResult}");
         ref SurfaceCapabilitiesKHR caps = ref capsArr[0];
 
         uint formatCount = 0;
         // 检查 GetPhysicalDeviceSurfaceFormats 返回值
-        Result fmtResult = _khrSurface.GetPhysicalDeviceSurfaceFormats(_physicalDevice, _surface, &formatCount, null);
+        Result fmtResult = VulkanNative.GetPhysicalDeviceSurfaceFormatsKHR(_physicalDevice, _surface, ref formatCount, (SurfaceFormatKHR*)null);
         if (fmtResult != Result.Success)
             throw new InvalidOperationException($"vkGetPhysicalDeviceSurfaceFormatsKHR 失败: {fmtResult}");
         if (formatCount == 0)
@@ -753,7 +996,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
 
         var formats = new SurfaceFormatKHR[formatCount];
         // 检查第二次 GetPhysicalDeviceSurfaceFormats 返回值
-        Result fmtResult2 = _khrSurface.GetPhysicalDeviceSurfaceFormats(_physicalDevice, _surface, &formatCount, formats);
+        Result fmtResult2 = VulkanNative.GetPhysicalDeviceSurfaceFormatsKHR(_physicalDevice, _surface, ref formatCount, formats);
         if (fmtResult2 != Result.Success)
             throw new InvalidOperationException($"vkGetPhysicalDeviceSurfaceFormatsKHR (第二次) 失败: {fmtResult2}");
 
@@ -819,20 +1062,20 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             OldSwapchain = default,
         };
 
-        SwapchainKHR[] swapArr = new SwapchainKHR[1];
-        Result result = _khrSwapchain.CreateSwapchain(_device, &swapInfo, (AllocationCallbacks*)null, swapArr);
+        SwapchainKHR swap;
+        Result result = VulkanNative.CreateSwapchainKHR(_device, ref swapInfo, null, out swap);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkCreateSwapchain 失败: {result}");
-        _swapchain = swapArr[0];
+        _swapchain = swap;
 
         uint imageCount = 0;
         // 检查 GetSwapchainImages 返回值
-        Result imgResult = _khrSwapchain.GetSwapchainImages(_device, _swapchain, &imageCount, null);
+        Result imgResult = VulkanNative.GetSwapchainImagesKHR(_device, _swapchain, ref imageCount, (Image*)null);
         if (imgResult != Result.Success)
             throw new InvalidOperationException($"vkGetSwapchainImagesKHR 失败: {imgResult}");
         _swapchainImages = new Image[imageCount];
         // 检查第二次 GetSwapchainImages 返回值
-        Result imgResult2 = _khrSwapchain.GetSwapchainImages(_device, _swapchain, &imageCount, _swapchainImages);
+        Result imgResult2 = VulkanNative.GetSwapchainImagesKHR(_device, _swapchain, ref imageCount, _swapchainImages);
         if (imgResult2 != Result.Success)
             throw new InvalidOperationException($"vkGetSwapchainImagesKHR (第二次) 失败: {imgResult2}");
     }
@@ -870,7 +1113,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             QueueFamilyIndex = _queueFamilyIndex,
         };
 
-        Result result = _vk.CreateCommandPool(_device, ref poolInfo, null, out _commandPool);
+        Result result = VulkanNative.CreateCommandPool(_device, ref poolInfo, null, out _commandPool);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkCreateCommandPool 失败: {result}");
 
@@ -884,7 +1127,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
 
         var cmds = stackalloc CommandBuffer[1];
         // 检查 AllocateCommandBuffers 返回值
-        result = _vk.AllocateCommandBuffers(_device, &allocInfo, cmds);
+        result = VulkanNative.AllocateCommandBuffers(_device, &allocInfo, cmds);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkAllocateCommandBuffers 失败: {result}");
         _commandBuffer = cmds[0];
@@ -894,10 +1137,16 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     {
         SemaphoreCreateInfo semInfo = new() { SType = StructureType.SemaphoreCreateInfo };
 
-        Result r1 = _vk.CreateSemaphore(_device, ref semInfo, null, out _imageAvailableSemaphore);
-        Result r2 = _vk.CreateSemaphore(_device, ref semInfo, null, out _renderFinishedSemaphore);
+        Result r1 = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _imageAvailableSemaphore);
+        Result r2 = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _renderFinishedSemaphore);
         if (r1 != Result.Success || r2 != Result.Success)
             throw new InvalidOperationException($"vkCreateSemaphore 失败: {r1}/{r2}");
+    }
+
+    private void CreateShaderPipeline()
+    {
+        _shaderPipeline = new VulkanShaderPipeline(_physicalDevice, _device);
+        _shaderPipeline.EnsureSwapchainResources(_swapchainFormat, _swapchainExtent, _swapchainImages);
     }
 
     private void EnsureStagingBuffer(ulong requiredSize)
@@ -906,8 +1155,14 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
 
         if (_stagingBuffer.Handle != 0)
         {
-            _vk.DestroyBuffer(_device, _stagingBuffer, null);
-            _vk.FreeMemory(_device, _stagingMemory, null);
+            // realloc：先解持久映射再释放，避免悬空映射
+            if (_stagingMapped != null)
+            {
+                VulkanNative.UnmapMemory(_device, _stagingMemory);
+                _stagingMapped = null;
+            }
+            VulkanNative.DestroyBuffer(_device, _stagingBuffer, null);
+            VulkanNative.FreeMemory(_device, _stagingMemory, null);
             // 重置为 default 防止双重释放——若后续 CreateBuffer/AllocateMemory 失败，
             // ReleaseSessionResources 会通过陈旧句柄再次释放已释放的内存
             _stagingBuffer = default;
@@ -922,12 +1177,12 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             SharingMode = SharingMode.Exclusive,
         };
 
-        Result result = _vk.CreateBuffer(_device, ref bufInfo, null, out _stagingBuffer);
+        Result result = VulkanNative.CreateBuffer(_device, ref bufInfo, null, out _stagingBuffer);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkCreateBuffer 失败: {result}");
 
         MemoryRequirements memReq;
-        _vk.GetBufferMemoryRequirements(_device, _stagingBuffer, &memReq);
+        VulkanNative.GetBufferMemoryRequirements(_device, _stagingBuffer, &memReq);
 
         uint memTypeIndex = FindMemoryType(
             memReq.MemoryTypeBits,
@@ -940,14 +1195,23 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             MemoryTypeIndex = memTypeIndex,
         };
 
-        result = _vk.AllocateMemory(_device, &memInfo, null, out _stagingMemory);
+        result = VulkanNative.AllocateMemory(_device, &memInfo, null, out _stagingMemory);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkAllocateMemory 失败: {result}");
 
         // 检查 BindBufferMemory 返回值
-        result = _vk.BindBufferMemory(_device, _stagingBuffer, _stagingMemory, 0);
+        result = VulkanNative.BindBufferMemory(_device, _stagingBuffer, _stagingMemory, 0);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkBindBufferMemory 失败: {result}");
+
+        // 持久映射整段 staging（HOST_COHERENT 内存，写入经一致性语义自动对 GPU 可见）。
+        // 只映射一次并长期复用，UploadSoftwareFrame 直接写 _stagingMapped，免去每帧 Map/Unmap 仪式开销。
+        void* mapped = null;
+        Result mapResult = VulkanNative.MapMemory(_device, _stagingMemory, 0, memReq.Size, 0, &mapped);
+        if (mapResult != Result.Success)
+            throw new InvalidOperationException($"vkMapMemory（staging 持久映射）失败: {mapResult}");
+        _stagingMapped = mapped;
+
         // 必须记录 buffer 创建大小（requiredSize），不能记 memReq.Size（≥ requiredSize，含对齐填充）。
         // 否则帧尺寸中途变大时，第 688 行复用判断会误判「够用」——新 requiredSize ≤ 旧 memReq.Size
         // 但 > 旧 buffer 实际 Size，CmdCopyBufferToImage 读取超出 VkBuffer 对象范围（validation error / UB）。
@@ -957,7 +1221,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     private uint FindMemoryType(uint typeFilter, MemoryPropertyFlags properties)
     {
         PhysicalDeviceMemoryProperties memProps;
-        _vk.GetPhysicalDeviceMemoryProperties(_physicalDevice, &memProps);
+        VulkanNative.GetPhysicalDeviceMemoryProperties(_physicalDevice, &memProps);
         for (int i = 0; i < memProps.MemoryTypeCount; i++)
         {
             if ((typeFilter & (1u << i)) != 0 &&
@@ -1004,7 +1268,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             SubresourceRange = range,
         };
 
-        _vk.CmdPipelineBarrier(
+        VulkanNative.CmdPipelineBarrier(
             _commandBuffer,
             srcStageMask,
             dstStageMask,
@@ -1052,15 +1316,15 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
             // recording 状态的命令缓冲——会返回 VK_NOT_READY，后续 BeginCommandBuffer 也失败，
             // 信号量永久泄漏。先调用 EndCommandBuffer（忽略错误）将其移出 recording 状态：
             // 成功→executable 状态；失败→invalid 状态。两种状态均可被 ResetCommandBuffer 重置。
-            _vk.EndCommandBuffer(_commandBuffer);
-            _vk.ResetCommandBuffer(_commandBuffer, CommandBufferResetFlags.None);
+            VulkanNative.EndCommandBuffer(_commandBuffer);
+            VulkanNative.ResetCommandBuffer(_commandBuffer, CommandBufferResetFlags.None);
 
             CommandBufferBeginInfo beginInfo = new()
             {
                 SType = StructureType.CommandBufferBeginInfo,
                 Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
             };
-            if (_vk.BeginCommandBuffer(_commandBuffer, ref beginInfo) != Result.Success) return;
+            if (VulkanNative.BeginCommandBuffer(_commandBuffer, ref beginInfo) != Result.Success) return;
 
             // 将 SwapChain 图像转为 PresentSrc 布局（最小可呈现状态）
             // srcStage=TransferBit 与本提交的信号量 waitDstStageMask（TransferBit）对齐形成依赖链
@@ -1069,7 +1333,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 AccessFlags.None, AccessFlags.MemoryReadBit,
                 PipelineStageFlags.TransferBit, PipelineStageFlags.BottomOfPipeBit);
 
-            if (_vk.EndCommandBuffer(_commandBuffer) != Result.Success) return;
+            if (VulkanNative.EndCommandBuffer(_commandBuffer) != Result.Success) return;
 
             // 提交以消费 _imageAvailableSemaphore，信号 _renderFinishedSemaphore
             CommandBuffer cmd = _commandBuffer;
@@ -1090,8 +1354,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 PSignalSemaphores = &renderFin,
             };
 
-            _vk.QueueSubmit(_queue, 1, &submitInfo, default);
-            _vk.QueueWaitIdle(_queue);
+            VulkanNative.QueueSubmit(_queue, 1, &submitInfo, default);
+            VulkanNative.QueueWaitIdle(_queue);
 
             // 呈现以消费 _renderFinishedSemaphore
             SwapchainKHR swap = _swapchain;
@@ -1106,7 +1370,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
                 PImageIndices = &idx,
             };
 
-            _khrSwapchain.QueuePresent(_queue, _presentInfoArr);
+            VulkanNative.QueuePresentKHR(_queue, _presentInfoArr);
         }
         catch (Exception ex)
         {
@@ -1124,20 +1388,21 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     {
         // OutOfDate 重建路径的 DeviceWaitIdle 也可能返回 DeviceLost
         //（如休眠唤醒同时掉驱动）——类型化上抛，避免后续 CreateSwapchain 报泛化错误误导会话层。
-        ThrowIfDeviceLost(_vk.DeviceWaitIdle(_device), "vkDeviceWaitIdle/RecreateSwapchain");
+        ThrowIfDeviceLost(VulkanNative.DeviceWaitIdle(_device), "vkDeviceWaitIdle/RecreateSwapchain");
 
         if (_swapchain.Handle != 0)
-        { _khrSwapchain.DestroySwapchain(_device, _swapchain, null); _swapchain = default; }
+        { VulkanNative.DestroySwapchainKHR(_device, _swapchain, null); _swapchain = default; }
         _swapchainImages = [];
 
         if (_imageAvailableSemaphore.Handle != 0)
-        { _vk.DestroySemaphore(_device, _imageAvailableSemaphore, null); _imageAvailableSemaphore = default; }
+        { VulkanNative.DestroySemaphore(_device, _imageAvailableSemaphore, null); _imageAvailableSemaphore = default; }
         if (_renderFinishedSemaphore.Handle != 0)
-        { _vk.DestroySemaphore(_device, _renderFinishedSemaphore, null); _renderFinishedSemaphore = default; }
+        { VulkanNative.DestroySemaphore(_device, _renderFinishedSemaphore, null); _renderFinishedSemaphore = default; }
 
         try
         {
             CreateSwapchain(_targetWidth, _targetHeight);
+            _shaderPipeline?.EnsureSwapchainResources(_swapchainFormat, _swapchainExtent, _swapchainImages);
             CreateSemaphores();
         }
         catch
@@ -1156,27 +1421,46 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer
     private void ReleaseSessionResources()
     {
         if (_device.Handle != 0)
-            _vk.DeviceWaitIdle(_device);
+            VulkanNative.DeviceWaitIdle(_device);
+
+        _shaderPipeline?.Dispose();
+        _shaderPipeline = null;
 
         if (_imageAvailableSemaphore.Handle != 0)
-        { _vk.DestroySemaphore(_device, _imageAvailableSemaphore, null); _imageAvailableSemaphore = default; }
+        { VulkanNative.DestroySemaphore(_device, _imageAvailableSemaphore, null); _imageAvailableSemaphore = default; }
         if (_renderFinishedSemaphore.Handle != 0)
-        { _vk.DestroySemaphore(_device, _renderFinishedSemaphore, null); _renderFinishedSemaphore = default; }
+        { VulkanNative.DestroySemaphore(_device, _renderFinishedSemaphore, null); _renderFinishedSemaphore = default; }
 
         if (_stagingBuffer.Handle != 0)
-        { _vk.DestroyBuffer(_device, _stagingBuffer, null); _stagingBuffer = default; }
+        {
+            if (_stagingMapped != null)
+            {
+                VulkanNative.UnmapMemory(_device, _stagingMemory);
+                _stagingMapped = null;
+            }
+            VulkanNative.DestroyBuffer(_device, _stagingBuffer, null);
+            _stagingBuffer = default;
+        }
         if (_stagingMemory.Handle != 0)
-        { _vk.FreeMemory(_device, _stagingMemory, null); _stagingMemory = default; }
+        { VulkanNative.FreeMemory(_device, _stagingMemory, null); _stagingMemory = default; }
         _stagingBufferSize = 0;
 
+        if (_stagingImage.Handle != 0)
+        { VulkanNative.DestroyImage(_device, _stagingImage, null); _stagingImage = default; }
+        if (_stagingImageMem.Handle != 0)
+        { VulkanNative.FreeMemory(_device, _stagingImageMem, null); _stagingImageMem = default; }
+        _stagingImageW = 0;
+        _stagingImageH = 0;
+        _stagingImageFormat = default;
+
         if (_swapchain.Handle != 0)
-        { _khrSwapchain.DestroySwapchain(_device, _swapchain, null); _swapchain = default; }
+        { VulkanNative.DestroySwapchainKHR(_device, _swapchain, null); _swapchain = default; }
         _swapchainImages = [];
 
         if (_surface.Handle != 0)
-        { _khrSurface.DestroySurface(_instance, _surface, null); _surface = default; }
+        { VulkanNative.DestroySurfaceKHR(_instance, _surface, null); _surface = default; }
 
         if (_commandPool.Handle != 0)
-        { _vk.DestroyCommandPool(_device, _commandPool, null); _commandPool = default; }
+        { VulkanNative.DestroyCommandPool(_device, _commandPool, null); _commandPool = default; }
     }
 }

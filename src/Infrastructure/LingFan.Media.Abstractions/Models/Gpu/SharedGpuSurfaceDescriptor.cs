@@ -54,6 +54,10 @@ public enum SharedGpuSurfaceFormat
 /// 表面版本号。适配器每次<b>重建</b>底层纹理（尺寸变化等）时递增；
 /// 消费方据此判断需要丢弃已缓存的导入图像并重新导入。同一纹理连续出帧时版本号保持不变。
 /// </param>
+/// <param name="SyncMode">
+/// 本表面使用的跨设备同步模型（与产出它的 <see cref="ISharedGpuSurfaceSource.SyncMode"/> 一致）。
+/// 消费方据此选择对应的提交方式（keyed mutex / 信号量），各后端互不跨界。
+/// </param>
 /// <remarks>
 /// <para><b>纯数据</b>：不持有所有权，不可释放——底层纹理生命周期归产出它的
 /// <see cref="ISharedGpuSurfaceSource"/> 管理。</para>
@@ -65,7 +69,8 @@ public readonly record struct SharedGpuSurfaceDescriptor(
     int Width,
     int Height,
     SharedGpuSurfaceFormat Format,
-    ulong Version)
+    ulong Version,
+    SharedGpuSyncMode SyncMode)
 {
     /// <summary>句柄是否有效（非空且尺寸为正）。</summary>
     public bool IsValid => Handle != IntPtr.Zero && Width > 0 && Height > 0;

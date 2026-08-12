@@ -12,7 +12,14 @@ namespace LingFan.Media.Abstractions;
 /// <para><b>与 <c>IGpuPresenter</c> 的区别</b>：<c>IGpuPresenter</c> 走原生窗口 SwapChain（需 HWND，
 /// 产生独立合成树 → 有空域，无法被 UI 内容遮挡/裁剪/变换）。本契约产出的是一块<b>共享纹理</b>，
 /// 交由宿主合成器作为普通视觉合成，因而无空域。</para>
-/// <para><b>同步模型（keyed mutex）</b>：底层纹理以 keyed mutex 保护，双方轮流持有：</para>
+/// <para><b>同步模型由后端自报（治本）</b>：本契约不再把任何 GPU API 的同步原语写死。
+/// 每个实现通过 <see cref="SyncMode"/> 声明它使用的跨设备同步模型——D3D11/DXGI 用
+/// <see cref="SharedGpuSyncMode.KeyedMutex"/>（由 <see cref="ConsumerAcquireKey"/> /
+/// <see cref="ConsumerReleaseKey"/> 驱动），Vulkan 用 <see cref="SharedGpuSyncMode.Semaphores"/>
+/// （由 <see cref="Semaphores"/> 驱动）。消费方（UI 合成器）据此选择
+/// <c>UpdateWithKeyedMutexAsync</c> 或 <c>UpdateWithSemaphoresAsync</c>，<b>各后端只用自己 API 的
+/// 原生机制，互不跨界、不伪造句柄</b>。</para>
+/// <para><b>keyed mutex 握手（D3D11 模型示例）</b>：</para>
 /// <list type="number">
 /// <item>生产者（本接口实现）在 <see cref="TryWriteFrame"/> 内部取锁 → GPU 写入 → 以
 /// <see cref="ConsumerAcquireKey"/> 释放；</item>
@@ -31,11 +38,29 @@ public interface ISharedGpuSurfaceSource : IDisposable
     /// <summary>本源产出的共享句柄类型。消费方据此判断宿主合成器是否支持。</summary>
     SharedGpuHandleKind HandleKind { get; }
 
-    /// <summary>消费方<b>获取</b>表面时应使用的 keyed mutex 键。</summary>
+    /// <summary>
+    /// 本源使用的跨设备同步模型（中立，由后端自报）。消费方据此选择对应的提交方式。
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SharedGpuSyncMode.KeyedMutex"/>：消费方用 <see cref="ConsumerAcquireKey"/> /
+    /// <see cref="ConsumerReleaseKey"/> 走 <c>UpdateWithKeyedMutexAsync</c>；
+    /// <see cref="SharedGpuSyncMode.Semaphores"/>：消费方用 <see cref="Semaphores"/> 走
+    /// <c>UpdateWithSemaphoresAsync</c>。每个后端只用自己 API 的原生同步机制，互不跨界。
+    /// </remarks>
+    SharedGpuSyncMode SyncMode { get; }
+
+    /// <summary>消费方<b>获取</b>表面时应使用的 keyed mutex 键（仅 <see cref="SharedGpuSyncMode.KeyedMutex"/> 模型有意义）。</summary>
     ulong ConsumerAcquireKey { get; }
 
-    /// <summary>消费方<b>归还</b>表面时应使用的 keyed mutex 键。</summary>
+    /// <summary>消费方<b>归还</b>表面时应使用的 keyed mutex 键（仅 <see cref="SharedGpuSyncMode.KeyedMutex"/> 模型有意义）。</summary>
     ulong ConsumerReleaseKey { get; }
+
+    /// <summary>
+    /// 跨设备同步用的信号量对（仅 <see cref="SharedGpuSyncMode.Semaphores"/> 模型返回有效值；
+    /// 其它模型返回 <see langword="null"/>）。消费方据此导入信号量后走 <c>UpdateWithSemaphoresAsync</c>。
+    /// </summary>
+    /// <remarks>信号量是<b>长期对象</b>，随源一同创建与释放，消费方只需导入一次。</remarks>
+    SharedGpuSemaphorePair? Semaphores { get; }
 
     /// <summary>
     /// 将一帧写入共享表面（必要时按帧尺寸重建底层纹理）。
@@ -71,7 +96,12 @@ public interface ISharedGpuSurfaceSourceFactory
     bool IsAvailable { get; }
 
     /// <summary>创建共享表面源实例。由调用方负责释放。</summary>
+    /// <param name="targetAdapter">
+    /// 消费方（宿主合成器）所在的物理 GPU 身份（可选）。生产者据此优选<b>同一物理设备</b>，
+    /// 无法匹配时应抛 <see cref="NotSupportedException"/> 让调用方干净回退到下一个工厂。
+    /// 为空表示消费方未提供身份，生产者按自身偏好选择。
+    /// </param>
     /// <returns>共享表面源。</returns>
     /// <exception cref="NotSupportedException">当前环境无法创建时（调用方应回退到下一个工厂）。</exception>
-    ISharedGpuSurfaceSource Create();
+    ISharedGpuSurfaceSource Create(SharedGpuAdapterIdentity? targetAdapter = null);
 }

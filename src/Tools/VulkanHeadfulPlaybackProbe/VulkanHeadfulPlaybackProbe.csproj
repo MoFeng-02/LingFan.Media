@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>VulkanHeadfulPlaybackProbe</RootNamespace>
+		<AssemblyName>VulkanHeadfulPlaybackProbe</AssemblyName>
+		<IsPackable>false</IsPackable>
+		<!-- Windows-only（Win32 HWND + WASAPI）：抑制 CA1416。
+		     路线 A：Vulkan 渲染器执行层已完全自写零反射绑定（VulkanNative），不再调用 Silk.NET 的
+		     Vk/Khr* 包装与 SilkMarshal，故「己方代码」来源的 IL2xxx 已彻底消除：
+		       · IL3000/IL3002（Silk.NET.Core.Loader.DefaultPathResolver 用 Assembly.Location/CodeBase）
+		         → 已无 Vk.GetApi() 加载路径，这些分支不可达。
+		       · 己方不再有任何 SilkMarshal 调用点。
+		     Silk.NET.Vulkan 仍作数据结构（struct/enum/handle）复用，但其基类型 Silk.NET.Core / SharpGen.Runtime
+		     被 transitively 链接，ILC 全程序分析仍会将第三方反射方法判定为可达并报警：
+		       · IL3050（SilkMarshal.DelegateToPtr 调 Marshal.GetFunctionPointerForDelegate）
+		         → 仅当运行期存在委托回调（debug messenger / 分配回调）才会触发；本项目调用图无此类调用，
+		           故抑制后运行期安全（与 FFmpeg/VLC/Vortice 探针同源处理）。
+		       · IL2067/IL2072（SharpGen/Silk.NET module-initializer 反射）→ 第三方来源，库本身 AOT 运行期兼容。
+		     在 TreatWarningsAsErrors=true 下这些必须抑制，否则 publish 直接失败。
+		     （注：真·零 IL2xxx 需走路线 A++——弃用 Silk.NET.Vulkan 类型、自写最小 native struct/enum/handle，
+		      为更大改动，未在本轮执行。） -->
+		<NoWarn>CA1416;IL2067;IL2070;IL2072;IL2075;IL2080;IL2087;IL2091;IL3000;IL3002;IL3050</NoWarn>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+		<!-- 本探针是宿主/消费方工程：设置 PublishAot=true 以端到端验证 LingFan.Media.Renderers.Vulkan
+		     在 NativeAOT 下的就绪度（0 IL2xxx 警告）。库项目本身绝不设置此开关。 -->
+		<PublishAot>true</PublishAot>
+	</PropertyGroup>
+
+	<!-- 路线 A：VulkanNative 零反射绑定替代了 Silk.NET 的 Vk/Khr* 运行期包装与 SilkMarshal，
+	     但 Silk.NET.Vulkan 数据类型的基类型仍 transitively 链接 Silk.NET.Core / SharpGen.Runtime，
+	     其 vtable 泛型成员可能在 trim 下被裁掉 → 运行期 MissingMethodException。
+	     根留这三程序集（与 FFmpeg/VLC/Vortice 探针同源配方）避免该风险。
+	     Silk.NET.Vulkan.Extensions.KHR 已被路线 A 移除（KHR 改由 VulkanNative 三阶段（实例/设备句柄）零反射解析），故不在此列。 -->
+	<ItemGroup>
+		<TrimmerRootAssembly Include="SharpGen.Runtime" />
+		<TrimmerRootAssembly Include="Silk.NET.Core" />
+		<TrimmerRootAssembly Include="Silk.NET.Vulkan" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 有头全链路：MF 软解（H264 → CPU NV12）→ Vulkan 上传上屏（渲染器）+ WASAPI 出声（输出）。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
+		<!-- Vulkan 渲染器（契约层：仅引用 IVideoRendererFactory / IGpuDeviceContext，不越级）。 -->
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.Vulkan\LingFan.Media.Renderers.Vulkan.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+		<ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 真实媒体资源（与测试工程同源） -->
+		<None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+</Project>

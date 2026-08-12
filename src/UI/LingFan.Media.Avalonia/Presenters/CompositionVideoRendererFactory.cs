@@ -18,21 +18,26 @@ namespace LingFan.Media.Avalonia;
 public sealed class CompositionVideoRendererFactory : IVideoRendererFactory
 {
     private readonly IEnumerable<ISharedGpuSurfaceSourceFactory> _surfaceFactories;
+    private readonly SharedGpuSurfaceSourceSelector _selector;
     private readonly ILoggerFactory _loggerFactory;
 
     /// <summary>
     /// 初始化 <see cref="CompositionVideoRendererFactory"/> 的新实例。
     /// </summary>
     /// <param name="surfaceFactories">共享表面源工厂集合（DI 注入）。</param>
+    /// <param name="selector">共享表面源工厂选择记忆（进程级，避免每次从头逐个回退）。</param>
     /// <param name="loggerFactory">日志工厂。</param>
     public CompositionVideoRendererFactory(
-        IEnumerable<ISharedGpuSurfaceSourceFactory> surfaceFactories, ILoggerFactory loggerFactory)
+        IEnumerable<ISharedGpuSurfaceSourceFactory> surfaceFactories,
+        SharedGpuSurfaceSourceSelector selector,
+        ILoggerFactory loggerFactory)
     {
         _surfaceFactories = surfaceFactories ?? throw new ArgumentNullException(nameof(surfaceFactories));
+        _selector = selector ?? throw new ArgumentNullException(nameof(selector));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
     }
 
     /// <inheritdoc/>
     public IVideoRenderer Create() =>
-        new CompositionVideoRenderer(_surfaceFactories, _loggerFactory.CreateLogger<CompositionVideoRenderer>());
+        new CompositionVideoRenderer(_surfaceFactories, _selector, _loggerFactory.CreateLogger<CompositionVideoRenderer>());
 }

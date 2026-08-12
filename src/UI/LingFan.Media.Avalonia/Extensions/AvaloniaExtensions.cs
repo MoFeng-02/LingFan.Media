@@ -79,6 +79,9 @@ public static class AvaloniaExtensions
     public static MediaBuilder AddCompositionRenderer(this MediaBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+        // 共享表面源工厂选择记忆（进程级单例）：首次成功选定后缓存胜出厂，后续挂载优先命中，
+        // 不再每次从注册序头部逐个探测（Vulkan→D3D11→…→软渲）。对标后端 Lazy<*Backend> 记忆模式。
+        builder.Services.AddSingleton<SharedGpuSurfaceSourceSelector>();
         // 类名须含 CompositionVideoRenderer 以支持 RendererType 前置匹配。
         builder.Services.AddSingleton<IVideoRendererFactory, CompositionVideoRendererFactory>();
         return builder;

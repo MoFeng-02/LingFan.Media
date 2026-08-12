@@ -40,7 +40,7 @@ public sealed class D3D11SharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFac
 
     /// <inheritdoc/>
     /// <exception cref="NotSupportedException">当前环境无法创建 D3D11 共享设备时（调用方应回退下一个工厂）。</exception>
-    public ISharedGpuSurfaceSource Create()
+    public ISharedGpuSurfaceSource Create(SharedGpuAdapterIdentity? targetAdapter = null)
     {
         // 触发共享设备延迟创建（若解码器尚未创建，则在此创建；已创建则返回缓存实例）。
         // RenderContext.SharedDevice 即工厂持有的真实 ID3D11Device（非新包装，无引用计数游戏）。
