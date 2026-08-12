@@ -17,6 +17,10 @@
 #   under src/Tools/* for local validation; xunit is disabled.
 # - NuGet brand metadata (authors / license / icon / readme) is centralized in
 #   Directory.Build.props and inherited by every IsPackable=true project.
+# - Packages are pushed to BOTH nuget.org (Trusted Publishing / OIDC) and GitHub
+#   Packages (GITHUB_TOKEN, this repo's "Packages" tab). GitHub Packages needs
+#   `permissions.packages: write`; the source URL is per-owner
+#   (nuget.pkg.github.com/<owner>/index.json).
 # - We build/pack `nuget.slnx` (library projects only). The `src/Tools/*` sample
 #   apps / Probes are excluded on purpose: they produce no NuGet package and the
 #   mobile targets (Android / iOS / Browser) fail Release trimming on CI.
@@ -38,6 +42,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 concurrency:
   group: nuget-publish-${{ github.ref }}
@@ -151,6 +156,34 @@ jobs:
             # 显式检查推送退出码，失败立即终止，杜绝静默失败
             if ($LASTEXITCODE -ne 0) {
               Write-Error "Failed to push package: $($pkg.Name)"
+              exit $LASTEXITCODE
+            }
+          }
+
+      - name: Publish to GitHub Packages (NuGet)
+        # 同一批 nupkg 同时推到 GitHub Packages，使仓库 “Packages” 页自动列出。
+        # 鉴权用 GITHUB_TOKEN（自动注入），需上方 permissions 含 packages: write。
+        if: |
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+          (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkgs = Get-ChildItem ./artifacts -Filter '*.nupkg' -File
+          if (-not $pkgs) {
+            Write-Error "No .nupkg files found under ./artifacts"
+            exit 1
+          }
+          $ghSource = "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          foreach ($pkg in $pkgs) {
+            Write-Host "Pushing $($pkg.Name) to GitHub Packages ($([math]::Round($pkg.Length/1KB, 1)) KB) ..."
+            dotnet nuget push $pkg.FullName `
+              --api-key "${{ secrets.GITHUB_TOKEN }}" `
+              --skip-duplicate `
+              --no-symbols `
+              --source $ghSource
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to push package to GitHub Packages: $($pkg.Name)"
               exit $LASTEXITCODE
             }
           }
