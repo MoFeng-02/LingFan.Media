@@ -31,6 +31,8 @@
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<PackageIcon>LingFan.icon.png</PackageIcon>
 		<RepositoryType>git</RepositoryType>
+		<RepositoryUrl>https://github.com/MoFeng-02/LingFan.Media</RepositoryUrl>
+		<PackageProjectUrl>https://github.com/MoFeng-02/LingFan.Media</PackageProjectUrl>
 		<PackageTags>dotnet;media;video;audio;cross-platform;ffmpeg;vlc;aot;playback</PackageTags>
 		<PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
 	</PropertyGroup>
