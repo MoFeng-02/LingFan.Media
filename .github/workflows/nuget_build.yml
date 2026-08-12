@@ -40,7 +40,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write   # 创建 GitHub Release 并上传 release assets 需要写权限
   id-token: write
   packages: write
 
@@ -129,6 +129,10 @@ jobs:
         # 受信任发布：用 GitHub OIDC token 向 nuget.org 换一次性临时 key（约 1h 有效）。
         # 须在本仓库 Secrets 配置 NUGET_USER = 你的 nuget.org 用户名（profile name，非邮箱），
         # 且该用户名下已建好匹配本仓库/工作流/环境的 Trusted Publishing 策略。
+        # 仅真正发布时才执行：dry_run 也走发布条件，避免只打包验证却因缺 NUGET_USER 失败。
+        if: |
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+          (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         uses: NuGet/login@v1
         with:
           user: ${{ secrets.NUGET_USER }}
@@ -187,3 +191,27 @@ jobs:
               exit $LASTEXITCODE
             }
           }
+
+      - name: Create GitHub Release with NuGet assets
+        # 仅 tag 推送时创建 Release 并把所有 nupkg 挂为 release assets。
+        # 手动 workflow_dispatch 不创建 Release，避免 CI 版本污染 Releases 页。
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.Substring(1)
+          $assets = (Get-ChildItem ./artifacts -Filter '*.nupkg' -File).FullName
+          if (-not $assets) {
+            Write-Error "No .nupkg files found under ./artifacts"
+            exit 1
+          }
+          Write-Host "Creating release $tag with $($assets.Count) NuGet asset(s) ..."
+          # --generate-notes 会自动生成基于 commits 的 release notes
+          gh release create $tag `
+            --title "LingFan.Media $version" `
+            --generate-notes `
+            --verify-tag `
+            @assets
