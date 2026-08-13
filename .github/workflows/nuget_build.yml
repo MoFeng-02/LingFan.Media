@@ -1,30 +1,4 @@
 # NuGet Build & Publish workflow for LingFan.Media
-#
-# Pairs with the NuGet.org Trusted Publisher policy:
-#   Owner: MoFeng | Repository: LingFan.Media | Workflow: nuget_build.yml
-#   Environment: production
-# Authentication is OIDC trusted publishing (no long-lived API key): the job
-# has `id-token: write` + `environment: production`; the "NuGet login" step
-# exchanges the GitHub OIDC token for a short-lived NuGet API key, which the
-# "Publish" step passes via `--api-key`. NuGet.org matches it against the
-# Trusted Publishing policy (Owner=MoFeng / Repo=LingFan.Media /
-# Workflow=nuget_build.yml / Environment=production).
-#
-# Project conventions honored here:
-# - .NET 10 SDK; V1 is Windows-only, so we use `windows-latest` (D3D11 + Skia +
-#   WASAPI; FFmpeg / LibVLC / MediaFoundation backends).
-# - We deliberately do NOT run `dotnet test`. Tests use minimal Probe binaries
-#   under src/Tools/* for local validation; xunit is disabled.
-# - NuGet brand metadata (authors / license / icon / readme) is centralized in
-#   Directory.Build.props and inherited by every IsPackable=true project.
-# - Packages are pushed to BOTH nuget.org (Trusted Publishing / OIDC) and GitHub
-#   Packages (GITHUB_TOKEN, this repo's "Packages" tab). GitHub Packages needs
-#   `permissions.packages: write`; the source URL is per-owner
-#   (nuget.pkg.github.com/<owner>/index.json).
-# - We build/pack `nuget.slnx` (library projects only). The `src/Tools/*` sample
-#   apps / Probes are excluded on purpose: they produce no NuGet package and the
-#   mobile targets (Android / iOS / Browser) fail Release trimming on CI.
-#   Local dev can still open `LingFan.Media.slnx` to build/run the Tools in Debug.
 
 name: NuGet Build & Publish
 
@@ -40,7 +14,7 @@ on:
         default: false
 
 permissions:
-  contents: write   # 创建 GitHub Release 并上传 release assets 需要写权限
+  contents: write # 创建 GitHub Release 并上传 release assets 需要写权限
   id-token: write
   packages: write
 
