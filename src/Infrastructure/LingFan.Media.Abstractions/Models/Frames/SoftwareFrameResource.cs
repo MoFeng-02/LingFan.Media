@@ -21,6 +21,17 @@ namespace LingFan.Media.Abstractions;
 /// </remarks>
 public sealed class SoftwareFrameResource : IFrameResource
 {
+    // ── 有界私有池（headless 默认场景的关键内存治理点）──
+    // 原用 ArrayPool<byte>.Shared：4K 软解每帧租 12–33MB，归还后 Shared 会囤积数十个大 buffer 不还 GC，
+    // 造成「队列只 ~6 帧、进程内存却卡在 500MB~1GB」的 ghost 内存（帧在队列里很少，多的是池里囤的）。
+    // 私有有界池把每桶囤积数锁死：超出的 buffer 在 Return 时即丢弃、交由 GC 回收 —— 内存有界、可预测，
+    // 不再随 4K 软解爆发。in-flight 帧数由 FrameQueue 容量封顶，本池仅保留少量热 buffer 复用，代价是
+    // 稳态略多 LOH 分配（headless「内存尽量小」的取舍，可接受）。
+    // maxArrayLength 覆盖最大单帧（8K BGRA32≈132MB，留 256MB 余量）；maxArraysPerBucket 限制每桶囤积数。
+    private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Create(
+        maxArrayLength: 256 * 1024 * 1024,
+        maxArraysPerBucket: 4);
+
     private byte[]? _rentedBuffer;
     private IDisposable? _dataOwner;
     private bool _disposed;
@@ -63,7 +74,7 @@ public sealed class SoftwareFrameResource : IFrameResource
         Width = width;
         Height = height;
         Format = format;
-        _rentedBuffer = ArrayPool<byte>.Shared.Rent(dataLength);
+        _rentedBuffer = _pool.Rent(dataLength);
         Data = _rentedBuffer.AsMemory(0, dataLength);
     }
 
@@ -115,10 +126,10 @@ public sealed class SoftwareFrameResource : IFrameResource
         if (_disposed) return;
         _disposed = true;
 
-        // 归还租借的 buffer 到 ArrayPool（仅 ArrayPool 构造函数创建的实例）
+        // 归还租借的 buffer 到私有有界池（仅 ArrayPool 构造函数创建的实例；超额囤积即由 GC 回收）
         if (_rentedBuffer != null)
         {
-            ArrayPool<byte>.Shared.Return(_rentedBuffer);
+            _pool.Return(_rentedBuffer);
             _rentedBuffer = null;
         }
 

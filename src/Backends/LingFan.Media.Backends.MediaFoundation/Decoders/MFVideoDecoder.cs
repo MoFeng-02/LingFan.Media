@@ -1,7 +1,11 @@
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.MediaFoundation.Concurrency;
 using LingFan.Media.Backends.MediaFoundation.Interop;
+using Vortice.Direct3D11;
+using Vortice.DXGI;
 
 namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 
@@ -37,7 +41,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 /// H264/H265 含 B 帧时解码输出顺序与输入顺序不同。读取失败时回退输入 packet 时间戳。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
-internal sealed class MFVideoDecoder : IVideoDecoder
+internal sealed partial class MFVideoDecoder : IVideoDecoder
 {
     // MFT_MESSAGE_TYPE（mftransform.h 权威值）
     private const int MFT_MESSAGE_COMMAND_FLUSH = 0x00000000;
@@ -122,6 +126,9 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     // 依赖契约层 IGpuDeviceContext（共享 D3D11 设备），不引用任何渲染器模块，严守依赖倒置。
     // 有头：设备由 D3D11 渲染器注册（同设备 → 零拷贝）；无头：由 MF 自备（MfGpuDeviceContext），均经同一契约。
     private readonly IGpuDeviceContext? _gpuContext;
+    // GPU 零拷贝生产者（中立桥，ApiType==激活渲染器）：DXVA 产出的 D3D11 纹理经其导入为渲染器 GPU 纹理上屏。
+    // 仅当宿主同时注册 D3D11 设备上下文（DXVA 必需）与匹配 ApiType 的生产者时启用；否则为 null → 走 D3D11 零拷贝。
+    private readonly IGpuFrameProducer? _gpuProducer;
     private bool _dxvaActive;        // DXVA 是否成功激活（决定 ExtractFrame 走 GPU 纹理还是软解拷贝）
     private IntPtr _dxvaManager;     // IMFDXGIDeviceManager*（DXVA 必需；Dispose 时 Release）
     private uint _dxvaResetToken;    // ResetDevice 配对 reset token
@@ -154,10 +161,16 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     private IMFTransform_ProcessInput? _processInput;
     private IMFTransform_ProcessOutput? _processOutput;
 
-    public MFVideoDecoder(ILogger<MFVideoDecoder> logger, IGpuDeviceContext? gpuContext = null)
+    public MFVideoDecoder(
+        ILogger<MFVideoDecoder> logger,
+        IGpuDeviceContext? gpuContext = null,
+        IEnumerable<IGpuFrameProducer>? gpuFrameProducers = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _gpuContext = gpuContext;
+        // 解析匹配当前激活渲染器的零拷贝生产者（依赖倒置：解码器只依赖 IGpuFrameProducer 抽象）。
+        // 与 Vulkan 同源守卫，不硬编码任一渲染器——MF DXVA 在 Windows 上为 Vulkan/OpenGL 渲染器均产出 D3D11 共享句柄。
+        _gpuProducer = gpuFrameProducers?.FirstOrDefault(p => p.ApiType == _gpuContext?.ApiType);
     }
 
     /// <inheritdoc/>
@@ -927,7 +940,7 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 int hrRaw = getBuffer(sample, 0, out rawBuffer);
             if (hrRaw >= 0 && rawBuffer != IntPtr.Zero)
             {
-                var gpu = TryExtractDxgiTexture(rawBuffer);
+                var gpu = TryExtractGpuTexture(rawBuffer);
                     if (gpu is not null)
                     {
                         System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
@@ -1084,19 +1097,22 @@ internal sealed class MFVideoDecoder : IVideoDecoder
     }
 
     /// <summary>
-    /// 从 DXVA 输出 buffer 提取 DXGI 纹理并包成 <see cref="MfD3D11TextureResource"/>（零拷贝）。
+    /// 从 DXVA 输出 buffer 提取 GPU 纹理（零拷贝）。
     /// </summary>
-    /// <remarks>QueryInterface IMFDXGIBuffer → GetResource(ID3D11Texture2D) + GetSubresourceIndex。
-    /// GetResource 已 AddRef 纹理；失败时返回 null（调用方回落软解路径）。</remarks>
-    private MfD3D11TextureResource? TryExtractDxgiTexture(IntPtr buffer)
+    /// <remarks>
+    /// <para>优先经当前激活渲染器生产者把 D3D11 纹理导入为 <see cref="IGpuTextureResource"/>（MF DXVA → GPU 零拷贝上屏）；
+    /// 导入不可用 / 失败（扩展缺失、纹理非共享、切片不兼容）→ 回落 <see cref="MfD3D11TextureResource"/>（D3D11 零拷贝），
+    /// 计入 [DXVA-FRAMEPATH] GPU 纹理帧。绝不报"零拷贝已生效"假绿（S_OK≠被接受）。</para>
+    /// <para>依赖倒置：仅经 <see cref="IGpuFrameProducer"/> 抽象，不引用渲染器模块；
+    /// COM 引用计数严守 GetResource 配对（成功导入时释放 tex 的 GetResource 引用，共享句柄由渲染器侧消费）。</para>
+    /// </remarks>
+    private IGpuTextureResource? TryExtractGpuTexture(IntPtr buffer)
     {
         Guid iidDxgi = MFConstants.IID_IMFDXGIBuffer;
         int hr = Marshal.QueryInterface(buffer, in iidDxgi, out IntPtr dxgi);
         if (hr < 0 || dxgi == IntPtr.Zero)
         {
             // 每帧都打 warning 会刷屏，故只深度诊断一次。
-            // 必须用**专用**标志：旧代码借 _loggedLayoutOnce（软解布局诊断标志）当守卫，
-            //    该标志由软解路径设置，语义与生命周期都不对，属偶然可用。
             if (!_loggedDxvaDiagOnce)
             {
                 _loggedDxvaDiagOnce = true;
@@ -1124,6 +1140,42 @@ internal sealed class MFVideoDecoder : IVideoDecoder
                 return null;
             }
 
+            // GPU 零拷贝：D3D11 纹理 → DXGI 共享 NT 句柄 → 渲染器生产者导入为 GPU 纹理。
+            if (_gpuProducer is not null)
+            {
+                try
+                {
+                    var d3dTex = new ID3D11Texture2D(tex);
+                    using var dxgiRes = d3dTex.QueryInterface<IDXGIResource1>();
+                    nint sharedHandle = dxgiRes.CreateSharedHandle(
+                        null, Vortice.DXGI.SharedResourceFlags.Read | Vortice.DXGI.SharedResourceFlags.Write, null);
+                    int arrayLayers = (int)d3dTex.Description.ArraySize;
+                    var source = new GpuFrameImportSource
+                    {
+                        Kind = GpuFrameImportKind.D3D11SharedHandle,
+                        Handle = sharedHandle,
+                        Width = _width,
+                        Height = _height,
+                        Format = PixelFormat.NV12,
+                        SubresourceIndex = (int)sub,
+                        ArrayLayers = arrayLayers,
+                    };
+                    if (_gpuProducer.TryImport(source, out var gpuTex) && gpuTex is not null)
+                    {
+                        // 导入成功：GPU 纹理已绑定外部内存，原 tex 的 GetResource 引用可回收；
+                        // 共享句柄由渲染器侧消费，调用方不得关闭（生产者契约 S_OK≠被接受）。
+                        Marshal.Release(tex);
+                        return gpuTex;
+                    }
+                    // 导入未接受（S_OK≠被接受）：关闭共享句柄，回落 D3D11 资源。
+                    CloseHandle(sharedHandle);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[DXVA-FRAMEPATH] GPU 零拷贝导入异常，回落 D3D11 资源。");
+                }
+            }
+
             return new MfD3D11TextureResource(tex, _width, _height, PixelFormat.NV12, (int)sub);
         }
         catch (Exception ex)
@@ -1136,6 +1188,12 @@ internal sealed class MFVideoDecoder : IVideoDecoder
             Marshal.Release(dxgi);
         }
     }
+
+    /// <summary>关闭 DXGI 共享 NT 句柄（GPU 零拷贝导入失败回落时由调用方负责关闭）。</summary>
+    /// <remarks>原始 P/Invoke（[LibraryImport]，AOT 安全；本类为 Windows-only）。</remarks>
+    [LibraryImport("kernel32")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint hObject);
 
     /// <summary>
     /// DXVA 已激活（PROVIDES_SAMPLES=True）但输出 buffer 不支持 <c>IMFDXGIBuffer</c> 时的一次性深度诊断。

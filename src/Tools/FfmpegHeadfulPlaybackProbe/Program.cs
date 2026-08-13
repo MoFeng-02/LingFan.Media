@@ -605,7 +605,7 @@ internal static class Program
 
     private static string? ResolveDefaultMedia(bool wantVideo)
     {
-        string rel = wantVideo ? Path.Combine("Resources", "Video", "m1.mp4")
+        string rel = wantVideo ? Path.Combine("Resources", "Video", "m2.mp4")
                                : Path.Combine("Resources", "Audio", "crickets_night01.mp3");
         string local = Path.Combine(AppContext.BaseDirectory, rel);
         if (File.Exists(local)) return local;

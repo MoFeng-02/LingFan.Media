@@ -93,6 +93,21 @@ internal static unsafe partial class GLNative
     [LibraryImport("GL")]
     public static partial nint glGetString(uint name);
 
+    // 查询（GL 1.1 基线，加载期解析）
+    [LibraryImport("GL")]
+    public static partial void glGetIntegerv(uint pname, int* data);
+
+    // 纹理回读（GL 1.1 基线，加载期解析）——供 GLTextureResource.ReadbackToCpu 经共享设备上下文读取 RGBA8。
+    [LibraryImport("GL")]
+    public static partial void glGetTexImage(uint target, int level, uint format, uint type, void* pixels);
+
+    // 查询常量（GL 枚举原始值，照 .h 实物核对）
+    internal const int GlRenderer = 0x1F01;        // GL_RENDERER
+    internal const int GlMaxTextureSize = 0x0D33;  // GL_MAX_TEXTURE_SIZE
+    internal const int GlTexture2DConst = 0x0DE1;  // GL_TEXTURE_2D
+    internal const int GlRgbaConst = 0x1908;       // GL_RGBA
+    internal const int GlUnsignedByteConst = 0x1401; // GL_UNSIGNED_BYTE
+
     [LibraryImport("GL")]
     public static partial void glPixelStorei(uint pname, int param);
 

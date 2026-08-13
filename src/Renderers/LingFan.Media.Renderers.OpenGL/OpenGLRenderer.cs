@@ -34,6 +34,7 @@ public sealed class OpenGLRenderer : IVideoRenderer
 {
     private readonly object _gate = new();
     private readonly ILogger? _logger;
+    private readonly OpenGLOffscreenDeviceContext? _deviceContext;
     private IGlContext? _context;
     private OpenGLShaderPipeline? _shaderPipeline;
     private int _attachedWidth;
@@ -47,9 +48,12 @@ public sealed class OpenGLRenderer : IVideoRenderer
     private static readonly TimeSpan PresentationLatencyValue = TimeSpan.FromMilliseconds(16.67);
 
     /// <summary>初始化 <see cref="OpenGLRenderer"/> 的新实例。</summary>
-    public OpenGLRenderer(ILogger? logger = null)
+    /// <param name="logger">日志器（可为 null）。</param>
+    /// <param name="deviceContext">工厂级离屏 GL 设备上下文（共享组所有者）。可为 null（向后兼容）。</param>
+    public OpenGLRenderer(ILogger? logger = null, OpenGLOffscreenDeviceContext? deviceContext = null)
     {
         _logger = logger;
+        _deviceContext = deviceContext;
     }
 
     /// <inheritdoc />
@@ -99,6 +103,11 @@ public sealed class OpenGLRenderer : IVideoRenderer
 
             try
             {
+                // 工厂级离屏 GL 上下文先行建立（共享组所有者），使 on-screen 上下文可接入同一共享组，
+                // 解码侧经 IGpuDeviceContext 产出的 GL 纹理对渲染器可见（零拷贝链路）。
+                _deviceContext?.EnsureCreated();
+                nint shareHandle = _deviceContext?.ShareHandle ?? nint.Zero;
+
                 if (OperatingSystem.IsWindows())
                 {
                     if (target.NativeHandle is not IntPtr hwnd || hwnd == IntPtr.Zero)
@@ -106,7 +115,7 @@ public sealed class OpenGLRenderer : IVideoRenderer
                         throw new ArgumentException(
                             "渲染目标的原生句柄无效——期望 IntPtr 类型的 HWND。", nameof(target));
                     }
-                    _context = new WglContext(hwnd, _logger);
+                    _context = new WglContext(hwnd, _logger, shareHandle);
                 }
                 else if (OperatingSystem.IsLinux())
                 {
@@ -115,7 +124,12 @@ public sealed class OpenGLRenderer : IVideoRenderer
                         throw new NotSupportedException(
                             "Linux GL 渲染器要求 IRenderTarget.NativeHandle 为 X11WindowHandle（Display + Window）。");
                     }
-                    _context = new EglContext(x11.Display, x11.Window, _logger);
+                    // 复用离屏共享组所有者的同一 EGLDisplay（而非 eglGetDisplay(x11.Display)），
+                    // 否则两显示连接 → 不同 EGLDisplay → 共享组无效、eglCreateContext 返回 NULL。
+                    nint sharedDisplay = _deviceContext?.OffscreenDisplay ?? nint.Zero;
+                    _context = sharedDisplay != nint.Zero
+                        ? EglContext.CreateOnSharedDisplay(sharedDisplay, x11.Window, _logger, shareHandle)
+                        : new EglContext(x11.Display, x11.Window, _logger, shareHandle);
                 }
                 else if (OperatingSystem.IsMacOS())
                 {
@@ -215,10 +229,11 @@ public sealed class OpenGLRenderer : IVideoRenderer
                         _shaderPipeline.Present(sw, _attachedWidth, _attachedHeight, _scaleMode);
                         break;
 
-                    case IGpuTextureResource:
-                        // 零拷贝 GPU 纹理路径依赖未来 VAAPI → GLTextureResource 的 EGL interop，不在本渲染器当前范围
-                        throw new NotSupportedException(
-                            "OpenGL 零拷贝 GPU 纹理 Present 尚未实现（依赖未来 VAAPI EGL interop 路径）。");
+                    case IGpuTextureResource gpu:
+                        // 零拷贝 GPU 纹理路径：解码侧经共享组产出的 GL 纹理（NativeTextureHandle 为 GL 纹理 ID），
+                        // 在当前已 current 的 on-screen 上下文中直接采样，无需 CPU 回读。
+                        _shaderPipeline.PresentGpuTexture(gpu, _attachedWidth, _attachedHeight, _scaleMode);
+                        break;
 
                     default:
                         throw new NotSupportedException(

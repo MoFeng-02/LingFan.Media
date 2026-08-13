@@ -9,10 +9,17 @@ namespace LingFan.Media.Core;
 /// <para>线程安全：使用 <see cref="System.Threading.Channels.Channel{T}"/> 实现。</para>
 /// <para>所有权转移：Enqueue 时所有权从生产者转移到队列，Dequeue 时从队列转移到消费者。</para>
 /// <para>Clear 时 Dispose 所有帧，防止 GPU 资源泄漏。</para>
-/// <para>三重限制：Capacity（帧数）+ MaxDuration（时长）+ MaxBytes（字节）。</para>
+/// <para>三重限制：Capacity（帧数）+ MaxDuration（时长）+ MaxBytes（字节，按真实像素格式计费）。</para>
+/// <para>headless 优先默认：内存有界、可预测（见 <see cref="_defaultCapacity"/> 等）。有头播放如需更大前向缓冲，构造时显式传参覆盖。</para>
 /// </remarks>
 public sealed class FrameQueue
 {
+    // headless 优先默认：内存有界。4K 软解单帧（YUV420P）≈12MB、BGRA32≈33MB，
+    // 故 Capacity 决定 in-flight 上限、MaxBytes 作为大帧安全网。
+    private const int _defaultCapacity = 8;                 // ≥ VideoPipeline.TargetDepth(6)，前向缓冲可维持
+    private static readonly TimeSpan _defaultMaxDuration = TimeSpan.FromSeconds(2);
+    private const long _defaultMaxBytes = 96 * 1024 * 1024L; // 8 × 4K-YUV(≈12MB)，覆盖 Capacity；4K-BGRA 经此限到 ~2 帧
+
     private Channel<VideoFrame> _channel;
     private readonly int _capacity;
     private readonly TimeSpan _maxDuration;
@@ -26,17 +33,17 @@ public sealed class FrameQueue
     /// <summary>
     /// 初始化 <see cref="FrameQueue"/> 的新实例。
     /// </summary>
-    /// <param name="capacity">最大容量（帧数），默认 30。</param>
-    /// <param name="maxDuration">最大缓冲时长，默认 5 秒。</param>
-    /// <param name="maxBytes">最大缓冲字节数，默认 500MB。</param>
+    /// <param name="capacity">最大容量（帧数），默认 <see cref="_defaultCapacity"/>（headless 优先，8 帧）。</param>
+    /// <param name="maxDuration">最大缓冲时长，默认 2 秒。</param>
+    /// <param name="maxBytes">最大缓冲字节数（按真实像素格式计费），默认 96MB。</param>
     public FrameQueue(
-        int capacity = 30,
+        int capacity = _defaultCapacity,
         TimeSpan? maxDuration = null,
         long? maxBytes = null)
     {
         _capacity = capacity;
-        _maxDuration = maxDuration ?? TimeSpan.FromSeconds(5);
-        _maxBytes = maxBytes ?? 500 * 1024 * 1024L;
+        _maxDuration = maxDuration ?? _defaultMaxDuration;
+        _maxBytes = maxBytes ?? _defaultMaxBytes;
 
         _channel = Channel.CreateBounded<VideoFrame>(new BoundedChannelOptions(capacity)
         {
@@ -204,9 +211,26 @@ public sealed class FrameQueue
         return false;
     }
 
+    /// <summary>
+    /// 按真实像素格式估算单帧字节数（用于 <see cref="_totalBytes"/> 账簿，使 <see cref="_maxBytes"/> 表示真实内存）。
+    /// YUV420P/NV12/NV21 为 1.5 字节/像素，P010/YUV420P10 为 3 字节/像素（10-bit），其余取 4 字节/像素近似。
+    /// </summary>
+    private static long FrameByteSize(LingFan.Media.Abstractions.PixelFormat format, int width, int height)
+    {
+        long pixels = (long)width * height;
+        return format switch
+        {
+            LingFan.Media.Abstractions.PixelFormat.BGRA32 or LingFan.Media.Abstractions.PixelFormat.RGBA32 => pixels * 4,
+            LingFan.Media.Abstractions.PixelFormat.RGB24 => pixels * 3,
+            LingFan.Media.Abstractions.PixelFormat.YUV420P or LingFan.Media.Abstractions.PixelFormat.NV12 or LingFan.Media.Abstractions.PixelFormat.NV21 => pixels * 3 / 2,
+            LingFan.Media.Abstractions.PixelFormat.P010 or LingFan.Media.Abstractions.PixelFormat.YUV420P10 => pixels * 3,
+            _ => pixels * 4
+        };
+    }
+
     private void UpdateStatsOnEnqueue(VideoFrame frame)
     {
-        _totalBytes += frame.Width * frame.Height * 4L; // 近似字节数
+        _totalBytes += FrameByteSize(frame.Format, frame.Width, frame.Height);
 
         if (!_hasTimestamps)
         {
@@ -219,7 +243,7 @@ public sealed class FrameQueue
 
     private void UpdateStatsOnDequeue(VideoFrame frame)
     {
-        _totalBytes -= frame.Width * frame.Height * 4L;
+        _totalBytes -= FrameByteSize(frame.Format, frame.Width, frame.Height);
         if (_totalBytes < 0) _totalBytes = 0;
 
         // 更新首帧时间戳

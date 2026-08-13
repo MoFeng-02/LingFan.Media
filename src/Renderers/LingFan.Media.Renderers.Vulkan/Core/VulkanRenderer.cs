@@ -691,7 +691,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 {
                     AspectMask = ImageAspectFlags.ColorBit,
                     MipLevel = 0,
-                    BaseArrayLayer = 0,
+                    BaseArrayLayer = (uint)src.SubresourceIndex,
                     LayerCount = 1,
                 },
                 SrcOffset = new Offset3D(0, 0, 0),
@@ -717,7 +717,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 {
                     AspectMask = ImageAspectFlags.ColorBit,
                     MipLevel = 0,
-                    BaseArrayLayer = 0,
+                    BaseArrayLayer = (uint)src.SubresourceIndex,
                     LayerCount = 1,
                 },
                 DstSubresource = new ImageSubresourceLayers

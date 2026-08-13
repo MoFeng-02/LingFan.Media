@@ -166,7 +166,7 @@ internal static class Program
             // （本探针只验 OpenGL 上屏软解帧，WebM 不在范围内）。
             o.EnableHardwareDecoding = false;
             o.EnableDxva = false;
-        });
+        }).AddOpenGLRenderer();
 
         // —— 视频侧 ——
         CountingVideoRendererFactory? countingFactory = null;

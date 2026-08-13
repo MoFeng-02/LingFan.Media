@@ -21,7 +21,14 @@ public sealed class MediaPlayerOptions
     public float DefaultPlaybackRate { get; set; } = 1.0f;
 
     /// <summary>是否启用硬件加速解码。</summary>
+    /// <remarks>用户显式设为 false 时本意必须真实生效（即便内容超过软件解码阈值也不强制硬解）；
+    /// 策略仅据此判断是否"尝试"硬解并提供告警。详见 <see cref="DecodePreferencePolicy"/>。</remarks>
     public bool EnableHardwareAcceleration { get; set; } = true;
+
+    /// <summary>软件解码能力阈值（解码成本分）。内容超过此值将"优先硬件加速"且实际未走硬解时告警。
+    /// null=使用 <see cref="DecodePreferencePolicy.DefaultSoftwareDecodeThreshold"/>（≈2K60 H265）。</summary>
+    /// <remarks>供无头/受限环境按需调高或调低。调低=更早倾向硬解；调高=更宽容忍软件解码。</remarks>
+    public long? SoftwareDecodeComplexityThreshold { get; set; }
 
     /// <summary>视频帧队列容量。</summary>
     public int VideoFrameQueueCapacity { get; set; } = 30;

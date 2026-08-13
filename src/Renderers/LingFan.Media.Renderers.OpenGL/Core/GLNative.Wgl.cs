@@ -53,4 +53,42 @@ internal static unsafe partial class GLNative
 
     [LibraryImport("user32", EntryPoint = "ReleaseDC")]
     public static partial int ReleaseDC(nint hWnd, nint hDC);
+
+    // ── 离屏设备上下文（隐藏窗口）所需 user32 P/Invoke（AOT 合规：[LibraryImport] + EntryPoint="XxxW" + Utf16）──
+    // 模式移植自 OpenGLHeadfulPlaybackProbe（已验证）：WNDCLASSEXW 的 lpfnWndProc 以函数指针传入、字符串成员以 IntPtr 传入。
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct WNDCLASSEXW
+    {
+        public uint cbSize;
+        public uint style;
+        public nint lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public nint hInstance;
+        public nint hIcon;
+        public nint hCursor;
+        public nint hbrBackground;
+        public nint lpszMenuName;
+        public nint lpszClassName;
+        public nint hIconSm;
+    }
+
+    [LibraryImport("user32", EntryPoint = "RegisterClassExW", SetLastError = true)]
+    public static partial ushort RegisterClassExW(ref WNDCLASSEXW lpwcx);
+
+    [LibraryImport("user32", EntryPoint = "CreateWindowExW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    public static partial nint CreateWindowExW(int dwExStyle, string lpClassName, string lpWindowName,
+        int dwStyle, int x, int y, int nWidth, int nHeight, nint hWndParent, nint hMenu, nint hInstance, nint lpParam);
+
+    [LibraryImport("user32", EntryPoint = "DefWindowProcW")]
+    public static partial nint DefWindowProcW(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    [LibraryImport("user32", EntryPoint = "DestroyWindow")]
+    public static partial int DestroyWindow(nint hwnd);
+
+    [LibraryImport("gdi32", EntryPoint = "GetStockObject")]
+    public static partial nint GetStockObject(int i);
+
+    [LibraryImport("user32", EntryPoint = "LoadCursorW")]
+    public static partial nint LoadCursorW(nint hInstance, nint lpCursorName);
 }

@@ -30,16 +30,6 @@
   <Folder Name="/Platforms/">
     <Project Path="src/Platforms/LingFan.Media.Platforms/LingFan.Media.Platforms.csproj" />
   </Folder>
-  <Folder Name="/Tools/AvaloniaTools/">
-    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Android/LingFan.Media.AvaloniaTools.Android.csproj" />
-    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Browser/LingFan.Media.AvaloniaTools.Browser.csproj" />
-    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Desktop/LingFan.Media.AvaloniaTools.Desktop.csproj" />
-    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.iOS/LingFan.Media.AvaloniaTools.iOS.csproj" />
-    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.csproj" />
-  </Folder>
-  <Folder Name="/UI/">
-    <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
-  </Folder>
   <Folder Name="/Tools/">
     <Project Path="src/Tools/FfmpegHeadfulPlaybackProbe/FfmpegHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/FfmpegPlaybackProbe/FfmpegPlaybackProbe.csproj" />
@@ -53,5 +43,15 @@
     <Project Path="src/Tools/VulkanHeadfulPlaybackProbe/VulkanHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/WasapiDriverProbe/WasapiDriverProbe.csproj" />
     <Project Path="src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
+  </Folder>
+  <Folder Name="/Tools/AvaloniaTools/">
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Android/LingFan.Media.AvaloniaTools.Android.csproj" />
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Browser/LingFan.Media.AvaloniaTools.Browser.csproj" />
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Desktop/LingFan.Media.AvaloniaTools.Desktop.csproj" />
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.iOS/LingFan.Media.AvaloniaTools.iOS.csproj" />
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.csproj" />
+  </Folder>
+  <Folder Name="/UI/">
+    <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
   </Folder>
 </Solution>

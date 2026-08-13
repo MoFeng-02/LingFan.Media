@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using LingFan.Media.Backends.FFmpeg.Interop;
 using LingFan.Media.Backends.FFmpeg.Models;
@@ -37,6 +39,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
     private readonly ILogger<FFmpegVideoDecoder> _logger;
     private readonly IGpuDeviceContext? _gpuContext;
+    private readonly IEnumerable<IGpuFrameProducer>? _frameProducers;
+    private IGpuFrameProducer? _gpuProducer;
+    private bool _gpuImportMode;
     private readonly FFmpegOptions? _options;
     private SafeAVCodecContextHandle? _codecContextHandle;
     private SafeAVBufferRefHandle? _hwDeviceCtx;
@@ -90,11 +95,22 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <param name="logger">日志器。</param>
     /// <param name="gpuContext">可选 GPU 设备上下文（D3D11VA 硬解需要，null=软件解码）。</param>
     /// <param name="options">可选 FFmpeg 配置（含 MediaCodec Surface 注入点）。</param>
-    public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null)
+    public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null, IEnumerable<IGpuFrameProducer>? frameProducers = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _gpuContext = gpuContext;
         _options = options;
+        _frameProducers = frameProducers;
+        // 解析匹配当前激活渲染器的零拷贝生产者（依赖倒置：解码器只依赖 IGpuFrameProducer 抽象）。
+        // 仅当容器注册了与当前 IGpuDeviceContext.ApiType 同型的生产者时才非空；否则不进入 GPU 零拷贝路径。
+        // 与 Vulkan 同源守卫，不硬编码任一渲染器——FFmpeg D3D11VA 在 Windows 上为 Vulkan/OpenGL 渲染器均产出 D3D11 共享句柄。
+        // GPUApiType 无 Unknown 哨兵（D3D11=0 不可重定义），故以可空 GPUApiType? 表达"无活跃渲染器上下文"：
+        // _gpuContext 为 null 时 activeApi 为 null，p.ApiType == null 恒为 false，_gpuProducer 保持 null（不进入 GPU 零拷贝路径）。
+        GPUApiType? activeApi = _gpuContext?.ApiType;
+        foreach (var p in _frameProducers ?? Enumerable.Empty<IGpuFrameProducer>())
+        {
+            if (p.ApiType == activeApi) { _gpuProducer = p; break; }
+        }
     }
 
     /// <inheritdoc/>
@@ -213,6 +229,37 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             {
                 _logger.LogWarning(ex, "D3D11VA 硬件解码初始化失败，回退到软件解码");
                 IsHardwareAccelerated = false;
+            }
+        }
+        else if (hwEnabled && _gpuContext is not null && _gpuContext.ApiType != GPUApiType.D3D11 && _gpuProducer is not null)
+        {
+            // GPU 零拷贝硬解：FFmpeg 仍走 D3D11VA 产出 D3D11 纹理（Windows），
+            // 由匹配的渲染器生产者（Vulkan/OpenGL）经互操作导入为 GPU 纹理上屏（零拷贝，不回读 CPU）。
+            // 依赖倒置：解码器只经 IGpuFrameProducer 抽象把原生句柄交给渲染器侧生产者。
+            if (OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    // 同 D3D11 分支：纹理数组须留余量供管线长期持有切片（见 D3D11VA 注释）。
+                    ctx->extra_hw_frames = D3D11VAExtraHwFrames;
+                    InitializeD3D11VA(ctx);
+                    _gpuImportMode = true;
+                    IsHardwareAccelerated = true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "GPU 零拷贝（D3D11VA→GPU）初始化失败，回退软件解码");
+                    IsHardwareAccelerated = false;
+                }
+            }
+            else
+            {
+                // Linux/macOS：GPU 零拷贝需 VAAPI→GPU（VaApiInterop 为 Phase 2 桩，未实现）→ 软解。
+                // 不进入 _gpuImportMode，避免运行时每帧都尝试不可用的导入。
+                IsHardwareAccelerated = false;
+                _logger.LogWarning(
+                    "已请求 GPU 零拷贝，但当前平台不支持硬解→GPU 互操作（VAAPI 为 Phase 2），" +
+                    "本次{Codec}将全程软件解码（CPU 拷贝）。", codec);
             }
         }
         else if (hwEnabled)
@@ -475,20 +522,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     {
         var hwFmt = (AVPixelFormat)avFrame->format;
         if (hwFmt is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
-        {
-            VideoFrame gpuFrame = CreateHardwareFrameFromAVFrame(avFrame);
-            System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
-            return gpuFrame;
-        }
+            return CreateHardwareFrameFromAVFrame(avFrame);
         if (hwFmt == AVPixelFormat.AV_PIX_FMT_MEDIACODEC)
-        {
-            VideoFrame surfaceFrame = CreateMediaCodecSurfaceFrame(avFrame);
-            System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
-            return surfaceFrame;
-        }
-        VideoFrame cpuFrame = CreateVideoFrameFromAVFrame(avFrame);
-        System.Threading.Interlocked.Increment(ref _cpuFallbackFrames);
-        return cpuFrame;
+            return CreateMediaCodecSurfaceFrame(avFrame);
+        return CreateVideoFrameFromAVFrame(avFrame);
     }
 
     /// <inheritdoc/>
@@ -809,7 +846,22 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         // packed 4 字节格式优先零拷贝；失败（非引用计数帧/OOM）回退拷贝
         SoftwareFrameResource? resource = null;
-        if (pixFmt is AVPixelFormat.AV_PIX_FMT_BGRA or AVPixelFormat.AV_PIX_FMT_RGBA)
+        if (format == PixelFormat.P010)
+        {
+            // 10-bit 单一收敛点：解码侧把 P010(NV12 布局、10bit 存 16-bit 高位)
+            // CPU 解包为 BGRA32，渲染器只消费 BGRA32——与 NV12 软件帧/D3D11 不可绑 SRV
+            // 的处理完全一致。无黑屏、无静默降 8-bit；真·GPU 10-bit 零拷贝着色器留作未来增强。
+            resource = CreateP010ToBgraResource(avFrame, width, height);
+        }
+        else if (format == PixelFormat.YUV420P10)
+        {
+            // 10-bit 平面收敛点：ffmpeg 软解 10-bit HEVC 主流出帧为 yuv420p10le(三平面、
+            // 10bit 存 16-bit 高位)。与 P010 完全相同的 BT.601 全范围解包到 BGRA32，
+            // 仅平面布局不同。若不处理此分支，默认会误当 8-bit YUV420P 解包 => 画面发绿/错色，
+            // 且 present 计数仍 PASS（假阳性）。
+            resource = CreateYuv420P10ToBgraResource(avFrame, width, height);
+        }
+        else if (pixFmt is AVPixelFormat.AV_PIX_FMT_BGRA or AVPixelFormat.AV_PIX_FMT_RGBA)
         {
             resource = TryCreateZeroCopyResource(avFrame, width, height, format);
         }
@@ -823,9 +875,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             : TimeSpan.Zero;
         bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
 
-        // 从池中 Rent 帧壳并 Reset 填充数据，复用 VideoFrame 实例
+        // 从池中 Rent 帧壳并 Reset 填充数据，复用 VideoFrame 实例。
+        // 用 resource.Format（解包路径下为 BGRA32）而非 format，避免枚举/实际布局不一致。
         var frame = _framePool?.Rent() ?? new VideoFrame();
-        frame.Reset(width, height, format, resource, timestamp, duration, keyFrame);
+        frame.Reset(width, height, resource.Format, resource, timestamp, duration, keyFrame);
+        System.Threading.Interlocked.Increment(ref _cpuFallbackFrames);
         return frame;
     }
 
@@ -899,6 +953,162 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             pixFmt, width, height, 1);
 
         return resource;
+    }
+
+    /// <summary>
+    /// P010(NV12 布局、10bit 存于 16-bit 高位) CPU 解包为 BGRA32 的单一收敛点。
+    /// </summary>
+    /// <remarks>
+    /// <para>10-bit 值经右移 6 位归一化到 0..1023，再套用与 NV12 GPU 着色器 / Skia CPU 兜底
+    /// 完全一致的 BT.601 全范围系数（Rv=1.402, Gu=0.344136, Gv=0.714136, Bu=1.772），
+    /// 保证 10-bit 与 8-bit 帧色彩不漂移、无静默降精度。这是「10-bit 上屏」的唯一正确入口；
+    /// 真·GPU 10-bit 零拷贝着色器（采 unorm16）留作未来增强。</para>
+    /// <para>P010 唯一来源是 FFmpeg 软解（MF 解码器硬编码只产 NV12），故解包只落在解码侧，
+    /// 渲染器永远只消费 BGRA32，三渲染器（D3D11/OpenGL/Vulkan）+ Skia 均免改。</para>
+    /// </remarks>
+    private static unsafe SoftwareFrameResource CreateP010ToBgraResource(
+        AVFrame* avFrame, int width, int height)
+    {
+        bool bigEndian = (AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_P010BE;
+
+        int bgraBufSize = width * height * 4;
+        var resource = new SoftwareFrameResource(width, height, PixelFormat.BGRA32, bgraBufSize);
+
+        byte* yPlane = avFrame->data[0];
+        byte* uvPlane = avFrame->data[1];
+        int yStride = avFrame->linesize[0];
+        int uvStride = avFrame->linesize[1];
+        if (yPlane == null || uvPlane == null || yStride <= 0 || uvStride <= 0)
+            throw new InvalidOperationException("P010 帧平面/步幅无效");
+
+        using var pin = resource.Data.Pin();
+        byte* dst = (byte*)pin.Pointer;
+
+        // BT.601 全范围系数（与 NV12 着色器、Skia LUT 一致）
+        const double rV = 1.402;
+        const double gU = 0.344136;
+        const double gV = 0.714136;
+        const double bU = 1.772;
+
+        for (int y = 0; y < height; y++)
+        {
+            byte* yRow = yPlane + (nint)y * yStride;
+            byte* uvRow = uvPlane + (nint)(y >> 1) * uvStride;
+            byte* dstRow = dst + (nint)y * (width * 4);
+            for (int x = 0; x < width; x++)
+            {
+                int yVal = Read10Bit(yRow, x, bigEndian);
+                int uVal = Read10Bit(uvRow, (x >> 1) * 2, bigEndian);
+                int vVal = Read10Bit(uvRow, (x >> 1) * 2 + 1, bigEndian);
+
+                double yf = yVal / 1023.0;
+                double uf = uVal / 1023.0 - 0.5;
+                double vf = vVal / 1023.0 - 0.5;
+
+                double r = yf + rV * vf;
+                double g = yf - gU * uf - gV * vf;
+                double b = yf + bU * uf;
+
+                int di = x * 4;
+                dstRow[di] = (byte)ClampTo8Bit(b);
+                dstRow[di + 1] = (byte)ClampTo8Bit(g);
+                dstRow[di + 2] = (byte)ClampTo8Bit(r);
+                dstRow[di + 3] = 255;
+            }
+        }
+
+        return resource;
+    }
+
+    /// <summary>
+    /// YUV420P10(三平面、10bit 存于 16-bit 高位) CPU 解包为 BGRA32 的单一收敛点。
+    /// </summary>
+    /// <remarks>
+    /// <para>与 <see cref="CreateP010ToBgraResource"/> 共用同一套 BT.601 全范围系数与
+    /// <see cref="Read10Bit"/>（10bit 右移 6 归一），仅平面布局不同：Y/U/V 各自独立平面，
+    /// 色度按 2x2 子采样。ffmpeg 软解 10-bit HEVC 主流出帧即为此布局，故这是「10-bit 上屏」
+    /// 真正会被触发的主路径。</para>
+    /// <para>渲染器永远只消费 BGRA32（资源 Format 已为 BGRA32），三渲染器 + Skia 均免改。</para>
+    /// </remarks>
+    private static unsafe SoftwareFrameResource CreateYuv420P10ToBgraResource(
+        AVFrame* avFrame, int width, int height)
+    {
+        bool bigEndian = (AVPixelFormat)avFrame->format == AVPixelFormat.AV_PIX_FMT_YUV420P10BE;
+
+        int bgraBufSize = width * height * 4;
+        var resource = new SoftwareFrameResource(width, height, PixelFormat.BGRA32, bgraBufSize);
+
+        byte* yPlane = avFrame->data[0];
+        byte* uPlane = avFrame->data[1];
+        byte* vPlane = avFrame->data[2];
+        int yStride = avFrame->linesize[0];
+        int uStride = avFrame->linesize[1];
+        int vStride = avFrame->linesize[2];
+        if (yPlane == null || uPlane == null || vPlane == null
+            || yStride <= 0 || uStride <= 0 || vStride <= 0)
+            throw new InvalidOperationException("YUV420P10 帧平面/步幅无效");
+
+        using var pin = resource.Data.Pin();
+        byte* dst = (byte*)pin.Pointer;
+
+        // BT.601 全范围系数（与 P010 / NV12 着色器 / Skia LUT 完全一致，色彩不漂移）
+        const double rV = 1.402;
+        const double gU = 0.344136;
+        const double gV = 0.714136;
+        const double bU = 1.772;
+
+        for (int y = 0; y < height; y++)
+        {
+            byte* yRow = yPlane + (nint)y * yStride;
+            int cy = y >> 1;
+            byte* uRow = uPlane + (nint)cy * uStride;
+            byte* vRow = vPlane + (nint)cy * vStride;
+            byte* dstRow = dst + (nint)y * (width * 4);
+            for (int x = 0; x < width; x++)
+            {
+                int yVal = Read10Bit(yRow, x, bigEndian);
+                int uVal = Read10Bit(uRow, x >> 1, bigEndian);
+                int vVal = Read10Bit(vRow, x >> 1, bigEndian);
+
+                double yf = yVal / 1023.0;
+                double uf = uVal / 1023.0 - 0.5;
+                double vf = vVal / 1023.0 - 0.5;
+
+                double r = yf + rV * vf;
+                double g = yf - gU * uf - gV * vf;
+                double b = yf + bU * uf;
+
+                int di = x * 4;
+                dstRow[di] = (byte)ClampTo8Bit(b);
+                dstRow[di + 1] = (byte)ClampTo8Bit(g);
+                dstRow[di + 2] = (byte)ClampTo8Bit(r);
+                dstRow[di + 3] = 255;
+            }
+        }
+
+        return resource;
+    }
+
+    /// <summary>从 16-bit 半平面读出第 <paramref name="sampleIndex"/> 个样本的 10-bit 值(0..1023)。</summary>
+    /// <remarks>
+    /// 本机 ffmpeg 将 10-bit 值<b>右对齐</b>存入 16-bit 字（值位于低 10 位，高 6 位填零），
+    /// 故直接取低 10 位即可，不要做 <c>raw &gt;&gt; 6</c>（那会把中性色度 512 错读成 8，导致满屏绿）。
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe int Read10Bit(byte* plane, int sampleIndex, bool bigEndian)
+    {
+        byte* p = plane + (nint)sampleIndex * 2;
+        ushort raw = bigEndian
+            ? (ushort)((p[0] << 8) | p[1])
+            : (ushort)((p[1] << 8) | p[0]);
+        return raw & 0x3FF; // 10-bit 右对齐：值位于低 10 位 => 0..1023
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int ClampTo8Bit(double v)
+    {
+        int i = (int)(v * 255.0 + 0.5);
+        return i < 0 ? 0 : i > 255 ? 255 : i;
     }
 
     // ── D3D11VA 硬件解码 ──
@@ -999,6 +1209,19 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         int width = avFrame->width;
         int height = avFrame->height;
 
+        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        TimeSpan duration = avFrame->duration > 0
+            ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
+
+        // GPU 零拷贝：D3D11VA 纹理 → DXGI 共享句柄 → 渲染器生产者（Vulkan/OpenGL）导入为 GPU 纹理上屏。
+        if (_gpuImportMode && _gpuProducer is not null)
+            return CreateGpuImportFrame(avFrame, width, height, timestamp, duration, keyFrame);
+
+        // D3D11 零拷贝（默认 D3D11 渲染器路径）
         // D3D11VA 帧：data[0] = ID3D11Texture2D*，data[1] = 纹理数组索引
         IntPtr texturePtr = (IntPtr)avFrame->data[0];
         int subresourceIndex = (int)(IntPtr)avFrame->data[1];
@@ -1018,17 +1241,165 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         var resource = new D3D11HardwareFrameResource(
             texturePtr, width, height, PixelFormat.NV12, subresourceIndex, frameOwner);
 
-        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
-            : TimeSpan.Zero;
-        TimeSpan duration = avFrame->duration > 0
-            ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
-            : TimeSpan.Zero;
-        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
-
         var frame = _framePool?.Rent() ?? new VideoFrame();
-        frame.Reset(width, height, PixelFormat.NV12, resource, timestamp, duration, keyFrame);
+        frame.Reset(width, height, PixelFormat.NV12, resource, timestamp, duration: duration, keyFrame);
+        System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
         return frame;
+    }
+
+    /// <summary>
+    /// GPU 零拷贝帧创建：把 D3D11VA 硬解纹理经 DXGI 共享句柄导入为渲染器 GPU 纹理（<see cref="IGpuTextureResource"/>）。
+    /// </summary>
+    /// <remarks>
+    /// <para>导入失败（扩展不可用 / 句柄无效 / 切片不兼容）→ 回落 CPU 传输（<see cref="TransferHardwareFrameToCpu"/>），
+    /// 计入 [FFMPEG-FRAMEPATH] CPU 拷贝，绝不报"零拷贝已生效"假绿（S_OK≠被接受）。</para>
+    /// <para><b>多切片</b>：经 <see cref="GetD3D11TextureArraySize"/> 取真实阵列层数填入
+    /// <see cref="GpuFrameImportSource.ArrayLayers"/>，生产者据此创建整数组 GPU 纹理，Blit 时按
+    /// <see cref="GpuFrameImportSource.SubresourceIndex"/> 选 baseArrayLayer，正确处理 D3D11VA 纹理数组。</para>
+    /// </remarks>
+    private unsafe VideoFrame CreateGpuImportFrame(
+        AVFrame* avFrame, int width, int height, TimeSpan timestamp, TimeSpan duration, bool keyFrame)
+    {
+        IntPtr texturePtr = (IntPtr)avFrame->data[0];
+        int subresourceIndex = (int)(IntPtr)avFrame->data[1];
+
+        if (texturePtr != IntPtr.Zero)
+        {
+            try
+            {
+                // 取 DXGI 共享 NT 句柄（IDXGIResource1::CreateSharedHandle），零反射原生调用。
+                nint sharedHandle = GetD3D11SharedHandle(texturePtr);
+                var source = new GpuFrameImportSource
+                {
+                    Kind = GpuFrameImportKind.D3D11SharedHandle,
+                    Handle = sharedHandle,
+                    Width = width,
+                    Height = height,
+                    Format = PixelFormat.NV12,
+                    SubresourceIndex = subresourceIndex,
+                    ArrayLayers = GetD3D11TextureArraySize(texturePtr),
+                };
+                if (_gpuProducer!.TryImport(source, out var tex) && tex is not null)
+                {
+                    var frame = _framePool?.Rent() ?? new VideoFrame();
+                    frame.Reset(width, height, PixelFormat.NV12, tex, timestamp, duration, keyFrame);
+                    System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
+                    return frame;
+                }
+
+                _logger.LogWarning(
+                    "GPU 零拷贝导入未接受（S_OK≠被接受：行为副作用未成立），本帧回落 CPU 传输。");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "GPU 零拷贝导入异常（S_OK≠被接受），本帧回落 CPU 传输。");
+            }
+        }
+
+        // 回落：硬解帧 → CPU（av_hwframe_transfer_data），计入 CPU 拷贝。
+        System.Threading.Interlocked.Increment(ref _cpuFallbackFrames);
+        return TransferHardwareFrameToCpu(avFrame);
+    }
+
+    /// <summary>
+    /// 从 D3D11VA 硬解纹理取 DXGI 共享 NT 句柄（跨 API 共享给渲染器生产者导入为 GPU 纹理）。
+    /// </summary>
+    /// <remarks>
+    /// <para>原始 vtable 调用（零反射、AOT 安全）：QI IDXGIResource1 后调 CreateSharedHandle。
+    /// 仅对 FFmpeg 自有纹理做 QI（自身 AddRef）+ CreateSharedHandle，finally 仅 Release QI 那份引用，
+    /// 不触碰 FFmpeg 纹理的原始引用计数（生产者导入成功后才由渲染器侧消费句柄）。</para>
+    /// <para>仅 Windows 调用（_gpuImportMode 仅 Windows 置位），但代码无 #if，跨平台可编译。</para>
+    /// </remarks>
+    private static unsafe nint GetD3D11SharedHandle(nint texturePtr)
+    {
+        // IID_IDXGIResource1 = {4AFA9644-FD70-4EE0-AFB1-090CE337B791}
+        Guid iidDxgiResource1 = new(0x4AFA9644, 0xFD70, 0x4EE0, 0xAF, 0xB1, 0x09, 0x0C, 0xE3, 0x37, 0xB7, 0x91);
+        IntPtr* vt = (IntPtr*)*(IntPtr*)texturePtr;
+        var qi = (delegate* unmanaged[Stdcall]<IntPtr, ref Guid, out IntPtr, int>)vt[0];
+        int hr = qi(texturePtr, ref iidDxgiResource1, out IntPtr dxgi);
+        if (hr < 0 || dxgi == IntPtr.Zero)
+            throw new InvalidOperationException("QI IDXGIResource1 失败（D3D11VA 纹理共享句柄导出）");
+
+        IntPtr* dvt = (IntPtr*)*(IntPtr*)dxgi;
+        try
+        {
+            // IDXGIResource1::CreateSharedHandle 位于 vtable 槽 12
+            //   HRESULT CreateSharedHandle(IUnknown* pDevice, DXGI_SHARED_RESOURCE_FLAGS dwAccess, LPCWSTR lpName, HANDLE* pHandle)
+            // dwAccess = 3（SharedResourceFlags.Read | Write）
+            var create = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int, IntPtr, out IntPtr, int>)dvt[12];
+            int hr2 = create(dxgi, IntPtr.Zero, 3, IntPtr.Zero, out IntPtr handle);
+            if (hr2 < 0)
+                throw new InvalidOperationException($"IDXGIResource1::CreateSharedHandle 失败 (0x{hr2:X8})");
+            return handle;
+        }
+        finally
+        {
+            // 仅释放 QI 得到的 dxgi 引用（用其自身 vtable 的 Release，槽 2）。
+            var release = (delegate* unmanaged[Stdcall]<IntPtr, int>)dvt[2];
+            release(dxgi);
+        }
+    }
+
+    /// <summary>
+    /// 取 D3D11 纹理数组大小（ArraySize），用于多切片零拷贝导入的 arrayLayers。
+    /// </summary>
+    /// <remarks>原始 vtable 调用（零反射、AOT 安全）：<c>ID3D11Texture2D::GetDesc</c>（vtable 槽 10）填充
+    /// <c>D3D11_TEXTURE2D_DESC</c>，读其中 <c>ArraySize</c> 字段（偏移 12 字节）。仅查询，不增删引用计数；
+    /// 异常时回落 1（单切片）。D3D11VA 纹理数组（切片总数&gt;1）必须填真实层数，否则 GPU 外部内存导入校验失败。</remarks>
+    private static unsafe int GetD3D11TextureArraySize(nint texturePtr)
+    {
+        try
+        {
+            IntPtr* vt = (IntPtr*)*(IntPtr*)texturePtr;
+            var getDesc = (delegate* unmanaged[Stdcall]<IntPtr, D3D11Texture2DDesc*, void>)vt[10];
+            D3D11Texture2DDesc desc = default;
+            getDesc(texturePtr, &desc);
+            return desc.ArraySize > 0 ? (int)desc.ArraySize : 1;
+        }
+        catch
+        {
+            return 1;
+        }
+    }
+
+    /// <summary>D3D11_TEXTURE2D_DESC 最小布局（仅取 ArraySize 字段，偏移 12 字节）。与 Windows SDK 布局一致。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct D3D11Texture2DDesc
+    {
+        public uint Width;
+        public uint Height;
+        public uint MipLevels;
+        public uint ArraySize;
+        public int Format;
+        public uint SampleCount;
+        public uint SampleQuality;
+        public int Usage;
+        public uint BindFlags;
+        public uint CPUAccessFlags;
+        public uint MiscFlags;
+    }
+
+    /// <summary>
+    /// GPU 零拷贝导入失败时的稳健回落：把 D3D11VA 硬解帧经 <c>av_hwframe_transfer_data</c> 传输到 CPU 像素帧。
+    /// </summary>
+    /// <remarks>同步原生调用（无 I/O），属于 CPU 拷贝路径；NV12 走 CreateCopyResource 拷贝，释放临时帧安全。</remarks>
+    private unsafe VideoFrame TransferHardwareFrameToCpu(AVFrame* avFrame)
+    {
+        AVFrame* sw = ffmpeg.av_frame_alloc();
+        if (sw == null)
+            throw new InvalidOperationException("av_frame_alloc 失败（GPU 零拷贝回落 CPU）");
+        try
+        {
+            int ret = ffmpeg.av_hwframe_transfer_data(sw, avFrame, 0);
+            if (ret < 0)
+                throw new InvalidOperationException($"av_hwframe_transfer_data 失败: {GetErrorString(ret)}");
+            return CreateVideoFrameFromAVFrame(sw);
+        }
+        finally
+        {
+            ffmpeg.av_frame_free(&sw);
+        }
     }
 
     // ── Android MediaCodec 硬件解码 ──
@@ -1130,6 +1501,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         var frame = _framePool?.Rent() ?? new VideoFrame();
         frame.Reset(width, height, PixelFormat.NV12, resource, timestamp, duration, keyFrame);
+        System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
         return frame;
     }
 
@@ -1163,6 +1535,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         AVPixelFormat.AV_PIX_FMT_YUV444P => PixelFormat.YUV444P,
         AVPixelFormat.AV_PIX_FMT_NV12 => PixelFormat.NV12,
         AVPixelFormat.AV_PIX_FMT_NV21 => PixelFormat.NV21,
+        AVPixelFormat.AV_PIX_FMT_P010LE => PixelFormat.P010,
+        AVPixelFormat.AV_PIX_FMT_P010BE => PixelFormat.P010,
+        AVPixelFormat.AV_PIX_FMT_YUV420P10LE => PixelFormat.YUV420P10,
+        AVPixelFormat.AV_PIX_FMT_YUV420P10BE => PixelFormat.YUV420P10,
         AVPixelFormat.AV_PIX_FMT_BGRA => PixelFormat.BGRA32,
         AVPixelFormat.AV_PIX_FMT_RGBA => PixelFormat.RGBA32,
         AVPixelFormat.AV_PIX_FMT_RGB24 => PixelFormat.RGB24,

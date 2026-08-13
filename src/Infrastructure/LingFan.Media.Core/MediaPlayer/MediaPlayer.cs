@@ -270,12 +270,29 @@ public sealed class MediaPlayer : IMediaPlayer
                 // 透传解封装器提取的编解码器私有配置（H264/H265 的 SPS+PPS）→ 解码器输入类型
                 // 同时透传公开开关 EnableHardwareAcceleration：用户显式关闭硬解时须真实生效，
                 // 否则两级与（会话级 VideoSettings × 后端级 FFmpegOptions）的会话级恒为 true 而失效。
+                var videoInfo = videoTrack.VideoInfo;
                 _videoDecoder = _videoDecoderFactory.Create(videoTrack.VideoCodec.Value, new VideoSettings
                 {
-                    CodecConfiguration = videoTrack.VideoInfo?.CodecConfiguration ?? default,
-                    TimeBase = videoTrack.VideoInfo?.TimeBase ?? default,
+                    CodecConfiguration = videoInfo?.CodecConfiguration ?? default,
+                    TimeBase = videoInfo?.TimeBase ?? default,
                     EnableHardwareAcceleration = _options.EnableHardwareAcceleration
                 });
+
+                // 解码偏好策略：内容复杂度超过软件解码阈值时，应优先硬件加速。
+                // 若最终未走硬解（无可用 GPU / 用户显式关闭），明确告警"可能无法实时"，
+                // 把静默丢帧转为可行动的提示——但绝不覆盖用户显式关闭硬解的意图。
+                if (videoInfo != null
+                    && DecodePreferencePolicy.ExceedsSoftwareDecodeCapability(videoInfo, videoTrack.VideoCodec, _options.SoftwareDecodeComplexityThreshold)
+                    && !_videoDecoder.IsHardwareAccelerated)
+                {
+                    long score = DecodePreferencePolicy.ComputeScore(videoInfo, videoTrack.VideoCodec);
+                    long threshold = _options.SoftwareDecodeComplexityThreshold ?? DecodePreferencePolicy.DefaultSoftwareDecodeThreshold;
+                    _logger.LogWarning(
+                        "视频内容超出软件解码实时能力阈值（{Width}x{Height}@{Fps}fps {Codec} {BitDepth}bit，成本分 {Score} ≥ 阈值 {Threshold}）。" +
+                        "当前为软件解码，可能无法实时（丢帧）。建议启用硬件加速：注册 AddD3D11Renderer()/AddMediaFoundation() 并提供可用 GPU。",
+                        videoInfo.Width, videoInfo.Height, videoInfo.FrameRate, videoTrack.VideoCodec,
+                        DecodePreferencePolicy.BitDepthOf(videoInfo.PixelFormat), score, threshold);
+                }
             }
 
             if (audioTrack != null && audioTrack.AudioCodec.HasValue)

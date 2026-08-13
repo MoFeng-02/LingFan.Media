@@ -101,6 +101,21 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         }
     }
 
+    /// <summary>
+    /// 创建零拷贝帧生产者（<see cref="IGpuFrameProducer"/>），供解码后端经中立桥把原生解码输出导入为 Vulkan 纹理。
+    /// </summary>
+    /// <remarks>
+    /// 确保共享 GPU 设备已创建（延迟、线程安全）；返回单例生产者（持有本工厂的 VkDevice / VkPhysicalDevice）。
+    /// 解码后端仅依赖 <see cref="IGpuFrameProducer"/> 抽象，不感知 Vulkan 绑定细节（依赖倒置严守）。
+    /// </remarks>
+    public VulkanGpuFrameProducer CreateFrameProducer()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        EnsureDeviceCreated();
+        return new VulkanGpuFrameProducer(
+            _device, _physicalDevice, _loggerFactory.CreateLogger<VulkanGpuFrameProducer>());
+    }
+
     private void EnsureDeviceCreated()
     {
         // 无锁快路径检查发布哨兵（volatile 读自带 acquire 语义，

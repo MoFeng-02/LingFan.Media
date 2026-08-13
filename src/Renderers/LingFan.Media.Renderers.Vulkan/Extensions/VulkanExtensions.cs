@@ -37,6 +37,15 @@ public static class VulkanExtensions
             return factory.Context;
         });
 
+        // 中立 GPU 帧生产者桥（Abstractions 契约）：解码后端经此把原生解码输出导入为 Vulkan 纹理（零拷贝上屏），
+        // 依赖倒置严守——后端仅依赖 IGpuFrameProducer 抽象，不感知 Vulkan 绑定细节。
+        // 解析延迟到消费方（解码器）真正请求时才发生，且仅在 ApiType==Vulkan 时被解码器选用。
+        builder.Services.AddSingleton<IGpuFrameProducer>(sp =>
+        {
+            var factory = sp.GetRequiredService<VulkanRendererFactory>();
+            return factory.CreateFrameProducer();
+        });
+
         // 无空域合成桥（ISharedGpuSurfaceSource）注册 Vulkan 实现——「Vulkan 渲染 Vulkan 的」架构原则落地：
         // 本源产出<b>自身</b>的 Vulkan 外部内存/信号量句柄（VulkanOpaqueNtHandle / VulkanOpaquePosixFileDescriptor），
         // 由原生支持导入该句柄的宿主组合器（Vulkan 后端合成器）消费，不跨界喂 D3D11 组合器、

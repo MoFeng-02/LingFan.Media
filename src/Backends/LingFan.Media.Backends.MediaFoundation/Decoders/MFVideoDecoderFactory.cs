@@ -15,17 +15,22 @@ public sealed class MFVideoDecoderFactory : IVideoDecoderFactory
 {
     private readonly ILoggerFactory _loggerFactory;
     private readonly IGpuDeviceContext? _gpuContext;
+    private readonly IEnumerable<IGpuFrameProducer>? _gpuFrameProducers;
 
-    public MFVideoDecoderFactory(ILoggerFactory loggerFactory, IGpuDeviceContext? gpuContext = null)
+    public MFVideoDecoderFactory(
+        ILoggerFactory loggerFactory,
+        IGpuDeviceContext? gpuContext = null,
+        IEnumerable<IGpuFrameProducer>? gpuFrameProducers = null)
     {
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _gpuContext = gpuContext;
+        _gpuFrameProducers = gpuFrameProducers;
     }
 
     /// <inheritdoc/>
     public IVideoDecoder Create(VideoCodec codec, VideoSettings settings)
     {
-        var decoder = new MFVideoDecoder(_loggerFactory.CreateLogger<MFVideoDecoder>(), _gpuContext);
+        var decoder = new MFVideoDecoder(_loggerFactory.CreateLogger<MFVideoDecoder>(), _gpuContext, _gpuFrameProducers);
         decoder.Initialize(codec, settings);
         return decoder;
     }

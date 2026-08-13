@@ -56,16 +56,22 @@ internal sealed unsafe class WglContext : IGlContext
     public int GlMajor { get; private set; }
     public int GlMinor { get; private set; }
 
-    public WglContext(nint hwnd, ILogger? logger = null)
+    /// <summary>GL 上下文句柄（HGLRC）。作为 <see cref="IGpuDeviceContext"/> 的 DeviceHandle / 共享组句柄。</summary>
+    public nint ContextHandle => _hglrc;
+
+    /// <summary>平台显示/设备上下文句柄（HDC）。作为 <see cref="IGpuDeviceContext"/> 的 ContextHandle（解码侧 interop 用）。</summary>
+    public nint PlatformDisplay => _hdc;
+
+    public WglContext(nint hwnd, ILogger? logger = null, nint shareContext = default)
     {
         if (hwnd == nint.Zero)
             throw new ArgumentNullException(nameof(hwnd));
         _hwnd = hwnd;
         _logger = logger;
-        Create();
+        Create(shareContext);
     }
 
-    private void Create()
+    private void Create(nint shareContext = default)
     {
         _hdc = GLNative.GetDC(_hwnd);
         if (_hdc == nint.Zero)
@@ -112,7 +118,7 @@ internal sealed unsafe class WglContext : IGlContext
                 0,
             };
             fixed (int* a = attribs)
-                modernRc = createAttribs(_hdc, nint.Zero, nint.Zero, a);
+                modernRc = createAttribs(_hdc, shareContext, nint.Zero, a);
         }
 
         if (modernRc == nint.Zero)
@@ -167,4 +173,57 @@ internal sealed unsafe class WglContext : IGlContext
         }
         _hwnd = nint.Zero;
     }
+
+    // ── 工厂级离屏 GL 上下文（隐藏窗口）──
+    // 类过程委托须保活，否则被 GC 后 lpfnWndProc 悬空 ⇒ 野调用崩溃（同 OpenGLHeadfulPlaybackProbe）。
+    private static WndProcDelegate? _offscreenWndProcKeepAlive;
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate nint WndProcDelegate(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    private const string OffscreenClassName = "LingFanGLDeviceCtx";
+
+    /// <summary>
+    /// 创建工厂级离屏 GL 上下文（隐藏 1×1 窗口 + WGL 3.3 core），作为共享组所有者。
+    /// 供 <see cref="OpenGLOffscreenDeviceContext"/> 在解码器初始化前建立，使解码侧产出的 GL 纹理
+    /// 经共享组对渲染器 on-screen 上下文可见（零拷贝路径的治本基础）。
+    /// </summary>
+    public static WglContext CreateOffscreen(ILogger? logger = null)
+    {
+        nint hwnd = CreateHiddenWindow();
+        return new WglContext(hwnd, logger);
+    }
+
+    private static nint CreateHiddenWindow()
+    {
+        _offscreenWndProcKeepAlive = StaticWndProc; // 保活，防止类过程被 GC
+        nint namePtr = nint.Zero;
+        try
+        {
+            namePtr = Marshal.StringToHGlobalUni(OffscreenClassName);
+            var wc = new GLNative.WNDCLASSEXW
+            {
+                cbSize = (uint)Marshal.SizeOf<GLNative.WNDCLASSEXW>(),
+                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_offscreenWndProcKeepAlive),
+                hbrBackground = GLNative.GetStockObject(4), // BLACK_BRUSH
+                lpszClassName = namePtr,
+                lpszMenuName = nint.Zero,
+            };
+            ushort atom = GLNative.RegisterClassExW(ref wc);
+            if (atom == 0)
+                throw new InvalidOperationException($"WGL 离屏窗口类注册失败(err={Marshal.GetLastPInvokeError()})。");
+            nint hwnd = GLNative.CreateWindowExW(0, OffscreenClassName, "", 0, 0, 0, 1, 1,
+                nint.Zero, nint.Zero, nint.Zero, nint.Zero);
+            if (hwnd == nint.Zero)
+                throw new InvalidOperationException($"WGL 离屏窗口创建失败(err={Marshal.GetLastPInvokeError()})。");
+            return hwnd;
+        }
+        finally
+        {
+            if (namePtr != nint.Zero) Marshal.FreeHGlobal(namePtr);
+        }
+    }
+
+    private static nint StaticWndProc(nint hWnd, uint msg, nint wParam, nint lParam)
+        => GLNative.DefWindowProcW(hWnd, msg, wParam, lParam);
 }

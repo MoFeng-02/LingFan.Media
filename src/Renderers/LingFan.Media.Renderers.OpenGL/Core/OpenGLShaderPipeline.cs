@@ -500,6 +500,54 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
     }
 
     /// <summary>
+    /// 用 Shader 路径将零拷贝 GPU 纹理（<see cref="IGpuTextureResource"/>）呈现到当前 GL 帧缓冲（不交换缓冲，由调用方 SwapBuffers）。
+    /// </summary>
+    /// <remarks>
+    /// <para>解码侧经共享组产出的 GL 纹理（<see cref="IGpuTextureResource.NativeTextureHandle"/> 为 GL 纹理 ID）
+    /// 在当前已 current 的 on-screen 上下文中直接绑定 + 采样，无需 CPU 回读，即零拷贝。</para>
+    /// <para>外部纹理按 RGBA8 上传（VAAPI / ffmpeg interop 标准输出），故走 <c>_rgbProgram</c> 且 <c>uIsBgra=0</c>（无需 BGR 交换）。
+    /// 与 D3D11 的 <c>case IGpuTextureResource</c> 各自为政、只处理本 API 纹理同源。</para>
+    /// </remarks>
+    internal void PresentGpuTexture(IGpuTextureResource gpu, int dstWidth, int dstHeight, AspectRatioMode mode)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(gpu);
+
+        EnsureInitialized();
+
+        uint tex = unchecked((uint)gpu.NativeTextureHandle);
+
+        // WGL_NV_DX_interop2 栅栏：采样前 Acquire（锁 D3D 资源，防解码侧写入与 GL 读取竞态/撕裂），绘制后 Release。
+        // GLD3D11InteropTexture 与本管线同程序集，可直接识别并调用；非 WGL 互操作纹理（如 EGL dma_buf）无操作。
+        GLD3D11InteropTexture? interop = gpu as GLD3D11InteropTexture;
+        interop?.AcquireForRendering();
+        try
+        {
+            GLNative.ActiveTexture((uint)GlTexture0);
+            GLNative.glBindTexture(GlTexture2D, tex);
+
+            // 按 ScaleMode 计算目标视口矩形（与 Present 同源）
+            ComputeScaleRects(gpu.Width, gpu.Height, dstWidth, dstHeight, mode,
+                out int vx, out int vy, out int vw, out int vh);
+
+            GLNative.glViewport(0, 0, dstWidth, dstHeight);
+            GLNative.glClearColor(0f, 0f, 0f, 1f);
+            GLNative.glClear(GlColorBufferBit);
+
+            GLNative.glViewport(vx, dstHeight - vy - vh, vw, vh);
+            GLNative.BindVertexArray(_vao);
+            GLNative.UseProgram(_rgbProgram);
+            GLNative.Uniform1i(_rgbUTex, 0);
+            GLNative.Uniform1i(_rgbUIsBgra, 0); // 外部零拷贝纹理按 RGBA8 上传，无需 BGR 交换
+            GLNative.glDrawArrays(GlTriangleStrip, 0, 4);
+        }
+        finally
+        {
+            interop?.ReleaseForRendering();
+        }
+    }
+
+    /// <summary>
     /// 按 <see cref="AspectRatioMode"/> 计算软帧→目标（top-left 原点）的目标视口矩形。
     /// <list type="bullet">
     /// <item><see cref="AspectRatioMode.Fill"/>：拉伸填满（整目标）。</item>
