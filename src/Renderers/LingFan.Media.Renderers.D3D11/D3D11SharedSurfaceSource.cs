@@ -43,6 +43,7 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
     private readonly ID3D11DeviceContext _context;
     private readonly ILogger<D3D11SharedSurfaceSource> _logger;
     private readonly D3D11ShaderPipeline _pipeline;
+    private AspectRatioMode _scaleMode = AspectRatioMode.Uniform;
 
     // 共享纹理 + RTV + keyed mutex（尺寸变化时重建；_version 随之递增）
     private ID3D11Texture2D? _sharedTexture;
@@ -70,6 +71,13 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _pipeline = new D3D11ShaderPipeline(_device, _context);
+    }
+
+    /// <summary>软帧/硬解帧宽高比缩放模式（契约层 <see cref="AspectRatioMode"/>）。默认 <see cref="AspectRatioMode.Uniform"/>（信箱）。</summary>
+    public AspectRatioMode ScaleMode
+    {
+        get => _scaleMode;
+        set => _scaleMode = value;
     }
 
     /// <inheritdoc/>
@@ -161,15 +169,15 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
                 // flipY=true：D3D11 RTV 原点在左上，Avalonia Composition 合成器按 OpenGL 风格
                 //（原点在左下）采样共享纹理，写入时预翻转 Y 才能保证最终正向。
                 if (fmt is PixelFormat.NV12 or PixelFormat.NV21)
-                    _pipeline.PresentFromGpuTexture(srcGpu, subresource, w, h, _renderTargetView!, w, h, flipY: true);
+                    _pipeline.PresentFromGpuTexture(srcGpu, subresource, w, h, _renderTargetView!, w, h, _scaleMode, flipY: true);
                 else if (fmt is PixelFormat.BGRA32 or PixelFormat.RGBA32)
-                    _pipeline.PresentFromBgraGpuTexture(srcGpu, subresource, w, h, fmt, _renderTargetView!, w, h, flipY: true);
+                    _pipeline.PresentFromBgraGpuTexture(srcGpu, subresource, w, h, fmt, _renderTargetView!, w, h, _scaleMode, flipY: true);
                 else
                     return false; // 不支持的 GPU 格式 → 交回回退
             }
             else // SoftwareFrameResource
             {
-                _pipeline.Present((SoftwareFrameResource)frame.Resource, _renderTargetView!, w, h, flipY: true);
+                _pipeline.Present((SoftwareFrameResource)frame.Resource, _renderTargetView!, w, h, _scaleMode, flipY: true);
             }
 
             written = true;

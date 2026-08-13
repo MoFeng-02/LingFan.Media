@@ -95,7 +95,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     private uint _stagingImageH;
     private Format _stagingImageFormat;
 
-    // ── 诊断计时（A1 验证用：定位每帧 ~92ms 开销归属）──
+    // ── 诊断计时（定位每帧开销归属，由诊断开关门控）──
     // 累加 CPU 转换耗时（UploadSoftwareFrame 全程）与 GPU 同步耗时（QueueWaitIdle 全程），
     // 收尾由探针读取打印，指导进一步优化方向（不改热路径逻辑）。
     private long _profConvertTicks;

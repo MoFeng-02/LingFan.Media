@@ -71,7 +71,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
 
     // ── no-airspace 共享表面源（VulkanSharedSurfaceSource）访问共享 Vulkan 资源的内部入口 ──
     // 仅同程序集（Vulkan 模块）可见：源经工厂构造，直接复用本工厂的 VkInstance/Device/Queue，
-    // 严守「各 Renderer 管好自身（无头/有头/无空域）」宪法，不跨界泄露给其它层。
+    // 严守「各 Renderer 管好自身（无头/有头/无空域）」架构原则，不跨界泄露给其它层。
     internal Instance SharedInstance => _instance;
     internal PhysicalDevice SharedPhysicalDevice => _physicalDevice;
     internal Device SharedDevice => _device;

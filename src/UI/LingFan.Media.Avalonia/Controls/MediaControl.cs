@@ -405,7 +405,7 @@ public sealed class MediaControl : TemplatedControl
         => FullscreenRequested?.Invoke(this, EventArgs.Empty);
 
     /// <summary>
-    /// 根据当前播放器状态更新播放按钮内容（▶/⏸）。
+    /// 根据当前播放器状态更新播放按钮内容（播放/暂停）。
     /// </summary>
     private void UpdatePlayButtonContent()
     {

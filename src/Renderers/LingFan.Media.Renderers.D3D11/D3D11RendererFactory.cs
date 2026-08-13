@@ -33,6 +33,9 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
     private RenderContext? _renderContext;
     private bool _disposed;
 
+    /// <summary>软帧/硬解帧缩放模式（契约层 <see cref="AspectRatioMode"/>）。默认 <see cref="AspectRatioMode.Uniform"/>（信箱）。</summary>
+    public AspectRatioMode ScaleMode { get; set; } = AspectRatioMode.Uniform;
+
     /// <summary>
     /// 初始化 <see cref="D3D11RendererFactory"/> 的新实例。
     /// </summary>
@@ -56,6 +59,7 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
                 _singleton = new D3D11Renderer(_device!, _context!, _loggerFactory.CreateLogger<D3D11Renderer>());
                 _logger.LogDebug("D3D11 渲染器单例已创建（缓存复用）");
             }
+            _singleton.ScaleMode = this.ScaleMode;
             return _singleton;
         }
     }

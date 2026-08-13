@@ -5,13 +5,13 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.AppleAudioUnit;
 
 /// <summary>
-/// Apple AudioUnit 共用播放引擎（macOS DefaultOutput / iOS RemoteIO）。P2 平台扩展（O2+O3）。
+/// Apple AudioUnit 共用播放引擎（macOS DefaultOutput / iOS RemoteIO），平台扩展。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 AudioToolbox AudioUnit v2 C API 播放交错 S16 PCM。
 /// <see cref="CoreAudio.CoreAudioOutput"/>（macOS，kAudioUnitSubType_DefaultOutput）与
 /// <see cref="AVAudioEngine.AvAudioEngineOutput"/>（iOS，kAudioUnitSubType_RemoteIO）共用本引擎
-/// （O3 走 RemoteIO 共用 AudioUnit 路径，不走 Obj-C AVAudioEngine 封装）。</para>
+/// （走 RemoteIO 共用 AudioUnit 路径，不走 Obj-C AVAudioEngine 封装）。</para>
 /// <para><b>数据模型</b>：AudioUnit 为拉模式——注册 <c>AURenderCallback</c>，CoreAudio 实时线程回调拉取 PCM；
 /// <see cref="Submit"/> 推入托管环形缓冲（500ms 容量），缓冲满时阻塞等待（带 2 秒超时）自带背压；
 /// 回调侧数据不足补零（静音，underrun 不抛错）。</para>

@@ -50,7 +50,10 @@ public sealed class D3D11SharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFac
 
         // 共享设备已开启多线程保护；使用其 immediate context 提交（与管线/解码线程并发安全）。
         ID3D11DeviceContext d3d11Context = device.ImmediateContext;
-        return new D3D11SharedSurfaceSource(
+        var source = new D3D11SharedSurfaceSource(
             device, d3d11Context, _loggerFactory.CreateLogger<D3D11SharedSurfaceSource>());
+        // 宽高比缩放模式与渲染器工厂保持一致（默认 Uniform 信箱）
+        source.ScaleMode = _rendererFactory.ScaleMode;
+        return source;
     }
 }

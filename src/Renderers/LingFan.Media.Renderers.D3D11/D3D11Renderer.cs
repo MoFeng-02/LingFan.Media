@@ -63,6 +63,9 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// <summary>诊断：Present 序号（从 1 起），用于 DUMP_SKIP/DUMP_EVERY 采样控制。</summary>
     private long _presentSeq;
 
+    /// <summary>软帧/硬解帧宽高比缩放模式（契约层 <see cref="AspectRatioMode"/>）。默认 <see cref="AspectRatioMode.Uniform"/>（信箱）。</summary>
+    private AspectRatioMode _scaleMode = AspectRatioMode.Uniform;
+
     /// <summary>诊断：源→目标缩放比只在首帧记一次（避免每帧刷屏）。</summary>
     private bool _loggedScaleOnce;
 
@@ -106,6 +109,13 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// <inheritdoc />
     /// <remarks>真实「Present→上屏」延迟 = 端到端呈现延迟（最坏 vsync 相位 + Present()/消费者管线路径），约 40ms@60Hz。</remarks>
     public TimeSpan PresentationLatency => _presentationLatency;
+
+    /// <summary>软帧/硬解帧宽高比缩放模式（契约层 <see cref="AspectRatioMode"/>）。默认 <see cref="AspectRatioMode.Uniform"/>（保持比例，留黑边）。</summary>
+    public AspectRatioMode ScaleMode
+    {
+        get => _scaleMode;
+        set => _scaleMode = value;
+    }
 
     /// <inheritdoc/>
     /// <remarks>接口契约：设备由工厂创建，无 I/O，返回 <see cref="Task.CompletedTask"/>。</remarks>
@@ -304,7 +314,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
                     {
                         _shaderPipeline ??= new D3D11ShaderPipeline(_device, _context);
                         _shaderPipeline.Present(sw, _renderTargetView!,
-                            (int)backBufferDesc.Width, (int)backBufferDesc.Height);
+                            (int)backBufferDesc.Width, (int)backBufferDesc.Height, _scaleMode);
                     }
                     else
                     {
@@ -320,7 +330,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
                     if (D3D11ShaderPipeline.IsYuvFormat(gpu.Format))
                     {
                         _shaderPipeline ??= new D3D11ShaderPipeline(_device, _context);
-                        PresentGpuTextureViaShader(gpu, (int)backBufferDesc.Width, (int)backBufferDesc.Height);
+                        PresentGpuTextureViaShader(gpu, (int)backBufferDesc.Width, (int)backBufferDesc.Height, _scaleMode);
                     }
                     else if (sizeMatches)
                     {
@@ -329,7 +339,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
                     else
                     {
                         _shaderPipeline ??= new D3D11ShaderPipeline(_device, _context);
-                        PresentGpuTextureViaShaderBgra(gpu, (int)backBufferDesc.Width, (int)backBufferDesc.Height);
+                        PresentGpuTextureViaShaderBgra(gpu, (int)backBufferDesc.Width, (int)backBufferDesc.Height, _scaleMode);
                     }
                     break;
 
@@ -542,7 +552,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// <summary>
     /// GPU 纹理渲染路径（NV12/NV21）：经中间 SRV 纹理 + Shader 缩放/转换（DXVA 硬解）。
     /// </summary>
-    private void PresentGpuTextureViaShader(IGpuTextureResource gpu, int targetWidth, int targetHeight)
+    private void PresentGpuTextureViaShader(IGpuTextureResource gpu, int targetWidth, int targetHeight, AspectRatioMode mode)
     {
         IntPtr ptr = gpu.NativeTextureHandle;
         if (ptr == IntPtr.Zero)
@@ -554,7 +564,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
             _shaderPipeline!.PresentFromGpuTexture(
                 srcTexture, gpu.SubresourceIndex,
                 gpu.Width, gpu.Height,
-                _renderTargetView!, targetWidth, targetHeight);
+                _renderTargetView!, targetWidth, targetHeight, mode);
         }
         finally
         {
@@ -570,7 +580,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// 复用 <c>PSRgb</c> Shader 双线性缩放，零 CPU 往返。替代原先抛 <see cref="NotSupportedException"/> 的行为——
     /// 帧尺寸本应逐帧可变，源分辨率 ≠ 窗口尺寸属正常缩放场景（如 4K 视频缩至窗口）。
     /// </remarks>
-    private void PresentGpuTextureViaShaderBgra(IGpuTextureResource gpu, int targetWidth, int targetHeight)
+    private void PresentGpuTextureViaShaderBgra(IGpuTextureResource gpu, int targetWidth, int targetHeight, AspectRatioMode mode)
     {
         IntPtr ptr = gpu.NativeTextureHandle;
         if (ptr == IntPtr.Zero)
@@ -582,7 +592,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
             _shaderPipeline!.PresentFromBgraGpuTexture(
                 srcTexture, gpu.SubresourceIndex,
                 gpu.Width, gpu.Height, gpu.Format,
-                _renderTargetView!, targetWidth, targetHeight);
+                _renderTargetView!, targetWidth, targetHeight, mode);
         }
         finally
         {

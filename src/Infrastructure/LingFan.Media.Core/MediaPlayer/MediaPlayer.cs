@@ -334,7 +334,7 @@ public sealed class MediaPlayer : IMediaPlayer
             _videoRenderer = _videoRendererFactory.Create();
             _audioOutput = _audioOutputFactory.Create();
 
-            // P0 修复：音频输出设备必须显式初始化。WASAPI 以固定采样率打开设备，
+            // 修复：音频输出设备必须显式初始化。WASAPI 以固定采样率打开设备，
             // Submit 不校验采样率——设备率必须与解码器实际输出率一致，否则节奏/音高错乱。
             // Initialize 为同步 COM 原生边界，保持 sync void（非伪异步），不引入 await。
             if (_audioDecoder != null)
@@ -892,7 +892,7 @@ public sealed class MediaPlayer : IMediaPlayer
         try { _subtitleDecoder?.Dispose(); } catch (Exception ex) { _logger.LogWarning(ex, "释放字幕解码器异常"); }
     }
 
-    // 方案 A（P0 修复）共享单例渲染器生命周期说明：
+    // 共享单例渲染器生命周期说明：
     // _videoRenderer 是 D3D11RendererFactory 的缓存单例，Core 视频管线与 UI 层 D3D11GpuPresenter
     // 通过同一工厂解析到同一 D3D11Renderer 实例。其生命周期由工厂（DI Singleton）持有，
     // SwapChain 与 HWND 的绑定由 UI Presenter.Detach 管理。

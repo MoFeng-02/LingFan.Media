@@ -4,7 +4,7 @@ using LingFan.Media.Outputs.AppleAudioUnit;
 namespace LingFan.Media.Outputs.CoreAudio;
 
 /// <summary>
-/// CoreAudio 音频输出（macOS）。P2 平台扩展（O2）。
+/// CoreAudio 音频输出（macOS），平台扩展。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 AudioToolbox AudioUnit（kAudioUnitSubType_DefaultOutput）播放交错 S16 PCM，

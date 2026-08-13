@@ -703,7 +703,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     {
         if (_codecContextHandle == null) return;
 
-        // ★ 先丢弃旧时间线的残留包/帧，避免混入新流造成参考帧错乱或 D3D11VA 硬件帧池枯竭。
+        // 先丢弃旧时间线的残留包/帧，避免混入新流造成参考帧错乱或 D3D11VA 硬件帧池枯竭。
         ClearPendingQueues();
 
         // 重播/seek 全量重建：D3D11VA/VP9 硬件解码器在流末 EOF 排干后，
@@ -711,7 +711,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         // 一路丢帧直到下一个真关键帧 → 视频冻结较长时间。
         // 成因：硬件解码器内部参考帧/序列状态在 EOF 后未干净复位。
         // 唯一稳妥修复=关闭旧 AVCodecContext 并完整重建（同 Initialize 路径，复用原 settings）。
-        // ★ 引用计数配对（不泄漏共享 D3D11 设备）：先 Dispose 旧 _hwDeviceCtx（av_buffer_unref 释放时
+        // 引用计数配对（不泄漏共享 D3D11 设备）：先 Dispose 旧 _hwDeviceCtx（av_buffer_unref 释放时
         //   ffmpeg 内部 Release 掉 InitializeD3D11VA 时对共享设备加的 2 个引用），再 avcodec_free_context，
         //   最后 Initialize 重新 AddRef + 重建 hw_device_ctx。旧解码器仍被在途帧(D3D11HardwareFrameResource
         //   持有的 av_frame_clone 引用)保活的纹理，待那些帧归还池后由 ffmpeg 引用计数自动释放，安全。

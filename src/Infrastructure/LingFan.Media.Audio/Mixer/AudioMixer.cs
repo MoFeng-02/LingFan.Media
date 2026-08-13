@@ -71,7 +71,7 @@ public sealed class AudioMixer : IDisposable
         int outCh = _settings.Channels;
         int totalSamples = sampleCount * outCh;
 
-        // A2: mixBuffer 大尺寸时改用 ArrayPool 租借（与下方 chBuf 一致），避免每帧 new float[] 的 LOH/GC 压力
+        // mixBuffer 大尺寸时改用 ArrayPool 租借（与下方 chBuf 一致），避免每帧 new float[] 的 LOH/GC 压力
         float[]? mixRented = null;
         Span<float> mixBuffer = totalSamples <= 256
             ? stackalloc float[256]

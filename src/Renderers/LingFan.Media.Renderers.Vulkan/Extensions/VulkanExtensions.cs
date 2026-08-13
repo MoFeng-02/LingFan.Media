@@ -37,7 +37,7 @@ public static class VulkanExtensions
             return factory.Context;
         });
 
-        // 无空域合成桥（ISharedGpuSurfaceSource）注册 Vulkan 实现——「Vulkan 渲染 Vulkan 的」宪法落地：
+        // 无空域合成桥（ISharedGpuSurfaceSource）注册 Vulkan 实现——「Vulkan 渲染 Vulkan 的」架构原则落地：
         // 本源产出<b>自身</b>的 Vulkan 外部内存/信号量句柄（VulkanOpaqueNtHandle / VulkanOpaquePosixFileDescriptor），
         // 由原生支持导入该句柄的宿主组合器（Vulkan 后端合成器）消费，不跨界喂 D3D11 组合器、
         // 不伪造 D3D11 句柄类型。仅在本 Vulkan 模块内注册，严守模块化与依赖倒置。

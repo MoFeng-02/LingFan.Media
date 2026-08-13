@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>OpenGLHeadfulPlaybackProbe</RootNamespace>
+		<AssemblyName>OpenGLHeadfulPlaybackProbe</AssemblyName>
+		<IsPackable>false</IsPackable>
+		<!-- Windows-only（Win32 HWND + WGL + WASAPI）：抑制 CA1416。
+		     OpenGL 渲染器执行层完全自写零反射绑定（GLNative：LibraryImport + 运行时 GetProcAddress），
+		     无 Silk.NET / Vortice / SharpGen 三方依赖，故不存在 IL2xxx 第三方反射告警；
+		     AOT 配方与 Vulkan 探针同源但更轻。TreatWarningsAsErrors=true 下如有己方 IL2xxx 再补 NoWarn。 -->
+		<NoWarn>CA1416</NoWarn>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+		<!-- 本探针是宿主/消费方工程：设置 PublishAot=true 以端到端验证 LingFan.Media.Renderers.OpenGL
+		     在 NativeAOT 下的就绪度（期望 0 IL2xxx 警告）。库项目本身绝不设置此开关。 -->
+		<PublishAot>true</PublishAot>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 有头全链路：MF 软解（H264 → CPU SoftwareFrameResource）→ OpenGL 上传上屏（WGL）+ WASAPI 出声（输出）。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
+		<!-- OpenGL 渲染器（契约层：仅引用 IVideoRendererFactory，不越级）。 -->
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.OpenGL\LingFan.Media.Renderers.OpenGL.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+		<ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 真实媒体资源（与测试工程同源） -->
+		<None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+</Project>

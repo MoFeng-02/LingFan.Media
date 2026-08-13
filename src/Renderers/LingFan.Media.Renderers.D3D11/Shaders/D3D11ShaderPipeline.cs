@@ -165,6 +165,48 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         PixelFormat.NV12 or PixelFormat.NV21;
 
     /// <summary>
+    /// 按 <see cref="AspectRatioMode"/> 计算软帧/硬解帧→目标（top-left 原点）的目标视口矩形。
+    /// <list type="bullet">
+    /// <item><see cref="AspectRatioMode.Fill"/>：拉伸填满（整目标）。</item>
+    /// <item><see cref="AspectRatioMode.Uniform"/>：保持比例、居中、留黑边（子矩形）。</item>
+    /// <item><see cref="AspectRatioMode.UniformToFill"/>：保持比例、居中、溢出裁剪（大于目标的矩形，仅中心可见）。</item>
+    /// </list>
+    /// 纯视口数学，无需改动 HLSL（Full→均匀覆盖、溢出→天然裁中心），与 Vulkan/Skia/OpenGL 语义一致。
+    /// </summary>
+    private static void ComputeScaleRects(
+        int srcW, int srcH, int dstW, int dstH, AspectRatioMode mode,
+        out int x, out int y, out int w, out int h)
+    {
+        x = 0; y = 0; w = dstW; h = dstH;
+        if (srcW <= 0 || srcH <= 0) return;
+
+        switch (mode)
+        {
+            case AspectRatioMode.Uniform:
+            {
+                double fit = Math.Min((double)dstW / srcW, (double)dstH / srcH);
+                w = Math.Max(1, (int)(srcW * fit + 0.5));
+                h = Math.Max(1, (int)(srcH * fit + 0.5));
+                x = (dstW - w) / 2;
+                y = (dstH - h) / 2;
+                break;
+            }
+            case AspectRatioMode.UniformToFill:
+            {
+                double cover = Math.Max((double)dstW / srcW, (double)dstH / srcH);
+                w = Math.Max(1, (int)(srcW * cover + 0.5));
+                h = Math.Max(1, (int)(srcH * cover + 0.5));
+                x = (dstW - w) / 2;
+                y = (dstH - h) / 2;
+                break;
+            }
+            case AspectRatioMode.Fill:
+            default:
+                break;
+        }
+    }
+
+    /// <summary>
     /// 用 Shader 路径呈现软件帧到渲染目标（GPU 缩放 + 可选 YUV→RGB）。
     /// </summary>
     /// <remarks>调用方（<see cref="D3D11Renderer"/>）持锁；本方法同步 GPU 提交，无 I/O。</remarks>
@@ -174,7 +216,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     /// <param name="targetHeight">渲染目标高度（像素）。</param>
     /// <param name="flipY">是否在采样时翻转 UV.y。共享纹理经 Avalonia Composition 导入时，
     /// 合成器按 OpenGL 风格（原点在左下）采样，需在写入共享纹理时预翻转；默认 false。</param>
-    internal void Present(SoftwareFrameResource sw, ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, bool flipY = false)
+    internal void Present(SoftwareFrameResource sw, ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, AspectRatioMode mode, bool flipY = false)
     {
         ArgumentNullException.ThrowIfNull(sw);
         ArgumentNullException.ThrowIfNull(rtv);
@@ -198,7 +240,11 @@ internal sealed class D3D11ShaderPipeline : IDisposable
 
         // 绑定管线状态并绘制全屏三角形
         _context.OMSetRenderTargets(rtv, null!);
-        _context.RSSetViewport(0, 0, targetWidth, targetHeight, 0f, 1f);
+        // 按 ScaleMode 计算目标视口矩形（top-left 原点）：Uniform 留黑边、UniformToFill 居中溢出裁剪
+        ComputeScaleRects(sw.Width, sw.Height, targetWidth, targetHeight, mode,
+            out int vx, out int vy, out int vw, out int vh);
+        _context.ClearRenderTargetView(rtv, new Color4(0, 0, 0, 1));
+        _context.RSSetViewport(vx, vy, vw, vh, 0f, 1f);
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _context.IASetInputLayout(null!); // SV_VertexID 生成顶点，无输入布局
         _context.VSSetShader(_vs!);
@@ -235,7 +281,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     internal void PresentFromGpuTexture(
         ID3D11Texture2D srcTexture, int subresourceIndex,
         int srcWidth, int srcHeight,
-        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, bool flipY = false)
+        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, AspectRatioMode mode, bool flipY = false)
     {
         ArgumentNullException.ThrowIfNull(srcTexture);
         ArgumentNullException.ThrowIfNull(rtv);
@@ -298,7 +344,11 @@ internal sealed class D3D11ShaderPipeline : IDisposable
 
         // 3. 用 PS_Nv12 渲染（Composition 共享纹理路径使用 Flip 变体预翻转 Y）
         _context.OMSetRenderTargets(rtv, null!);
-        _context.RSSetViewport(0, 0, targetWidth, targetHeight, 0f, 1f);
+        // 按 ScaleMode 计算目标视口矩形（top-left 原点）；GPU 纹理路径同样受宽高比约束
+        ComputeScaleRects(srcWidth, srcHeight, targetWidth, targetHeight, mode,
+            out int vx, out int vy, out int vw, out int vh);
+        _context.ClearRenderTargetView(rtv, new Color4(0, 0, 0, 1));
+        _context.RSSetViewport(vx, vy, vw, vh, 0f, 1f);
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _context.IASetInputLayout(null!);
         _context.VSSetShader(_vs!);
@@ -331,7 +381,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     internal void PresentFromBgraGpuTexture(
         ID3D11Texture2D srcTexture, int subresourceIndex,
         int srcWidth, int srcHeight, PixelFormat srcFormat,
-        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, bool flipY = false)
+        ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, AspectRatioMode mode, bool flipY = false)
     {
         ArgumentNullException.ThrowIfNull(srcTexture);
         ArgumentNullException.ThrowIfNull(rtv);
@@ -349,7 +399,11 @@ internal sealed class D3D11ShaderPipeline : IDisposable
 
         // 复用 PSRgb + 平面0 SRV 采样缩放（Composition 共享纹理路径使用 Flip 变体预翻转 Y）
         _context.OMSetRenderTargets(rtv, null!);
-        _context.RSSetViewport(0, 0, targetWidth, targetHeight, 0f, 1f);
+        // 按 ScaleMode 计算目标视口矩形（top-left 原点）；GPU 纹理路径同样受宽高比约束
+        ComputeScaleRects(srcWidth, srcHeight, targetWidth, targetHeight, mode,
+            out int vx, out int vy, out int vw, out int vh);
+        _context.ClearRenderTargetView(rtv, new Color4(0, 0, 0, 1));
+        _context.RSSetViewport(vx, vy, vw, vh, 0f, 1f);
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
         _context.IASetInputLayout(null!);
         _context.VSSetShader(_vs!);

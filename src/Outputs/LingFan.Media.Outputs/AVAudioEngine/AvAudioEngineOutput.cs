@@ -4,7 +4,7 @@ using LingFan.Media.Outputs.AppleAudioUnit;
 namespace LingFan.Media.Outputs.AVAudioEngine;
 
 /// <summary>
-/// iOS 音频输出（RemoteIO AudioUnit）。P2 平台扩展（O3）。
+/// iOS 音频输出（RemoteIO AudioUnit），平台扩展。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 AudioToolbox AudioUnit（kAudioUnitSubType_RemoteIO）播放交错 S16 PCM，

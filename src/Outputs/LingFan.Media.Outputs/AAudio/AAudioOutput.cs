@@ -5,7 +5,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.AAudio;
 
 /// <summary>
-/// AAudio 音频输出（Android API 27+）。P2 平台扩展（O5）。
+/// AAudio 音频输出（Android API 27+），平台扩展。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 Android NDK AAudio API 播放 PCM 数据（libaaudio.so）。

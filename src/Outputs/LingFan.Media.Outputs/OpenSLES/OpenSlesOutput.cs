@@ -5,7 +5,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.OpenSLES;
 
 /// <summary>
-/// OpenSL ES 音频输出（Android）。P2 平台扩展（O4）。
+/// OpenSL ES 音频输出（Android），平台扩展。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 Android NDK OpenSL ES API 直接播放 PCM 数据（libOpenSLES.so）。

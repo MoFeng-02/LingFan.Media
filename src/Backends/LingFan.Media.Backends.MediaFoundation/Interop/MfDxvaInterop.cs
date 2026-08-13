@@ -81,7 +81,7 @@ internal static partial class MfDxvaInterop
     //    ResetDevice 的 P/Invoke 若有偏差，HRESULT 仍可能成功，但管理器内部设备为空/错 ⇒ 解码器
     //    GetVideoService 取回空设备 ⇒ 静默读回系统内存（PROVIDES_SAMPLES 仍可为 True）。本探针直接
     //    从管理器取回 ID3D11Device 并复测 DXVA 能力，是「绑定是否真正生效」的唯一权威判据。
-    //    ★ SDK 实物 mfobjects.h:6631-6639：GetVideoService 真实签名为
+    //    SDK 实物 mfobjects.h:6631-6639：GetVideoService 真实签名为
     //        HRESULT GetVideoService(THIS, _In_ HANDLE hDevice, _In_ REFIID riid, _Outptr_ void** ppService)
     //      即紧接 This 之后的【第一个参数是 OpenDeviceHandle 取得的 HANDLE】，此前手写委托漏掉该参数
     //      ⇒ 调用栈错位（riid 落到了 hDevice 位、ppService 落到 riid 位、少压一个参数）
@@ -204,7 +204,7 @@ internal static partial class MfDxvaInterop
 
     // ── ID3D11VideoDevice 解码 profile 枚举（用于彻底排查「profile 不匹配致 CreateVideoDecoder 失败」）──
     //    GetVideoDecoderProfileCount=11(→8), GetVideoDecoderProfile=12(→9)。
-    // ★ SDK 实物 d3d11.h:13965-13967：GetVideoDecoderProfileCount 真实签名为
+    // SDK 实物 d3d11.h:13965-13967：GetVideoDecoderProfileCount 真实签名为
     //     UINT GetVideoDecoderProfileCount(THIS);  —— 直接以【返回值】返回 profile 数量（UINT），【无 out 参数】。
     //   此前手写委托误写成 (self, out uint count) 导致：真实数量（如 AMD 27）被误读进 hr，count 永远为 0
     //   ⇒ 误判「设备无视频解码 profile」（假阴性，HRESULT=0x1B 实为 27 个 profile 的返回值）。
@@ -219,7 +219,7 @@ internal static partial class MfDxvaInterop
     /// <c>GetVideoService(IID_ID3D11VideoDevice)</c> 取回解码器实际会用的视频设备，并复测指定 profile→NV12
     /// DXVA 能力。这是区分「绑定真正生效」与「ResetDevice 静默失败（P/Invoke 偏差 / token 不匹配 /
     /// 设备缺 VIDEO_SUPPORT）」的唯一权威判据。
-    /// ★ SDK 实物 mfobjects.h:6631：<c>GetVideoService</c> 仅支持 <c>IID_ID3D11VideoDevice</c>（DXVA 服务接口），
+    /// SDK 实物 mfobjects.h:6631：<c>GetVideoService</c> 仅支持 <c>IID_ID3D11VideoDevice</c>（DXVA 服务接口），
     ///   查 <c>IID_ID3D11Device</c> 必返 E_NOINTERFACE —— 旧探针正是因此造出「绑定异常」假阴性。
     /// </summary>
     internal static string? ProbeManagerBoundDevice(IntPtr manager, Guid decoderProfile)
@@ -233,7 +233,7 @@ internal static partial class MfDxvaInterop
             return $"[DXVA-DIAG] 管理器 OpenDeviceHandle 失败 HRESULT=0x{oh & 0xFFFFFFFF:X8} → ResetDevice 未真正绑定设备（或 token 不匹配），解码器将静默读回系统内存";
         try
         {
-            // ★ SDK：GetVideoService 仅支持 IID_ID3D11VideoDevice（旧探针误用 IID_ID3D11Device ⇒ 必 E_NOINTERFACE 假阴性）。
+            // SDK：GetVideoService 仅支持 IID_ID3D11VideoDevice（旧探针误用 IID_ID3D11Device ⇒ 必 E_NOINTERFACE 假阴性）。
             var getVs = MfVTable.Get<IMFDXGIDeviceManager_GetVideoService>(manager, 1); // abs 4
             Guid iid = MFConstants.IID_ID3D11VideoDevice;
             int hr = getVs(manager, hDevice, ref iid, out IntPtr vd);
