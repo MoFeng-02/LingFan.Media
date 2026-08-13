@@ -1,0 +1,36 @@
+# Sync GitHub → Gitee mirror
+#
+# 每次向本仓库 push（任意分支 / tag）时，把整个仓库（含所有分支与 tag）镜像到 Gitee。
+# 鉴权方式：Gitee 个人访问令牌（PAT），存为本仓库 Secrets 中的 GITEE_TOKEN。
+#   令牌需具备 projects 写权限；令牌归属账号须为 MoFeng-02（下方 URL 已写死用户名）。
+#   若你的 Gitee 用户名不是 MoFeng-02，请同步改下方 URL 中的用户名。
+# 准备工作（仅需一次）：
+#   1. Gitee 上新建同名空仓库：MoFeng-02/LingFan.Media（不要初始化 README）。
+#   2. Gitee → 设置 → 私人令牌 → 生成，勾选 projects 权限，得到令牌。
+#   3. 在本仓库 Settings → Secrets 中添加 GITEE_TOKEN = 该令牌。
+
+name: Sync to Gitee
+
+on:
+  push:
+
+concurrency:
+  group: sync-gitee-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror repository to Gitee
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Mirror to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 完整镜像克隆（含所有分支与 tag），再强制推送到 Gitee
+          git clone --mirror "https://github.com/${{ github.repository }}.git" mirror-tmp
+          cd mirror-tmp
+          git remote set-url origin "https://MoFeng-02:${GITEE_TOKEN}@gitee.com/MoFeng-02/LingFan.Media.git"
+          git push --mirror
