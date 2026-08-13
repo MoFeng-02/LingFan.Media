@@ -23,5 +23,5 @@ jobs:
           # 完整镜像克隆（含所有分支与 tag），再强制推送到 Gitee
           git clone --mirror "https://github.com/${{ github.repository }}.git" mirror-tmp
           cd mirror-tmp
-          git remote set-url origin "https://MoFeng-02:${GITEE_TOKEN}@gitee.com/MoFeng-02/LingFan.Media.git"
+          git remote set-url origin "https://${{ github.repository_owner }}:${GITEE_TOKEN}@gitee.com/${{ github.repository_owner }}/LingFan.Media.git"
           git push --mirror
