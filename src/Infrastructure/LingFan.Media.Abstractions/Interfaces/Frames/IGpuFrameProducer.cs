@@ -11,21 +11,24 @@ public enum GpuFrameImportKind
     /// <summary>Windows：ID3D11Texture2D 经 DXGI 共享句柄（HANDLE，legacy 或 NT）。</summary>
     D3D11SharedHandle,
 
-    /// <summary>Linux：VAAPI surface 导出的 dma_buf 文件描述符（fd）。</summary>
-    VaApiDmaBuf,
+    /// <summary>Linux：VAAPI / VDPAU / NVDEC surface 导出的 dma_buf 文件描述符（fd），跨 API 中性句柄。</summary>
+    LinuxDmaBufFd,
 
     /// <summary>Android：AHardwareBuffer 指针。</summary>
     AndroidHardwareBuffer,
 
     /// <summary>Apple(macOS/iOS)：IOSurfaceRef。</summary>
     IOSurface,
+
+    /// <summary>跨平台：Vulkan Video 解码产出的 VkImage，经 Vulkan 外部内存句柄（fd / HANDLE）导入，由 Vulkan 渲染器零拷贝消费（B4）。</summary>
+    VulkanImage,
 }
 
 /// <summary>
 /// 解码原生输出导入描述（中立，零外部引用）。
 /// </summary>
 /// <remarks>
-/// 由解码后端填充：把其原生解码输出（D3D11 共享句柄 / VAAPI dma_buf / AHardwareBuffer / IOSurface）
+/// 由解码后端填充：把其原生解码输出（D3D11 共享句柄 / Linux dma_buf / AHardwareBuffer / IOSurface）
 /// 的句柄、尺寸与格式交给渲染器侧生产者，避免后端反向引用渲染器程序集。
 /// </remarks>
 public readonly struct GpuFrameImportSource
@@ -61,7 +64,7 @@ public readonly struct GpuFrameImportSource
 /// 中立 GPU 帧生产者桥：由渲染器程序集实现并注册为 Singleton，解码后端仅依赖此抽象。
 /// </summary>
 /// <remarks>
-/// <para>解码器把其原生解码输出（D3D11 共享句柄 / VAAPI dma_buf / AHardwareBuffer / IOSurface）
+/// <para>解码器把其原生解码输出（D3D11 共享句柄 / Linux dma_buf / AHardwareBuffer / IOSurface）
 /// 经本桥导入为当前渲染器 GPU-API 的纹理（<see cref="IGpuTextureResource"/>），实现零拷贝上屏。
 /// 与 <see cref="IGpuDeviceContext"/> 同为 Abstractions 中立桥，严守依赖倒置——
 /// 解码后端不反向引用渲染器程序集，亦不感知具体 GPU-API 绑定的创建细节（VkImage 创建由生产者完成）。</para>

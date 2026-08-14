@@ -86,6 +86,15 @@ internal sealed class MfGpuDeviceContext : IGpuDeviceContext
         => new GpuDeviceCapabilities("MF-DXVA-Device", 0, 0, 16384, false, true, -1);
 
     /// <inheritdoc/>
+    public object? SharedDevice => null;
+
+    /// <inheritdoc/>
+    public object? SharedPhysicalDevice => null;
+
+    /// <inheritdoc/>
+    public uint VideoQueueFamilyIndex => uint.MaxValue;
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed) return;

@@ -15,6 +15,8 @@
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
 		<ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
+		<!-- 共享 Vulkan 原生绑定（渲染 + B4 硬解共用，单一零反射 AOT 友好层） -->
+		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Vulkan\LingFan.Media.GPUShare.Vulkan.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

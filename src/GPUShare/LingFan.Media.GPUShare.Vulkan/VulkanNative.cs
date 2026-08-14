@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace LingFan.Media.Renderers.Vulkan;
+namespace LingFan.Media.GPUShare.Vulkan;
 
 /// <summary>
 /// 零反射 Vulkan 原生绑定层（替代 Silk.NET 的 <c>Vk</c> / <c>Khr*</c> 包装与 <c>SilkMarshal</c> 调用）。
@@ -29,7 +29,7 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <para>调用约定：Vulkan 函数指针统一 <c>unmanaged[Stdcall]</c>；z 调用方传参与 Silk.NET 的 <c>Vk</c>/<c>Khr*</c>
 /// 方法签名保持一致（ref/out/数组/指针），故现有调用点只需改名。</para>
 /// </remarks>
-internal static unsafe partial class VulkanNative
+public static unsafe partial class VulkanNative
 {
     // ── 平台库名重定向：macOS/iOS（MoltenVK）上 Vulkan loader 原生库名非 vulkan-1 ──
     static VulkanNative()

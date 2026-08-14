@@ -42,6 +42,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private readonly IEnumerable<IGpuFrameProducer>? _frameProducers;
     private IGpuFrameProducer? _gpuProducer;
     private bool _gpuImportMode;
+    // D3D11VA NV12 硬解帧 → RGBA32 的 GPU 转换器（位于中性互操作模块 LingFan.Media.GPUShare.D3D11）。
+    // 仅 GPU 零拷贝路径（Windows）使用；其持有的共享设备包装不 Dispose（见转换器注释）。
+    private LingFan.Media.GPUShare.D3D11.D3D11Nv12ToRgbaConverter? _nv12ToRgbaConverter;
     private readonly FFmpegOptions? _options;
     private SafeAVCodecContextHandle? _codecContextHandle;
     private SafeAVBufferRefHandle? _hwDeviceCtx;
@@ -243,6 +246,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                     // 同 D3D11 分支：纹理数组须留余量供管线长期持有切片（见 D3D11VA 注释）。
                     ctx->extra_hw_frames = D3D11VAExtraHwFrames;
                     InitializeD3D11VA(ctx);
+                    // 解码侧 NV12→RGBA 转换器（GPU 零拷贝必备：Vulkan/GL 无法可移植采样 NV12）。
+                    // 构造失败会抛到下方 catch，回落软件解码（_gpuImportMode 保持 false）。
+                    _nv12ToRgbaConverter = new LingFan.Media.GPUShare.D3D11.D3D11Nv12ToRgbaConverter(
+                        _gpuContext!.DeviceHandle, _gpuContext.ContextHandle);
                     _gpuImportMode = true;
                     IsHardwareAccelerated = true;
                 }
@@ -801,6 +808,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         ClearPendingQueues();
         _hwDeviceCtx?.Dispose();
         _hwDeviceCtx = null;
+        // 释放 NV12→RGBA 转换器（仅释放其内部 QI 的视频设备/上下文与处理器；共享设备包装不 Dispose）。
+        _nv12ToRgbaConverter?.Dispose();
+        _nv12ToRgbaConverter = null;
         // 先释放比特流过滤器（其内部 par_in->extradata 由 ffmpeg 分配器管理）
         if (_bsfContext != null)
         {
@@ -1251,11 +1261,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// GPU 零拷贝帧创建：把 D3D11VA 硬解纹理经 DXGI 共享句柄导入为渲染器 GPU 纹理（<see cref="IGpuTextureResource"/>）。
     /// </summary>
     /// <remarks>
+    /// <para>解码侧先经 GPUShare.D3D11 的 D3D11Nv12ToRgbaConverter 把 NV12 硬解帧 GPU 转 RGBA32
+    /// （VideoProcessorBlt，无 CPU 回读），再以 DXGI 共享 NT 句柄交给渲染器生产者导入；三渲染器统一收 RGBA 走零拷贝。
+    /// 单纹理、ArrayLayers=1（转换器产出即 RGBA 单平面）。</para>
     /// <para>导入失败（扩展不可用 / 句柄无效 / 切片不兼容）→ 回落 CPU 传输（<see cref="TransferHardwareFrameToCpu"/>），
     /// 计入 [FFMPEG-FRAMEPATH] CPU 拷贝，绝不报"零拷贝已生效"假绿（S_OK≠被接受）。</para>
-    /// <para><b>多切片</b>：经 <see cref="GetD3D11TextureArraySize"/> 取真实阵列层数填入
-    /// <see cref="GpuFrameImportSource.ArrayLayers"/>，生产者据此创建整数组 GPU 纹理，Blit 时按
-    /// <see cref="GpuFrameImportSource.SubresourceIndex"/> 选 baseArrayLayer，正确处理 D3D11VA 纹理数组。</para>
     /// </remarks>
     private unsafe VideoFrame CreateGpuImportFrame(
         AVFrame* avFrame, int width, int height, TimeSpan timestamp, TimeSpan duration, bool keyFrame)
@@ -1263,121 +1273,58 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         IntPtr texturePtr = (IntPtr)avFrame->data[0];
         int subresourceIndex = (int)(IntPtr)avFrame->data[1];
 
-        if (texturePtr != IntPtr.Zero)
+        // GPU 零拷贝（解码侧 NV12→RGBA）：D3D11VA 硬解帧经 VideoProcessorBlt 转 RGBA32，
+        // 三渲染器（Vulkan/GL/D3D11）统一收 RGBA 走零拷贝，避开 NV12 双平面不可移植采样。
+        if (texturePtr != IntPtr.Zero && _nv12ToRgbaConverter is not null)
         {
             try
             {
-                // 取 DXGI 共享 NT 句柄（IDXGIResource1::CreateSharedHandle），零反射原生调用。
-                nint sharedHandle = GetD3D11SharedHandle(texturePtr);
-                var source = new GpuFrameImportSource
+                if (_nv12ToRgbaConverter.TryConvert(texturePtr, subresourceIndex, width, height,
+                        out var rgbaHandle, out var rgbaTexture)
+                    && rgbaTexture is not null)
                 {
-                    Kind = GpuFrameImportKind.D3D11SharedHandle,
-                    Handle = sharedHandle,
-                    Width = width,
-                    Height = height,
-                    Format = PixelFormat.NV12,
-                    SubresourceIndex = subresourceIndex,
-                    ArrayLayers = GetD3D11TextureArraySize(texturePtr),
-                };
-                if (_gpuProducer!.TryImport(source, out var tex) && tex is not null)
-                {
-                    var frame = _framePool?.Rent() ?? new VideoFrame();
-                    frame.Reset(width, height, PixelFormat.NV12, tex, timestamp, duration, keyFrame);
-                    System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
-                    return frame;
-                }
+                    var source = new GpuFrameImportSource
+                    {
+                        Kind = GpuFrameImportKind.D3D11SharedHandle,
+                        Handle = rgbaHandle,
+                        Width = width,
+                        Height = height,
+                        Format = PixelFormat.RGBA32,
+                        SubresourceIndex = 0,
+                        ArrayLayers = 1,
+                    };
+                    // 把共享句柄交给生产者：TryImport 调用即把 rgbaHandle 所有权转移给生产者；
+                    // 无论导入成功或失败，生产者均负责 CloseHandle，本解码器不关，避免双关。
+                    if (_gpuProducer!.TryImport(source, out var tex) && tex is not null)
+                    {
+                        // 共享引用已转移给渲染器；释放解码侧 RGBA 纹理包装（底层资源由共享句柄保活）。
+                        rgbaTexture.Dispose();
+                        var frame = _framePool?.Rent() ?? new VideoFrame();
+                        frame.Reset(width, height, PixelFormat.RGBA32, tex, timestamp, duration, keyFrame);
+                        System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
+                        return frame;
+                    }
 
-                _logger.LogWarning(
-                    "GPU 零拷贝导入未接受（S_OK≠被接受：行为副作用未成立），本帧回落 CPU 传输。");
+                    _logger.LogWarning(
+                        "GPU 零拷贝导入未接受（S_OK≠被接受：行为副作用未成立），本帧回落 CPU 传输。");
+                    rgbaTexture.Dispose();
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "NV12→RGBA GPU 转换未成功，本帧回落 CPU 传输。");
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "GPU 零拷贝导入异常（S_OK≠被接受），本帧回落 CPU 传输。");
+                    "GPU 零拷贝转换/导入异常（S_OK≠被接受），本帧回落 CPU 传输。");
             }
         }
 
         // 回落：硬解帧 → CPU（av_hwframe_transfer_data），计入 CPU 拷贝。
         System.Threading.Interlocked.Increment(ref _cpuFallbackFrames);
         return TransferHardwareFrameToCpu(avFrame);
-    }
-
-    /// <summary>
-    /// 从 D3D11VA 硬解纹理取 DXGI 共享 NT 句柄（跨 API 共享给渲染器生产者导入为 GPU 纹理）。
-    /// </summary>
-    /// <remarks>
-    /// <para>原始 vtable 调用（零反射、AOT 安全）：QI IDXGIResource1 后调 CreateSharedHandle。
-    /// 仅对 FFmpeg 自有纹理做 QI（自身 AddRef）+ CreateSharedHandle，finally 仅 Release QI 那份引用，
-    /// 不触碰 FFmpeg 纹理的原始引用计数（生产者导入成功后才由渲染器侧消费句柄）。</para>
-    /// <para>仅 Windows 调用（_gpuImportMode 仅 Windows 置位），但代码无 #if，跨平台可编译。</para>
-    /// </remarks>
-    private static unsafe nint GetD3D11SharedHandle(nint texturePtr)
-    {
-        // IID_IDXGIResource1 = {4AFA9644-FD70-4EE0-AFB1-090CE337B791}
-        Guid iidDxgiResource1 = new(0x4AFA9644, 0xFD70, 0x4EE0, 0xAF, 0xB1, 0x09, 0x0C, 0xE3, 0x37, 0xB7, 0x91);
-        IntPtr* vt = (IntPtr*)*(IntPtr*)texturePtr;
-        var qi = (delegate* unmanaged[Stdcall]<IntPtr, ref Guid, out IntPtr, int>)vt[0];
-        int hr = qi(texturePtr, ref iidDxgiResource1, out IntPtr dxgi);
-        if (hr < 0 || dxgi == IntPtr.Zero)
-            throw new InvalidOperationException("QI IDXGIResource1 失败（D3D11VA 纹理共享句柄导出）");
-
-        IntPtr* dvt = (IntPtr*)*(IntPtr*)dxgi;
-        try
-        {
-            // IDXGIResource1::CreateSharedHandle 位于 vtable 槽 12
-            //   HRESULT CreateSharedHandle(IUnknown* pDevice, DXGI_SHARED_RESOURCE_FLAGS dwAccess, LPCWSTR lpName, HANDLE* pHandle)
-            // dwAccess = 3（SharedResourceFlags.Read | Write）
-            var create = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int, IntPtr, out IntPtr, int>)dvt[12];
-            int hr2 = create(dxgi, IntPtr.Zero, 3, IntPtr.Zero, out IntPtr handle);
-            if (hr2 < 0)
-                throw new InvalidOperationException($"IDXGIResource1::CreateSharedHandle 失败 (0x{hr2:X8})");
-            return handle;
-        }
-        finally
-        {
-            // 仅释放 QI 得到的 dxgi 引用（用其自身 vtable 的 Release，槽 2）。
-            var release = (delegate* unmanaged[Stdcall]<IntPtr, int>)dvt[2];
-            release(dxgi);
-        }
-    }
-
-    /// <summary>
-    /// 取 D3D11 纹理数组大小（ArraySize），用于多切片零拷贝导入的 arrayLayers。
-    /// </summary>
-    /// <remarks>原始 vtable 调用（零反射、AOT 安全）：<c>ID3D11Texture2D::GetDesc</c>（vtable 槽 10）填充
-    /// <c>D3D11_TEXTURE2D_DESC</c>，读其中 <c>ArraySize</c> 字段（偏移 12 字节）。仅查询，不增删引用计数；
-    /// 异常时回落 1（单切片）。D3D11VA 纹理数组（切片总数&gt;1）必须填真实层数，否则 GPU 外部内存导入校验失败。</remarks>
-    private static unsafe int GetD3D11TextureArraySize(nint texturePtr)
-    {
-        try
-        {
-            IntPtr* vt = (IntPtr*)*(IntPtr*)texturePtr;
-            var getDesc = (delegate* unmanaged[Stdcall]<IntPtr, D3D11Texture2DDesc*, void>)vt[10];
-            D3D11Texture2DDesc desc = default;
-            getDesc(texturePtr, &desc);
-            return desc.ArraySize > 0 ? (int)desc.ArraySize : 1;
-        }
-        catch
-        {
-            return 1;
-        }
-    }
-
-    /// <summary>D3D11_TEXTURE2D_DESC 最小布局（仅取 ArraySize 字段，偏移 12 字节）。与 Windows SDK 布局一致。</summary>
-    [StructLayout(LayoutKind.Sequential)]
-    private struct D3D11Texture2DDesc
-    {
-        public uint Width;
-        public uint Height;
-        public uint MipLevels;
-        public uint ArraySize;
-        public int Format;
-        public uint SampleCount;
-        public uint SampleQuality;
-        public int Usage;
-        public uint BindFlags;
-        public uint CPUAccessFlags;
-        public uint MiscFlags;
     }
 
     /// <summary>

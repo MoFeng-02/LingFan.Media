@@ -22,6 +22,12 @@ public sealed class RenderContext : IGpuDeviceContext
     /// <summary>共享 GPU 设备对象（运行时显式 cast，如 ID3D11Device / VkDevice）。</summary>
     public object? SharedDevice { get; }
 
+    /// <summary>共享 GPU 物理设备对象（Vulkan 等需同物理设备对齐零拷贝时提供，盒装 PhysicalDevice）。</summary>
+    public object? SharedPhysicalDevice { get; }
+
+    /// <summary>视频解码队列族索引（VK_QUEUE_VIDEO_DECODE_BIT_KHR）；无视频解码能力时为 uint.MaxValue。</summary>
+    public uint VideoQueueFamilyIndex { get; }
+
     /// <summary>GPU 设备能力（由工厂注入，纯内存快照）。</summary>
     public GpuDeviceCapabilities Capabilities { get; }
 
@@ -44,13 +50,17 @@ public sealed class RenderContext : IGpuDeviceContext
         GpuDeviceCapabilities capabilities,
         IntPtr deviceHandle,
         object? sharedDevice = null,
-        IntPtr contextHandle = default)
+        IntPtr contextHandle = default,
+        object? sharedPhysicalDevice = null,
+        uint videoQueueFamilyIndex = uint.MaxValue)
     {
         GpuApiType = gpuApiType;
         Capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
         DeviceHandle = deviceHandle;
         ContextHandle = contextHandle;
         SharedDevice = sharedDevice;
+        SharedPhysicalDevice = sharedPhysicalDevice;
+        VideoQueueFamilyIndex = videoQueueFamilyIndex;
     }
 
     // ── IGpuDeviceContext 实现（接口契约，无真实 I/O）──

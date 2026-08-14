@@ -18,6 +18,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <!-- 解码侧 D3D11 原生互操作（NV12→RGBA 视频处理器、共享句柄）：中性模块，仅依赖 Abstractions + Vortice -->
+    <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.D3D11\LingFan.Media.GPUShare.D3D11.csproj" />
   </ItemGroup>
 
 </Project>

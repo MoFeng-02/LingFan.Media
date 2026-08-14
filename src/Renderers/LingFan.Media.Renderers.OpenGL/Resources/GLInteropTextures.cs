@@ -284,7 +284,7 @@ public sealed unsafe class GLD3D11InteropTexture : IFrameResource, IGpuTextureRe
 /// <para><b>生命周期</b>：Dispose 在当前 EGL/GL 上下文下——先 <c>glDeleteTextures</c>，再 <c>eglDestroyImageKHR</c>；
 /// EGLDisplay 由生产者（离屏共享组所有者）持有，此处不释放。</para>
 /// <para><b>状态</b>：解码侧 VAAPI→EGL 导入为未来端点（见零拷贝架构铁律），当前仅作结构就绪；调用方（解码器）尚不产出
-/// <see cref="GpuFrameImportKind.VaApiDmaBuf"/> 时本类不会被实例化，可用性探测失败即回落软解（S_OK≠被接受）。</para>
+/// <see cref="GpuFrameImportKind.LinuxDmaBufFd"/> 时本类不会被实例化，可用性探测失败即回落软解（S_OK≠被接受）。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
 /// </remarks>
 public sealed unsafe class GLEglDmaBufTexture : IFrameResource, IGpuTextureResource
@@ -323,7 +323,7 @@ public sealed unsafe class GLEglDmaBufTexture : IFrameResource, IGpuTextureResou
 
     /// <inheritdoc/>
     /// <exception cref="NotSupportedException">解码侧 VAAPI→EGL 导入为未来端点（见零拷贝架构铁律），
-    /// 当前调用方（解码器）尚不产出 <see cref="GpuFrameImportKind.VaApiDmaBuf"/>，本类不会被实例化；
+    /// 当前调用方（解码器）尚不产出 <see cref="GpuFrameImportKind.LinuxDmaBufFd"/>，本类不会被实例化；
     /// 故 CPU 回读为显式未支持路径，非静默假绿。</exception>
     public GpuTextureReadback ReadbackToCpu()
         => throw new NotSupportedException(

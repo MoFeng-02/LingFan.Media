@@ -1,0 +1,6 @@
+<Project>
+  <!-- Chain to the repo-root Directory.Build.props so TargetFramework / AOT / warnings
+       settings apply to every project under src/GPUShare (GPUShare.D3D11, future
+       GPUShare.Vulkan / .OpenGL / .Metal / .OpenGLES). Pure pass-through; no redirects. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+</Project>

@@ -34,6 +34,8 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     private Device _device;
     private Queue _queue;
     private uint _queueFamilyIndex;
+    private Queue _videoQueue;
+    private uint _videoQueueFamilyIndex = uint.MaxValue;
     private RenderContext? _renderContext;
 
     // 所选物理设备的身份（供 no-airspace 源验证「同 GPU 对齐」）。
@@ -237,32 +239,57 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 var devExts = GetDeviceExtensions(physicalDevice);
                 nint devExtPtr = VulkanNative.StringArrayToPtr(devExts);
 
+                // 视频解码队列族（B4 Vulkan Video 硬解复用同一设备；无则跳过，不影响现有渲染）。
+                // 直接写入字段（与 _device/_queue 等同为方法级工作变量，确保 catch 之后的赋值块仍可见）。
+                _videoQueueFamilyIndex = FindVideoDecodeQueueFamily(physicalDevice);
+                bool videoOnSeparateFamily = _videoQueueFamilyIndex != uint.MaxValue && _videoQueueFamilyIndex != queueFamilyIndex;
+                // 若 video-decode 与 graphics 同族（部分 GPU 的 graphics 族兼具 VIDEO_DECODE_BIT），
+                // 该族需 2 条队列（idx0=graphics, idx1=video），否则 graphics 族仅 1 条。
+                bool videoSameFamily = _videoQueueFamilyIndex != uint.MaxValue && _videoQueueFamilyIndex == queueFamilyIndex;
+
                 float queuePriority = 1.0f;
                 var queueInfo = new DeviceQueueCreateInfo
                 {
                     SType = StructureType.DeviceQueueCreateInfo,
                     QueueFamilyIndex = queueFamilyIndex,
+                    QueueCount = videoSameFamily ? 2u : 1u,
+                    PQueuePriorities = &queuePriority,
+                };
+
+                var videoQueueInfo = new DeviceQueueCreateInfo
+                {
+                    SType = StructureType.DeviceQueueCreateInfo,
+                    QueueFamilyIndex = _videoQueueFamilyIndex,
                     QueueCount = 1,
                     PQueuePriorities = &queuePriority,
                 };
 
+                // 队列创建信息数组：graphics 族必含；video 在独立族时追加一条。
+                DeviceQueueCreateInfo[] queueInfos = videoOnSeparateFamily
+                    ? new[] { queueInfo, videoQueueInfo }
+                    : new[] { queueInfo };
+
                 var devInfo = new DeviceCreateInfo
                 {
                     SType = StructureType.DeviceCreateInfo,
-                    QueueCreateInfoCount = 1,
-                    PQueueCreateInfos = &queueInfo,
+                    QueueCreateInfoCount = (uint)queueInfos.Length,
+                    PQueueCreateInfos = null,
                     EnabledExtensionCount = (uint)devExts.Length,
                     PpEnabledExtensionNames = (byte**)devExtPtr,
                 };
 
-                // try-finally 保护 devExtPtr 内存释放
-                try
+                fixed (DeviceQueueCreateInfo* pQueueInfos = queueInfos)
                 {
-                    result = VulkanNative.CreateDevice(physicalDevice, ref devInfo, null, out device);
-                }
-                finally
-                {
-                    VulkanNative.FreeStringArrayPtr(devExtPtr);
+                    devInfo.PQueueCreateInfos = pQueueInfos;
+                    // try-finally 保护 devExtPtr 内存释放
+                    try
+                    {
+                        result = VulkanNative.CreateDevice(physicalDevice, ref devInfo, null, out device);
+                    }
+                    finally
+                    {
+                        VulkanNative.FreeStringArrayPtr(devExtPtr);
+                    }
                 }
 
                 if (result != Result.Success)
@@ -272,6 +299,12 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 VulkanNative.InitDevice(device);
 
                 VulkanNative.GetDeviceQueue(device, queueFamilyIndex, 0, out queue);
+                if (_videoQueueFamilyIndex != uint.MaxValue)
+                {
+                    // video 队列索引用 idx1（与 graphics 同族，2 队列）或 idx0（独立族）。
+                    uint videoQueueIndex = videoOnSeparateFamily ? 0u : 1u;
+                    VulkanNative.GetDeviceQueue(device, _videoQueueFamilyIndex, videoQueueIndex, out _videoQueue);
+                }
 
                 // ── 填充所选物理设备身份（供 no-airspace 共享表面源「同 GPU 对齐」）──
                 // vkGetPhysicalDeviceProperties2 + pNext=PhysicalDeviceIDProperties 取 deviceUUID(16) / deviceLUID(8)。
@@ -337,12 +370,17 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 // 作 QueryInterface；若填入 Vulkan 原生句柄，该 QI 会对非 COM 指针解引用而访问违规。
                 // 填 Zero 让这些路径在「无 D3D11 设备可共享」分支干净回落软解（契约文档亦规定无设备即 Zero）。
                 // SharedDevice 仍保留 Vulkan 设备对象，供能力/诊断查询使用。
+                // 视频解码支持标志：video-decode 扩展 + 视频解码队列族均存在时为真
+                //（B4 后端据此走零拷贝硬解，否则软解兜底）。
+                bool videoDecodeSupported = _videoQueueFamilyIndex != uint.MaxValue;
                 renderContext = new RenderContext(
                     GPUApiType.Vulkan,
-                    new GpuDeviceCapabilities(devName, heapSize, 0, maxTextureSize, true, false, -1),
+                    new GpuDeviceCapabilities(devName, heapSize, 0, maxTextureSize, true, videoDecodeSupported, -1),
                     IntPtr.Zero,
                     device,
-                    IntPtr.Zero);
+                    IntPtr.Zero,
+                    physicalDevice,
+                    _videoQueueFamilyIndex);
             }
             catch
             {
@@ -388,6 +426,30 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         for (uint i = 0; i < familyCount; i++)
         {
             if ((families[i].QueueFlags & QueueFlags.GraphicsBit) != 0)
+                return i;
+        }
+        return uint.MaxValue;
+    }
+
+    // 独立的 video-decode 队列族查找（供 B4 Vulkan Video 硬解复用同一物理设备）。
+    // VK_QUEUE_VIDEO_DECODE_BIT_KHR = 0x00000020；自定义绑定未单独特化该枚举值时按原始位比对。
+    private static unsafe uint FindVideoDecodeQueueFamily(PhysicalDevice device)
+    {
+        uint familyCount = 0;
+        VulkanNative.GetPhysicalDeviceQueueFamilyProperties(device, ref familyCount, null);
+        if (familyCount == 0)
+            return uint.MaxValue;
+
+        var families = new QueueFamilyProperties[familyCount];
+        fixed (QueueFamilyProperties* pFamilies = families)
+        {
+            VulkanNative.GetPhysicalDeviceQueueFamilyProperties(device, ref familyCount, pFamilies);
+        }
+
+        const uint VideoDecodeQueueBit = 0x00000020;
+        for (uint i = 0; i < familyCount; i++)
+        {
+            if (((uint)families[i].QueueFlags & VideoDecodeQueueBit) != 0)
                 return i;
         }
         return uint.MaxValue;
@@ -446,6 +508,15 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
             // 导出为 IOSurface / MTLSharedEvent（不使用 external_memory/external_semaphore 扩展）。
             AddIfAvail("VK_EXT_metal_objects");
         }
+
+        // B4 Vulkan Video 硬解（Vulkan 闭环零拷贝）：条件启用 video-decode 扩展。
+        // 按物理设备实际支持过滤，缺失则静默跳过——vkCreateDevice 不会因 video 扩展不可用而失败，
+        // 现有渲染路径完全不受影响（不支持 video 解码的 GPU 仅由 B4 后端回落软件解码）。
+        AddIfAvail("VK_KHR_video_queue");
+        AddIfAvail("VK_KHR_video_decode_queue");
+        AddIfAvail("VK_KHR_video_decode_h264");
+        AddIfAvail("VK_KHR_video_decode_h265");
+
         return exts.ToArray();
     }
 

@@ -17,6 +17,7 @@
     <Project Path="src/Backends/LingFan.Media.Backends.MediaCodec/LingFan.Media.Backends.MediaCodec.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.Apple/LingFan.Media.Backends.Apple.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.WebRTC/LingFan.Media.Backends.WebRTC.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.VulkanVideo/LingFan.Media.Backends.VulkanVideo.csproj" />
   </Folder>
   <Folder Name="/Renderers/">
     <Project Path="src/Renderers/LingFan.Media.Renderers.D3D11/LingFan.Media.Renderers.D3D11.csproj" />
@@ -29,6 +30,10 @@
   <Folder Name="/Outputs/">
     <Project Path="src/Outputs/LingFan.Media.Outputs.Shared/LingFan.Media.Outputs.Shared.csproj" />
     <Project Path="src/Outputs/LingFan.Media.Outputs/LingFan.Media.Outputs.csproj" />
+  </Folder>
+  <Folder Name="/GPUShare/">
+    <Project Path="src/GPUShare/LingFan.Media.GPUShare.D3D11/LingFan.Media.GPUShare.D3D11.csproj" />
+    <Project Path="src/GPUShare/LingFan.Media.GPUShare.Vulkan/LingFan.Media.GPUShare.Vulkan.csproj" />
   </Folder>
   <Folder Name="/Platforms/">
     <Project Path="src/Platforms/LingFan.Media.Platforms/LingFan.Media.Platforms.csproj" />

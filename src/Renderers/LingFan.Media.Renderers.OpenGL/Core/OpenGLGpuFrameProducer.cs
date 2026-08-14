@@ -30,11 +30,15 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// <para><b>AOT</b>：GL/WGL/EGL 互操作函数指针经 <see cref="GLNative"/> 零反射解析；D3D11 桥接设备经 Vortice 类型安全 API；
 /// 无 [DllImport]/[ComImport]/反射；跨平台经 OperatingSystem.IsXxx() 运行时分发，无 #if。</para>
 /// <para><b>v1 范围</b>：Windows(D3D11→GL) 为主路径；Linux(VAAPI→GL) 结构就绪但解码侧 VAAPI→GL 导入为未来端点，
-/// 当前调用方不产出 <see cref="GpuFrameImportKind.VaApiDmaBuf"/>，可用性探测失败即回落软解。Android(AHardwareBuffer)/Apple(IOSurface) 为后续端点，当前返回 false。</para>
+/// 当前调用方不产出 <see cref="GpuFrameImportKind.LinuxDmaBufFd"/>，可用性探测失败即回落软解。Android(AHardwareBuffer)/Apple(IOSurface) 为后续端点，当前返回 false。</para>
 /// <para><b>异步策略</b>：<see cref="TryImport"/> 为同步（native 分类）——GPU 纹理导入是同步原生调用，无 I/O await；
 /// 实现保持同步，不补 async（补即伪异步）。</para>
+/// <para><b>句柄所有权契约（单一责任人）</b>：原生共享句柄（NT HANDLE / dma_buf fd）的所有权自
+/// <see cref="TryImport"/> 调用起转移至本生产者；无论导入成功或失败，生产者均在返回前
+/// 经 <c>CloseHandle</c>（NT HANDLE）/ close（fd）关闭句柄（导入成功后资源引用已由 GL 纹理 / EGLImage 持有，
+/// 关闭句柄不销毁资源）。调用方（解码器）导出句柄后<b>不得</b>再关闭，避免双关。</para>
 /// </remarks>
-public sealed class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposable
+public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposable
 {
     /// <inheritdoc/>
     public GPUApiType ApiType => GPUApiType.OpenGL;
@@ -68,7 +72,7 @@ public sealed class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposable
 
             if (OperatingSystem.IsWindows() && source.Kind == GpuFrameImportKind.D3D11SharedHandle)
                 return TryImportWin32D3D11(source, out texture);
-            if (OperatingSystem.IsLinux() && source.Kind == GpuFrameImportKind.VaApiDmaBuf)
+            if (OperatingSystem.IsLinux() && source.Kind == GpuFrameImportKind.LinuxDmaBufFd)
                 return TryImportLinuxVaApi(source, out texture);
 
             // Android / iOS：后续端点（AHardwareBuffer / IOSurface），当前回落软解。
@@ -85,6 +89,11 @@ public sealed class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposable
     }
 
     // ── Windows：WGL_NV_DX_interop2（D3D11 共享句柄 → GL 纹理）──
+
+    /// <summary>关闭 DXGI 共享 NT 句柄（导入完成/失败后由生产者负责关闭，防内核句柄泄漏）。</summary>
+    [LibraryImport("kernel32")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint hObject);
 
     private unsafe bool TryImportWin32D3D11(GpuFrameImportSource source, out IGpuTextureResource? texture)
     {
@@ -103,6 +112,7 @@ public sealed class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposable
             if (!GLNative.IsWglDxInteropAvailable())
             {
                 _logger?.LogWarning("[OPENGL-ZEROCOPY] WGL_NV_DX_interop2 不可用，回落软件解码。");
+                CloseHandle(source.Handle);
                 return false;
             }
 
@@ -112,6 +122,7 @@ public sealed class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposable
             if (source.Format is PixelFormat.NV12 or PixelFormat.NV21)
             {
                 _logger?.LogDebug("[OPENGL-ZEROCOPY] D3D11 共享纹理为 NV12/NV21，WGL 不可移植采样 → 回落 CPU NV12 路径（与 D3D11 渲染器一致）。");
+                CloseHandle(source.Handle);
                 return false;
             }
 
@@ -124,6 +135,7 @@ public sealed class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposable
             if (d3dTex is null)
             {
                 _logger?.LogWarning("[OPENGL-ZEROCOPY] ID3D11Device1.OpenSharedResource1 失败，回落软件解码。");
+                CloseHandle(source.Handle);
                 return false;
             }
 
@@ -147,13 +159,16 @@ public sealed class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposable
                 glContext: _glContext, subresourceIndex: source.SubresourceIndex);
 
             // 所有权移交 GLD3D11InteropTexture：本方法不再释放 d3dTex（桥接设备与互操作句柄由生产者持有）。
+            // NT 共享句柄：OpenSharedResource1 已为生产者建立独立纹理引用，此处关闭句柄（不销毁资源，防内核句柄泄漏）。
             d3dTex = null;
+            CloseHandle(source.Handle);
             return true;
         }
         catch
         {
             if (glTex != 0) GLNative.glDeleteTextures(1, &glTex);
             d3dTex?.Dispose();
+            CloseHandle(source.Handle);
             throw;
         }
         finally

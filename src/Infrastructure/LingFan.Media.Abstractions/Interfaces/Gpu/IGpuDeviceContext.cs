@@ -25,6 +25,24 @@ public interface IGpuDeviceContext
     /// </summary>
     IntPtr ContextHandle { get; }
 
+    /// <summary>
+    /// 共享 GPU 设备对象（运行时显式 cast，如 ID3D11Device / Device(Vulkan)）。
+    /// 供解码器复用渲染器共享设备进行零拷贝；无设备时为 <see langword="null"/>。
+    /// </summary>
+    object? SharedDevice { get; }
+
+    /// <summary>
+    /// 共享 GPU 物理设备对象（Vulkan 等需「同物理设备对齐」零拷贝时提供，盒装 PhysicalDevice）。
+    /// 非 Vulkan 后端为 <see langword="null"/>。
+    /// </summary>
+    object? SharedPhysicalDevice { get; }
+
+    /// <summary>
+    /// 视频解码队列族索引（对应 <c>VK_QUEUE_VIDEO_DECODE_BIT_KHR</c>）。
+    /// 设备创建时启用了 video-decode 扩展且存在该队列族才非 <see cref="uint.MaxValue"/>；否则为 <see cref="uint.MaxValue"/>（解码器回落软件解码）。
+    /// </summary>
+    uint VideoQueueFamilyIndex { get; }
+
     /// <summary>设备是否已初始化（共享设备已创建）。</summary>
     bool IsInitialized { get; }
 

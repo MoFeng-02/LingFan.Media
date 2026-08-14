@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Vulkan 硬解后端（VK_KHR_video_decode_h264）：独立一等公民后端，仅依赖 Abstractions + Extensions + GPUShare.Vulkan。
+      绝不引用任何 Renderers 程序集（依赖倒置）；零拷贝经 IGpuFrameProducer / 共享 VkDevice 抽象由渲染器侧消费。
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Vulkan\LingFan.Media.GPUShare.Vulkan.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 内部类型供本工程单元测试直接访问 -->
+    <InternalsVisibleTo Include="LingFan.Media.Backends.VulkanVideo.Tests" />
+  </ItemGroup>
+
+</Project>

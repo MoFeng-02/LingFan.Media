@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace LingFan.Media.Renderers.Vulkan;
 
 /// <summary>
@@ -18,10 +20,12 @@ namespace LingFan.Media.Renderers.Vulkan;
     /// <para><b>多切片</b>：按 <see cref="GpuFrameImportSource.ArrayLayers"/> 创建整数组 VkImage，并据
     /// <see cref="GpuFrameImportSource.SubresourceIndex"/> 在 <see cref="VulkanRenderer.BlitVulkanImageResource"/>
     /// 选 <c>baseArrayLayer</c>，正确处理 D3D11VA 纹理数组（切片索引=avFrame-&gt;data[1]）。</para>
-/// <para><b>句柄所有权契约</b>：导入成功后原生共享句柄（HANDLE / fd）由 Vulkan 消费，调用方（解码器）不得关闭；
-/// 导入失败则返回 false，调用方须关闭句柄。生产者不在内部关闭句柄。</para>
+/// <para><b>句柄所有权契约（单一责任人）</b>：原生共享句柄（NT HANDLE / dma_buf fd）的所有权自
+/// <see cref="TryImport"/> 调用起转移至本生产者；无论导入成功或失败，生产者均在返回前
+/// 经 <c>CloseHandle</c>（NT HANDLE）/ close（fd）关闭句柄（导入成功后资源引用已由 VkImage/VkDeviceMemory 持有，
+/// 关闭句柄不销毁资源）。调用方（解码器）导出句柄后<b>不得</b>再关闭，避免双关。</para>
 /// </remarks>
-public sealed class VulkanGpuFrameProducer : IGpuFrameProducer
+public sealed partial class VulkanGpuFrameProducer : IGpuFrameProducer
 {
     private readonly Device _device;
     private readonly PhysicalDevice _physicalDevice;
@@ -48,7 +52,7 @@ public sealed class VulkanGpuFrameProducer : IGpuFrameProducer
 
             if (OperatingSystem.IsWindows() && source.Kind == GpuFrameImportKind.D3D11SharedHandle)
                 return TryImportWin32(source, out texture);
-            if (OperatingSystem.IsLinux() && source.Kind == GpuFrameImportKind.VaApiDmaBuf)
+            if (OperatingSystem.IsLinux() && source.Kind == GpuFrameImportKind.LinuxDmaBufFd)
                 return TryImportLinux(source, out texture);
 
             // Android / iOS：后续端点（AHardwareBuffer / IOSurface），当前回落软解。
@@ -63,6 +67,11 @@ public sealed class VulkanGpuFrameProducer : IGpuFrameProducer
             return false;
         }
     }
+
+    /// <summary>关闭 DXGI 共享 NT 句柄（导入完成/失败后由生产者负责关闭，防内核句柄泄漏）。</summary>
+    [LibraryImport("kernel32")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint hObject);
 
     private unsafe bool TryImportWin32(GpuFrameImportSource source, out IGpuTextureResource? texture)
     {
@@ -94,7 +103,10 @@ public sealed class VulkanGpuFrameProducer : IGpuFrameProducer
 
         Image image;
         if (VulkanNative.CreateImage(_device, &ci, null, out image) != Result.Success)
+        {
+            CloseHandle(source.Handle);
             return false;
+        }
 
         try
         {
@@ -117,21 +129,28 @@ public sealed class VulkanGpuFrameProducer : IGpuFrameProducer
 
             DeviceMemory memory;
             if (VulkanNative.AllocateMemory(_device, &ai, null, out memory) != Result.Success)
+            {
+                CloseHandle(source.Handle);
                 return false;
+            }
 
             if (VulkanNative.BindImageMemory(_device, image, memory, 0) != Result.Success)
             {
                 VulkanNative.FreeMemory(_device, memory, null);
+                CloseHandle(source.Handle);
                 return false;
             }
 
             texture = new VulkanImageResource(_device, image, memory,
                 source.Width, source.Height, source.Format, source.SubresourceIndex, ImageLayout.Undefined);
+            // NT 共享句柄：vkAllocateMemory 已把句柄导入为 VkDeviceMemory（独立引用），此处关闭句柄不销毁资源，防内核句柄泄漏。
+            CloseHandle(source.Handle);
             return true;
         }
         catch
         {
             VulkanNative.DestroyImage(_device, image, null);
+            CloseHandle(source.Handle);
             throw;
         }
     }

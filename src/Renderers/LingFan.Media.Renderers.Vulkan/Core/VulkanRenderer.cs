@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using LingFan.Media.GPUShare.Vulkan;
 
 namespace LingFan.Media.Renderers.Vulkan;
 
@@ -57,6 +58,10 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
     // GPU Shader 管线（软帧 YUV 路径）
     private VulkanShaderPipeline? _shaderPipeline;
+
+    // 中性 NV12→RGBA 转换器（GPUShare.Vulkan）：把硬解 DPB 的 NV12 VkImage 转 RGBA 后交 BlitVulkanImageResource 上屏。
+    // 与 _shaderPipeline 同生命周期（Attach 创建 / ReleaseSessionResources 释放）。
+    private VulkanNv12ToRgbaConverter? _nv12Converter;
 
     // ── Session 级资源 ──
     private SurfaceKHR _surface;
@@ -177,6 +182,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 CreateSwapchain((uint)target.Width, (uint)target.Height);
                 CreateShaderPipeline();
                 CreateCommandPoolAndBuffer();
+                // NV12→RGBA 转换器：与 Shader 管线同生命周期；Present 时把硬解 DPB 的 NV12 图像转 RGBA。
+                _nv12Converter = new VulkanNv12ToRgbaConverter(_device, _physicalDevice, _logger);
                 CreateSemaphores();
                 _attached = true;
                 _logger.LogDebug("Vulkan 渲染器已附加：{W}x{H}", target.Width, target.Height);
@@ -322,6 +329,17 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                     break;
                 case VulkanImageResource vk:
                     BlitVulkanImageResource(vk, swapchainImage);
+                    break;
+                case VulkanVideoFrameResource vvfr:
+                    // 硬解 DPB 的 NV12 VkImage → 经中性转换器（GPUShare.Vulkan）转 RGBA → 再 blit 到 SwapChain。
+                    // 零拷贝、GPU 内 YUV→RGB，无 CPU 回读；转换器与下游 SwapChain 同格式以走零缩放 Copy 快路径。
+                    if (_nv12Converter is null)
+                        throw new InvalidOperationException("NV12→RGBA 转换器未初始化（Attach 失败）。");
+                    PixelFormat nv12TargetFmt = swapchainIsBgra ? PixelFormat.BGRA32 : PixelFormat.RGBA32;
+                    _nv12Converter.Convert(_commandBuffer, vvfr.Image, vvfr.CurrentLayout,
+                        (uint)vvfr.Width, (uint)vvfr.Height, _swapchainFormat, out var rgbaImage);
+                    BlitVulkanImageResource(rgbaImage, nv12TargetFmt, ImageLayout.TransferSrcOptimal,
+                        vvfr.Width, vvfr.Height, swapchainImage);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -667,27 +685,48 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     /// <para>异步策略：同步原生调用（无 I/O await），符合 Present 的 sync-only 原则。</para>
     /// <para>AOT 兼容：无反射、无新增 P/Invoke（复用 Vortice 源生成 <c>LibraryImport</c> 绑定）。</para>
     /// </remarks>
+    /// <summary>
+    /// VK-ZERO：Vulkan GPU 纹理零拷贝 Present 路径（VulkanImageResource 重载）。
+    /// 将 <see cref="VulkanImageResource"/> 的 <c>VkImage</c> blit/copy 到 SwapChain 图像。
+    /// </summary>
     internal void BlitVulkanImageResource(VulkanImageResource src, Image dstImage)
     {
-        int srcW = src.Width;
-        int srcH = src.Height;
+        BlitVulkanImageResource(src.Image, src.Format, src.CurrentLayout,
+            src.Width, src.Height, (uint)src.SubresourceIndex, dstImage);
+    }
+
+    /// <summary>
+    /// VK-ZERO：Vulkan GPU 纹理零拷贝 Present 路径（原始 Image 重载）。
+    /// 将任意 RGBA 单平面 <c>VkImage</c> blit/copy 到 SwapChain 图像。
+    /// 供硬解 NV12→RGBA 转换结果（<see cref="VulkanNv12ToRgbaConverter"/> 产出，已处 TransferSrcOptimal）上屏复用。
+    /// 多平面 / 24 位格式（NV12/NV21/YUV*/RGB24）Vulkan blit 不支持，须先经 Shader 转码为 RGBA。
+    /// </summary>
+    internal void BlitVulkanImageResource(
+        Image srcImage, PixelFormat srcFormat, ImageLayout srcCurrentLayout,
+        int srcW, int srcH, Image dstImage)
+    {
+        BlitVulkanImageResource(srcImage, srcFormat, srcCurrentLayout, srcW, srcH, 0, dstImage);
+    }
+
+    internal void BlitVulkanImageResource(
+        Image srcImage, PixelFormat srcFormat, ImageLayout srcCurrentLayout,
+        int srcW, int srcH, uint subresourceIndex, Image dstImage)
+    {
         uint dstW = _swapchainExtent.Width;
         uint dstH = _swapchainExtent.Height;
 
-        // 多平面 / 24 位等 Vulkan blit 不支持或需转码
-        Format srcVkFormat = src.Format switch
+        // 仅支持单平面 BGRA32/RGBA32（NV12 等多平面格式已由上游转换器转码为 RGBA）。
+        Format srcVkFormat = srcFormat switch
         {
             PixelFormat.BGRA32 => Format.B8G8R8A8Unorm,
             PixelFormat.RGBA32 => Format.R8G8B8A8Unorm,
-            PixelFormat.NV12 or PixelFormat.NV21 or PixelFormat.YUV420P
-                or PixelFormat.YUV422P or PixelFormat.YUV444P or PixelFormat.RGB24
-                => throw new NotSupportedException(
-                    $"Vulkan GPU 纹理零拷贝暂不支持格式 {src.Format}（多平面/24 位需 Shader 转码）。"),
-            _ => throw new NotSupportedException($"Vulkan 渲染器不支持的像素格式 {src.Format}。"),
+            _ => throw new NotSupportedException(
+                $"Vulkan GPU 纹理零拷贝仅支持 BGRA32/RGBA32 单平面格式（收到 {srcFormat}）。"),
         };
 
-        // 源图像：交付布局 → TransferSrcOptimal（生产者可能以其他布局交付）
-        TransitionImageLayout(src.Image, src.CurrentLayout, ImageLayout.TransferSrcOptimal,
+        // 源图像：交付布局 → TransferSrcOptimal（生产者可能以其他布局交付）。
+        // 转换结果已处 TransferSrcOptimal 时此屏障为本状态自转移（no-op 语义，安全）。
+        TransitionImageLayout(srcImage, srcCurrentLayout, ImageLayout.TransferSrcOptimal,
             AccessFlags.None, AccessFlags.TransferReadBit,
             PipelineStageFlags.TransferBit, PipelineStageFlags.TransferBit);
 
@@ -701,7 +740,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 {
                     AspectMask = ImageAspectFlags.ColorBit,
                     MipLevel = 0,
-                    BaseArrayLayer = (uint)src.SubresourceIndex,
+                    BaseArrayLayer = subresourceIndex,
                     LayerCount = 1,
                 },
                 SrcOffset = new Offset3D(0, 0, 0),
@@ -715,7 +754,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 DstOffset = new Offset3D(0, 0, 0),
                 Extent = new Extent3D((uint)srcW, (uint)srcH, 1),
             };
-            VulkanNative.CmdCopyImage(_commandBuffer, src.Image, ImageLayout.TransferSrcOptimal,
+            VulkanNative.CmdCopyImage(_commandBuffer, srcImage, ImageLayout.TransferSrcOptimal,
                 dstImage, ImageLayout.TransferDstOptimal, 1, &region);
         }
         else
@@ -727,7 +766,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 {
                     AspectMask = ImageAspectFlags.ColorBit,
                     MipLevel = 0,
-                    BaseArrayLayer = (uint)src.SubresourceIndex,
+                    BaseArrayLayer = subresourceIndex,
                     LayerCount = 1,
                 },
                 DstSubresource = new ImageSubresourceLayers
@@ -742,7 +781,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             blit.SrcOffsets[1] = new Offset3D(srcW, srcH, 1);
             blit.DstOffsets[0] = new Offset3D(0, 0, 0);
             blit.DstOffsets[1] = new Offset3D((int)dstW, (int)dstH, 1);
-            VulkanNative.CmdBlitImage(_commandBuffer, src.Image, ImageLayout.TransferSrcOptimal,
+            VulkanNative.CmdBlitImage(_commandBuffer, srcImage, ImageLayout.TransferSrcOptimal,
                 dstImage, ImageLayout.TransferDstOptimal, 1, &blit, Filter.Linear);
         }
     }
@@ -1474,6 +1513,10 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
         _shaderPipeline?.Dispose();
         _shaderPipeline = null;
+
+        // NV12→RGBA 转换器：与 Shader 管线同生命周期（Attach 创建），此处对称释放。
+        _nv12Converter?.Dispose();
+        _nv12Converter = null;
 
         if (_imageAvailableSemaphore.Handle != 0)
         { VulkanNative.DestroySemaphore(_device, _imageAvailableSemaphore, null); _imageAvailableSemaphore = default; }

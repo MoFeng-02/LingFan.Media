@@ -1160,16 +1160,15 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
                         SubresourceIndex = (int)sub,
                         ArrayLayers = arrayLayers,
                     };
-                    if (_gpuProducer.TryImport(source, out var gpuTex) && gpuTex is not null)
-                    {
-                        // 导入成功：GPU 纹理已绑定外部内存，原 tex 的 GetResource 引用可回收；
-                        // 共享句柄由渲染器侧消费，调用方不得关闭（生产者契约 S_OK≠被接受）。
-                        Marshal.Release(tex);
-                        return gpuTex;
-                    }
-                    // 导入未接受（S_OK≠被接受）：关闭共享句柄，回落 D3D11 资源。
-                    CloseHandle(sharedHandle);
+                // TryImport 调用即把共享句柄所有权转移给生产者；无论导入成功或失败，生产者均负责 CloseHandle，
+                // 调用方（解码器）不得再关闭，避免与生产者双关（S_OK≠被接受）。
+                if (_gpuProducer.TryImport(source, out var gpuTex) && gpuTex is not null)
+                {
+                    // 导入成功：GPU 纹理已绑定外部内存，原 tex 的 GetResource 引用可回收；句柄所有权已由生产者接管。
+                    Marshal.Release(tex);
+                    return gpuTex;
                 }
+            }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "[DXVA-FRAMEPATH] GPU 零拷贝导入异常，回落 D3D11 资源。");
@@ -1188,12 +1187,6 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
             Marshal.Release(dxgi);
         }
     }
-
-    /// <summary>关闭 DXGI 共享 NT 句柄（GPU 零拷贝导入失败回落时由调用方负责关闭）。</summary>
-    /// <remarks>原始 P/Invoke（[LibraryImport]，AOT 安全；本类为 Windows-only）。</remarks>
-    [LibraryImport("kernel32")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool CloseHandle(nint hObject);
 
     /// <summary>
     /// DXVA 已激活（PROVIDES_SAMPLES=True）但输出 buffer 不支持 <c>IMFDXGIBuffer</c> 时的一次性深度诊断。

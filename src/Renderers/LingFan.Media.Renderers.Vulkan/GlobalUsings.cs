@@ -9,6 +9,8 @@ global using Microsoft.Extensions.DependencyInjection;
 global using LingFan.Media.Extensions;
 // Silk.NET Vulkan 纯数据结构（struct/enum/handle 类型，零反射、ABI 精确，仅作数据类型复用）
 global using Silk.NET.Vulkan;
+// 共享 Vulkan 原生绑定（GPUShare.Vulkan：渲染命令 + VK_KHR_video_decode，与 B4 硬解共用）
+global using LingFan.Media.GPUShare.Vulkan;
 // 共享渲染层（中性窗口句柄传输类型 X11WindowHandle/WaylandWindowHandle 等，非契约层）
 global using LingFan.Media.Renderers.Shared;
 // 消除命名歧义：Vulkan 的 Semaphore/Buffer 优先于 System.Threading.Semaphore/System.Buffer
