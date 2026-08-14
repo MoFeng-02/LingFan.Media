@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Android 后端（MediaExtractor + MediaCodec）仅 Android 运行时可用。
+      不设置 SupportedOSPlatform("android")：避免 TreatWarningsAsErrors 下，
+      方案级跨平台构建因 CA1416（BCL 调用被标为“非 android 平台支持”）而失败。
+      平台安全性由 OpenAsync/Initialize 内的 OperatingSystem.IsAndroid() 运行时门控保障
+      （与 MF 后端在 Windows 之外运行会失败同一思路；开箱即用原则：注册 ≠ 立刻要 native 库）。
+    -->
+    <!-- 帧 buffer 指针拷贝 + 原生互操作需要 unsafe -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 内部类型供本工程单元测试直接访问 -->
+    <InternalsVisibleTo Include="LingFan.Media.Backends.MediaCodec.Tests" />
+  </ItemGroup>
+
+</Project>

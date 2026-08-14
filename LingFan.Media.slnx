@@ -14,6 +14,7 @@
     <Project Path="src/Backends/LingFan.Media.Backends.GStreamer/LingFan.Media.Backends.GStreamer.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.MediaFoundation/LingFan.Media.Backends.MediaFoundation.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.MediaCodec/LingFan.Media.Backends.MediaCodec.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.WebRTC/LingFan.Media.Backends.WebRTC.csproj" />
   </Folder>
   <Folder Name="/Renderers/">
