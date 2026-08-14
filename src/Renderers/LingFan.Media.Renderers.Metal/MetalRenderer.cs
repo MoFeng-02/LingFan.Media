@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using LingFan.Media.Abstractions;
+using LingFan.Media.Apple.Shared;
 using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Renderers.Metal;
@@ -127,10 +128,10 @@ public sealed class MetalRenderer : IVideoRenderer
                     throw new ArgumentException(
                         "Pointer 句柄期望 NSView*（IntPtr）。", nameof(target));
                 }
-                MetalNative.objc_msgSend(view, MetalNative.Sel("setWantsLayer:"), (byte)1);
-                nint metalLayerCls = MetalNative.Class("CAMetalLayer");
-                nint metalLayer = MetalNative.AllocInit(metalLayerCls);
-                MetalNative.objc_msgSend(view, MetalNative.Sel("setLayer:"), metalLayer);
+                AppleRuntime.objc_msgSend(view, AppleRuntime.Sel("setWantsLayer:"), (byte)1);
+                nint metalLayerCls = AppleRuntime.Class("CAMetalLayer");
+                nint metalLayer = AppleRuntime.AllocInit(metalLayerCls);
+                AppleRuntime.objc_msgSend(view, AppleRuntime.Sel("setLayer:"), metalLayer);
                 layer = metalLayer;
                 // 注：view 与后续构造的 MetalContext 各自 retain metalLayer；此处释放 alloc 的 +1 以平衡引用计数。
                 _attachedWidth = target.Width;
@@ -139,7 +140,7 @@ public sealed class MetalRenderer : IVideoRenderer
                 {
                     _context = new MetalContext(metalLayer, target.Width, target.Height, _logger);
                     _shaderPipeline = new MetalShaderPipeline(_context.Device, _context.Queue, _logger);
-                    MetalNative.objc_release(metalLayer); // 平衡 alloc 的 +1（view 与 context 已各自 retain）
+                    AppleRuntime.objc_release(metalLayer); // 平衡 alloc 的 +1（view 与 context 已各自 retain）
                     _attached = true;
                     _logger?.LogInformation(
                         "[METAL-ATTACH] target={TW}x{TH} 图层={Layer}",
@@ -152,7 +153,7 @@ public sealed class MetalRenderer : IVideoRenderer
                     _shaderPipeline = null;
                     _context?.Dispose();
                     _context = null;
-                    MetalNative.objc_release(metalLayer);
+                    AppleRuntime.objc_release(metalLayer);
                     throw;
                 }
             }
@@ -217,7 +218,7 @@ public sealed class MetalRenderer : IVideoRenderer
             }
 
             // 每帧原生对象（可绘制层、纹理描述符、命令缓冲等）置于 autorelease 池内，避免 NativeAOT 无池环境下的逐帧泄漏。
-            nint pool = MetalNative.objc_autoreleasePoolPush();
+            nint pool = AppleRuntime.objc_autoreleasePoolPush();
             try
             {
                 switch (frame.Resource)
@@ -243,7 +244,7 @@ public sealed class MetalRenderer : IVideoRenderer
             }
             finally
             {
-                MetalNative.objc_autoreleasePoolPop(pool);
+                AppleRuntime.objc_autoreleasePoolPop(pool);
             }
         }
     }
@@ -256,7 +257,7 @@ public sealed class MetalRenderer : IVideoRenderer
         {
             if (_disposed || !_attached || _context is null) return;
 
-            nint pool = MetalNative.objc_autoreleasePoolPush();
+            nint pool = AppleRuntime.objc_autoreleasePoolPush();
             try
             {
                 // 呈现一帧纯黑（clear 语义：清空当前画面）。Metal 渲染目标以 drawable 纹理呈现。
@@ -265,28 +266,28 @@ public sealed class MetalRenderer : IVideoRenderer
             }
             finally
             {
-                MetalNative.objc_autoreleasePoolPop(pool);
+                AppleRuntime.objc_autoreleasePoolPop(pool);
             }
         }
     }
 
     private void ClearToBlack(nint targetTexture, int w, int h, nint drawable)
     {
-        nint rpDesc = MetalNative.objc_msgSend(MetalNative.Class("MTLRenderPassDescriptor"), MetalNative.Sel("renderPassDescriptor"));
-        nint caArr = MetalNative.objc_msgSend(rpDesc, MetalNative.Sel("colorAttachments"));
-        nint ca0 = MetalNative.objc_msgSend(caArr, MetalNative.Sel("objectAtIndexedSubscript:"), (nuint)0);
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setTexture:"), targetTexture);
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setLoadAction:"), MetalConstants.LoadActionClear);
-        MetalNative.MTLClearColor cc = new() { Red = 0, Green = 0, Blue = 0, Alpha = 1 };
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setClearColor:"), ref cc);
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setStoreAction:"), MetalConstants.StoreActionStore);
+        nint rpDesc = AppleRuntime.objc_msgSend(AppleRuntime.Class("MTLRenderPassDescriptor"), AppleRuntime.Sel("renderPassDescriptor"));
+        nint caArr = AppleRuntime.objc_msgSend(rpDesc, AppleRuntime.Sel("colorAttachments"));
+        nint ca0 = AppleRuntime.objc_msgSend(caArr, AppleRuntime.Sel("objectAtIndexedSubscript:"), (nuint)0);
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setTexture:"), targetTexture);
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setLoadAction:"), MetalConstants.LoadActionClear);
+        AppleRuntime.MTLClearColor cc = new() { Red = 0, Green = 0, Blue = 0, Alpha = 1 };
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setClearColor:"), ref cc);
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setStoreAction:"), MetalConstants.StoreActionStore);
 
-        nint cb = MetalNative.objc_msgSend(_context!.Queue, MetalNative.Sel("newCommandBuffer"));
-        nint enc = MetalNative.objc_msgSend(cb, MetalNative.Sel("renderCommandEncoderWithDescriptor:"), rpDesc);
-        MetalNative.objc_msgSend(enc, MetalNative.Sel("endEncoding"));
-        MetalNative.objc_msgSend(cb, MetalNative.Sel("presentDrawable:"), drawable);
-        MetalNative.objc_msgSend(cb, MetalNative.Sel("commit"));
-        MetalNative.objc_release(cb); // newCommandBuffer 返回 +1；commit 后由命令队列接管，释放我们的 +1
+        nint cb = AppleRuntime.objc_msgSend(_context!.Queue, AppleRuntime.Sel("newCommandBuffer"));
+        nint enc = AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("renderCommandEncoderWithDescriptor:"), rpDesc);
+        AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("endEncoding"));
+        AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("presentDrawable:"), drawable);
+        AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("commit"));
+        AppleRuntime.objc_release(cb); // newCommandBuffer 返回 +1；commit 后由命令队列接管，释放我们的 +1
     }
 
     /// <inheritdoc />

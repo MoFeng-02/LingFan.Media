@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Apple 共享互操作层（全仓唯一 Apple objc / Core* 绑定源）。
+      Metal 渲染器、Backends.Apple、Platforms 的 VideoToolbox / Metal interop 全部消费本层，
+      消除 Apple 绑定分叉（原先 MetalNative 内部 + Platforms VT/Metal 桩三处分叉）。
+      仅依赖 BCL（System.Runtime.InteropServices），零 Abstractions / Renderers / Platforms 反向引用，严守 DIP。
+      不设置 SupportedOSPlatform：避免 TreatWarningsAsErrors 下跨平台构建因 CA1416 失败；
+      平台安全性由 OpenAsync / Attach 内的 OperatingSystem.IsMacOS() / IsIOS() 运行时门控保障。
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

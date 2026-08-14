@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using LingFan.Media.Abstractions;
+using LingFan.Media.Apple.Shared;
 using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Renderers.Metal;
@@ -23,7 +24,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// <para><b>异步策略</b>：全部同步（native 分类）——MSL 编译与 GPU 提交均为同步原生调用，无 I/O await；包 async/Task.Run 即伪异步，禁止。</para>
 /// <para><b>线程安全</b>：所有方法由 <see cref="MetalRenderer"/> 在其 <c>_gate</c> 锁内调用，本类不再加锁。</para>
 /// <para><b>资源所有权</b>：设备由渲染器持有（不 Dispose）；库/管线状态/顶点缓冲由本类持有，<see cref="Dispose"/> 释放；
-/// 每帧源纹理（+1）在 Present 内 <see cref="MetalNative.objc_release"/>，自动释放对象由渲染器的 autorelease 池回收。</para>
+/// 每帧源纹理（+1）在 Present 内 <see cref="AppleRuntime.objc_release"/>，自动释放对象由渲染器的 autorelease 池回收。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射；Metal 调用经 <see cref="MetalNative"/>（零反射 [LibraryImport]）。</para>
 /// </remarks>
 internal sealed unsafe class MetalShaderPipeline : IDisposable
@@ -140,16 +141,16 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
 
     private void CompileLibraryAndPipelines()
     {
-        nint source = MetalNative.MakeNSString(MslSource);
+        nint source = AppleRuntime.MakeNSString(MslSource);
         nint error = nint.Zero;
-        nint lib = MetalNative.objc_msgSend(_device, MetalNative.Sel("newLibraryWithSource:options:error:"), source, nint.Zero, &error);
+        nint lib = AppleRuntime.objc_msgSend(_device, AppleRuntime.Sel("newLibraryWithSource:options:error:"), source, nint.Zero, &error);
         if (lib == nint.Zero)
             throw new InvalidOperationException("Metal：MSL 库编译失败：" + ErrorString(error));
 
-        nint vs = MetalNative.objc_msgSend(lib, MetalNative.Sel("newFunctionWithName:"), MetalNative.MakeNSString("vmain"));
-        nint fsRgb = MetalNative.objc_msgSend(lib, MetalNative.Sel("newFunctionWithName:"), MetalNative.MakeNSString("frgb"));
-        nint fsYuv = MetalNative.objc_msgSend(lib, MetalNative.Sel("newFunctionWithName:"), MetalNative.MakeNSString("fyuv"));
-        nint fsNv = MetalNative.objc_msgSend(lib, MetalNative.Sel("newFunctionWithName:"), MetalNative.MakeNSString("fnv"));
+        nint vs = AppleRuntime.objc_msgSend(lib, AppleRuntime.Sel("newFunctionWithName:"), AppleRuntime.MakeNSString("vmain"));
+        nint fsRgb = AppleRuntime.objc_msgSend(lib, AppleRuntime.Sel("newFunctionWithName:"), AppleRuntime.MakeNSString("frgb"));
+        nint fsYuv = AppleRuntime.objc_msgSend(lib, AppleRuntime.Sel("newFunctionWithName:"), AppleRuntime.MakeNSString("fyuv"));
+        nint fsNv = AppleRuntime.objc_msgSend(lib, AppleRuntime.Sel("newFunctionWithName:"), AppleRuntime.MakeNSString("fnv"));
 
         if (vs == nint.Zero || fsRgb == nint.Zero || fsYuv == nint.Zero || fsNv == nint.Zero)
             throw new InvalidOperationException("Metal：MSL 函数查找失败（vmain/frgb/fyuv/fnv 之一不存在）。");
@@ -159,10 +160,10 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
         _nvPipeline = NewPipeline(vs, fsNv);
 
         // 临时函数对象（newFunctionWithName: 返回 +1）由渲染管线状态内部强引用，此处释放我们的 +1 引用。
-        MetalNative.objc_release(vs);
-        MetalNative.objc_release(fsRgb);
-        MetalNative.objc_release(fsYuv);
-        MetalNative.objc_release(fsNv);
+        AppleRuntime.objc_release(vs);
+        AppleRuntime.objc_release(fsRgb);
+        AppleRuntime.objc_release(fsYuv);
+        AppleRuntime.objc_release(fsNv);
 
         // 库引用（newLibraryWithSource: 返回 +1，本类持有，Dispose 释放一次即平衡）。
         _library = lib;
@@ -170,18 +171,18 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
 
     private nint NewPipeline(nint vs, nint fs)
     {
-        nint pdesc = MetalNative.AllocInit(MetalNative.Class("MTLRenderPipelineDescriptor"));
-        MetalNative.objc_msgSend(pdesc, MetalNative.Sel("setVertexFunction:"), vs);
-        MetalNative.objc_msgSend(pdesc, MetalNative.Sel("setFragmentFunction:"), fs);
-        nint caArr = MetalNative.objc_msgSend(pdesc, MetalNative.Sel("colorAttachments"));
-        nint ca0 = MetalNative.objc_msgSend(caArr, MetalNative.Sel("objectAtIndexedSubscript:"), (nuint)0);
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setPixelFormat:"), MetalConstants.BGRA8Unorm);
+        nint pdesc = AppleRuntime.AllocInit(AppleRuntime.Class("MTLRenderPipelineDescriptor"));
+        AppleRuntime.objc_msgSend(pdesc, AppleRuntime.Sel("setVertexFunction:"), vs);
+        AppleRuntime.objc_msgSend(pdesc, AppleRuntime.Sel("setFragmentFunction:"), fs);
+        nint caArr = AppleRuntime.objc_msgSend(pdesc, AppleRuntime.Sel("colorAttachments"));
+        nint ca0 = AppleRuntime.objc_msgSend(caArr, AppleRuntime.Sel("objectAtIndexedSubscript:"), (nuint)0);
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setPixelFormat:"), MetalConstants.BGRA8Unorm);
 
         nint error = nint.Zero;
-        nint state = MetalNative.objc_msgSend(_device, MetalNative.Sel("newRenderPipelineStateWithDescriptor:error:"), pdesc, &error);
+        nint state = AppleRuntime.objc_msgSend(_device, AppleRuntime.Sel("newRenderPipelineStateWithDescriptor:error:"), pdesc, &error);
         if (state == nint.Zero)
             throw new InvalidOperationException("Metal：创建渲染管线失败：" + ErrorString(error));
-        MetalNative.objc_release(pdesc); // 释放 MTLRenderPipelineDescriptor（AllocInit 的 +1）；管线状态已内部持有配置
+        AppleRuntime.objc_release(pdesc); // 释放 MTLRenderPipelineDescriptor（AllocInit 的 +1）；管线状态已内部持有配置
         return state; // newRenderPipelineStateWithDescriptor:error: 已返回 +1（本类所有），Dispose 释放一次即平衡，切勿再 retain
     }
 
@@ -196,7 +197,7 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
              1f,  1f, 1f, 0f,
         };
         fixed (float* p = quad)
-            _vbo = MetalNative.objc_msgSend(_device, MetalNative.Sel("newBufferWithBytes:length:options:"),
+            _vbo = AppleRuntime.objc_msgSend(_device, AppleRuntime.Sel("newBufferWithBytes:length:options:"),
                 (nint)p, (nuint)(quad.Length * sizeof(float)), MetalConstants.ResourceStorageModeShared);
         // newBufferWithBytes: 返回 +1（本类所有），Dispose 释放一次即平衡，无需额外 retain。
     }
@@ -205,17 +206,17 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
 
     private nint CreatePlaneTexture(int w, int h, nuint pixelFormat)
     {
-        nint td = MetalNative.objc_msgSend(MetalNative.Class("MTLTextureDescriptor"),
-            MetalNative.Sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+        nint td = AppleRuntime.objc_msgSend(AppleRuntime.Class("MTLTextureDescriptor"),
+            AppleRuntime.Sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
             pixelFormat, (nuint)w, (nuint)h, (byte)0);
-        nint tex = MetalNative.objc_msgSend(_device, MetalNative.Sel("newTextureWithDescriptor:"), td);
+        nint tex = AppleRuntime.objc_msgSend(_device, AppleRuntime.Sel("newTextureWithDescriptor:"), td);
         // newTextureWithDescriptor: 返回 +1（本方法所有），调用方 Present 内 objc_release 一次即平衡。
         return tex;
     }
 
     private static void UploadPlane(nint tex, int w, int h, int bpp, int stride, PixelFormat format, byte* basePtr)
     {
-        MetalNative.MTLRegion region = new() { X = 0, Y = 0, Z = 0, Width = (nuint)w, Height = 1, Depth = 1 };
+        AppleRuntime.MTLRegion region = new() { X = 0, Y = 0, Z = 0, Width = (nuint)w, Height = 1, Depth = 1 };
         if (format == PixelFormat.RGB24)
         {
             // 扩展 RGB24（3 字节）→ RGBA8Unorm（4 字节）逐行上传
@@ -232,7 +233,7 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
                 }
                 region.Y = (nuint)row;
                 fixed (byte* dp = rgba)
-                    MetalNative.objc_msgSendReplaceRegion(tex, MetalNative.Sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
+                    AppleRuntime.objc_msgSendReplaceRegion(tex, AppleRuntime.Sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
                         ref region, (nuint)0, (nint)dp, (nuint)(w * 4));
             }
         }
@@ -241,7 +242,7 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
             for (int row = 0; row < h; row++)
             {
                 region.Y = (nuint)row;
-                MetalNative.objc_msgSendReplaceRegion(tex, MetalNative.Sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
+                AppleRuntime.objc_msgSendReplaceRegion(tex, AppleRuntime.Sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
                     ref region, (nuint)0, (nint)(basePtr + row * stride), (nuint)stride);
             }
         }
@@ -265,24 +266,24 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
         EnsureInitialized();
 
         // 渲染 Pass（自动释放对象，处于渲染器包装的 autorelease 池内）
-        nint rpDesc = MetalNative.objc_msgSend(MetalNative.Class("MTLRenderPassDescriptor"), MetalNative.Sel("renderPassDescriptor"));
-        nint caArr = MetalNative.objc_msgSend(rpDesc, MetalNative.Sel("colorAttachments"));
-        nint ca0 = MetalNative.objc_msgSend(caArr, MetalNative.Sel("objectAtIndexedSubscript:"), (nuint)0);
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setTexture:"), targetTexture);
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setLoadAction:"), MetalConstants.LoadActionClear);
-        MetalNative.MTLClearColor cc = new() { Red = 0, Green = 0, Blue = 0, Alpha = 1 };
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setClearColor:"), ref cc);
-        MetalNative.objc_msgSend(ca0, MetalNative.Sel("setStoreAction:"), MetalConstants.StoreActionStore);
+        nint rpDesc = AppleRuntime.objc_msgSend(AppleRuntime.Class("MTLRenderPassDescriptor"), AppleRuntime.Sel("renderPassDescriptor"));
+        nint caArr = AppleRuntime.objc_msgSend(rpDesc, AppleRuntime.Sel("colorAttachments"));
+        nint ca0 = AppleRuntime.objc_msgSend(caArr, AppleRuntime.Sel("objectAtIndexedSubscript:"), (nuint)0);
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setTexture:"), targetTexture);
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setLoadAction:"), MetalConstants.LoadActionClear);
+        AppleRuntime.MTLClearColor cc = new() { Red = 0, Green = 0, Blue = 0, Alpha = 1 };
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setClearColor:"), ref cc);
+        AppleRuntime.objc_msgSend(ca0, AppleRuntime.Sel("setStoreAction:"), MetalConstants.StoreActionStore);
 
-        nint cb = MetalNative.objc_msgSend(_queue, MetalNative.Sel("newCommandBuffer"));
-        nint enc = MetalNative.objc_msgSend(cb, MetalNative.Sel("renderCommandEncoderWithDescriptor:"), rpDesc);
+        nint cb = AppleRuntime.objc_msgSend(_queue, AppleRuntime.Sel("newCommandBuffer"));
+        nint enc = AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("renderCommandEncoderWithDescriptor:"), rpDesc);
 
         // 顶点缓冲（持久）+ 缩放/居中（信箱/裁剪）
-        MetalNative.objc_msgSend(enc, MetalNative.Sel("setVertexBuffer:offset:atIndex:"), _vbo, (nuint)0, (nuint)0);
+        AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setVertexBuffer:offset:atIndex:"), _vbo, (nuint)0, (nuint)0);
         ComputeScale(sw.Width, sw.Height, dstW, dstH, mode, out float sx, out float sy);
         float[] su = { sx, sy, 0f, 0f };
         fixed (float* sup = su)
-            MetalNative.objc_msgSend(enc, MetalNative.Sel("setVertexBytes:length:atIndex:"), (nint)sup, (nuint)16, (nuint)1);
+            AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setVertexBytes:length:atIndex:"), (nint)sup, (nuint)16, (nuint)1);
 
         var span = sw.Data.Span;
         fixed (byte* basePtr = span)
@@ -298,10 +299,10 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
                     nuint pf = sw.Format == PixelFormat.BGRA32 ? MetalConstants.BGRA8Unorm : MetalConstants.RGBA8Unorm;
                     nint tex = CreatePlaneTexture(w, h, pf);
                     UploadPlane(tex, w, h, bpp, stride, sw.Format, basePtr);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setRenderPipelineState:"), _rgbPipeline);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setFragmentTexture:atIndex:"), tex, (nuint)0);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("drawPrimitives:vertexStart:vertexCount:"), MetalConstants.PrimitiveTypeTriangleStrip, (nuint)0, (nuint)4);
-                    MetalNative.objc_release(tex);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setRenderPipelineState:"), _rgbPipeline);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setFragmentTexture:atIndex:"), tex, (nuint)0);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("drawPrimitives:vertexStart:vertexCount:"), MetalConstants.PrimitiveTypeTriangleStrip, (nuint)0, (nuint)4);
+                    AppleRuntime.objc_release(tex);
                     break;
                 }
 
@@ -310,10 +311,10 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
                     int stride = sw.Stride > 0 ? sw.Stride : w * 3;
                     nint tex = CreatePlaneTexture(w, h, MetalConstants.RGBA8Unorm);
                     UploadPlane(tex, w, h, 3, stride, PixelFormat.RGB24, basePtr);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setRenderPipelineState:"), _rgbPipeline);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setFragmentTexture:atIndex:"), tex, (nuint)0);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("drawPrimitives:vertexStart:vertexCount:"), MetalConstants.PrimitiveTypeTriangleStrip, (nuint)0, (nuint)4);
-                    MetalNative.objc_release(tex);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setRenderPipelineState:"), _rgbPipeline);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setFragmentTexture:atIndex:"), tex, (nuint)0);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("drawPrimitives:vertexStart:vertexCount:"), MetalConstants.PrimitiveTypeTriangleStrip, (nuint)0, (nuint)4);
+                    AppleRuntime.objc_release(tex);
                     break;
                 }
 
@@ -335,14 +336,14 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
                     UploadPlane(ty, w, h, 1, w, sw.Format, basePtr);
                     UploadPlane(tu, cw, ch, 1, cw, sw.Format, basePtr + ySize);
                     UploadPlane(tv, cw, ch, 1, cw, sw.Format, basePtr + ySize + cSize);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setRenderPipelineState:"), _yuvPipeline);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setFragmentTexture:atIndex:"), ty, (nuint)0);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setFragmentTexture:atIndex:"), tu, (nuint)1);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setFragmentTexture:atIndex:"), tv, (nuint)2);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("drawPrimitives:vertexStart:vertexCount:"), MetalConstants.PrimitiveTypeTriangleStrip, (nuint)0, (nuint)4);
-                    MetalNative.objc_release(ty);
-                    MetalNative.objc_release(tu);
-                    MetalNative.objc_release(tv);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setRenderPipelineState:"), _yuvPipeline);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setFragmentTexture:atIndex:"), ty, (nuint)0);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setFragmentTexture:atIndex:"), tu, (nuint)1);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setFragmentTexture:atIndex:"), tv, (nuint)2);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("drawPrimitives:vertexStart:vertexCount:"), MetalConstants.PrimitiveTypeTriangleStrip, (nuint)0, (nuint)4);
+                    AppleRuntime.objc_release(ty);
+                    AppleRuntime.objc_release(tu);
+                    AppleRuntime.objc_release(tv);
                     break;
                 }
 
@@ -356,15 +357,15 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
                     nint tuv = CreatePlaneTexture(uvW, uvH, MetalConstants.RG8Unorm);
                     UploadPlane(ty, w, h, 1, w, sw.Format, basePtr);
                     UploadPlane(tuv, uvW, uvH, 2, uvW * 2, sw.Format, basePtr + ySize);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setRenderPipelineState:"), _nvPipeline);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setFragmentTexture:atIndex:"), ty, (nuint)0);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setFragmentTexture:atIndex:"), tuv, (nuint)1);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setRenderPipelineState:"), _nvPipeline);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setFragmentTexture:atIndex:"), ty, (nuint)0);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setFragmentTexture:atIndex:"), tuv, (nuint)1);
                     int swap = sw.Format == PixelFormat.NV21 ? 1 : 0;
                     int* fp = &swap;
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("setFragmentBytes:length:atIndex:"), (nint)fp, (nuint)4, (nuint)0);
-                    MetalNative.objc_msgSend(enc, MetalNative.Sel("drawPrimitives:vertexStart:vertexCount:"), MetalConstants.PrimitiveTypeTriangleStrip, (nuint)0, (nuint)4);
-                    MetalNative.objc_release(ty);
-                    MetalNative.objc_release(tuv);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("setFragmentBytes:length:atIndex:"), (nint)fp, (nuint)4, (nuint)0);
+                    AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("drawPrimitives:vertexStart:vertexCount:"), MetalConstants.PrimitiveTypeTriangleStrip, (nuint)0, (nuint)4);
+                    AppleRuntime.objc_release(ty);
+                    AppleRuntime.objc_release(tuv);
                     break;
                 }
 
@@ -374,10 +375,10 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
             }
         }
 
-        MetalNative.objc_msgSend(enc, MetalNative.Sel("endEncoding"));
-        MetalNative.objc_msgSend(cb, MetalNative.Sel("presentDrawable:"), drawable);
-        MetalNative.objc_msgSend(cb, MetalNative.Sel("commit"));
-        MetalNative.objc_release(cb); // newCommandBuffer 返回 +1；commit 后由命令队列接管直至 GPU 完成，释放我们的 +1
+        AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("endEncoding"));
+        AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("presentDrawable:"), drawable);
+        AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("commit"));
+        AppleRuntime.objc_release(cb); // newCommandBuffer 返回 +1；commit 后由命令队列接管直至 GPU 完成，释放我们的 +1
     }
 
     /// <summary>按 <see cref="AspectRatioMode"/> 计算软帧→目标（裁剪空间中心）的缩放因子（offset 恒为 0，居中）。
@@ -413,9 +414,9 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
     private static string ErrorString(nint error)
     {
         if (error == nint.Zero) return "（无错误信息）";
-        nint desc = MetalNative.objc_msgSend(error, MetalNative.Sel("localizedDescription"));
+        nint desc = AppleRuntime.objc_msgSend(error, AppleRuntime.Sel("localizedDescription"));
         if (desc == nint.Zero) return "（无法读取错误描述）";
-        nint utf8 = MetalNative.objc_msgSend(desc, MetalNative.Sel("UTF8String"));
+        nint utf8 = AppleRuntime.objc_msgSend(desc, AppleRuntime.Sel("UTF8String"));
         if (utf8 == nint.Zero) return "（UTF8String 为空）";
         return Marshal.PtrToStringUTF8(utf8) ?? "（解码失败）";
     }
@@ -426,11 +427,11 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (_vbo != nint.Zero) { MetalNative.objc_release(_vbo); _vbo = nint.Zero; }
-        if (_rgbPipeline != nint.Zero) { MetalNative.objc_release(_rgbPipeline); _rgbPipeline = nint.Zero; }
-        if (_yuvPipeline != nint.Zero) { MetalNative.objc_release(_yuvPipeline); _yuvPipeline = nint.Zero; }
-        if (_nvPipeline != nint.Zero) { MetalNative.objc_release(_nvPipeline); _nvPipeline = nint.Zero; }
-        if (_library != nint.Zero) { MetalNative.objc_release(_library); _library = nint.Zero; }
+        if (_vbo != nint.Zero) { AppleRuntime.objc_release(_vbo); _vbo = nint.Zero; }
+        if (_rgbPipeline != nint.Zero) { AppleRuntime.objc_release(_rgbPipeline); _rgbPipeline = nint.Zero; }
+        if (_yuvPipeline != nint.Zero) { AppleRuntime.objc_release(_yuvPipeline); _yuvPipeline = nint.Zero; }
+        if (_nvPipeline != nint.Zero) { AppleRuntime.objc_release(_nvPipeline); _nvPipeline = nint.Zero; }
+        if (_library != nint.Zero) { AppleRuntime.objc_release(_library); _library = nint.Zero; }
         _logger?.LogDebug("Metal Shader 管线已释放");
     }
 }

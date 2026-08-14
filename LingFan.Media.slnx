@@ -15,6 +15,7 @@
     <Project Path="src/Backends/LingFan.Media.Backends.MediaFoundation/LingFan.Media.Backends.MediaFoundation.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.MediaCodec/LingFan.Media.Backends.MediaCodec.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.Apple/LingFan.Media.Backends.Apple.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.WebRTC/LingFan.Media.Backends.WebRTC.csproj" />
   </Folder>
   <Folder Name="/Renderers/">
@@ -31,6 +32,9 @@
   </Folder>
   <Folder Name="/Platforms/">
     <Project Path="src/Platforms/LingFan.Media.Platforms/LingFan.Media.Platforms.csproj" />
+  </Folder>
+  <Folder Name="/Apple/">
+    <Project Path="src/Apple/LingFan.Media.Apple.Shared/LingFan.Media.Apple.Shared.csproj" />
   </Folder>
   <Folder Name="/Tools/">
     <Project Path="src/Tools/FfmpegHeadfulPlaybackProbe/FfmpegHeadfulPlaybackProbe.csproj" />

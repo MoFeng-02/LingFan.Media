@@ -1,4 +1,5 @@
 using LingFan.Media.Abstractions;
+using LingFan.Media.Apple.Shared;
 
 namespace LingFan.Media.Renderers.Metal;
 
@@ -11,7 +12,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// <see cref="IGpuTextureResource"/> 零拷贝路径暂未启用，故本类型作为合法 <see cref="IFrameResource"/> 实现存在，
 /// 不直接参与上屏。</para>
 /// <para><b>所有权</b>：若 <paramref name="ownsHandle"/> 为 <see langword="true"/>，<see cref="Dispose"/> 中
-/// 经 <see cref="MetalNative.objc_release"/> 释放原生纹理；否则仅解除托管引用（句柄由外部所有者管理）。</para>
+/// 经 <see cref="AppleRuntime.objc_release"/> 释放原生纹理；否则仅解除托管引用（句柄由外部所有者管理）。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
 /// </remarks>
 public sealed class MetalTextureResource : IFrameResource
@@ -57,6 +58,6 @@ public sealed class MetalTextureResource : IFrameResource
         _disposed = true;
 
         if (_ownsHandle && _texture != nint.Zero)
-            MetalNative.objc_release(_texture);
+            AppleRuntime.objc_release(_texture);
     }
 }

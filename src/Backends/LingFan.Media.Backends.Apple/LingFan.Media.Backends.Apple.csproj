@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Apple 后端（AVAssetReader passthrough 解封装 + VideoToolbox/AVFoundation 解码）仅 Apple 运行时可用。
+      不设 SupportedOSPlatform("macos"/"ios")：避免 TreatWarningsAsErrors 下跨平台构建因 CA1416 失败。
+      平台安全性由 OpenAsync/Initialize 内的 OperatingSystem.IsMacOS()/IsIOS() 运行时门控保障
+      （与 MF/Android 后端同思路；开箱即用：注册 ≠ 立刻要求原生库）。
+    -->
+    <!-- 帧 buffer 指针拷贝 + 原生互操作需要 unsafe -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\..\Apple\LingFan.Media.Apple.Shared\LingFan.Media.Apple.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 内部类型供本工程单元测试直接访问 -->
+    <InternalsVisibleTo Include="LingFan.Media.Backends.Apple.Tests" />
+  </ItemGroup>
+
+</Project>
