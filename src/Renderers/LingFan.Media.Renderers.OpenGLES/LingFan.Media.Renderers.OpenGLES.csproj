@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 零反射原生绑定（GlesNative：EGL + GLES）使用 unsafe 上下文 + [LibraryImport]，必须开启。 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- 与 D3D11 / Vulkan / OpenGL 渲染器对齐：作为可发布 NuGet 库。
+         打包元数据（README/图标/LICENSE/第三方声明）由仓库根 Directory.Build.props 统一注入。 -->
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

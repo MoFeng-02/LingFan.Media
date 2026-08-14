@@ -34,9 +34,11 @@ public interface IRendererProfiler
 /// 这是「有限超时替代无限等待」权衡的已知副作用，属预期行为而非死锁。</para>
 /// <para><b>已知性能限制</b>：<see cref="RecordAndSubmitFrame"/> 中使用 <c>vkQueueWaitIdle</c>
 /// 每帧同步 GPU——确保 Command Buffer 可安全复用但消除 GPU 并行。将改用 Fence 或环形 Command Buffer。</para>
-/// <para><b>已知功能限制</b>：Linux X11/Wayland Surface 创建缺少 Display 指针——明确抛
-/// <see cref="PlatformNotSupportedException"/>（扩展契约后支持）。
-/// 软帧 YUV 平面格式（NV12/NV21/YUV420P/YUV422P/YUV444P）走 GPU Shader 路径：由 Fragment Shader
+/// <para><b>Linux Surface</b>：X11 / Wayland 经中性句柄类型 <c>X11WindowHandle</c> / <c>WaylandWindowHandle</c>
+/// （定义于 <c>LingFan.Media.Renderers.Shared</c>，非契约层）携带 Display* 指针，由
+/// <c>VulkanNative.CreateXlibSurfaceKHR</c> / <c>CreateWaylandSurfaceKHR</c> 创建 Surface；
+/// 对应 WSI 扩展由 <c>VulkanRendererFactory.GetPlatformExtensions</c> 经 <c>AddIfAvailable</c> 注册。</para>
+/// <para><b>软帧 YUV 平面格式</b>（NV12/NV21/YUV420P/YUV422P/YUV444P）走 GPU Shader 路径：由 Fragment Shader
 /// 采样 Y/U/V 平面并完成 YUV→RGB（与 D3D11 Shader 路径共用 BT.601 全范围矩阵），CPU 仅做原始平面搬运；
 /// 缩放支持三种 <see cref="AspectRatioMode"/>（见 <see cref="ScaleMode"/>）。</para>
 /// ErrorOutOfDateKhr 已由 <c>RecreateSwapchain</c> 就地重建（含信号量重建，消除 signaled 残留）；
@@ -154,8 +156,16 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
             if (target.HandleType != RenderHandleType.Pointer)
                 throw new NotSupportedException($"Vulkan 渲染器仅支持 {nameof(RenderHandleType.Pointer)}。");
-            if (target.NativeHandle is not IntPtr handle || handle == IntPtr.Zero)
+            if (OperatingSystem.IsLinux())
+            {
+                // Linux X11/Wayland 经中性句柄类型 X11WindowHandle / WaylandWindowHandle 携带 Display* 指针（定义于 Renderers.Shared，非契约层）。
+                if (target.NativeHandle is not (X11WindowHandle or WaylandWindowHandle))
+                    throw new ArgumentException("Linux 渲染目标句柄须为 X11WindowHandle 或 WaylandWindowHandle（携带 Display* 与 Window/Surface 指针）。", nameof(target));
+            }
+            else if (target.NativeHandle is not IntPtr handle || handle == IntPtr.Zero)
+            {
                 throw new ArgumentException("渲染目标句柄无效。", nameof(target));
+            }
             if (target.Width <= 0 || target.Height <= 0)
                 throw new ArgumentException($"尺寸无效：{target.Width}x{target.Height}。", nameof(target));
 
@@ -163,7 +173,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             {
                 _targetWidth = (uint)target.Width;
                 _targetHeight = (uint)target.Height;
-                CreateSurface(handle);
+                CreateSurface(target);
                 CreateSwapchain((uint)target.Width, (uint)target.Height);
                 CreateShaderPipeline();
                 CreateCommandPoolAndBuffer();
@@ -925,7 +935,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     [System.Runtime.InteropServices.LibraryImport("kernel32")]
     private static partial nint GetModuleHandleW(nint lpModuleName);
 
-    private unsafe void CreateSurface(IntPtr handle)
+    private unsafe void CreateSurface(IRenderTarget target)
     {
         SurfaceKHR[] surfArr = new SurfaceKHR[1];
         Result result;
@@ -934,6 +944,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         {
             // VUID-VkWin32SurfaceCreateInfoKHR-hinstance-01307 要求有效 HINSTANCE，
             // 不能默认 0 靠驱动宽容（validation layer 必报错）。GetModuleHandleW(null) = 进程模块句柄。
+            if (target.NativeHandle is not IntPtr handle || handle == IntPtr.Zero)
+                throw new ArgumentException("渲染目标句柄无效。", nameof(target));
             var info = new Win32SurfaceCreateInfoKHR
             {
                 SType = StructureType.Win32SurfaceCreateInfoKhr,
@@ -944,9 +956,11 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         }
         else if (OperatingSystem.IsAndroid())
         {
-            // handle 本身就是 ANativeWindow*（IRenderTarget 传来的原生窗口指针）。
+            // NativeHandle 本身就是 ANativeWindow*（IRenderTarget 传来的原生窗口指针）。
             // 绝不能写 &handle——那是「指向栈局部变量的指针」，驱动会把栈地址当 ANativeWindow* 解引用（UB）。
             // 对照 Win32 路径 Hwnd = handle 的直接赋值语义：字段里装的必须是窗口指针值本身。
+            if (target.NativeHandle is not IntPtr handle || handle == IntPtr.Zero)
+                throw new ArgumentException("渲染目标句柄无效。", nameof(target));
             var info = new AndroidSurfaceCreateInfoKHR
             {
                 SType = StructureType.AndroidSurfaceCreateInfoKhr,
@@ -956,10 +970,11 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         }
         else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
         {
-            // MoltenVK 路径：handle 应为宿主提供的 CAMetalLayer*（由 Apple 合成栈 / VideoView 注入）。
+            // MoltenVK 路径：NativeHandle 应为宿主提供的 CAMetalLayer*（由 Apple 合成栈 / VideoView 注入）。
             // VK_EXT_metal_surface 须已在实例启用（VulkanRendererFactory.GetPlatformExtensions 已加 Apple 分支）。
             // MetalSurfaceCreateInfoEXT.PLayer 是 IntPtr*（指向 CAMetalLayer*），故取局部副本的地址传入。
-            IntPtr layer = handle;
+            if (target.NativeHandle is not IntPtr layer || layer == IntPtr.Zero)
+                throw new ArgumentException("渲染目标句柄无效。", nameof(target));
             var info = new MetalSurfaceCreateInfoEXT
             {
                 SType = StructureType.MetalSurfaceCreateInfoExt,
@@ -969,16 +984,37 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         }
         else if (OperatingSystem.IsLinux())
         {
-            // X11/Wayland Surface 创建需要 Display* 指针（Xlib 的 Dpy / Wayland 的 wl_display*），
-            // 当前 IRenderTarget.NativeHandle 仅传递单个 IntPtr（窗口句柄），无法携带 Display 指针。
-            // 旧「预留骨架」以缺失 Dpy/Display 的方式调用驱动，属于未定义行为（驱动解引用空 Display）。
-            // 按平台范围决策 Linux 原生 Surface 不在范围——明确抛 PNS，快速失败优于 UB。
-            // 若排期：需扩展 IRenderTarget 契约（复合句柄/ExtraFields）携带 Display* 后再实现。
-            _logger.LogWarning(
-                "Linux Vulkan Surface 创建被拒绝（Xlib/Wayland 原生 Surface 暂未集成）——缺少 Display* 传递通道。");
-            throw new PlatformNotSupportedException(
-                "Linux 原生 Vulkan Surface 需要 Display* 指针（X11 Dpy / wl_display*），" +
-                "当前 IRenderTarget.NativeHandle 仅单一窗口句柄无法携带，扩展契约后才支持。");
+            // Linux X11/Wayland Surface 需要 Display* 指针（Xlib 的 Dpy / Wayland 的 wl_display*），
+            // 由 IRenderTarget.NativeHandle 以中性句柄类型 X11WindowHandle / WaylandWindowHandle 携带
+            // （定义于 LingFan.Media.Renderers.Shared，非契约层）。Silk.NET 的 Xlib/Wayland surface 结构体
+            // 中 Dpy / Display / Surface 字段为 IntPtr*（指向原生指针），故取局部副本地址传入，避免栈 UB。
+            if (target.NativeHandle is X11WindowHandle x11)
+            {
+                nint dpy = x11.Display;
+                var info = new XlibSurfaceCreateInfoKHR
+                {
+                    SType = StructureType.XlibSurfaceCreateInfoKhr,
+                    Dpy = &dpy,
+                    Window = x11.Window,
+                };
+                result = VulkanNative.CreateXlibSurfaceKHR(_instance, ref info, null, out surfArr[0]);
+            }
+            else if (target.NativeHandle is WaylandWindowHandle wl)
+            {
+                nint disp = wl.Display;
+                nint surf = wl.Surface;
+                var info = new WaylandSurfaceCreateInfoKHR
+                {
+                    SType = StructureType.WaylandSurfaceCreateInfoKhr,
+                    Display = &disp,
+                    Surface = &surf,
+                };
+                result = VulkanNative.CreateWaylandSurfaceKHR(_instance, ref info, null, out surfArr[0]);
+            }
+            else
+                throw new PlatformNotSupportedException(
+                    "Linux Vulkan Surface 需要 X11WindowHandle 或 WaylandWindowHandle（携带 Display* 与 Window/Surface 指针）。" +
+                    "请由 X11/Wayland 集成层以中性句柄类型构造 IRenderTarget.NativeHandle。");
         }
         else
         {

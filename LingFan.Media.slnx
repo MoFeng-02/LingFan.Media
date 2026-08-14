@@ -22,6 +22,7 @@
     <Project Path="src/Renderers/LingFan.Media.Renderers.OpenGL/LingFan.Media.Renderers.OpenGL.csproj" />
     <Project Path="src/Renderers/LingFan.Media.Renderers.Shared/LingFan.Media.Renderers.Shared.csproj" />
     <Project Path="src/Renderers/LingFan.Media.Renderers.Vulkan/LingFan.Media.Renderers.Vulkan.csproj" />
+    <Project Path="src/Renderers/LingFan.Media.Renderers.OpenGLES/LingFan.Media.Renderers.OpenGLES.csproj" />
   </Folder>
   <Folder Name="/Outputs/">
     <Project Path="src/Outputs/LingFan.Media.Outputs.Shared/LingFan.Media.Outputs.Shared.csproj" />
