@@ -24,11 +24,16 @@
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<!-- 有头全链路：MF 软解（H264 → CPU SoftwareFrameResource）→ OpenGL 上传上屏（WGL）+ WASAPI 出声（输出）。 -->
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
+		<!-- FFmpeg 后端（backend=ffmpeg 验收用）：软解 H264/WebM 等。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
+		<!-- VLC 后端（backend=vlc 验收用）：自带 Apache-2.0 原生 P/Invoke 包装 libvlc，无三方 trim 缺陷。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
 		<!-- OpenGL 渲染器（契约层：仅引用 IVideoRendererFactory，不越级）。 -->
 		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.OpenGL\LingFan.Media.Renderers.OpenGL.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
@@ -41,5 +46,35 @@
 		<!-- 真实媒体资源（与测试工程同源） -->
 		<None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布：AOT 不会自动携带构建期复制的原生 DLL，
+		     否则运行目录为空 → EnsureUnversionedAliases 建不出无版本别名 → AutoGen 桩抛 NotSupportedException。 -->
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<!--
+    LGPL 合规 + 运行时可加载：把合规的 ffmpeg 共享构建（BtbN lgpl-shared）复制到输出/发布目录，
+    使 FFmpeg.AutoGen 的 DynamicallyLoaded 绑定从应用目录动态加载 avcodec-*.dll 等（绝不静态合并）。
+    无版本别名：AutoGen 8.1 按「avutil/avcodec/...」无版本名加载，BtbN 只给 avutil-60.dll，
+       必须同时复制去掉 -<数字> 的同名别名，否则首个 ffmpeg.* 调用静默崩（退出码 127）。
+  -->
+	<Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
+		<ItemGroup>
+			<FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
+			<FFmpegDll>
+				<Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
+			</FFmpegDll>
+		</ItemGroup>
+		<!-- 构建输出（dotnet run / Debug） -->
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+		<!-- 发布输出（dotnet publish / AOT） -->
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll-&gt;Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
+	</Target>
+
 
 </Project>

@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.MediaFoundation;
+using LingFan.Media.Backends.VLCNative;
 using LingFan.Media.Consumers;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
@@ -23,11 +24,12 @@ namespace HeadfulPlaybackProbe;
 
 /// <summary>
 /// 有头（Headful）全链路验证程序：真实 D3D11 SwapChain 上屏（GPU Present）与真实 WASAPI 出声，
-/// 二者共用同一个 MediaPlayer 与 MF 解码链。
+/// 二者共用同一个 MediaPlayer 与指定后端（mf/ffmpeg/vlc）解码链。
 /// </summary>
 /// <remarks>
 /// <para>命令行开关用于隔离变量：</para>
 /// <list type="bullet">
+///   <item><c>--backend</c>：后端选择 <c>mf</c>（默认）/ <c>ffmpeg</c> / <c>vlc</c>，三者均强制软件解码以产出 CPU 帧喂给 D3D11 上屏。</item>
 ///   <item><c>--visible</c>：窗口真正可见，便于肉眼确认上屏。</item>
 ///   <item><c>--no-video</c>：只验 WASAPI 出声。</item>
 ///   <item><c>--no-audio</c>：只验 D3D11 上屏。</item>
@@ -80,6 +82,30 @@ internal static class Program
         bool visible = HasFlag(args, "--visible");
         bool enableCategory = HasFlag(args, "--category");
         bool softwareDecode = HasFlag(args, "--software-decode");
+        // —— 后端选择开关：让同一套 D3D11 渲染路径覆盖 MF / FFmpeg / VLC 三条后端 ——
+        // 三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource（NV12），D3D11 上传上屏。
+        string backendArg = ParseOption(args, "--backend")?.ToLowerInvariant() ?? "mf";
+        if (backendArg is not ("mf" or "ffmpeg" or "vlc"))
+        {
+            Console.Error.WriteLine($"--backend 仅支持 mf|ffmpeg|vlc，收到：{backendArg}");
+            return 2;
+        }
+        Console.WriteLine($"[HEADFUL-BACKEND] {backendArg}");
+        // VLC 原生库定位：必须在解析 VLC 后端单例之前把 libvlc 目录前置 PATH，
+        // 使原生加载器（LoadLibrary 搜 PATH）稳定找到 libvlc.dll。
+        if (backendArg == "vlc")
+        {
+            string? vlcDir = LocateLibVlc();
+            if (vlcDir is null)
+            {
+                Console.Error.WriteLine("[HEADFUL-VLC] 未找到原生 libvlc.dll（原生包未分发且系统未装 VLC），无法验收 VLC 后端。");
+                return 3;
+            }
+            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            if (existingPath.IndexOf(vlcDir, StringComparison.OrdinalIgnoreCase) < 0)
+                Environment.SetEnvironmentVariable("PATH", vlcDir + Path.PathSeparator + existingPath);
+            Console.WriteLine($"[HEADFUL-VLC] libvlc 目录(已前置 PATH): {vlcDir}");
+        }
         // —— WASAPI 模式对照开关 ——
         // --exclusive：强制独占模式（默认共享）。--polling：关闭事件驱动改用轮询（默认事件驱动）。
         // --audio-warmup：开启音频预热（默认关闭，见下方说明）。
@@ -131,7 +157,7 @@ internal static class Program
         if (saveFrames > 0)
             Console.WriteLine($"[HEADFUL-SAVE] 每 {saveFrames} 帧落盘 -> {saveDir}");
         if (softwareDecode)
-            Console.WriteLine("[HEADFUL-SAVE] 已强制软件解码（帧为 CPU NV12，便于对照 VLC）");
+            Console.WriteLine("[HEADFUL-SAVE] --software-decode 已忽略（本探针恒强制软件解码以隔离 D3D11 上屏路径）");
 
         if (!doVideo && !doAudio)
         {
@@ -155,27 +181,34 @@ internal static class Program
         services.AddSingleton<ILoggerFactory>(loggerFactory);
         // AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
         // 必须接在 builder 链上调用，不能对 ServiceCollection 直接调用。
-        // 后端注册顺序即运行时回退优先级：MF → FFmpeg。
-        //    MF 经系统 MFT 支持 H264/H265，遇 VP9/AV1（.webm）会在 OpenAsync 判定 Unknown 而失败；
-        //    补 FFmpeg 作下家后，MP4/H264 仍由 MF 命中，WebM 自动落到 FFmpeg。
-        //    VLC 不在此注册：它需要 libvlc 原生库且要在 Main 里前置 PATH，会显著加重本探针；
-        //    VLC 有头验证走专用的 VlcHeadfulPlaybackProbe。
-        var builder = services.AddLingFanMedia().AddMediaFoundation(o =>
+        // 后端选择由 --backend 决定（mf/ffmpeg/vlc），三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource，
+        // D3D11 渲染器走「CPU 软解帧 → D3D11 纹理上传 → SwapChain 上屏」路径。
+        // 注：D3D11 渲染器本身可消费 DXVA 纹理，但为隔离上屏路径变量、与 Vulkan 探针同源约束，
+        // 本探针恒强制软件解码（帧恒为 CPU SoftwareFrameResource，D3D11 上传上屏）。
+        MediaBuilder builder = backendArg switch
         {
-            // 诊断开关：强制软件解码，使帧为 CPU SoftwareFrameResource（NV12），
-            // 便于逐帧对照，且绕开 DXVA 纹理路径。
-            if (softwareDecode)
+            "ffmpeg" => services.AddLingFanMedia().AddFFmpeg(o =>
             {
+                // 恒软解：D3D11 走「CPU 软解帧 → 纹理上传 → SwapChain 上屏」，关闭硬件加速使帧恒为 CPU SoftwareFrameResource。
+                o.FFmpegLibraryPath = AppContext.BaseDirectory;
+                o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
+                o.HardwareAcceleration = false;
+            }),
+            "vlc" => services.AddLingFanMedia().AddVLCNative(o =>
+            {
+                // VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
+                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；EnableHardwareDecoding=false 仍交付 CPU BGRA32，
+                // 由下方 D3D11 渲染器上传上屏（非零拷贝）。
+                o.EnableHardwareDecoding = false;
+                o.Headless = true;
+            }),
+            _ => services.AddLingFanMedia().AddMediaFoundation(o =>
+            {
+                // 恒软解：关闭硬件解码使帧恒为 CPU SoftwareFrameResource（NV12），D3D11 可上传上屏。
                 o.EnableHardwareDecoding = false;
                 o.EnableDxva = false;
-            }
-        })
-        .AddFFmpeg(o =>
-        {
-            // --software 同样传导给回退后端，保证「强制软解」在哪个后端命中都成立。
-            if (softwareDecode)
-                o.HardwareAcceleration = false;
-        });
+            }),
+        };
 
         // —— 视频侧 ——
         CountingVideoRendererFactory? countingFactory = null;
@@ -241,6 +274,9 @@ internal static class Program
             // —— MF 预热：把「解码器 MFT 首次激活」的冷启动成本挪到可见窗口出现之前 ——
             // 预热提前打开一次目标文件、强制激活 H.264/AAC 解码器，正式 OpenAsync 复用已加载的
             // 解码器，几乎瞬时完成，窗口一出现即可出画面，避免窗口出现后长时间空屏。
+            // 仅 MF 后端需要（FFmpeg/VLC 无此预热路径）。
+            if (backendArg == "mf")
+            {
             var warmSw = Stopwatch.StartNew();
             try
             {
@@ -251,6 +287,7 @@ internal static class Program
             catch (Exception ex)
             {
                 Console.WriteLine($"[HEADFUL-MF] 预热失败（忽略，正式打开仍可用）: {ex.Message}");
+            }
             }
 
             // —— WASAPI 预热（opt-in，--audio-warmup）——
@@ -483,6 +520,93 @@ internal static class Program
             Console.WriteLine($"[HEADFUL-SAVE] 共落盘 {FrameDumper.DumpedCount} 张帧 -> {saveDir}");
         Console.WriteLine(overall ? "总体 PASS" : "总体 FAIL");
         return overall ? 0 : 1;
+    }
+
+    // ── VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH ──
+
+    /// <summary>定位原生 libvlc 目录（libvlc.dll 所在目录）：优先探针自带分发的 NuGet 原生包，其次系统已安装的 VLC。</summary>
+    private static string? LocateLibVlc()
+    {
+        string baseDir = AppContext.BaseDirectory;
+        string? bundled = FindBundledLibVlc(baseDir);
+        if (bundled is not null) return bundled;
+
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                if (File.Exists(Path.Combine(dir, "libvlc.dll")))
+                    return dir;
+            }
+            catch { /* 忽略无权限目录 */ }
+        }
+
+        var candidates = new List<string>();
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            string? pf = Environment.GetEnvironmentVariable("ProgramFiles");
+            string? pfX86 = Environment.GetEnvironmentVariable("ProgramFiles(x86)");
+            if (pf is not null) candidates.Add(Path.Combine(pf, "VideoLAN", "VLC"));
+            if (pfX86 is not null) candidates.Add(Path.Combine(pfX86, "VideoLAN", "VLC"));
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            candidates.Add("/usr/lib/x86_64-linux-gnu");
+            candidates.Add("/usr/lib");
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            candidates.Add("/Applications/VLC.app/Contents/MacOS/lib");
+            candidates.Add("/usr/local/lib");
+        }
+
+        foreach (var cand in candidates)
+        {
+            try
+            {
+                if (File.Exists(Path.Combine(cand, "libvlc.dll")) ||
+                    File.Exists(Path.Combine(cand, "libvlc.so")) ||
+                    File.Exists(Path.Combine(cand, "libvlc.dylib")))
+                    return cand;
+            }
+            catch { /* 忽略 */ }
+        }
+
+        return null;
+    }
+
+    /// <summary>在输出目录树中找含 libvlc.dll 的目录（NuGet 原生包随构建复制的位置不固定）。优先与当前进程架构匹配的那一份。</summary>
+    private static string? FindBundledLibVlc(string startDir)
+    {
+        string arch = RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.X86 => "x86",
+            Architecture.Arm64 => "arm64",
+            Architecture.X64 => "x64",
+            _ => "x64"
+        };
+        string archDir = Path.Combine(startDir, "libvlc", "win-" + arch);
+        if (File.Exists(Path.Combine(archDir, "libvlc.dll")))
+            return archDir;
+
+        if (File.Exists(Path.Combine(startDir, "libvlc.dll")))
+            return startDir;
+        try
+        {
+            foreach (var sub in Directory.EnumerateDirectories(startDir))
+            {
+                if (File.Exists(Path.Combine(sub, "libvlc.dll")))
+                    return sub;
+                foreach (var sub2 in Directory.EnumerateDirectories(sub))
+                {
+                    if (File.Exists(Path.Combine(sub2, "libvlc.dll")))
+                        return sub2;
+                }
+            }
+        }
+        catch { /* 忽略无权限/并发删除 */ }
+        return null;
     }
 
     // ── 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用 ──
