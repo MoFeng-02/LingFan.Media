@@ -42,6 +42,7 @@ internal sealed unsafe class H264ParameterSet : IDisposable
     private IntPtr _offsetForRefFrame;  // int[]
 
     private bool _disposed;
+    private static bool _diagStdEmitted;
 
     /// <summary>
     /// 解析 SPS/PPS RBSP（已去 NAL 头），构造并填充 STD 参数集。
@@ -79,20 +80,44 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         Sps.Flags.ConstraintSet5Flag = (uint)((constraintByte >> 2) & 1);
         Sps.SeqParameterSetId = (byte)spsId;
 
-        byte chromaFmt = (byte)r.ReadUe();
+        // ⚠️ 规范铁律（H.264 Annex A SPS RBSP 语法）：
+        // chroma_format_idc / bit_depth_luma_minus8 / bit_depth_chroma_minus8 /
+        // qpprime_y_zero_transform_bypass_flag / seq_scaling_matrix_present_flag 仅当 profile 属
+        // 「high」档族（上列 profile_idc）时才出现在比特流；Baseline(66)/Main(77)/Extended(88) 等档位
+        // 无这些字段，chroma 隐式 4:2:0（=1）。
+        // 此前这些字段被无条件 ReadUe、且漏读 qpprime/seq_scaling 两比特 → 非 high 档整体偏移 2 个 ue(v)、
+        // high 档偏移 2 比特 → SPS 全乱 → 解码器无法解切片 → 静默吐全零 DPB（绿屏真因）。
+        bool highProfile = profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 244
+                          || profileIdc == 44 || profileIdc == 83 || profileIdc == 86 || profileIdc == 118
+                          || profileIdc == 128 || profileIdc == 138 || profileIdc == 139 || profileIdc == 134 || profileIdc == 135;
+
+        byte chromaFmt;
+        byte separateColourPlaneFlag = 0;
+        if (highProfile)
+        {
+            chromaFmt = (byte)r.ReadUe();
+            if (chromaFmt == 3)
+            {
+                separateColourPlaneFlag = (byte)r.ReadBit();
+                Sps.Flags.SeparateColourPlaneFlag = separateColourPlaneFlag;
+            }
+            Sps.BitDepthLumaMinus8 = (byte)r.ReadUe();
+            Sps.BitDepthChromaMinus8 = (byte)r.ReadUe();
+            Sps.Flags.QpprimeYZeroTransformBypassFlag = (byte)r.ReadBit();
+            byte seqScalingMatrixPresentFlag = (byte)r.ReadBit();
+            Sps.Flags.SeqScalingMatrixPresentFlag = seqScalingMatrixPresentFlag;
+            if (seqScalingMatrixPresentFlag == 1)
+            {
+                int chromaArrayType = (separateColourPlaneFlag == 1) ? 0 : chromaFmt;
+                ParseScalingLists(ref r, chromaArrayType, out _scalingLists, ref Sps.PScalingLists);
+            }
+        }
+        else
+        {
+            chromaFmt = 1; // 隐式 4:2:0，无 chroma/bit_depth/scaling 字段
+        }
         ChromaFormatIdc = chromaFmt;
         Sps.ChromaFormatIdc = (StdVideoH264ChromaFormatIdc)chromaFmt;
-        byte separateColourPlaneFlag = 0;
-        if (chromaFmt == 3)
-        {
-            separateColourPlaneFlag = (byte)r.ReadBit();
-            Sps.Flags.SeparateColourPlaneFlag = separateColourPlaneFlag;
-        }
-
-        byte bitDepthLumaMinus8 = (byte)r.ReadUe();
-        byte bitDepthChromaMinus8 = (byte)r.ReadUe();
-        Sps.BitDepthLumaMinus8 = bitDepthLumaMinus8;
-        Sps.BitDepthChromaMinus8 = bitDepthChromaMinus8;
 
         byte log2MaxFrameNumMinus4 = (byte)r.ReadUe();
         byte picOrderCntType = (byte)r.ReadUe();
@@ -161,17 +186,8 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         Sps.PSequenceParameterSetVui = null;
         _ = r.ReadBit(); // vui_parameters_present_flag（丢弃）
 
-        // 可选 seq scaling lists
-        Sps.Flags.SeqScalingMatrixPresentFlag = 0;
-        Sps.PScalingLists = null;
-        int chromaArrayType = (separateColourPlaneFlag == 1) ? 0 : chromaFmt;
-        if (r.Eof == false)
-        {
-            byte seqScalingMatrixPresentFlag = (byte)r.ReadBit();
-            Sps.Flags.SeqScalingMatrixPresentFlag = seqScalingMatrixPresentFlag;
-            if (seqScalingMatrixPresentFlag == 1)
-                ParseScalingLists(ref r, chromaArrayType, out _scalingLists, ref Sps.PScalingLists);
-        }
+        // 注：seq scaling lists 已在上方 high 档分支按 Annex A 语法（bit_depth 之后、qpprime/seq_scaling_matrix_present_flag 之后）
+        // 正确解析；非 high 档 SPS 无 scaling lists 字段（PScalingLists 默认 null 正确）。此处不再处理，避免错位重读。
 
         // offset_for_ref_frame 原生缓冲
         if (offsetForRefFrame is not null)
@@ -189,6 +205,16 @@ internal sealed unsafe class H264ParameterSet : IDisposable
 
         Sps.Reserved1 = 0;
         Sps.Reserved2 = 0;
+
+        // [DIAG] 打印真正喂给 Vulkan 的 SPS std 字段值（一次性、只读），核对尺寸/参考帧/档位等是否合规。
+        if (!_diagStdEmitted)
+        {
+            _diagStdEmitted = true;
+            Console.WriteLine($"[DIAG-SPS-STD] chroma={(int)Sps.ChromaFormatIdc} separateColourPlane={Sps.Flags.SeparateColourPlaneFlag} " +
+                $"maxNumRef={Sps.MaxNumRefFrames} picW={Sps.PicWidthInMbsMinus1} picH={Sps.PicHeightInMapUnitsMinus1} " +
+                $"frameMbsOnly={Sps.Flags.FrameMbsOnlyFlag} bitDepthLuma={Sps.BitDepthLumaMinus8} " +
+                $"bitDepthChroma={Sps.BitDepthChromaMinus8} level={(int)Sps.LevelIdc}");
+        }
     }
 
     // ── PPS 解析 ──

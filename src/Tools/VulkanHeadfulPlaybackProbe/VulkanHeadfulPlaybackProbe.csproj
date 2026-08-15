@@ -46,11 +46,15 @@
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<!-- 有头全链路：MF 软解（H264 → CPU NV12）→ Vulkan 上传上屏（渲染器）+ WASAPI 出声（输出）。 -->
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
+		<!-- 验收多后端经同一 Vulkan 渲染器上屏：ffmpeg / vlc 强制软解产出 CPU 帧喂给 Vulkan。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
 		<!-- Vulkan 渲染器（契约层：仅引用 IVideoRendererFactory / IGpuDeviceContext，不越级）。 -->
 		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.Vulkan\LingFan.Media.Renderers.Vulkan.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
@@ -72,31 +76,59 @@
 	     NativeAOT 下 dotnet publish 不会自动携带构建期复制的原生 dylib，须显式复制到 $(PublishDir)。
 	     仅 Apple 构建触发；Windows/Linux 跳过（Vulkan loader 由系统/驱动提供，无需此库）。 -->
 	<ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-		<None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib"
-		      Link="%(Filename)%(Extension)"
-		      CopyToOutputDirectory="PreserveNewest"
-		      CopyToPublishDirectory="PreserveNewest" />
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 	</ItemGroup>
 
-	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish"
-	        Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
 		<ItemGroup>
 			<MoltenVKDylib Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" />
 		</ItemGroup>
 		<!-- 构建输出（dotnet run / Debug） -->
-		<Copy SourceFiles="@(MoltenVKDylib)"
-		      DestinationFolder="$(OutDir)"
-		      SkipUnchangedFiles="true"
-		      Condition="'@(MoltenVKDylib)' != ''" />
+		<Copy SourceFiles="@(MoltenVKDylib)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(MoltenVKDylib)' != ''" />
 		<!-- 发布输出（dotnet publish / AOT） -->
-		<Copy SourceFiles="@(MoltenVKDylib)"
-		      DestinationFolder="$(PublishDir)"
-		      SkipUnchangedFiles="true"
-		      Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
-		<Message Condition="'@(MoltenVKDylib)' != ''"
-		         Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
-		<Message Condition="'@(MoltenVKDylib)' == ''"
-		         Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
+		<Copy SourceFiles="@(MoltenVKDylib)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(MoltenVKDylib)' != ''" Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(MoltenVKDylib)' == ''" Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
 	</Target>
+
+
+	<ItemGroup>
+		<!-- 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布：AOT 不会自动携带构建期复制的原生 DLL，
+         否则运行目录为空 → EnsureUnversionedAliases 建不出无版本别名 → AutoGen 桩抛 NotSupportedException。
+         无版本别名由 FFmpegBackend.EnsureUnversionedAliases 运行时兜底创建。 -->
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<!--
+    LGPL 合规关键步骤：把「合规的 ffmpeg 共享构建（LGPL，BtbN lgpl-shared）」复制到输出目录，
+    使 FFmpeg.AutoGen 的 DynamicallyLoaded 绑定在运行时从应用目录动态加载 avcodec-*.dll 等。
+    - 动态链接（绝不静态合并 ffmpeg 进本程序集）；
+    - 路径显式可控（FFmpegOptions.FFmpegLibraryPath 默认指向 AppContext.BaseDirectory），
+      用户可替换/升级这些 DLL 而不重编译本库。
+    原生 DLL 来自 ThirdParty/ffmpeg/<解压目录>/bin，不入库（gitignore）。
+    AOT 发布关键：dotnet publish 不会自动把「构建期复制」的原生 ffmpeg DLL 带进 publish/，
+       须显式复制到 $(PublishDir)，否则发布版运行时空目录 → NotSupportedException 桩崩溃。
+  -->
+	<Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
+		<ItemGroup>
+			<FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
+			<!-- 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载
+           （已用二进制字符串核验 Bindings.DynamicallyLoaded.dll 确含 "avutil" 字面量，无版本号、无 .dll 后缀），
+           但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名，否则 AutoGen 加载失败
+           → 首个 ffmpeg.* 调用崩溃（静默退出码 127）。别名 = 去掉文件名末尾 -<数字>（如 avutil-60 → avutil）。 -->
+			<FFmpegDll>
+				<Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
+			</FFmpegDll>
+		</ItemGroup>
+		<!-- 构建输出（dotnet run / Debug） -->
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+		<!-- 发布输出（dotnet publish / AOT）：显式补复制到 $(PublishDir) -->
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll-&gt;Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
+	</Target>
+
 
 </Project>

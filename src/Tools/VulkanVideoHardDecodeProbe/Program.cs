@@ -10,8 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.FFmpeg;
-using LingFan.Media.Backends.MediaFoundation;
-using LingFan.Media.Backends.VLCNative;
+using LingFan.Media.Backends.VulkanVideo;
 using LingFan.Media.Consumers;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
@@ -20,23 +19,26 @@ using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace VulkanHeadfulPlaybackProbe;
+namespace VulkanVideoHardDecodeProbe;
 
 /// <summary>
-/// 有头（Headful）全链路验证程序：真实 Vulkan SwapChain 上屏（GPU Present）与真实 WASAPI 出声，
-/// 二者共用同一个 MediaPlayer 与 MF 解码链。
+/// Vulkan 硬解零拷贝全链路验证程序：VulkanVideo 后端（VK_KHR_video_decode_h264）硬解出 NV12 VkImage，
+/// 与 Vulkan 渲染器共用同一 VkDevice → 渲染器经 pattern matching 直接 blit 同设备纹理零拷贝上屏（GPU Present），
+/// 音频走 FFmpeg 解封装/解码 + WASAPI 出声。两者共用同一个 MediaPlayer。
 /// </summary>
 /// <remarks>
 /// <para>命令行开关用于隔离变量：</para>
 /// <list type="bullet">
-///   <item><c>--backend</c>：后端选择 <c>mf</c>（默认）/ <c>ffmpeg</c> / <c>vlc</c>，三者均强制软件解码以产出 CPU 帧喂给 Vulkan 上屏。</item>
 ///   <item><c>--visible</c>：窗口真正可见，便于肉眼确认上屏。</item>
 ///   <item><c>--no-video</c>：只验 WASAPI 出声。</item>
-///   <item><c>--no-audio</c>：只验 Vulkan 上屏。</item>
-    ///   <item><c>--category</c>：启用 IAudioClient2 会话分类做对照（默认 Movie）。</item>
-    ///   <item><c>--scale</c>：Vulkan 软帧缩放模式（fill=拉伸全屏 / uniform=信箱默认 / uniformtofill=高保真全屏）。</item>
-    /// </list>
+///   <item><c>--no-audio</c>：只验 Vulkan 硬解上屏。</item>
+///   <item><c>--category</c>：启用 IAudioClient2 会话分类做对照（默认 Movie）。</item>
+///   <item><c>--scale</c>：Vulkan 缩放模式（fill=拉伸全屏 / uniform=信箱默认 / uniformtofill=高保真全屏）。</item>
+/// </list>
 /// <para>窗口代码使用 <c>[LibraryImport]</c> 以满足 AOT 要求。</para>
+/// <para>硬解前提：源须为 H.264（VulkanVideoDecoder 仅支持 H.264），且 GPU 设备启用 VK_KHR_video_decode_* 并存在
+/// video-decode 队列族（IGpuDeviceContext.VideoQueueFamilyIndex 有效）。不满足则 VulkanVideo 回落 FFmpeg 软解——
+/// 本探针会打印明确信号，便于判断真走硬解还是回退。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal static class Program
@@ -82,31 +84,6 @@ internal static class Program
         bool doAudio = !HasFlag(args, "--no-audio");
         bool visible = HasFlag(args, "--visible");
         bool enableCategory = HasFlag(args, "--category");
-        bool softwareDecode = HasFlag(args, "--software-decode");
-        // —— 后端选择开关：让同一套 Vulkan 渲染路径覆盖 MF / FFmpeg / VLC 三条后端 ——
-        // 三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource（YUV/BGRA），Vulkan 上传上屏。
-        string backendArg = ParseOption(args, "--backend")?.ToLowerInvariant() ?? "mf";
-        if (backendArg is not ("mf" or "ffmpeg" or "vlc"))
-        {
-            Console.Error.WriteLine($"--backend 仅支持 mf|ffmpeg|vlc，收到：{backendArg}");
-            return 2;
-        }
-        Console.WriteLine($"[HEADFUL-BACKEND] {backendArg}");
-        // VLC 原生库定位：必须在解析 VLC 后端单例之前把 libvlc 目录前置 PATH，
-        // 使原生加载器（LoadLibrary 搜 PATH）稳定找到 libvlc.dll。
-        if (backendArg == "vlc")
-        {
-            string? vlcDir = LocateLibVlc();
-            if (vlcDir is null)
-            {
-                Console.Error.WriteLine("[HEADFUL-VLC] 未找到原生 libvlc.dll（原生包未分发且系统未装 VLC），无法验收 VLC 后端。");
-                return 3;
-            }
-            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            if (existingPath.IndexOf(vlcDir, StringComparison.OrdinalIgnoreCase) < 0)
-                Environment.SetEnvironmentVariable("PATH", vlcDir + Path.PathSeparator + existingPath);
-            Console.WriteLine($"[HEADFUL-VLC] libvlc 目录(已前置 PATH): {vlcDir}");
-        }
         // —— WASAPI 模式对照开关 ——
         // --exclusive：强制独占模式（默认共享）。--polling：关闭事件驱动改用轮询（默认事件驱动）。
         // --audio-warmup：开启音频预热（默认关闭，见下方说明）。
@@ -125,26 +102,22 @@ internal static class Program
             // 音频相位诊断：让 AudioPipeline 打点 ReadAsync/Decode/解码间隙。
             Environment.SetEnvironmentVariable("LINGFAN_AUDIO_DIAG", "1");
             // EOS 时序诊断：让 Video/AudioPipeline 在自然完成瞬间打印主时钟位置。
-            // 完成由管线驱动而非时钟驱动；若 masterTime 明显小于 Duration，说明包队列/帧队列提前耗尽。
             Environment.SetEnvironmentVariable("LINGFAN_EOS_DIAG", "1");
-            // A/V 同步诊断：让 VideoPipeline 在每次呈现瞬间打印 videoPTS − audioClock，
-            // 用于定量观察音画偏差量级及其随播放时间的变化。
+            // A/V 同步诊断：让 VideoPipeline 在每次呈现瞬间打印 videoPTS − audioClock。
             Environment.SetEnvironmentVariable("LINGFAN_SYNC_DIAG", "1");
-            // 音频播放时钟：不打开则 SetMasterClockProvider 不执行，主时钟回落到按提交帧时间戳同步，
-            // 播放位置校准不生效。该开关默认关（ClockTuning.UseAudioPlaybackClock=false），建议常开。
+            // 音频播放时钟：不打开则 SetMasterClockProvider 不执行，主时钟回落到按提交帧时间戳同步。
             Environment.SetEnvironmentVariable("LINGFAN_CLOCK_AUDIO_POS", "1");
         }
         // 音画同步微调：--sync-lead=NN 把主时钟前移 N 毫秒以吸收视频呈现的恒定领先（默认 0=不补偿）。
-        // 注入 LINGFAN_SYNC_LEAD_MS 供 WasapiRenderLoop 每次 Start 读取，须在构建播放器前设置。
         double syncLeadMs = ParseDouble(args, "--sync-lead", 0);
         if (syncLeadMs != 0)
             Environment.SetEnvironmentVariable("LINGFAN_SYNC_LEAD_MS", syncLeadMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
         int saveFrames = (int)ParseDouble(args, "--save-frames", 0);
         string saveDir = ParseOption(args, "--save-dir")
-            ?? Path.Combine(Directory.GetCurrentDirectory(), "TestInfo", "Diagnostics", "HeadfulPlaybackProbe");
+            ?? Path.Combine(Directory.GetCurrentDirectory(), "TestInfo", "Diagnostics", "VulkanVideoHardDecodeProbe");
         string? file = ParseOption(args, "--file");
         double seconds = ParseDouble(args, "--seconds", 12);
-        // Vulkan 软帧缩放模式：fill=拉伸全屏 / uniform=信箱(默认) / uniformtofill(=cover)=高保真全屏
+        // Vulkan 缩放模式：fill=拉伸全屏 / uniform=信箱(默认) / uniformtofill(=cover)=高保真全屏
         string scaleArg = ParseOption(args, "--scale")?.ToLowerInvariant() ?? "uniform";
         AspectRatioMode scaleMode = scaleArg switch
         {
@@ -154,9 +127,6 @@ internal static class Program
             _ => AspectRatioMode.Uniform,
         };
         Console.WriteLine($"[HEADFUL-VULKAN-SCALE] {scaleMode} (--scale={scaleArg})");
-        // 缩小混叠对照实验：平面纹理已开 MipLevels=0 + GenerateMips（mipmap 三线性抑制摩尔纹）；
-        // 双线性抽头在多倍缩小下会高频欠采样，表现为随运动游走的摩尔纹竖条。
-        // 用 --window-w / --window-h 指定与源同尺寸可做 1:1 对照。
         int windowW = (int)ParseDouble(args, "--window-w", DefaultWindowW);
         int windowH = (int)ParseDouble(args, "--window-h", DefaultWindowH);
         if (windowW <= 0 || windowH <= 0)
@@ -167,8 +137,6 @@ internal static class Program
 
         if (saveFrames > 0)
             Console.WriteLine($"[HEADFUL-SAVE] 每 {saveFrames} 帧落盘 -> {saveDir}");
-        if (softwareDecode)
-            Console.WriteLine("[HEADFUL-SAVE] 已强制软件解码（帧为 CPU NV12，便于对照 VLC）");
 
         if (!doVideo && !doAudio)
         {
@@ -190,53 +158,32 @@ internal static class Program
 
         var services = new ServiceCollection();
         services.AddSingleton<ILoggerFactory>(loggerFactory);
-        // AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
+        // AddVulkanVideo / AddFFmpeg / AddWasapiOutput 都是 MediaBuilder 的扩展，
         // 必须接在 builder 链上调用，不能对 ServiceCollection 直接调用。
-        // 后端选择由 --backend 决定（mf/ffmpeg/vlc），三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource，
-        // Vulkan 渲染器走「CPU 软解帧 → VkImage 上传 → SwapChain 上屏」路径（GPU shader 做 YUV→RGB + 缩放）。
-        // 注：Vulkan 无法消费 D3D11 DXVA 纹理，故各后端一律软解；硬解零拷贝走 IGpuTextureResource（本探针不验）。
-        MediaBuilder builder = backendArg switch
-        {
-            "ffmpeg" => services.AddLingFanMedia().AddFFmpeg(o =>
-            {
-                // 恒软解：Vulkan 走「CPU 软解帧 → VkImage 上传 → SwapChain 上屏」，无法消费 D3D11VA 纹理，
-                // 故关闭 HardwareAcceleration，帧恒为 CPU SoftwareFrameResource，Vulkan 可上传上屏。
-                o.FFmpegLibraryPath = AppContext.BaseDirectory;
-                o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
-                o.HardwareAcceleration = false;
-            }),
-            "vlc" => services.AddLingFanMedia().AddVLCNative(o =>
-            {
-                // VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
-                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；EnableHardwareDecoding=false 仍交付 CPU BGRA32，
-                // 由下方 Vulkan 渲染器上传上屏（非零拷贝）。
-                o.EnableHardwareDecoding = false;
-                o.Headless = true;
-            }),
-            _ => services.AddLingFanMedia().AddMediaFoundation(o =>
-            {
-                // 恒软解：Vulkan 无法消费 D3D11 DXVA 纹理，强制软件解码使帧恒为 CPU SoftwareFrameResource。
-                o.EnableHardwareDecoding = false;
-                o.EnableDxva = false;
-            }),
-        };
+        // 解码后端注册顺序即运行时回退优先级：VulkanVideo → FFmpeg。
+        //    VulkanVideo 经 VK_KHR_video_decode_h264 硬解出 NV12 VkImage，与渲染器同设备 → 零拷贝上屏；
+        //    仅 H.264，且要求 IGpuDeviceContext.VideoQueueFamilyIndex 有效（设备启用 video-decode 扩展）；
+        //    不满足（非 H.264 / GPU 无 video-decode）时 Initialize 抛 NotSupportedException 由管线回落 FFmpeg。
+        //    FFmpeg 作下家：解封装 + 音频解码 + H.264 软解回退（VulkanVideo 不可用时）。
+        var builder = services.AddLingFanMedia().AddVulkanVideo().AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory);
 
         // —— 视频侧 ——
         CountingVideoRendererFactory? countingFactory = null;
+        IGpuDeviceContext? gpuCtx = null;
         if (doVideo)
         {
-            // 必须显式注册 Vulkan 工厂（装饰器包裹）。AddLingFanMedia 只注册契约骨架，
-            // 不注册具体渲染器；缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
+            // 必须显式注册 Vulkan 工厂（装饰器包裹）。AddLingFanMedia / AddVulkanRenderer 默认不注册具体渲染器；
+            // 缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
             // 装饰器包裹真实 VulkanRendererFactory 以精确统计 Present 调用。
-            // Vulkan 走「CPU 软解帧 → VkImage 上传 → SwapChain 上屏」，无法消费 D3D11 DXVA 纹理，
-            // 故本探针恒强制软件解码（见下方 AddMediaFoundation 的 EnableHardwareDecoding/EnableDxva=false）。
+            // 关键：渲染器 Context 实现 IGpuDeviceContext，须注册为单例供 VulkanVideoDecoder 注入——
+            // 两者共用同一 VkDevice + video-decode 队列族，零拷贝闭环成立。
+            // （本探针手动注册，不调 AddVulkanRenderer()，以免与下方 IVideoRendererFactory 双重注册冲突。）
             var vulkanFactory = new VulkanRendererFactory(loggerFactory);
             vulkanFactory.ScaleMode = scaleMode;
+            gpuCtx = vulkanFactory.Context;
             countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir);
             builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
-            // 保住 IGpuDeviceContext 注册：AddVulkanRenderer() 原本会注册它（cast 回 VulkanRendererFactory），
-            // 手动装饰时必须补回，否则依赖它的层拿不到 GPU 能力上下文。
-            builder.Services.AddSingleton<IGpuDeviceContext>(sp => vulkanFactory.Context);
+            builder.Services.AddSingleton<IGpuDeviceContext>(gpuCtx);
         }
         else
         {
@@ -255,6 +202,15 @@ internal static class Program
         else
             builder.AddSilentAudioOutput();
 
+        // —— 硬解能力诊断（先于 OpenAsync）：直接读渲染器设备的 VideoQueueFamilyIndex ——
+        if (doVideo && gpuCtx is not null)
+        {
+            bool videoDecodeCapable = gpuCtx.VideoQueueFamilyIndex != uint.MaxValue;
+            Console.WriteLine($"[HEADFUL-VULKANVIDEO] 渲染器设备 VideoQueueFamilyIndex={gpuCtx.VideoQueueFamilyIndex} " +
+                              $"video-decode 能力={(videoDecodeCapable ? "有效（硬解零拷贝可期）" : "无效（将回落 FFmpeg 软件解码）")}");
+            Console.WriteLine($"[HEADFUL-VULKANVIDEO] 组合根：AddVulkanVideo() 先于 AddFFmpeg() → H.264 优先走 VK_KHR_video_decode_h264 硬解");
+        }
+
         await using var sp = services.BuildServiceProvider();
         var player = sp.GetRequiredService<IMediaPlayer>();
 
@@ -268,8 +224,6 @@ internal static class Program
         };
 
         // 音频间隙诊断：对比「主时钟位置」与「已提交音频时长」。
-        //   backlog = pos - submittedSec（秒）：大于 0 表示音频落后主时钟，即提交停滞/欠载导致静音间隙；
-        //   stall = 主时钟前进超过 100ms 但 submittedSamples 未变，即音频管线停止喂数据。
         double maxAudioBacklogMs = 0;
         int audioGapCount = 0;
         int audioStallCount = 0;
@@ -285,32 +239,21 @@ internal static class Program
 
         try
         {
-            // —— MF 预热：把「解码器 MFT 首次激活」的冷启动成本挪到可见窗口出现之前 ——
-            // 预热提前打开一次目标文件、强制激活 H.264/AAC 解码器，正式 OpenAsync 复用已加载的
-            // 解码器，几乎瞬时完成，窗口一出现即可出画面，避免窗口出现后长时间空屏。
-            // 仅 MF 后端需要（FFmpeg/VLC 无此预热路径）。
-            if (backendArg == "mf")
-            {
+            // —— FFmpeg 预热：强制解析 FFmpegBackend 单例以在窗口出现前完成原生库初始化，
+            // 使正式 OpenAsync 复用已加载的库，几乎瞬时完成，避免窗口出现后长时间空屏。
+            // 预热失败一律降级为未预热，不影响播放。
             var warmSw = Stopwatch.StartNew();
             try
             {
-                var mf = sp.GetRequiredService<MFBackend>();
-                mf.Warmup(file);
-                Console.WriteLine($"[HEADFUL-MF] 预热耗时 {warmSw.Elapsed.TotalSeconds:F2}s（已提前激活解码器，正式打开将显著加快）");
+                var ff = sp.GetRequiredService<FFmpegBackend>();
+                Console.WriteLine($"[HEADFUL-FFMPEG] 预热耗时 {warmSw.Elapsed.TotalSeconds:F2}s（已拉起 FFmpeg 原生后端，正式打开将显著加快）");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[HEADFUL-MF] 预热失败（忽略，正式打开仍可用）: {ex.Message}");
-            }
+                Console.WriteLine($"[HEADFUL-FFMPEG] 预热失败（忽略，正式打开仍可用）: {ex.Message}");
             }
 
             // —— WASAPI 预热（opt-in，--audio-warmup）——
-            // 音频引擎/端点句柄由 Infrastructure 层单例持有（IAudioEngine / WasapiAudioEngine）。
-            // 预热时在专用 STA 线程建立一条常驻 anchor 流（Initialize + 默认 Start），使 OS 音频引擎
-            // 在进程内保持热态；后续每个 Transient 会话（WasapiOutput）的 IAudioClient.Initialize 走热路径，
-            // 免去冷启动等待。会话状态对象保持 Transient，不升为单例：长期原生资源用单例、会话状态用
-            // Transient，二者仅通过「OS 引擎已热」这一进程级副作用间接协作。
-            // 预热失败一律降级为未预热，不影响播放。
             if (audioWarmup)
             {
                 var audioWarmSw = Stopwatch.StartNew();
@@ -333,8 +276,7 @@ internal static class Program
 
             if (doVideo)
             {
-                // 真实可见窗口：专用 STA 线程 + 消息泵（D3D11 SwapChain 需要有效 HWND + 消息循环）。
-                // 加 --visible 可肉眼确认上屏。
+                // 真实可见窗口：专用 STA 线程 + 消息泵（Vulkan SwapChain 需要有效 HWND + 消息循环）。
                 win = new RenderWindow(windowW, windowH, visible);
                 if (win.Hwnd == IntPtr.Zero)
                 {
@@ -370,7 +312,6 @@ internal static class Program
                         win.ClientW > 0 ? win.ClientW : windowW,
                         win.ClientH > 0 ? win.ClientH : windowH));
                 // Vulkan 经统一 FrameChannel 订阅 Present（与 D3D11GpuPresenter 行为一致）。
-                // 不订阅则 PresentCount 恒为 0，验证失效。
                 player.VideoFrameAvailable += f => countingFactory.Last?.Present(f);
             }
 
@@ -416,10 +357,6 @@ internal static class Program
                 }
                 if (fullPlayback)
                 {
-                    // --full：播到播放器自然发出的 Ended 为止。
-                    // 注意：pos 来自音频设备时钟，流末之后仍会推进并越过 Duration；若以 pos 提前退出，
-                    // 会抢在 A/V 双管线 drain 完成之前退出而看不到 Ended。故不以 pos 作结束信号，
-                    // 仅用 Duration 之后 8s 作兜底，防播放完成检测失效时死等。
                     if (player.State == MediaState.Ended) break;
                     double cap = player.Duration.TotalSeconds + 8;
                     if (poll.Elapsed.TotalSeconds > cap)
@@ -445,12 +382,10 @@ internal static class Program
                     presentCount = countingFactory.Last.PresentCount;
                 videoPass = presentCount >= 5;
                 Console.WriteLine($"[HEADFUL-VIDEO] vulkanPresentCount={presentCount}  => " +
-                                  $"{(videoPass ? "PASS" : "FAIL (present<5)")}");
+                                  $"{(videoPass ? "PASS (硬解NV12→RGBA→SwapChain 零拷贝上屏)" : "FAIL (present<5)")}");
                 // 诊断：视频丢帧数。与 present 计数对照可判断尾帧是被 Synchronizer 判定丢弃还是已呈现。
                 Console.WriteLine($"[HEADFUL-VIDEO-DROP] droppedFrames={player.VideoDroppedFrames} present={presentCount}");
-                // 诊断：分相计时——定位每帧 ~92ms 开销归属（CPU 转换 vs GPU 同步 QueueWaitIdle）。
-                // 若 GPU 同步占比极高 → 瓶颈在每帧全队列同步，需改 fence 环消除串行；
-                // 若 CPU 转换占比极高 → 瓶颈在软解 NV12→BGRA，需 SIMD/降分辨率上传等。
+                // 诊断：分相计时——定位每帧开销归属（CPU 转换 vs GPU 同步 QueueWaitIdle）。
                 string? prof = countingFactory?.Last?.GetInnerProfile();
                 if (prof is not null) Console.WriteLine($"[HEADFUL-VIDEO-PROFILE] {prof}");
             }
@@ -462,9 +397,6 @@ internal static class Program
                 audioPass = playedSec >= minPlayed;
                 Console.WriteLine($"[HEADFUL-AUDIO] played={playedSec:F1}s submitted≈{subSec:F1}s  => " +
                                   $"{(audioPass ? "PASS" : $"FAIL (played<{minPlayed:F0}s)")}");
-                // 间隙诊断摘要：真欠载信号只有「主时钟跑过已提交音频时长」，即 backlog>150ms（设备把缓冲播干）。
-                // stalls（submittedSamples 跨轮未变）是批量提交造成的测量假象：SubmitBatch 整段 WaitForBufferSpace
-                // 期间 submittedSamples 不变而主时钟平滑前进，故不能作欠载依据，断言只认 maxBacklog。
                 bool realAudioGap = maxAudioBacklogMs > 150;
                 Console.WriteLine($"[HEADFUL-AUDIO-GAP] maxBacklog={maxAudioBacklogMs:F0}ms " +
                                   $"gaps(>150ms)={audioGapCount} stalls={audioStallCount} " +
@@ -475,10 +407,6 @@ internal static class Program
             }
 
             // —— 重播：Ended→Playing 无缝从头（--repeat/--full 启用，--no-replay 关闭）——
-            // 第一次自然结束后立即二次 PlayAsync，验证：
-            //   (a) 状态机 Ended→Playing 的合法转换；
-            //   (b) 时钟归零、位置回绕到 0（PlayAsync 在 Ended 态走 SeekAsync(0) + 时钟重置分支）；
-            //   (c) 双管线从排干态重启，present 从 0 重新开始累计。
             if (replayTest)
             {
                 Console.WriteLine();
@@ -489,7 +417,6 @@ internal static class Program
                 double posAfterReplay = player.Position.TotalSeconds;
                 Console.WriteLine($"  [HEADFUL-REPLAY] 二次 PlayAsync 后：state={player.State} " +
                                   $"pos={player.Position:g}（重播前 pos={posBeforeReplay:F2}s）");
-                // 重播合法 + 位置已归零（非 Ended 态遗留的末尾位置）
                 bool replayStateOk = player.State == MediaState.Playing && posAfterReplay < 1.0;
 
                 var replayPoll = Stopwatch.StartNew();
@@ -511,7 +438,6 @@ internal static class Program
                 }
                 int presentAfterReplay = presentCount;
                 int replayPresentDelta = presentAfterReplay - presentBeforeReplay;
-                // 无视频用例跳过呈现计数判定
                 bool replayPresentOk = !doVideo || replayPresentDelta >= 900;
                 replayPass = replayStateOk && replayPresentOk;
                 Console.WriteLine($"  [HEADFUL-REPLAY] 二次播放结束 state={player.State} " +
@@ -581,8 +507,8 @@ internal static class Program
         {
             int n = Interlocked.Increment(ref PresentCount);
             // 诊断：把渲染器收到的真实帧落 PNG（在 _inner.Present 之前同步拷贝，不持有帧引用）。
-            // CPU 软解帧走 NV12/BGRA 转换；GPU 硬解纹理走 ReadbackToCpu。
-            // 若落盘图干净而窗口画面异常，问题在 D3D11 上传/Present；若落盘图同样异常，问题在上游解码。
+            // 硬解纹理（VulkanVideoFrameResource : IGpuTextureResource）走 ReadbackToCpu；软解帧走 NV12/BGRA 转换。
+            // 若落盘图干净而窗口画面异常，问题在上传/Present；若落盘图同样异常，问题在上游解码。
             if (_saveFrames > 0 && n % _saveFrames == 0)
                 FrameDumper.DumpFrame(frame, n, _saveDir);
             _inner.Present(frame);
@@ -631,8 +557,8 @@ internal static class Program
         private readonly bool _visible;
         private readonly int _w, _h;
 
-        // —— 自注册窗口类（黑底，消除 MF 预热/解码期间的启动白屏）——
-        private const string WindowClassName = "LingFanProbeWnd";
+        // —— 自注册窗口类（黑底，消除解码期间的启动白屏）——
+        private const string WindowClassName = "LingFanVulkanVideoProbeWnd";
         private static readonly object _classLock = new();
         private static bool _classRegistered;
         // 必须保持根引用：类过程委托一旦被 GC，RegisterClassExW 注册的 lpfnWndProc 即悬空 ⇒ 野调用崩溃。
@@ -645,7 +571,7 @@ internal static class Program
         {
             _w = w; _h = h; _visible = visible;
             _thread = new Thread(Run) { IsBackground = true };
-            _thread.SetApartmentState(ApartmentState.STA); // D3D11 SwapChain 依赖 STA 线程 + 消息泵
+            _thread.SetApartmentState(ApartmentState.STA); // Vulkan SwapChain 依赖 STA 线程 + 消息泵
             _thread.Start();
             if (!_ready.Wait(TimeSpan.FromSeconds(5)))
                 throw new InvalidOperationException("窗口线程未就绪（HWND 创建超时）。");
@@ -662,7 +588,6 @@ internal static class Program
                 return;
             }
             if (_visible) NativeMethods.ShowWindow(Hwnd, 1);
-            // 实测客户区与 DPI：Attach 必须用实测客户区，用构造入参会让 SwapChain 与窗口错位，DXGI 会再拉伸一层。
             if (NativeMethods.GetClientRect(Hwnd, out var rc))
             {
                 ClientW = rc.Right - rc.Left;
@@ -773,94 +698,6 @@ internal static class Program
         }
         return null;
     }
-
-    // ── VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH ──
-    // 复制自 VlcHeadfulPlaybackProbe，使本探针可独立定位 libvlc（不依赖 D3D11 渲染探针）。
-
-    /// <summary>定位原生 libvlc 目录（libvlc.dll 所在目录）：优先探针自带分发的 NuGet 原生包，其次系统已安装的 VLC。</summary>
-    private static string? LocateLibVlc()
-    {
-        string baseDir = AppContext.BaseDirectory;
-        string? bundled = FindBundledLibVlc(baseDir);
-        if (bundled is not null) return bundled;
-
-        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            try
-            {
-                if (File.Exists(Path.Combine(dir, "libvlc.dll")))
-                    return dir;
-            }
-            catch { /* 忽略无权限目录 */ }
-        }
-
-        var candidates = new List<string>();
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            string? pf = Environment.GetEnvironmentVariable("ProgramFiles");
-            string? pfX86 = Environment.GetEnvironmentVariable("ProgramFiles(x86)");
-            if (pf is not null) candidates.Add(Path.Combine(pf, "VideoLAN", "VLC"));
-            if (pfX86 is not null) candidates.Add(Path.Combine(pfX86, "VideoLAN", "VLC"));
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-        {
-            candidates.Add("/usr/lib/x86_64-linux-gnu");
-            candidates.Add("/usr/lib");
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            candidates.Add("/Applications/VLC.app/Contents/MacOS/lib");
-            candidates.Add("/usr/local/lib");
-        }
-
-        foreach (var cand in candidates)
-        {
-            try
-            {
-                if (File.Exists(Path.Combine(cand, "libvlc.dll")) ||
-                    File.Exists(Path.Combine(cand, "libvlc.so")) ||
-                    File.Exists(Path.Combine(cand, "libvlc.dylib")))
-                    return cand;
-            }
-            catch { /* 忽略 */ }
-        }
-
-        return null;
-    }
-
-    /// <summary>在输出目录树中找含 libvlc.dll 的目录（NuGet 原生包随构建复制的位置不固定）。优先与当前进程架构匹配的那一份。</summary>
-    private static string? FindBundledLibVlc(string startDir)
-    {
-        string arch = RuntimeInformation.ProcessArchitecture switch
-        {
-            Architecture.X86 => "x86",
-            Architecture.Arm64 => "arm64",
-            Architecture.X64 => "x64",
-            _ => "x64"
-        };
-        string archDir = Path.Combine(startDir, "libvlc", "win-" + arch);
-        if (File.Exists(Path.Combine(archDir, "libvlc.dll")))
-            return archDir;
-
-        if (File.Exists(Path.Combine(startDir, "libvlc.dll")))
-            return startDir;
-        try
-        {
-            foreach (var sub in Directory.EnumerateDirectories(startDir))
-            {
-                if (File.Exists(Path.Combine(sub, "libvlc.dll")))
-                    return sub;
-                foreach (var sub2 in Directory.EnumerateDirectories(sub))
-                {
-                    if (File.Exists(Path.Combine(sub2, "libvlc.dll")))
-                        return sub2;
-                }
-            }
-        }
-        catch { /* 忽略无权限/并发删除 */ }
-        return null;
-    }
 }
 
 // 帧落盘诊断：把渲染器收到的真实帧（CPU 软解 / GPU 硬解回读）转 RGBA 后写极简 PNG。
@@ -871,6 +708,8 @@ internal static class FrameDumper
 
     internal static void DumpFrame(VideoFrame frame, int presentIndex, string dir)
     {
+        // 诊断上限：硬解零拷贝绿屏排查只关注前 3 帧（关键帧 + 紧随其后的 P 帧），避免落 359 张 PNG。
+        if (DumpedCount >= 3) return;
         try
         {
             byte[]? rgba = null; int w = 0, h = 0;
@@ -918,6 +757,7 @@ internal static class FrameDumper
             Directory.CreateDirectory(dir);
             string path = Path.Combine(dir, $"frame_{presentIndex:D5}.png");
             EncodeRgbaPng(path, w, h, rgba);
+            PrintPixelStats(presentIndex, rgba, w, h);
             Interlocked.Increment(ref DumpedCount);
         }
         catch (Exception ex)
@@ -960,6 +800,40 @@ internal static class FrameDumper
     }
 
     private static int Clamp(int v) => v < 0 ? 0 : v > 255 ? 255 : v;
+
+    /// <summary>
+    /// 量化落盘帧像素统计（绿屏数据驱动诊断）：直接回答「解码输出是否为空」——
+    /// 若 maxR/G/B≈0 且非零像素 ≈0%，说明 DPB 内容为空（解码静默失败）；
+    /// 若非零像素占比高，说明解码有真实数据，绿屏在显示/采样路径。
+    /// </summary>
+    private static void PrintPixelStats(int presentIndex, byte[] rgba, int w, int h)
+    {
+        ulong n = (ulong)((long)w * h);
+        if (n == 0) return;
+        long nonZero = 0;
+        ulong sumR = 0, sumG = 0, sumB = 0;
+        int maxR = 0, maxG = 0, maxB = 0;
+        for (ulong i = 0; i < n; i++)
+        {
+            int r = rgba[(int)(i * 4)], g = rgba[(int)(i * 4 + 1)], b = rgba[(int)(i * 4 + 2)];
+            if (r != 0 || g != 0 || b != 0) nonZero++;
+            sumR += (ulong)r; sumG += (ulong)g; sumB += (ulong)b;
+            if (r > maxR) maxR = r;
+            if (g > maxG) maxG = g;
+            if (b > maxB) maxB = b;
+        }
+        double pct = nonZero * 100.0 / (double)n;
+        ulong meanR = sumR / n, meanG = sumG / n, meanB = sumB / n;
+        Console.WriteLine($"  [HEADFUL-SAVE] 帧 {presentIndex} 统计: 尺寸={w}x{h} 非零像素={pct:F1}% " +
+                          $"均值(R,G,B)=({meanR},{meanG},{meanB}) max(R,G,B)=({maxR},{maxG},{maxB})");
+        if (pct < 1.0)
+            Console.WriteLine($"  [HEADFUL-SAVE]   → DPB 内容疑似为空（解码静默失败 / 起始码 / SPS / 参考帧配置问题）");
+        else if (meanR == 0 && meanG == 135 && meanB == 0)
+            // 均值(0,135,0) = YuvToRgb(0,0,0) = NV12 全零 → 解码器一个像素都没写进去（绿屏真因，非显示/采样路径问题）
+            Console.WriteLine($"  [HEADFUL-SAVE]   → DPB 仍为全零 NV12（均值(0,135,0)=YUV(0,0,0)），解码未写入真实像素");
+        else
+            Console.WriteLine($"  [HEADFUL-SAVE]   → DPB 含真实像素（解码有输出），绿屏在显示/采样/布局路径");
+    }
 
     // 极简 PNG 编码器（RGBA / color type 6，ZLibStream 走 BCL，无第三方依赖）
     private static readonly uint[] CrcTable = BuildCrc();
@@ -1054,36 +928,29 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
-    // ── DPI / 客户区几何诊断（判定「DWM 是否在 D3D11 之外又拉伸了一层」）──
-
-    /// <summary>取窗口客户区矩形（物理像素，前提是进程 DPI-aware；否则返回被虚拟化的逻辑像素）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "GetClientRect", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetClientRect(IntPtr hWnd, out RECT lpRect);
 
-    /// <summary>Win10 1607+：取窗口所在监视器的有效 DPI（96 = 100%，120 = 125%，144 = 150%）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "GetDpiForWindow")]
     public static partial uint GetDpiForWindow(IntPtr hWnd);
 
-    // ── 自注册窗口类（黑底，替代 "Static" 系统类的白色背景，消除启动白屏）──
-
-    /// <summary>注册窗口类（WNDCLASSEXW），返回类 atom（0=失败，GetLastPInvokeError 取原因）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "RegisterClassExW", SetLastError = true)]
     public static partial ushort RegisterClassExW(ref WNDCLASSEXW lpwcx);
 
-    /// <summary>默认窗口过程：本探针不自处理消息，全部转发 DefWindowProc。</summary>
     [LibraryImport("user32.dll", EntryPoint = "DefWindowProcW")]
     public static partial IntPtr DefWindowProcW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
-    /// <summary>取系统标准 GDI 对象（如 BLACK_BRUSH=4）作窗口类背景刷。</summary>
     [LibraryImport("gdi32.dll", EntryPoint = "GetStockObject")]
     public static partial IntPtr GetStockObject(int i);
 
-    /// <summary>取系统标准光标（IDC_ARROW=32512）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "LoadCursorW")]
     public static partial IntPtr LoadCursorW(IntPtr hInstance, IntPtr lpCursorName);
 
-    /// <summary>Win32 WNDCLASSEXW（Unicode）。lpfnWndProc 以函数指针传入，字符串成员以 IntPtr 传入（调用方分配后释放）。</summary>
+    [LibraryImport("user32.dll", EntryPoint = "SetProcessDpiAwarenessContext", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetProcessDpiAwarenessContext(IntPtr value);
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct WNDCLASSEXW
     {
@@ -1100,14 +967,6 @@ internal static partial class NativeMethods
         public IntPtr lpszClassName;
         public IntPtr hIconSm;
     }
-
-    /// <summary>
-    /// Win10 1703+：设置进程 DPI 感知上下文。必须在创建任何窗口之前调用。
-    /// 传 <c>DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (HANDLE)-4</c> 可关闭 DWM 位图拉伸虚拟化。
-    /// </summary>
-    [LibraryImport("user32.dll", EntryPoint = "SetProcessDpiAwarenessContext", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool SetProcessDpiAwarenessContext(IntPtr value);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
@@ -1126,4 +985,3 @@ internal static partial class NativeMethods
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT { public int x; public int y; }
 }
-

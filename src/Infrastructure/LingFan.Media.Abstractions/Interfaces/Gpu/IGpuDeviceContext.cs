@@ -43,6 +43,14 @@ public interface IGpuDeviceContext
     /// </summary>
     uint VideoQueueFamilyIndex { get; }
 
+    /// <summary>
+    /// 图形渲染队列族索引（对应 <c>VK_QUEUE_GRAPHICS_BIT</c>）。
+    /// Vulkan 硬解 DPB 图像需在「video-decode 队列族」与「图形队列族」之间共享（跨队列族读写零拷贝上屏），
+    /// 此值供解码器在创建 DPB 图像时正确设置 <c>VK_SHARING_MODE_CONCURRENT</c> 的队列族列表。
+    /// 仅 Vulkan 后端有意义；非 Vulkan 后端或单一队列族时为 <see cref="uint.MaxValue"/>（解码器退化为同族独占）。
+    /// </summary>
+    uint GraphicsQueueFamilyIndex { get; }
+
     /// <summary>设备是否已初始化（共享设备已创建）。</summary>
     bool IsInitialized { get; }
 

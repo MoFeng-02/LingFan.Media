@@ -10,9 +10,14 @@ namespace LingFan.Media.Backends.VulkanVideo.H264;
 /// 并解析首个 slice 头填充 <see cref="StdVideoDecodeH264PictureInfo"/> / <see cref="StdVideoDecodeH264ReferenceInfo"/>。
 /// </summary>
 /// <remarks>
-/// <para>Vulkan H.264 解码契约：<c>vkCmdDecodeVideoKHR</c> 的 <see cref="VideoDecodeInfoKHR.SrcBuffer"/> 承载
-/// 「去起始码」的 slice NAL 序列（每个 slice 自 NAL 头字节起，含 emulation prevention 字节由驱动剥离），
-/// <see cref="VideoDecodeInfoKHR.PSliceOffsets"/> 指向各 slice 在缓冲内的字节偏移。</para>
+/// <para>Vulkan H.264 解码契约（权威规范 VK_KHR_video_decode_h264 §42.11.1 + VkVideoDecodeH264PictureInfoKHR）：
+/// <c>vkCmdDecodeVideoKHR</c> 的 <see cref="VideoDecodeInfoKHR.SrcBuffer"/> 承载「<b>不含</b> NAL 起始码（00 00 01）前缀」
+/// 的 slice NAL 序列——每个 slice 的 NAL 头字节（如 IDR=0x65、非 IDR=0x41）须直接位于缓冲起点，
+/// <see cref="VideoDecodeInfoKHR.PSliceOffsets"/> 指向各 slice 的「slice header 起点」（即 NAL 头字节）。
+/// 起始码是 Annex-B 帧封装细节、非 NAL 单元的一部分；若保留起始码，解码器会把起始码首字节误读为 NAL 头
+/// （type=0 未定义 NAL）→ 静默丢弃全部切片 → DPB 全零 NV12 → 恒绿（绿屏根因）。</para>
+/// <para>本方法去除 avcC 长度前缀 / Annex-B 起始码后，直接拼接 NAL 单元（NAL 头 + RBSP，emulation prevention 字节保留——
+/// 硬件解码器自行处理），并为每个 slice 记录「指向 NAL 头」的对齐偏移。</para>
 /// <para>本类同时支持 avcC 长度前缀包（<paramref name="nalLengthSize"/> &gt; 0）与 Annex-B 起始码包（= 0）。</para>
 /// </remarks>
 internal static unsafe class H264SliceInfo
@@ -21,9 +26,11 @@ internal static unsafe class H264SliceInfo
     private static bool IsSliceNal(byte nalType) => nalType == 1 || nalType == 5 || nalType == 19 || nalType == 20;
 
     /// <summary>
-    /// 把 packet 中的 slice NAL 拼为解码比特流（去长度/起始前缀，保留 NAL 头字节），返回切片偏移。
+    /// 把 packet 中的 slice NAL 拼为解码比特流（去除长度前缀/Annex-B 起始码，再为每个 slice 重新加回
+    /// 00 00 01 NAL 起始码），返回指向各 slice 起始码的切片偏移（已按 <paramref name="bitstreamOffsetAlign"/> 对齐）。
     /// </summary>
-    public static byte[] BuildBitstream(ReadOnlySpan<byte> packet, int nalLengthSize, out int[] sliceOffsets)
+    /// <param name="bitstreamOffsetAlign">VkVideoCapabilitiesKHR::minBitstreamBufferOffsetAlignment（切片偏移对齐）。</param>
+    public static byte[] BuildBitstream(ReadOnlySpan<byte> packet, int nalLengthSize, out int[] sliceOffsets, ulong bitstreamOffsetAlign = 1)
     {
         var outBuf = new List<byte>(packet.Length);
         var offsets = new List<int>();
@@ -41,16 +48,13 @@ internal static unsafe class H264SliceInfo
                 var nal = packet.Slice(p, len);
                 byte nalType = (byte)(nal[0] & 0x1F);
                 if (IsSliceNal(nalType))
-                {
-                    offsets.Add(outBuf.Count);
-                    for (int i = 0; i < nal.Length; i++) outBuf.Add(nal[i]);
-                }
+                    AppendNal(outBuf, offsets, nal, bitstreamOffsetAlign);
                 p += len;
             }
         }
         else
         {
-            // Annex-B：扫描起始码
+            // Annex-B：扫描起始码，提取 NAL（不含起始码）后统一加回 00 00 01 起始码。
             int n = packet.Length;
             int i = 0;
             while (i + 3 < n)
@@ -65,10 +69,7 @@ internal static unsafe class H264SliceInfo
                 {
                     byte nalType = (byte)(packet[nalStart] & 0x1F);
                     if (IsSliceNal(nalType))
-                    {
-                        offsets.Add(outBuf.Count);
-                        for (int k = nalStart; k < end; k++) outBuf.Add(packet[k]);
-                    }
+                        AppendNal(outBuf, offsets, packet.Slice(nalStart, end - nalStart), bitstreamOffsetAlign);
                 }
                 if (next < 0) break;
                 i = next + 1;
@@ -77,6 +78,20 @@ internal static unsafe class H264SliceInfo
 
         sliceOffsets = offsets.ToArray();
         return outBuf.ToArray();
+    }
+
+    /// <summary>
+    /// 向解码比特流追加一个 slice NAL：起始码前导 0 填充至 <paramref name="bitstreamOffsetAlign"/> 边界，
+    /// 再直接写 NAL 原始字节（NAL 头 + RBSP，emulation prevention 字节保留）。
+    /// <paramref name="offsets"/> 记录 NAL 头位置——Vulkan H.264 解码要求 <c>pSliceOffsets</c> 指向 NAL 头
+    /// （slice header 起点），绝不可带起始码前缀，否则解码器静默丢弃（无错误、输出全零 → 绿屏）。
+    /// </summary>
+    private static void AppendNal(List<byte> outBuf, List<int> offsets, ReadOnlySpan<byte> nal, ulong bitstreamOffsetAlign)
+    {
+        ulong align = bitstreamOffsetAlign < 1 ? 1 : bitstreamOffsetAlign;
+        while ((ulong)outBuf.Count % align != 0) outBuf.Add(0); // 前导 0 填充（解码器不读取前导字节）
+        offsets.Add(outBuf.Count);                        // 指向 NAL 头（slice header 起点，无起始码）
+        for (int i = 0; i < nal.Length; i++) outBuf.Add(nal[i]);
     }
 
     private static int FindStartCode(ReadOnlySpan<byte> s, int from)
@@ -141,8 +156,19 @@ internal static unsafe class H264SliceInfo
         picInfo.PicOrderCnt[0] = sps.PicOrderCntType == 0 ? picOrderCntLsb : deltaPicOrderCnt0;
         picInfo.PicOrderCnt[1] = sps.PicOrderCntType == 1 ? deltaPicOrderCnt1 : 0;
 
-        refInfo.Flags.TopFieldFlag = fieldPicFlag == 0 ? 1u : 0u;
-        refInfo.Flags.BottomFieldFlag = (uint)bottomFieldFlag;
+        // ⚠️ 规范表（VK_KHR_video_decode_h264）：StdVideoDecodeH264ReferenceInfo 的场标志按此判定——
+        // 渐进帧(field_pic_flag=0)=帧 → top/bottom 均为 0；隔行帧按 bottom_field_flag 设顶场(1,0)/底场(0,1)。
+        // 旧 NVIDIA 驱动 bug 曾要求渐进帧 top=1，现已废弃；按现规范置 0 才符合"frame"语义，亦避免 validation 层抱怨。
+        if (fieldPicFlag == 0)
+        {
+            refInfo.Flags.TopFieldFlag = 0;
+            refInfo.Flags.BottomFieldFlag = 0;
+        }
+        else
+        {
+            refInfo.Flags.TopFieldFlag = bottomFieldFlag == 0 ? 1u : 0u;
+            refInfo.Flags.BottomFieldFlag = (uint)bottomFieldFlag;
+        }
         refInfo.Flags.UsedForLongTermReference = 0;
         refInfo.Flags.IsNonExisting = 0;
         refInfo.FrameNum = (ushort)frameNum;

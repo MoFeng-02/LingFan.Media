@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Threading;
 using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.MediaFoundation;
@@ -7,7 +6,7 @@ using LingFan.Media.Backends.VLCNative;
 using LingFan.Media.Consumers;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
-using LingFan.Media.Renderers.D3D11;
+using LingFan.Media.Renderers.Vulkan;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -73,10 +72,10 @@ internal static class Program
         // 之后 GetRequiredService<IMediaPlayer>() 拿到的就是「回退中间件」，完全不知道后端。
         // 顺序 MF → FFmpeg → VLC：贴合“264/MP4 由 MF 命中、WebM/HEVC 由 MF 失败再回退 ffmpeg”的回退叙事。
         var builder = services.AddLingFanMedia()
-            //.AddMediaFoundation(o => { if (noFusion) o.EnableReaderDecodeFusion = false; })
+            .AddMediaFoundation(o => { if (noFusion) o.EnableReaderDecodeFusion = false; })
             .AddFFmpeg()
             .AddVLCNative();
-        if (useGpu) builder.AddD3D11Renderer(); else builder.AddHeadlessRenderer();
+        if (useGpu) builder.AddVulkanRenderer(); else builder.AddHeadlessRenderer();
         if (useSound) builder.AddWasapiOutput(); else builder.AddSilentAudioOutput();
 
         await using var sp = services.BuildServiceProvider();

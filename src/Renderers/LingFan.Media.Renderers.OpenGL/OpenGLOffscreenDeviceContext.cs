@@ -136,6 +136,9 @@ public sealed unsafe class OpenGLOffscreenDeviceContext : IGpuDeviceContext, IDi
     uint IGpuDeviceContext.VideoQueueFamilyIndex => uint.MaxValue;
 
     /// <inheritdoc/>
+    uint IGpuDeviceContext.GraphicsQueueFamilyIndex => uint.MaxValue;
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed) return;

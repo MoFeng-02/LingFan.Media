@@ -47,9 +47,9 @@ public sealed unsafe class VulkanNv12ToRgbaConverter : IDisposable
     private uint _rgbaW, _rgbaH;
     private Format _rgbaFormat = (Format)0;
 
-    // NV12 平面视图缓存（按源图像句柄；DPB 槽池固定，故条目上界有限）。
+    // NV12 平面视图缓存（按 (源图像句柄, layer)；DPB 为单一 arrayed 图像，各槽 = 不同层，故按层区分）。
     // 视图在命令记录后即被 GPU 引用，须存活至命令执行完毕（渲染器每帧 QueueWaitIdle），故缓存而非每帧销毁。
-    private readonly Dictionary<ulong, (ImageView Y, ImageView UV)> _planeViews = new();
+    private readonly Dictionary<(ulong ImageHandle, uint Layer), (ImageView Y, ImageView UV)> _planeViews = new();
 
     private bool _disposed;
 
@@ -74,40 +74,119 @@ public sealed unsafe class VulkanNv12ToRgbaConverter : IDisposable
     }
 
     /// <summary>
-    /// 把 NV12 源图像转成 RGBA 目标图像（在同一条命令缓冲内记录；目标置于 <see cref="ImageLayout.TransferSrcOptimal"/> 供调用方 blit）。
+    /// 把 NV12 源图像转成内部缓存的 RGBA 目标图像（同命令缓冲内记录；目标置于 <see cref="ImageLayout.TransferSrcOptimal"/> 供调用方 blit）。
+    /// 用于渲染器硬解 DPB 路径（目标由本转换器内部持有并按尺寸/格式缓存）。
     /// </summary>
     /// <param name="cmd">正在记录的命令缓冲（调用方持有 _gate 锁）。</param>
     /// <param name="nv12Source">NV12 VkImage（硬解 DPB 或导入纹理），格式须为 multi-planar NV12。</param>
-    /// <param name="srcLayout">源图像交付时的布局（解码器传 TransferSrcOptimal）。</param>
+    /// <param name="srcLayout">源图像交付时的布局（Vulkan 硬解 DPB 传 VideoDecodeDpbKhr；导入纹理传 Undefined）。</param>
     /// <param name="width">源/目标宽度（像素）。</param>
     /// <param name="height">源/目标高度（像素）。</param>
     /// <param name="targetFormat">目标 RGBA 格式（须与下游 SwapChain 格式一致，避免 blit 跨 R/B 顺序）；通常为 B8G8R8A8Unorm / R8G8B8A8Unorm。</param>
     /// <param name="rgbaTarget">转出的 RGBA VkImage（转后处于 TransferSrcOptimal）。</param>
-    public void Convert(CommandBuffer cmd, Image nv12Source, ImageLayout srcLayout, uint width, uint height, Format targetFormat, out Image rgbaTarget)
+    public void Convert(CommandBuffer cmd, Image nv12Source, ImageLayout srcLayout, uint baseArrayLayer, uint width, uint height, Format targetFormat, out Image rgbaTarget)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         EnsurePipeline(targetFormat);
         EnsureRgbaTarget(width, height, targetFormat);
         EnsureFramebuffer();
-        EnsurePlaneViews(nv12Source);
+        EnsurePlaneViews(nv12Source, baseArrayLayer);
 
-        // NV12 两平面 → ShaderReadOnlyOptimal（供着色器采样；源已具备 SampledBit 用法）
+        RenderInto(cmd, nv12Source, _planeViews[(nv12Source.Handle, baseArrayLayer)], srcLayout, width, height, _rgbaImage, _framebuffer, baseArrayLayer);
+        rgbaTarget = _rgbaImage;
+    }
+
+    /// <summary>
+    /// 把 NV12 源图像转成<b>调用方提供的</b> RGBA 目标图像（同命令缓冲内记录；目标置于 <see cref="ImageLayout.TransferSrcOptimal"/>）。
+    /// 用于 <see cref="VulkanGpuFrameProducer"/> 导入 NV12 外部纹理场景：RGBA 目标由调用方创建并拥有（交付 <see cref="VulkanImageResource"/>），
+    /// 转换器不缓存、不持有该目标（避免与内部离屏目标冲突）。平面视图须经 <see cref="CreatePlaneViews"/> 创建、
+    /// 命令提交完成后经 <see cref="DestroyPlaneViews"/> 销毁。
+    /// </summary>
+    /// <param name="cmd">正在记录的命令缓冲（调用方持有锁）。</param>
+    /// <param name="nv12Source">NV12 VkImage。</param>
+    /// <param name="planeViews">调用方经 <see cref="CreatePlaneViews"/> 创建的 Y/UV 平面视图（提交完成后经 <see cref="DestroyPlaneViews"/> 销毁）。</param>
+    /// <param name="srcLayout">NV12 源交付布局（导入纹理传 Undefined）。</param>
+    /// <param name="width">宽度（像素）。</param>
+    /// <param name="height">高度（像素）。</param>
+    /// <param name="targetFormat">目标 RGBA 格式（须与下游 SwapChain 一致）。</param>
+    /// <param name="rgbaTarget">调用方提供的 RGBA VkImage（转后处于 TransferSrcOptimal）。</param>
+    /// <param name="rgbaView">调用方提供的 RGBA 图像视图（绑定临时帧缓冲）。</param>
+    public void Convert(CommandBuffer cmd, Image nv12Source, (ImageView Y, ImageView UV) planeViews, ImageLayout srcLayout, uint width, uint height, Format targetFormat, Image rgbaTarget, ImageView rgbaView)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        EnsurePipeline(targetFormat);
+
+        // 调用方提供的 RGBA 目标：建临时帧缓冲（绑定 rgbaView；目标所有权归调用方，不缓存）。
+        var attachView = rgbaView;
+        FramebufferCreateInfo fbInfo = new()
+        {
+            SType = StructureType.FramebufferCreateInfo,
+            RenderPass = _renderPass,
+            AttachmentCount = 1,
+            PAttachments = &attachView,
+            Width = width,
+            Height = height,
+            Layers = 1,
+        };
+        Framebuffer fb;
+        if (VulkanNative.CreateFramebuffer(_device, &fbInfo, null, out fb) != Result.Success)
+            throw new InvalidOperationException("vkCreateFramebuffer（NV12 转换·外部 RGBA 目标）失败。");
+        try
+        {
+            RenderInto(cmd, nv12Source, planeViews, srcLayout, width, height, rgbaTarget, fb, 0);
+        }
+        finally
+        {
+            VulkanNative.DestroyFramebuffer(_device, fb, null);
+        }
+    }
+
+    /// <summary>
+    /// 为 NV12 源图像创建 Y/UV 平面视图（采样用）。调用方在命令提交完成后须经 <see cref="DestroyPlaneViews"/> 销毁，
+    /// 避免与内部 <c>_planeViews</c> 缓存（仅服务长生命周期 DPB）冲突——导入纹理为瞬态，句柄值可能被复用导致陈旧条目。
+    /// </summary>
+    public (ImageView Y, ImageView UV) CreatePlaneViews(Image nv12Source)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return (CreatePlaneView(nv12Source, ImageAspectFlags.Plane0BitKhr, Format.R8Unorm, 0),
+                CreatePlaneView(nv12Source, ImageAspectFlags.Plane1BitKhr, Format.R8G8Unorm, 0));
+    }
+
+    /// <summary>销毁经 <see cref="CreatePlaneViews"/> 创建的平面视图（须于命令提交完成后调用）。</summary>
+    public void DestroyPlaneViews((ImageView Y, ImageView UV) pv)
+    {
+        if (_device.Handle == 0) return;
+        if (pv.Y.Handle != 0) VulkanNative.DestroyImageView(_device, pv.Y, null);
+        if (pv.UV.Handle != 0) VulkanNative.DestroyImageView(_device, pv.UV, null);
+    }
+
+    /// <summary>
+    /// 核心绘制：在同命令缓冲内把 NV12（两平面视图）经片元着色器转 RGBA 到指定目标，并置于 <see cref="ImageLayout.TransferSrcOptimal"/>。
+    /// 源/目标布局转换均自调用方给定布局起算（RGBA 目标固定从 Undefined 起算）。
+    /// </summary>
+    private void RenderInto(CommandBuffer cmd, Image nv12Source, (ImageView Y, ImageView UV) planeViews, ImageLayout srcLayout, uint width, uint height, Image rgbaImage, Framebuffer framebuffer, uint baseArrayLayer)
+    {
+        // NV12 两平面 → ShaderReadOnlyOptimal（供着色器采样；源已具备 SampledBit 用法）。
+        // 源为硬解 DPB（交付布局 = VideoDecodeDpbKhr）：解码器对该图像的写入必须作为「可用性」操作被本屏障建立，
+        // 否则着色器采样到的是解码写入前的零初始化内存（纯绿）。Silk.NET 2.23.0 的 video-decode 阶段/访问位
+        // 仅存在于 PipelineStageFlags2/AccessFlags2（须 synchronization2），故用 AllCommandsBit + MemoryWriteBit
+        // 的「全屏障」等价覆盖解码写入（与解码器 EnsureSlotDecodeLayout 的覆盖式屏障对称，规范合法）。
         TransitionImageLayout(cmd, nv12Source, srcLayout, ImageLayout.ShaderReadOnlyOptimal,
-            AccessFlags.None, AccessFlags.ShaderReadBit,
-            PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.FragmentShaderBit,
-            ImageAspectFlags.Plane0BitKhr);
+            AccessFlags.MemoryWriteBit, AccessFlags.ShaderReadBit,
+            PipelineStageFlags.AllCommandsBit, PipelineStageFlags.FragmentShaderBit,
+            ImageAspectFlags.Plane0BitKhr, baseArrayLayer);
         TransitionImageLayout(cmd, nv12Source, srcLayout, ImageLayout.ShaderReadOnlyOptimal,
-            AccessFlags.None, AccessFlags.ShaderReadBit,
-            PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.FragmentShaderBit,
-            ImageAspectFlags.Plane1BitKhr);
+            AccessFlags.MemoryWriteBit, AccessFlags.ShaderReadBit,
+            PipelineStageFlags.AllCommandsBit, PipelineStageFlags.FragmentShaderBit,
+            ImageAspectFlags.Plane1BitKhr, baseArrayLayer);
 
         // RGBA 目标 → ColorAttachmentOptimal（render pass loadOp=Clear）
-        TransitionImageLayout(cmd, _rgbaImage, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
+        TransitionImageLayout(cmd, rgbaImage, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
             AccessFlags.None, AccessFlags.ColorAttachmentWriteBit,
             PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.ColorAttachmentOutputBit,
             ImageAspectFlags.ColorBit);
 
-        UpdateDescriptorSet(_planeViews[nv12Source.Handle]);
+        UpdateDescriptorSet(planeViews);
 
         var clear = new ClearColorValue { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 0 };
         var clearValue = new ClearValue { Color = clear };
@@ -115,7 +194,7 @@ public sealed unsafe class VulkanNv12ToRgbaConverter : IDisposable
         {
             SType = StructureType.RenderPassBeginInfo,
             RenderPass = _renderPass,
-            Framebuffer = _framebuffer,
+            Framebuffer = framebuffer,
             RenderArea = new Rect2D { Offset = new Offset2D(0, 0), Extent = new Extent2D(width, height) },
             ClearValueCount = 1,
             PClearValues = &clearValue,
@@ -145,12 +224,10 @@ public sealed unsafe class VulkanNv12ToRgbaConverter : IDisposable
         VulkanNative.CmdEndRenderPass(cmd);
 
         // RGBA 目标 → TransferSrcOptimal（供调用方 blit 到 SwapChain）
-        TransitionImageLayout(cmd, _rgbaImage, ImageLayout.ColorAttachmentOptimal, ImageLayout.TransferSrcOptimal,
+        TransitionImageLayout(cmd, rgbaImage, ImageLayout.ColorAttachmentOptimal, ImageLayout.TransferSrcOptimal,
             AccessFlags.ColorAttachmentWriteBit, AccessFlags.TransferReadBit,
             PipelineStageFlags.ColorAttachmentOutputBit, PipelineStageFlags.TransferBit,
             ImageAspectFlags.ColorBit);
-
-        rgbaTarget = _rgbaImage;
     }
 
     public void Dispose()
@@ -509,16 +586,23 @@ public sealed unsafe class VulkanNv12ToRgbaConverter : IDisposable
             throw new InvalidOperationException("vkCreateFramebuffer（NV12 转换）失败。");
     }
 
-    private void EnsurePlaneViews(Image nv12Source)
+    private void EnsurePlaneViews(Image nv12Source, uint baseArrayLayer)
     {
-        if (_planeViews.ContainsKey(nv12Source.Handle)) return;
-        ImageView yView = CreatePlaneView(nv12Source, ImageAspectFlags.Plane0BitKhr, Format.R8Unorm);
-        ImageView uvView = CreatePlaneView(nv12Source, ImageAspectFlags.Plane1BitKhr, Format.R8G8Unorm);
-        _planeViews[nv12Source.Handle] = (yView, uvView);
+        var key = (nv12Source.Handle, baseArrayLayer);
+        if (_planeViews.ContainsKey(key)) return;
+        ImageView yView = CreatePlaneView(nv12Source, ImageAspectFlags.Plane0BitKhr, Format.R8Unorm, baseArrayLayer);
+        ImageView uvView = CreatePlaneView(nv12Source, ImageAspectFlags.Plane1BitKhr, Format.R8G8Unorm, baseArrayLayer);
+        _planeViews[key] = (yView, uvView);
     }
 
-    private ImageView CreatePlaneView(Image img, ImageAspectFlags aspect, Format format)
+    private ImageView CreatePlaneView(Image img, ImageAspectFlags aspect, Format format, uint baseArrayLayer)
     {
+        // per-plane 视图（R8/R8G8）须链 VkImageViewUsageCreateInfo、usage=Sampled（子集），
+        // 避免继承图像的多 planar 用法触发 VUID-08333/08335；图像已带 MUTABLE_FORMAT_BIT（VUID-12397/01564）。
+        ImageViewUsageCreateInfo viewUsage;
+        viewUsage.SType = StructureType.ImageViewUsageCreateInfo;
+        viewUsage.PNext = null;
+        viewUsage.Usage = ImageUsageFlags.SampledBit;
         ImageViewCreateInfo vi = new()
         {
             SType = StructureType.ImageViewCreateInfo,
@@ -530,9 +614,10 @@ public sealed unsafe class VulkanNv12ToRgbaConverter : IDisposable
                 AspectMask = aspect,
                 BaseMipLevel = 0,
                 LevelCount = 1,
-                BaseArrayLayer = 0,
+                BaseArrayLayer = baseArrayLayer,
                 LayerCount = 1,
             },
+            PNext = &viewUsage,
         };
         ImageView view;
         if (VulkanNative.CreateImageView(_device, &vi, null, out view) != Result.Success)
@@ -580,14 +665,14 @@ public sealed unsafe class VulkanNv12ToRgbaConverter : IDisposable
     }
 
     private void TransitionImageLayout(CommandBuffer cmd, Image image, ImageLayout oldLayout, ImageLayout newLayout,
-        AccessFlags srcAccess, AccessFlags dstAccess, PipelineStageFlags srcStage, PipelineStageFlags dstStage, ImageAspectFlags aspect)
+        AccessFlags srcAccess, AccessFlags dstAccess, PipelineStageFlags srcStage, PipelineStageFlags dstStage, ImageAspectFlags aspect, uint baseArrayLayer = 0)
     {
         ImageSubresourceRange range = new()
         {
             AspectMask = aspect,
             BaseMipLevel = 0,
             LevelCount = 1,
-            BaseArrayLayer = 0,
+            BaseArrayLayer = baseArrayLayer,
             LayerCount = 1,
         };
         ImageMemoryBarrier barrier = new()

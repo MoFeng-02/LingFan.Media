@@ -30,6 +30,7 @@
     <ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
 		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.Vulkan\LingFan.Media.Renderers.Vulkan.csproj" />
 	</ItemGroup>
 
   <ItemGroup>

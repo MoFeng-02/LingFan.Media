@@ -20,5 +20,5 @@
 
 ## 已知坑（已修复，留痕）
 - `TrackType` 枚举须与 VLC 实际枚举一致：`audio=0 / video=1`。若误写为 `audio=1/video=2`，会导致轨道分类错位、codec 全落 `Unknown`。
-- 帧路由唯一：`frame => _frameChannel.Emit`，不另开有头分支。
+- 帧路由唯一：视频与音频分走独立有界通道（`_videoChannel` / `_audioChannel`，音频不被视频 DropOldest 误删），由 `ReadPacketAsync` 合并；不另开有头分支。
 - 本地裸路径（如 `E:\x.mp4`）须走 `libvlc_media_new_path`；合法 MRL（`file:///...` / `http://`）才走 `libvlc_media_new_location`，否则 VLC 拒开报 `unable to open the MRL`。

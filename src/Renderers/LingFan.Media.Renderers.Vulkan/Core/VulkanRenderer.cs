@@ -78,7 +78,11 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     private CommandPool _commandPool;
     private CommandBuffer _commandBuffer;
     private Semaphore _imageAvailableSemaphore;
-    private Semaphore _renderFinishedSemaphore;
+    // 每个 SwapChain 图像独立持有一个 renderFinished 信号量，按 imageIndex 索引。
+    // 修复 VUID-vkQueueSubmit-pSignalSemaphores-00067：vkQueueSubmit 信号的信号量在提交时必须
+    // 处于 unsignaled；若全帧共用单一 renderFinished，上一帧 present 尚未完成（image 未 re-acquire）
+    // 时下一帧 submit 又去 signal 同一信号量，校验层即报 00067（硬解无 QueueWaitIdle 串行化时直接绿屏）。
+    private Semaphore[] _renderFinishedSemaphores = [];
 
     // 预分配 PresentInfo 数组，避免每帧 GC 分配
     private readonly PresentInfoKHR[] _presentInfoArr = [new PresentInfoKHR()];
@@ -252,7 +256,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
             // 3. 呈现（复用预分配数组）
             SwapchainKHR swap = _swapchain;
-            Semaphore renderFin = _renderFinishedSemaphore;
+            Semaphore renderFin = _renderFinishedSemaphores[imageIndex];
             uint idx = imageIndex;
 
             _presentInfoArr[0] = new PresentInfoKHR
@@ -269,8 +273,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             if (result == Result.ErrorOutOfDateKhr)
             {
                 // Present 阶段过期——丢弃本帧并重建 SwapChain。
-                // RecreateSwapchain 内部同时重建两个信号量，消除 QueuePresent
-                // 失败后 _renderFinishedSemaphore 可能的 signaled 残留。
+                // RecreateSwapchain 内部同时重建信号量（含 _renderFinishedSemaphores 数组），
+                // 消除 QueuePresent 失败后 renderFinished 信号量可能的 signaled 残留。
                 RecreateSwapchain();
                 return;
             }
@@ -301,6 +305,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
         bool swapchainIsBgra = _swapchainFormat == Format.B8G8R8A8Unorm;
         bool usedShaderPath = false;
+        // 硬解帧的跨队列同步信号量（video 队列解码完成 → graphics 队列采样前等待）；软帧为空句柄。
+        Semaphore decodeDoneSem = default;
 
         // YUV 软帧走 GPU Shader 路径：由 Fragment Shader 采样 Y/U/V 平面并完成 YUV→RGB 转换，
         // 彻底消除 CPU 端逐像素转换。该路径使用 RenderPass，不需要 Transfer 布局屏障。
@@ -335,8 +341,9 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                     // 零拷贝、GPU 内 YUV→RGB，无 CPU 回读；转换器与下游 SwapChain 同格式以走零缩放 Copy 快路径。
                     if (_nv12Converter is null)
                         throw new InvalidOperationException("NV12→RGBA 转换器未初始化（Attach 失败）。");
+                    decodeDoneSem = vvfr.DecodeDoneSemaphore; // 跨队列依赖：等待 video 队列解码写入完成
                     PixelFormat nv12TargetFmt = swapchainIsBgra ? PixelFormat.BGRA32 : PixelFormat.RGBA32;
-                    _nv12Converter.Convert(_commandBuffer, vvfr.Image, vvfr.CurrentLayout,
+                    _nv12Converter.Convert(_commandBuffer, vvfr.Image, vvfr.CurrentLayout, (uint)vvfr.SlotIndex,
                         (uint)vvfr.Width, (uint)vvfr.Height, _swapchainFormat, out var rgbaImage);
                     BlitVulkanImageResource(rgbaImage, nv12TargetFmt, ImageLayout.TransferSrcOptimal,
                         vvfr.Width, vvfr.Height, swapchainImage);
@@ -360,26 +367,51 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         // 提交
         CommandBuffer cmd = _commandBuffer;
         Semaphore imgAvail = _imageAvailableSemaphore;
-        Semaphore renderFin = _renderFinishedSemaphore;
+        Semaphore renderFin = _renderFinishedSemaphores[imageIndex];
         // Shader 路径首阶段为 ColorAttachmentOutput（RenderPass 写 color attachment），
         // Transfer 路径首阶段为 Transfer（Copy/Blit/LayoutTransition）。waitStage 必须与首阶段一致。
         PipelineStageFlags waitStage = usedShaderPath
             ? PipelineStageFlags.ColorAttachmentOutputBit
             : PipelineStageFlags.TransferBit;
 
-        SubmitInfo submitInfo = new()
+        // 硬解帧：额外等待解码完成信号量（video 队列 → graphics 队列跨队列依赖），
+        // waitDstStageMask = FragmentShaderBit（着色器采样为首个真正读取 DPB 的阶段）。
+        if (decodeDoneSem.Handle != 0)
         {
-            SType = StructureType.SubmitInfo,
-            WaitSemaphoreCount = 1,
-            PWaitSemaphores = &imgAvail,
-            PWaitDstStageMask = &waitStage,
-            CommandBufferCount = 1,
-            PCommandBuffers = &cmd,
-            SignalSemaphoreCount = 1,
-            PSignalSemaphores = &renderFin,
-        };
-
-        result = VulkanNative.QueueSubmit(_queue, 1, &submitInfo, default);
+            Semaphore[] waits = { imgAvail, decodeDoneSem };
+            PipelineStageFlags[] waitStages = { waitStage, PipelineStageFlags.FragmentShaderBit };
+            fixed (Semaphore* pWaits = waits)
+            fixed (PipelineStageFlags* pStages = waitStages)
+            {
+                SubmitInfo submitInfo = new()
+                {
+                    SType = StructureType.SubmitInfo,
+                    WaitSemaphoreCount = 2,
+                    PWaitSemaphores = pWaits,
+                    PWaitDstStageMask = pStages,
+                    CommandBufferCount = 1,
+                    PCommandBuffers = &cmd,
+                    SignalSemaphoreCount = 1,
+                    PSignalSemaphores = &renderFin,
+                };
+                result = VulkanNative.QueueSubmit(_queue, 1, &submitInfo, default);
+            }
+        }
+        else
+        {
+            SubmitInfo submitInfo = new()
+            {
+                SType = StructureType.SubmitInfo,
+                WaitSemaphoreCount = 1,
+                PWaitSemaphores = &imgAvail,
+                PWaitDstStageMask = &waitStage,
+                CommandBufferCount = 1,
+                PCommandBuffers = &cmd,
+                SignalSemaphoreCount = 1,
+                PSignalSemaphores = &renderFin,
+            };
+            result = VulkanNative.QueueSubmit(_queue, 1, &submitInfo, default);
+        }
         ThrowIfDeviceLost(result, "vkQueueSubmit"); // QueueSubmit 是 TDR 设备丢失最常见的浮现点
         if (result != Result.Success)
             throw new InvalidOperationException($"vkQueueSubmit 失败: {result}");
@@ -869,7 +901,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
                 CommandBuffer cmd = _commandBuffer;
                 Semaphore imgAvail = _imageAvailableSemaphore;
-                Semaphore renderFin = _renderFinishedSemaphore;
+                Semaphore renderFin = _renderFinishedSemaphores[imageIndex];
                 // TransferBit 而非 ColorAttachmentOutputBit——同 RecordAndSubmitFrame
                 PipelineStageFlags waitStage = PipelineStageFlags.TransferBit;
 
@@ -1226,9 +1258,18 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         SemaphoreCreateInfo semInfo = new() { SType = StructureType.SemaphoreCreateInfo };
 
         Result r1 = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _imageAvailableSemaphore);
-        Result r2 = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _renderFinishedSemaphore);
-        if (r1 != Result.Success || r2 != Result.Success)
-            throw new InvalidOperationException($"vkCreateSemaphore 失败: {r1}/{r2}");
+        if (r1 != Result.Success)
+            throw new InvalidOperationException($"vkCreateSemaphore（imageAvailable）失败: {r1}");
+
+        // renderFinished 按 SwapChain 图像数建独立信号量数组，索引 = imageIndex。
+        int n = _swapchainImages.Length;
+        _renderFinishedSemaphores = new Semaphore[n];
+        for (int i = 0; i < n; i++)
+        {
+            Result r = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _renderFinishedSemaphores[i]);
+            if (r != Result.Success)
+                throw new InvalidOperationException($"vkCreateSemaphore（renderFinished[{i}]）失败: {r}");
+        }
     }
 
     private void CreateShaderPipeline()
@@ -1423,10 +1464,10 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
             if (VulkanNative.EndCommandBuffer(_commandBuffer) != Result.Success) return;
 
-            // 提交以消费 _imageAvailableSemaphore，信号 _renderFinishedSemaphore
+            // 提交以消费 _imageAvailableSemaphore，信号 _renderFinishedSemaphores[imageIndex]
             CommandBuffer cmd = _commandBuffer;
             Semaphore imgAvail = _imageAvailableSemaphore;
-            Semaphore renderFin = _renderFinishedSemaphore;
+            Semaphore renderFin = _renderFinishedSemaphores[imageIndex];
             // 同 RecordAndSubmitFrame——TransferBit
             PipelineStageFlags waitStage = PipelineStageFlags.TransferBit;
 
@@ -1445,7 +1486,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             VulkanNative.QueueSubmit(_queue, 1, &submitInfo, default);
             VulkanNative.QueueWaitIdle(_queue);
 
-            // 呈现以消费 _renderFinishedSemaphore
+            // 呈现以消费 _renderFinishedSemaphores[imageIndex]
             SwapchainKHR swap = _swapchain;
             uint idx = imageIndex;
             _presentInfoArr[0] = new PresentInfoKHR
@@ -1484,8 +1525,9 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
         if (_imageAvailableSemaphore.Handle != 0)
         { VulkanNative.DestroySemaphore(_device, _imageAvailableSemaphore, null); _imageAvailableSemaphore = default; }
-        if (_renderFinishedSemaphore.Handle != 0)
-        { VulkanNative.DestroySemaphore(_device, _renderFinishedSemaphore, null); _renderFinishedSemaphore = default; }
+        foreach (var s in _renderFinishedSemaphores)
+            if (s.Handle != 0) VulkanNative.DestroySemaphore(_device, s, null);
+        _renderFinishedSemaphores = [];
 
         try
         {
@@ -1520,8 +1562,9 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
         if (_imageAvailableSemaphore.Handle != 0)
         { VulkanNative.DestroySemaphore(_device, _imageAvailableSemaphore, null); _imageAvailableSemaphore = default; }
-        if (_renderFinishedSemaphore.Handle != 0)
-        { VulkanNative.DestroySemaphore(_device, _renderFinishedSemaphore, null); _renderFinishedSemaphore = default; }
+        foreach (var s in _renderFinishedSemaphores)
+            if (s.Handle != 0) VulkanNative.DestroySemaphore(_device, s, null);
+        _renderFinishedSemaphores = [];
 
         if (_stagingBuffer.Handle != 0)
         {

@@ -95,6 +95,9 @@ internal sealed class MfGpuDeviceContext : IGpuDeviceContext
     public uint VideoQueueFamilyIndex => uint.MaxValue;
 
     /// <inheritdoc/>
+    public uint GraphicsQueueFamilyIndex => uint.MaxValue;
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed) return;

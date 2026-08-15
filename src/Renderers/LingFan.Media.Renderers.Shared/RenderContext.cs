@@ -28,6 +28,9 @@ public sealed class RenderContext : IGpuDeviceContext
     /// <summary>视频解码队列族索引（VK_QUEUE_VIDEO_DECODE_BIT_KHR）；无视频解码能力时为 uint.MaxValue。</summary>
     public uint VideoQueueFamilyIndex { get; }
 
+    /// <summary>图形渲染队列族索引（VK_QUEUE_GRAPHICS_BIT）；供 Vulkan 硬解 DPB 跨队列族并发共享。</summary>
+    public uint GraphicsQueueFamilyIndex { get; }
+
     /// <summary>GPU 设备能力（由工厂注入，纯内存快照）。</summary>
     public GpuDeviceCapabilities Capabilities { get; }
 
@@ -52,7 +55,8 @@ public sealed class RenderContext : IGpuDeviceContext
         object? sharedDevice = null,
         IntPtr contextHandle = default,
         object? sharedPhysicalDevice = null,
-        uint videoQueueFamilyIndex = uint.MaxValue)
+        uint videoQueueFamilyIndex = uint.MaxValue,
+        uint graphicsQueueFamilyIndex = uint.MaxValue)
     {
         GpuApiType = gpuApiType;
         Capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
@@ -61,6 +65,7 @@ public sealed class RenderContext : IGpuDeviceContext
         SharedDevice = sharedDevice;
         SharedPhysicalDevice = sharedPhysicalDevice;
         VideoQueueFamilyIndex = videoQueueFamilyIndex;
+        GraphicsQueueFamilyIndex = graphicsQueueFamilyIndex;
     }
 
     // ── IGpuDeviceContext 实现（接口契约，无真实 I/O）──
@@ -76,6 +81,9 @@ public sealed class RenderContext : IGpuDeviceContext
 
     /// <inheritdoc/>
     bool IGpuDeviceContext.IsInitialized => SharedDevice is not null;
+
+    /// <inheritdoc/>
+    uint IGpuDeviceContext.GraphicsQueueFamilyIndex => GraphicsQueueFamilyIndex;
 
     /// <inheritdoc/>
     Task IGpuDeviceContext.InitializeAsync(CancellationToken ct)

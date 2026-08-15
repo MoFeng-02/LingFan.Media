@@ -1,0 +1,144 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>VulkanVideoHardDecodeProbe</RootNamespace>
+		<AssemblyName>VulkanVideoHardDecodeProbe</AssemblyName>
+		<IsPackable>false</IsPackable>
+		<!-- Windows-only（Win32 HWND + WASAPI）：抑制 CA1416。
+		     路线 A：VulkanNative 零反射绑定替代了 Silk.NET 的 Vk/Khr* 运行期包装与 SilkMarshal，
+		     故「己方代码」来源的 IL2xxx 已彻底消除；Silk.NET.Vulkan 仍作数据结构（struct/enum/handle）复用，
+		     其基类型 Silk.NET.Core / SharpGen.Runtime 被 transitively 链接，ILC 全程序分析仍会将第三方反射方法
+		     判定为可达并报警，故在 TreatWarningsAsErrors=true 下这些必须抑制，否则 publish 直接失败。 -->
+		<NoWarn>CA1416;IL2067;IL2070;IL2072;IL2075;IL2080;IL2087;IL2091;IL3000;IL3002;IL3050</NoWarn>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+		<!-- 本探针是宿主/消费方工程：设置 PublishAot=true 以端到端验证
+		     LingFan.Media.Backends.VulkanVideo（VK_KHR_video_decode_h264 硬解）+
+		     LingFan.Media.Renderers.Vulkan（零拷贝上屏）在 NativeAOT 下的就绪度（0 IL2xxx 警告）。
+		     库项目本身绝不设置此开关。 -->
+		<PublishAot>true</PublishAot>
+	</PropertyGroup>
+
+	<!-- 路线 A：VulkanNative 零反射绑定替代了 Silk.NET 的 Vk/Khr* 运行期包装与 SilkMarshal，
+	     但 Silk.NET.Vulkan 数据类型的基类型仍 transitively 链接 Silk.NET.Core / SharpGen.Runtime，
+	     其 vtable 泛型成员可能在 trim 下被裁掉 → 运行期 MissingMethodException。
+	     根留这三程序集（与 FFmpeg/VLC/Vortice 探针同源配方）避免该风险。
+	     Silk.NET.Vulkan.Extensions.KHR 已被路线 A 移除（KHR 改由 VulkanNative 三阶段零反射解析），故不在此列。 -->
+	<ItemGroup>
+		<TrimmerRootAssembly Include="SharpGen.Runtime" />
+		<TrimmerRootAssembly Include="Silk.NET.Core" />
+		<TrimmerRootAssembly Include="Silk.NET.Vulkan" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 解码后端（按注册顺序参与运行时回退）：
+		     (1) VulkanVideo —— VK_KHR_video_decode_h264 硬解，产出 NV12 VkImage 与渲染器同设备 → 零拷贝上屏；
+		         仅 H.264，且要求共享 IGpuDeviceContext.VideoQueueFamilyIndex 有效（设备启用 video-decode 扩展）。
+		     (2) FFmpeg —— 解封装 + 音频解码 + 视频软解回退（VulkanVideo 不支持 VP9/AV1 或 GPU 无 video-decode 时）。 -->
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VulkanVideo\LingFan.Media.Backends.VulkanVideo.csproj" />
+		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
+		<!-- Vulkan 渲染器（契约层：仅引用 IVideoRendererFactory / IGpuDeviceContext，不越级）。 -->
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.Vulkan\LingFan.Media.Renderers.Vulkan.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+		<ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- 真实媒体资源（与测试工程同源） -->
+		<None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<!-- LGPL 合规关键步骤：把「合规的 ffmpeg 共享构建（BtbN lgpl-shared）」复制到输出目录，
+	     使 FFmpeg.AutoGen 的 DynamicallyLoaded 绑定在运行时从应用目录动态加载 avcodec-*.dll 等。
+	     - 动态链接（绝不静态合并 ffmpeg 进本程序集）；
+	     - FFmpegOptions.FFmpegLibraryPath 默认指向 AppContext.BaseDirectory（见 Program.cs AddFFmpeg 配置），
+	       用户可替换/升级这些 DLL 而不重编译本库。
+	     原生 DLL 来自 ThirdParty/ffmpeg/<解压目录>/bin，不入库（gitignore）。 -->
+	<ItemGroup>
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll"
+		      Link="%(Filename)%(Extension)"
+		      CopyToOutputDirectory="PreserveNewest"
+		      CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<!-- 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载，
+	     但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名，否则 AutoGen 加载失败。
+	     别名 = 去掉文件名末尾 -<数字>（如 avutil-60 → avutil）。
+	     AOT 发布关键：dotnet publish 不会自动把「构建期复制」的原生 ffmpeg DLL 带进 publish/，须显式复制到 $(PublishDir)。 -->
+	<Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
+		<ItemGroup>
+			<FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
+			<FFmpegDll>
+				<Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
+			</FFmpegDll>
+		</ItemGroup>
+		<!-- 构建输出（dotnet run / Debug） -->
+		<Copy SourceFiles="@(FFmpegDll)"
+		      DestinationFolder="$(OutDir)"
+		      SkipUnchangedFiles="true"
+		      Condition="'@(FFmpegDll)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)"
+		      DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')"
+		      SkipUnchangedFiles="true"
+		      Condition="'@(FFmpegDll)' != ''" />
+		<!-- 发布输出（dotnet publish / AOT）：显式补复制到 $(PublishDir) -->
+		<Copy SourceFiles="@(FFmpegDll)"
+		      DestinationFolder="$(PublishDir)"
+		      SkipUnchangedFiles="true"
+		      Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)"
+		      DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')"
+		      SkipUnchangedFiles="true"
+		      Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll->Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
+	</Target>
+
+	<!-- 原生 MoltenVK 库随 dotnet run / publish 一并复制进输出目录（仅 macOS/iOS / MoltenVK 平台）：
+	     VulkanNative 在 Apple 上经 NativeLibrary.SetDllImportResolver 把顶层 vulkan-1 重定向到
+	     libvulkan.1.dylib / libMoltenVK.dylib；这些库由 MoltenVK SDK 提供、不在系统 loader 路径，
+	     须由宿主打包到应用目录，否则运行期 DllNotFoundException。
+	     源：仓库根 ThirdParty/moltenvk/<版本>/lib/*.dylib（放 libMoltenVK.dylib；可选另装 Vulkan Loader 的 libvulkan.1.dylib）。
+	     NativeAOT 下 dotnet publish 不会自动携带构建期复制的原生 dylib，须显式复制到 $(PublishDir)。
+	     仅 Apple 构建触发；Windows/Linux 跳过（Vulkan loader 由系统/驱动提供，无需此库）。 -->
+	<ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib"
+		      Link="%(Filename)%(Extension)"
+		      CopyToOutputDirectory="PreserveNewest"
+		      CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish"
+	        Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<ItemGroup>
+			<MoltenVKDylib Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" />
+		</ItemGroup>
+		<!-- 构建输出（dotnet run / Debug） -->
+		<Copy SourceFiles="@(MoltenVKDylib)"
+		      DestinationFolder="$(OutDir)"
+		      SkipUnchangedFiles="true"
+		      Condition="'@(MoltenVKDylib)' != ''" />
+		<!-- 发布输出（dotnet publish / AOT） -->
+		<Copy SourceFiles="@(MoltenVKDylib)"
+		      DestinationFolder="$(PublishDir)"
+		      SkipUnchangedFiles="true"
+		      Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(MoltenVKDylib)' != ''"
+		         Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(MoltenVKDylib)' == ''"
+		         Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
+	</Target>
+
+</Project>

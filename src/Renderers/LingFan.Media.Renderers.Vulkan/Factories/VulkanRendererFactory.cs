@@ -159,6 +159,18 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     PpEnabledExtensionNames = (byte**)extPtr,
                 };
 
+                // ── 诊断：显式启用 Vulkan 验证层（仅当 LF_VULKAN_VALIDATION=1）──
+                // 比依赖 loader 的 VK_INSTANCE_LAYERS 环境变量可靠（本机 loader 未注入该层，
+                // 导致此前"零 VUID"为假象）。显式加入启用层列表，loader 必加载，
+                // 验证层默认将 VUID 报告到 stderr，供绿屏等硬解 bug 收口。默认不启用、零影响。
+                nint layerPtr = IntPtr.Zero;
+                if (Environment.GetEnvironmentVariable("LF_VULKAN_VALIDATION") == "1")
+                {
+                    layerPtr = VulkanNative.StringArrayToPtr(new[] { "VK_LAYER_KHRONOS_validation" });
+                    instInfo.EnabledLayerCount = 1;
+                    instInfo.PpEnabledLayerNames = (byte**)layerPtr;
+                }
+
                 // MoltenVK 要求实例创建时带 VK_KHR_portability_enumeration 标志，
                 // 否则 vkCreateInstance 返回 VK_ERROR_INCOMPATIBLE_DRIVER。
                 if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
@@ -174,6 +186,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 {
                     // CreateInstance 后立即释放扩展名字符串内存，不再需要保留
                     VulkanNative.FreeStringArrayPtr(extPtr);
+                    if (layerPtr != IntPtr.Zero) VulkanNative.FreeStringArrayPtr(layerPtr);
                 }
 
                 if (result != Result.Success)
@@ -380,7 +393,8 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     device,
                     IntPtr.Zero,
                     physicalDevice,
-                    _videoQueueFamilyIndex);
+                    _videoQueueFamilyIndex,
+                    graphicsQueueFamilyIndex: queueFamilyIndex);
             }
             catch
             {
@@ -571,6 +585,15 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
             AddIfAvailable("VK_EXT_metal_surface");
             AddIfAvailable("VK_KHR_portability_enumeration");
         }
+        // B4 Vulkan Video 硬解：实例级启用 VK_KHR_video_queue。
+        // 该扩展虽分类为 device extension，但 vkGetPhysicalDeviceVideoCapabilitiesKHR /
+        // vkGetPhysicalDeviceVideoFormatPropertiesKHR 是【实例级分派函数】（首参 VkPhysicalDevice），
+        // 规范要求其所在扩展在实例启用后方可正确调用（FFmpeg hwcontext_vulkan 亦在设备级启用，双保险）。
+        // 条件式过滤——缺失则静默跳过，不会令 vkCreateInstance 因 ErrorExtensionNotPresent 整体失败。
+        // 注：真正的 VU 硬约束在 VulkanVideoDecoder.CreateVideoSession 能力查询处——
+        // pCapabilities 的 pNext 链必须挂 VkVideoDecodeCapabilitiesKHR + VkVideoDecodeH264CapabilitiesKHR
+        // （VU 07183/07184），缺失则返回 VK_ERROR_INITIALIZATION_FAILED（此前真机崩溃根因）。
+        AddIfAvailable("VK_KHR_video_queue");
         return exts.ToArray();
     }
 

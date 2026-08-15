@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace LingFan.Media.Backends.VLCNative.Demuxer;
 
@@ -19,9 +22,9 @@ namespace LingFan.Media.Backends.VLCNative.Demuxer;
 /// <item>C 视频 cleanup 的 <c>opaque</c> 原生是 <c>void*</c>（按值）→ 声明 <c>IntPtr</c>。</item>
 /// </list>
 /// <para><b>帧戳策略</b>：音频 play 回调形参 pts 是 libvlc 绝对时钟域(µs)，弃用之，改按
-/// 「累计样本数 / 采样率」合成流内相对 PTS（与视频「帧计数 × 单帧时长」共用 _ptsBaseTicks 基准）。</para>
-/// <para>视频帧 PTS 用 CFR 合成（lock/unlock/display 不传帧 PTS，mediaPlayer.Time 在 unlock 取值失真）；
-/// VLC 内存回调不向回调传递帧 PTS，这是本后端固定采用的帧戳策略。</para>
+/// 「累计样本数 / 采样率」合成流内相对 PTS（与视频共用 _ptsBaseTicks 基准）。</para>
+/// <para>视频帧 PTS：VLC 内存回调不向回调传递帧 PTS、mediaPlayer.Time 在 unlock 取值失真，
+/// 故以播放起始墙钟为锚、按真实投递时刻合成并对齐帧最小间距（CFR 抖动/突发下跟随主时钟，消除落后丢帧）。</para>
 /// <para><b>AOT 兼容</b>：sealed 类；12 个回调委托存字段防 GC；句柄用 nint；无反射。</para>
 /// </remarks>
 internal sealed class VLCNativeDemuxer : IMediaDemuxer
@@ -36,7 +39,8 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     private IMediaStream? _sourceStream; // 仅地址式打开时持有，Close 时关闭
 
     // 帧交付 Channel
-    private readonly Channel<MediaPacket> _frameChannel;
+    private readonly Channel<MediaPacket> _videoChannel;
+    private readonly Channel<MediaPacket> _audioChannel;
 
     // 视频回调委托（存字段防 GC 回收）
     private readonly LibVlcTypes.VideoFormatCb _videoFormatCb;
@@ -60,8 +64,12 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     private int _videoHeight;
     private int _videoPitch;
     private int _videoTrackIndex = -1;
-    private long _videoFrameCounter;
     private long _videoFrameDurationTicks;
+    // 视频 PTS 合成（修复软解抖动丢帧）：以播放起始墙钟为锚、按真实投递时刻合成 PTS，
+    // 并对齐帧最小间距，使 PTS 在抖动/突发下跟随主时钟、消除「落后丢帧」，保留正确帧序与间距。
+    private bool _videoPtsAnchorStarted;
+    private long _videoPtsAnchorTimestamp;
+    private long _lastVideoPtsTicks;
 
     // 音频格式
     private int _audioSampleRate;
@@ -70,6 +78,15 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     private SampleFormat _audioSampleFormat = SampleFormat.S16;
     private int _audioTrackIndex = -1;
     private long _audioSampleCounter;
+
+    // 音频抖动缓冲（治本修复 VLC amem 突发投递→WASAPI 渲染欠载）：
+    // 生产者 OnAudioPlay 入队；专用释放线程按「共享通道水位」维持稳定释放到共享通道，
+    // 突发被缓冲吸收、停产被缓冲覆盖，WASAPI 得连续供给、消除间隙。后端内作用域，不影响 MF/FFmpeg。
+    private readonly ConcurrentQueue<MediaPacket> _audioJitter = new();
+    private const int AudioJitterMaxPackets = 2000; // ~40s@44.1k 上限，防失控增长
+    private CancellationTokenSource? _audioReleaseCts;
+    private Task? _audioReleaseTask;
+    private readonly object _audioReleaseLock = new();
 
     // 格式协商回调触发标志：作为「视频/音频轨确实存在」的权威信号，
     // 弥补播放前 tracks_get 漏列视频轨的缺陷（详见 BuildTracksAfterPlayback）。
@@ -93,8 +110,17 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-        _frameChannel = Channel.CreateBounded<MediaPacket>(
-            new BoundedChannelOptions(64)
+        // 视频(可丢)与音频(不可丢)分走独立有界通道：音频绝不被视频的 DropOldest 误删，
+        // 这是消除 VLC 音频间隙的根本修复（此前共享单通道时视频突发会把队首音频挤掉）。
+        _videoChannel = Channel.CreateBounded<MediaPacket>(
+            new BoundedChannelOptions(96)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false
+            });
+        _audioChannel = Channel.CreateBounded<MediaPacket>(
+            new BoundedChannelOptions(256)
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,
@@ -270,10 +296,20 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
 
         ct.ThrowIfCancellationRequested();
 
-        if (await _frameChannel.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
+        // 合并两独立通道：优先音频（不可丢，避免被视频淹没），两者皆空则等待任一可读。
+        while (!ct.IsCancellationRequested)
         {
-            if (_frameChannel.Reader.TryRead(out var packet))
-                return packet;
+            if (_audioChannel.Reader.TryPeek(out _))
+                return _audioChannel.Reader.TryRead(out var ap) ? ap : null;
+            if (_videoChannel.Reader.TryPeek(out _))
+                return _videoChannel.Reader.TryRead(out var vp) ? vp : null;
+
+            if (_audioChannel.Reader.Completion.IsCompleted && _videoChannel.Reader.Completion.IsCompleted)
+                return null;
+
+            var audioWait = _audioChannel.Reader.WaitToReadAsync(ct).AsTask();
+            var videoWait = _videoChannel.Reader.WaitToReadAsync(ct).AsTask();
+            await Task.WhenAny(audioWait, videoWait).ConfigureAwait(false);
         }
 
         return null;
@@ -293,8 +329,9 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         {
             // 时间轴重定位：先置基准再 set_time，使 seek 后新帧接在正确时间轴上（flush 触发新帧回调）。
             _ptsBaseTicks = position.Ticks;
-            _videoFrameCounter = 0;
+            _videoPtsAnchorStarted = false;
             _audioSampleCounter = 0;
+            RestartAudioRelease(); // 重置音频释放实时速率锚点，避免 seek 后 PTS 时序错位
             LibVlcNative.libvlc_media_player_set_time(_mediaPlayer, (long)position.TotalMilliseconds);
             return true;
         }, ct).ConfigureAwait(false);
@@ -306,6 +343,14 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         if (!_opened) return;
         _opened = false;
 
+        // 取消音频释放线程并等待排空（避免与 VLC 回调并发写通道）
+        try { _audioReleaseCts?.Cancel(); } catch { }
+        try { _audioReleaseTask?.Wait(TimeSpan.FromMilliseconds(500)); } catch { }
+        try { _audioReleaseCts?.Dispose(); } catch { }
+        _audioReleaseCts = null;
+        _audioReleaseTask = null;
+        while (_audioJitter.TryDequeue(out var p)) p.Dispose();
+
         if (_mediaPlayer != IntPtr.Zero)
         {
             try { LibVlcNative.libvlc_media_player_stop(_mediaPlayer); }
@@ -315,7 +360,8 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
             }
         }
 
-        _frameChannel.Writer.TryComplete();
+        _videoChannel.Writer.TryComplete();
+        _audioChannel.Writer.TryComplete();
 
         _sourceStream?.Close();
 
@@ -372,7 +418,8 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         _videoWidth = (int)w;
         _videoHeight = (int)h;
         _videoPitch = (int)pitch;
-        _videoFrameCounter = 0; // 新格式/新流起点：重置 PTS 合成计数
+        _videoPtsAnchorStarted = false; // 新格式/新流起点：重置 PTS 墙钟锚点
+        RestartAudioRelease(); // 同步重置音频释放实时速率锚点（同生命周期）
 
         if (_videoBuffer != IntPtr.Zero)
             Marshal.FreeHGlobal(_videoBuffer);
@@ -405,10 +452,25 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         byte[] data = new byte[dataSize];
         Marshal.Copy(_videoBuffer, data, 0, dataSize);
 
-        // 视频帧 PTS 用「帧计数 × 单帧时长」合成流内相对 PTS（CFR 近似），自 _ptsBaseTicks 起。
-        // 关键：VLC 内存回调不向回调传递帧 PTS；mediaPlayer.Time 在 unlock 取值不可靠（抖动致帧戳失真、卡顿）。
-        var pts = TimeSpan.FromTicks(_ptsBaseTicks + _videoFrameCounter * _videoFrameDurationTicks);
-        _videoFrameCounter++;
+        // 视频帧 PTS：原纯 CFR 计数（frame_counter × 单帧时长）不跟真实时钟对齐，
+        // VLC 软解经 libvlc 回调突发/抖动投递时，帧实际到达墙钟常落后合成 PTS 超过 DropThreshold
+        // → 被 Synchronizer 判「严重落后」丢弃（MF/FFmpeg 平稳投递故 0 丢）。
+        // 改为以播放起始墙钟为锚、按真实投递时刻合成 PTS，并对齐帧最小间距：
+        //   突发（preroll 多帧同刻到达）→ 取「上一 PTS + 单帧时长」保持正确帧序与间距；
+        //   平稳/抖动迟到 → 取「墙钟时刻」使 PTS 跟随主时钟、消除落后丢帧。
+        if (!_videoPtsAnchorStarted)
+        {
+            _videoPtsAnchorStarted = true;
+            _videoPtsAnchorTimestamp = Stopwatch.GetTimestamp();
+            _lastVideoPtsTicks = _ptsBaseTicks;
+        }
+        long elapsedTicks = Stopwatch.GetElapsedTime(_videoPtsAnchorTimestamp).Ticks;
+        long candidateTicks = _ptsBaseTicks + elapsedTicks;
+        long ptsTicks = candidateTicks > _lastVideoPtsTicks + _videoFrameDurationTicks
+            ? candidateTicks
+            : _lastVideoPtsTicks + _videoFrameDurationTicks;
+        _lastVideoPtsTicks = ptsTicks;
+        var pts = TimeSpan.FromTicks(ptsTicks);
 
         var packet = new MediaPacket(
             _videoTrackIndex, data,
@@ -416,7 +478,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
             TimeSpan.Zero, keyFrame: true,
             width: _videoWidth, height: _videoHeight, stride: _videoPitch);
 
-        _frameChannel.Writer.TryWrite(packet);
+        _videoChannel.Writer.TryWrite(packet);
     }
 
     // display 回调：帧已在 OnVideoUnlock 交付通道，此处无需动作（勿在 VLC 回调线程上 sleep）。
@@ -448,16 +510,20 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     // 选择性出队：仅丢弃音频包，保留视频包（flush 时音频需清空，视频帧保留）。
     private void OnAudioFlush(IntPtr data, long pts)
     {
-        var videoPackets = new List<MediaPacket>(capacity: 4);
-        while (_frameChannel.Reader.TryRead(out var packet))
-        {
-            if (packet.TrackIndex == _audioTrackIndex)
-                packet.Dispose();
-            else
-                videoPackets.Add(packet);
-        }
-        foreach (var f in videoPackets)
-            _frameChannel.Writer.TryWrite(f);
+        // 诊断（排查剩余音频间隙 H2 假设）：正常播放中途若触发，说明 VLC 主动丢弃已解码音频，
+        // 会清空抖动缓冲与通道内音频、造成真实断音。若重跑仍见间隙且此日志在 ~1.5s 出现，则根因是 VLC flush 而非节流。
+        int cleared = 0;
+        while (_audioJitter.TryDequeue(out var stale)) { stale.Dispose(); cleared++; }
+        if (cleared > 0)
+            _logger.LogWarning("[VLC-AUDIO] OnAudioFlush 触发：抖动缓冲清空 {Count} 包（排查中途断音 H2 假设）", cleared);
+        else
+            _logger.LogDebug("[VLC-AUDIO] OnAudioFlush 触发：抖动缓冲已空（seek/启动常规路径）");
+        // 清空音频通道内滞留音频：flush 后旧音频不可再释放，避免 seek 后串音。
+        // 音频已独立通道，不会被视频 DropOldest 误删；视频通道不干预（保持原语义：仅清音频，视频帧后续自然接续）。
+        int audioCleared = 0;
+        while (_audioChannel.Reader.TryRead(out var staleAudio)) { staleAudio.Dispose(); audioCleared++; }
+        if (audioCleared > 0)
+            _logger.LogDebug("[VLC-AUDIO] OnAudioFlush 已丢弃通道内滞留音频 {Count} 包", audioCleared);
     }
 
     private void OnAudioDrain(IntPtr data) { }
@@ -483,7 +549,67 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
             TimeSpan.Zero, keyFrame: true,
             sampleRate: _audioSampleRate, channels: _audioChannels, format: _audioSampleFormat);
 
-        _frameChannel.Writer.TryWrite(packet);
+        // 入队抖动缓冲（生产者）：释放线程按实时速率稳定释放到共享通道，吸收 VLC amem 突发投递，
+        // 消除 WASAPI 渲染侧欠载间隙。超上限丢弃最旧音频（瞬断劣于长卡，防失控增长）。
+        while (_audioJitter.Count >= AudioJitterMaxPackets && _audioJitter.TryDequeue(out var old)) old.Dispose();
+        _audioJitter.Enqueue(packet);
+        EnsureAudioReleaseStarted();
+    }
+
+    // 启动音频释放线程（首次 OnAudioPlay 懒启动并锁保护；已运行则幂等返回）。
+    private void EnsureAudioReleaseStarted()
+    {
+        if (_audioReleaseTask is { IsCompleted: false }) return;
+        lock (_audioReleaseLock)
+        {
+            if (_audioReleaseTask is { IsCompleted: false }) return;
+            RestartAudioRelease();
+        }
+    }
+
+    // 取消旧释放线程、清空缓冲、启动新线程（格式变更/Seek 时调用，重置释放状态）。
+    private void RestartAudioRelease()
+    {
+        try { _audioReleaseCts?.Cancel(); } catch { }
+        try { _audioReleaseCts?.Dispose(); } catch { }
+        _audioReleaseCts = null;
+        _audioReleaseTask = null;
+        while (_audioJitter.TryDequeue(out var p)) p.Dispose();
+
+        _audioReleaseCts = new CancellationTokenSource();
+        var ct = _audioReleaseCts.Token;
+        _audioReleaseTask = Task.Run(() => AudioReleaseLoop(ct), ct);
+    }
+
+    // 音频释放循环（治本修复 VLC amem 突发/停产→WASAPI 欠载）：
+    // 抖动缓冲在生产者侧吸收 VLC 突发/停产；释放侧把音频写入独立的 _audioChannel。
+    // 音频与视频分走独立通道后，视频的 DropOldest 再也无法误删队首音频，故释放侧无条件写入即可，
+    // 无需 HighWater 节流（早期共享单通道时那样做反而让位视频、饿死音频，制造 462ms 间隙）。
+    // 音频通道仅承载音频、几乎不溢出；通道暂满时 DropOldest 仅丢最旧音频（偶发微疵），不阻塞释放线程。
+    // 后端内作用域，不影响 MF/FFmpeg。
+    private async Task AudioReleaseLoop(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (_audioJitter.TryDequeue(out var pkt))
+                {
+                    // 无条件写入独立音频通道：该通道仅承载音频，DropOldest 仅丢最旧音频（偶发微疵），
+                    // 视频突发绝不再能挤掉音频；抖动缓冲继续在生产者侧吸收后续音频。
+                    await _audioChannel.Writer.WriteAsync(pkt, ct);
+                }
+                else
+                {
+                    await Task.Delay(2, ct); // 缓冲暂空：短暂让出，等待生产者
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            while (_audioJitter.TryDequeue(out var leftover)) leftover.Dispose();
+        }
     }
 
     // ── 辅助方法 ──
