@@ -10,7 +10,7 @@ namespace LingFan.Media.GPUShare.D3D11;
 /// 取「默认 D3D11 适配器」LUID（8 字节），用于对齐 Vulkan 物理设备选择到零拷贝共享纹理所在 GPU。
 /// </summary>
 /// <remarks>
-/// <para>以与 ffmpeg 零拷贝分支（<c>FFmpegVideoDecoder</c> 分支 237）完全相同的
+/// <para>以与 <c>FFmpegVideoDecoder</c> 的 D3D11VA 路径完全相同的
 /// <c>D3D11CreateDevice(DriverType.Hardware, BgraSupport)</c> 创建一次性 D3D11 设备
 /// （不指定适配器 → 默认适配器，即 D3D11VA 共享纹理所在 GPU），
 /// 经 <c>IDXGIDevice</c> 查其所属适配器，返回 <see cref="AdapterDescription1.Luid"/> 的 8 字节小端表示。</para>
@@ -34,7 +34,7 @@ public static class D3D11AdapterLuid
     {
         try
         {
-            // 与 FFmpegVideoDecoder 分支 237 同构：D3D11CreateDevice(DriverType.Hardware) 不指定适配器
+            // 与 FFmpegVideoDecoder 的 D3D11VA 路径同构：D3D11CreateDevice(DriverType.Hardware) 不指定适配器
             // → 默认适配器，正是 D3D11VA 共享纹理（NV12→RGBA 转换器）所在 GPU。
             // 注：当前命名空间 LingFan.Media.GPUShare.D3D11 与 Vortice 的静态类 Vortice.Direct3D11.D3D11
             // 重名，须用完全限定名避免被解析为当前命名空间成员。

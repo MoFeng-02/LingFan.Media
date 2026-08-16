@@ -16,7 +16,7 @@ namespace LingFan.Media.Backends.Apple.Demuxer;
 /// <para><b>关键帧判定</b>：<c>kCMSampleAttachmentKey_NotSync</c> 标记非同步帧（与 FFmpeg / Mozilla 判定一致）。</para>
 /// <para><b>定位（Seek）</b>：AVAssetReader 不支持在读过程中改 timeRange，故 Seek 重建 Reader（保留 asset 与轨道句柄），
 /// 经 <c>setTimeRange:</c> 设定 <c>[position, +∞)</c> 后重新 startReading。</para>
-/// <para><b>异步策略</b>（与 MFBackend / D1 对称）：<see cref="OpenAsync"/> 混合 <c>await stream.ConnectAsync</c> +
+/// <para><b>异步策略</b>（与 MFBackend 对称）：<see cref="OpenAsync"/> 混合 <c>await stream.ConnectAsync</c> +
 /// <c>Task.Run</c> 伪异步；<see cref="ReadPacketAsync"/> / <see cref="SeekAsync"/> 经 <c>Task.Run</c> 卸载同步原生调用；
 /// <see cref="Close"/> / <see cref="Dispose"/> 同步原生释放。</para>
 /// <para><b>仅 Apple 可用</b>：非 Apple 运行时 OpenAsync 抛 <see cref="PlatformNotSupportedException"/>。</para>

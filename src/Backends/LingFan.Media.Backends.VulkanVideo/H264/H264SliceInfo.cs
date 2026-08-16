@@ -156,7 +156,7 @@ internal static unsafe class H264SliceInfo
         picInfo.PicOrderCnt[0] = sps.PicOrderCntType == 0 ? picOrderCntLsb : deltaPicOrderCnt0;
         picInfo.PicOrderCnt[1] = sps.PicOrderCntType == 1 ? deltaPicOrderCnt1 : 0;
 
-        // ⚠️ 规范表（VK_KHR_video_decode_h264）：StdVideoDecodeH264ReferenceInfo 的场标志按此判定——
+        // 规范表（VK_KHR_video_decode_h264）：StdVideoDecodeH264ReferenceInfo 的场标志按此判定——
         // 渐进帧(field_pic_flag=0)=帧 → top/bottom 均为 0；隔行帧按 bottom_field_flag 设顶场(1,0)/底场(0,1)。
         // 旧 NVIDIA 驱动 bug 曾要求渐进帧 top=1，现已废弃；按现规范置 0 才符合"frame"语义，亦避免 validation 层抱怨。
         if (fieldPicFlag == 0)

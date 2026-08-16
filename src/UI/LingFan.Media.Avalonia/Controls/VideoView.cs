@@ -124,7 +124,7 @@ public sealed class VideoView : Control, IRenderTarget
     /// 宿主注入的 DI 服务容器。供 VideoView 解析已注册的 <see cref="IVideoRendererFactory"/>
     /// （如 D3D11RendererFactory 等 GPU 渲染器工厂）。未注入时直接兜底到内置
     /// <see cref="SkiaVideoRenderer"/>。VideoView 不引用具体 GPU 项目，仅通过 IVideoRendererFactory
-    /// 抽象消费，符合依赖倒置（D1 方案 B）。
+    /// 抽象消费，符合依赖倒置（抽象层消费模式）。
     /// </summary>
     public IServiceProvider? Services
     {

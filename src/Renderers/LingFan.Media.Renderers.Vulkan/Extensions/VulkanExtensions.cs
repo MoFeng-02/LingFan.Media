@@ -26,8 +26,8 @@ public static class VulkanExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        // 零拷贝跨 GPU 对齐：按构建期硬解开关默认开启（EnableHardwareDecode 默认 true，
-        // 等价于探针 --hw 默认行为）。硬件解码关闭时回落「独显优先」启发式，纯 Vulkan 渲染性能最优。
+        // 零拷贝跨 GPU 对齐：按构建期硬解开关默认开启（EnableHardwareDecode 默认 true）。
+        // 硬件解码开启时 D3D11VA 共享纹理存在，须对齐到其所在 GPU；关闭时回落「独显优先」启发式。
         bool alignToD3D11 = builder.Options.EnableHardwareDecode;
         builder.Services.AddSingleton<VulkanRendererFactory>(sp =>
         {

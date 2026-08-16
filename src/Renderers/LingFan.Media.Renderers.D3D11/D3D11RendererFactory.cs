@@ -8,7 +8,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂。持有共享的 <c>ID3D11Device</c> + <c>ID3D11DeviceContext</c>，
 /// <see cref="Create"/> 返回<b>缓存单例</b> <see cref="D3D11Renderer"/>（共享 GPU Device 与唯一 SwapChain）。</para>
-/// <para><b>方案 A</b>：缓存单例消除"双实例/双 SwapChain"——同一工厂多次 <see cref="Create"/>
+/// <para><b>缓存单例模式</b>：缓存单例消除"双实例/双 SwapChain"——同一工厂多次 <see cref="Create"/>
 /// 返回同一渲染器实例。Core 管线（<see cref="VideoPipeline"/>）与 UI 层（D3D11GpuPresenter）
 /// 通过同一工厂解析到同一渲染器，UI 层 Attach(HWND) 后管线 Present 即命中已附着实例，视频帧真正经 GPU 呈现。</para>
 /// <para><b>单 HWND 限制</b>：单例渲染器一次仅能附加到<b>一个</b> HWND。同一应用内多个 VideoView 同时走 D3D11
@@ -28,7 +28,7 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
     private readonly object _singletonLock = new();
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
-    // 方案 A：缓存单例渲染器——同一工厂的多次 Create 返回同一实例。
+    // 缓存单例模式：缓存单例渲染器——同一工厂的多次 Create 返回同一实例。
     private D3D11Renderer? _singleton;
     private RenderContext? _renderContext;
     private bool _disposed;
@@ -53,7 +53,7 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
         EnsureDeviceCreated();
         lock (_singletonLock)
         {
-            // 方案 A：缓存单例。已释放则重建（共享设备仍复用），避免复用已释放的 SwapChain。
+            // 缓存单例模式：缓存单例。已释放则重建（共享设备仍复用），避免复用已释放的 SwapChain。
             if (_singleton is null || _singleton.IsDisposed)
             {
                 _singleton = new D3D11Renderer(_device!, _context!, _loggerFactory.CreateLogger<D3D11Renderer>());

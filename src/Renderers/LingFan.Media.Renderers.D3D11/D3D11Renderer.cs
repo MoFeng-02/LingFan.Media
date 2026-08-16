@@ -19,7 +19,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>。
 /// D3D11 GPU 释放为快速同步 COM 调用，无 I/O 可 await，非伪异步。</item>
 /// </list>
-/// <para><b>线程安全（方案 A 修复）</b>：内部 <c>_gate</c> 锁串行化 Attach/Detach/Present/Clear/Dispose，
+/// <para><b>线程安全（_gate 锁串行化）</b>：内部 <c>_gate</c> 锁串行化 Attach/Detach/Present/Clear/Dispose，
 /// 可安全应对<b>管线线程 Present</b> 与 <b>UI 线程 Resize/Detach</b> 的并发竞态
 /// （D3D11GpuPresenter 的 <c>_rendererLock</c> 与 Core VideoPipeline 的 Present 均汇聚到本锁）。
 /// 单例渲染器被 UI 与 Core 管线共享时，本锁是唯一的跨调用方序列化点。</para>
@@ -84,7 +84,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
 
     /// <summary>
     /// 串行化所有原生方法（Attach/Detach/Present/Clear/Dispose），化解管线线程 Present 与
-    /// UI 线程 Resize/Detach 的并发原生竞态（方案 A）。普通 <see langword="lock"/>，同线程可重入。
+    /// UI 线程 Resize/Detach 的并发原生竞态（_gate 锁）。普通 <see langword="lock"/>，同线程可重入。
     /// </summary>
     private readonly object _gate = new();
 
@@ -102,7 +102,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     }
 
     /// <summary>
-    /// 是否已释放。供工厂判断缓存单例是否需要重建（方案 A 单例安全复用）。
+    /// 是否已释放。供工厂判断缓存单例是否需要重建（缓存单例安全复用）。
     /// </summary>
     internal bool IsDisposed => _disposed;
 

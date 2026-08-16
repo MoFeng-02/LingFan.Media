@@ -510,12 +510,12 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     // 选择性出队：仅丢弃音频包，保留视频包（flush 时音频需清空，视频帧保留）。
     private void OnAudioFlush(IntPtr data, long pts)
     {
-        // 诊断（排查剩余音频间隙 H2 假设）：正常播放中途若触发，说明 VLC 主动丢弃已解码音频，
-        // 会清空抖动缓冲与通道内音频、造成真实断音。若重跑仍见间隙且此日志在 ~1.5s 出现，则根因是 VLC flush 而非节流。
+        // 诊断（定位剩余音频间隙根因）：正常播放中途若触发，说明 VLC 主动丢弃已解码音频，
+        // 会清空抖动缓冲与通道内音频、造成真实断音。若重跑仍见间隙且此日志在起播阶段出现，则根因是 VLC flush 而非节流。
         int cleared = 0;
         while (_audioJitter.TryDequeue(out var stale)) { stale.Dispose(); cleared++; }
         if (cleared > 0)
-            _logger.LogWarning("[VLC-AUDIO] OnAudioFlush 触发：抖动缓冲清空 {Count} 包（排查中途断音 H2 假设）", cleared);
+            _logger.LogWarning("[VLC-AUDIO] OnAudioFlush 触发：抖动缓冲清空 {Count} 包（中途断音诊断）", cleared);
         else
             _logger.LogDebug("[VLC-AUDIO] OnAudioFlush 触发：抖动缓冲已空（seek/启动常规路径）");
         // 清空音频通道内滞留音频：flush 后旧音频不可再释放，避免 seek 后串音。

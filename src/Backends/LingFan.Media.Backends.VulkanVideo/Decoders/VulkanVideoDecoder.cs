@@ -372,7 +372,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         VideoDecodeH264SessionParametersCreateInfoKHR h264Params;
         h264Params.SType = StructureType.VideoDecodeH264SessionParametersCreateInfoKhr;
         h264Params.PNext = null;
-        // ⚠️ 规范 VU 04782（VK_KHR_video_decode_h264）：本创建信息须为 SPS/PPS 预留容量，
+        // 规范 VU 04782（VK_KHR_video_decode_h264）：本创建信息须为 SPS/PPS 预留容量，
         // maxStdSpsCount / maxStdPpsCount 必须 >= pParametersAddInfo 中实际条数（此处各 1）。
         // 漏设则默认 0 → 驱动静默丢弃 SPS/PPS（CreateVideoSessionParametersKHR 仍返回 Success），
         // 解码器无任何参数集 → 静默产出全零 NV12 DPB → 恒绿（绿屏根因，此前被"验证层未加载"假象掩盖）。
@@ -913,7 +913,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
             FillRefSlot(ref beginSlots[i], _references[i], ref beginResources[i], &beginDpbInfos[i]);
         }
 
-        // ⚠️ 规范铁律（VK_KHR_video_queue + 官方 H.264 解码样板）：本版 VkVideoBeginCodingInfoKHR
+        // 规范铁律（VK_KHR_video_queue + 官方 H.264 解码样板）：本版 VkVideoBeginCodingInfoKHR
         // 无 pSetupReferenceSlot 字段，setup 槽须出现在 pReferenceSlots 中，但须以 slotIndex=-1 标记
         // （表示该图本帧作为重建目标、尚未关联 DPB 槽，由解码命令随后关联）。若用真实输出槽索引
         // （+值）则驱动误判该空槽为“已激活参考”→ 首帧（无参考）即触发 VU、驱动静默拒绝写入 DPB
@@ -957,7 +957,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
 
         VideoDecodeInfoKHR decodeInfo;
         decodeInfo.SType = StructureType.VideoDecodeInfoKhr;
-        // ⚠️ 规范铁律（VK_KHR_video_decode_h264）：解码命令的 H.264 图片信息
+        // 规范铁律（VK_KHR_video_decode_h264）：解码命令的 H.264 图片信息
         // （pStdPictureInfo / SliceCount / pSliceOffsets——即真正要解码的切片）必须挂在
         // VkVideoDecodeInfoKHR.PNext 链上。VkVideoDecodeInfoKHR 无对应内嵌字段，PNext=null 时
         // vkCmdDecodeVideoKHR 收不到任何切片偏移与图片参数 → 静默产出全零 DPB → 恒绿（绿屏根因）。
@@ -1055,7 +1055,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         ref VideoPictureResourceInfoKHR resource, VideoDecodeH264DpbSlotInfoKHR* pDpbSlotInfo)
     {
         slot.SType = StructureType.VideoReferenceSlotInfoKhr;
-        // ⚠️ 规范铁律（VK_KHR_video_decode_h264 4.5/4.9 节）：setup 槽（重建帧）与 active 参考槽的
+        // 规范铁律（VK_KHR_video_decode_h264 4.5/4.9 节）：setup 槽（重建帧）与 active 参考槽的
         // VkVideoReferenceSlotInfoKHR 必须经 pNext 链 VkVideoDecodeH264DpbSlotInfoKHR 携带
         // StdVideoDecodeH264ReferenceInfo；Silk.NET 2.23.0 的 VideoReferenceSlotInfoKHR 无 PStdReferenceInfo 直接字段。
         // pNext 链缺失时解码器对重建帧无参考信息 → 静默不落盘 → 全零 DPB → 恒绿（绿屏根因）。

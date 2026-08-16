@@ -20,7 +20,7 @@ namespace LingFan.Media.Presenters.D3D11;
 /// <para><b>线程安全</b>：Present（管线线程）与 Resize/Dispose/Initialize（UI 线程）通过 _rendererLock 互斥，
 /// 防止 Detach 释放 SwapChain 与 Present 使用 SwapChain 原生竞态。<see cref="D3D11Renderer"/> 内部亦以
 /// <c>_gate</c> 锁串行化所有原生方法，是跨调用方（Core 管线 + UI Presenter）的最终序列化点。</para>
-/// <para><b>生命周期（方案 A）</b>：<see cref="IVideoRenderer"/> 为 <see cref="D3D11RendererFactory"/> 的缓存单例
+/// <para><b>生命周期（缓存单例）</b>：<see cref="IVideoRenderer"/> 为 <see cref="D3D11RendererFactory"/> 的缓存单例
 /// （Core 管线与 UI Presenter 共享同一实例）。本 Presenter 仅负责 Attach/Detach（管理 SwapChain 与 HWND 的绑定），
 /// <b>不 Dispose 共享单例</b>——释放交由工厂在应用关闭（或播放器释放后重建）时处理。Attach 失败时仅置空引用，
 /// 由 UI 层捕获并降级到 SkiaVideoPresenter。</para>
@@ -70,7 +70,7 @@ public sealed class D3D11GpuPresenter : IGpuPresenter
         _height = target.Height;
         _scale = target.Scale;
 
-        // 方案 A：工厂返回缓存单例渲染器（共享，非本 Presenter 私有）。Attach 失败时必须
+        // 缓存单例模式：工厂返回缓存单例渲染器（共享，非本 Presenter 私有）。Attach 失败时必须
         // 不能 Dispose 共享单例（会殃及 Core 管线持有的同一实例）。D3D11Renderer.Attach 内部已通过
         // try-catch 清理部分创建的 Session 级 COM 资源，渲染器处于干净的未附加状态，可安全复用。
         // 此处仅置空引用并向上抛出，由 UI 层（VideoView）捕获后降级到 SkiaVideoPresenter。
@@ -148,7 +148,7 @@ public sealed class D3D11GpuPresenter : IGpuPresenter
         {
             if (_renderer is not null)
             {
-                // 方案 A：共享单例渲染器由工厂在应用关闭（或播放器释放后重建）时 Dispose。
+                // 缓存单例模式：共享单例渲染器由工厂在应用关闭（或播放器释放后重建）时 Dispose。
                 // 此处仅 Detach 释放本 HWND 的 SwapChain（Session 级资源），不 Dispose 共享实例，
                 // 否则会殃及 Core 管线持有的同一渲染器实例。
                 _renderer.Detach();

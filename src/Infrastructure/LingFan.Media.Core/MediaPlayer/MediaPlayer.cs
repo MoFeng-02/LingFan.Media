@@ -721,7 +721,7 @@ public sealed class MediaPlayer : IMediaPlayer
             try { _audioDecoder?.Dispose(); } catch { }
             try { _subtitleDecoder?.Dispose(); } catch { }
             // 注意：共享单例渲染器（D3D11RendererFactory 缓存单例）不在此处置——
-            // 其生命周期归工厂，SwapChain 由 UI Presenter.Detach 释放（方案 A）。
+            // 其生命周期归工厂，SwapChain 由 UI Presenter.Detach 释放（缓存单例模式）。
             try { _audioOutput?.Dispose(); } catch { }
             try { _demuxer?.Close(); } catch { }
             try { _demuxer?.Dispose(); } catch { }
@@ -1007,7 +1007,7 @@ public sealed class MediaPlayer : IMediaPlayer
         try { _videoDecoder?.Dispose(); } catch { }
         try { _audioDecoder?.Dispose(); } catch { }
         try { _subtitleDecoder?.Dispose(); } catch { }
-        // 共享单例渲染器不在此处置（生命周期归工厂，SwapChain 由 UI Presenter.Detach）——方案 A。
+        // 共享单例渲染器不在此处置（生命周期归工厂，SwapChain 由 UI Presenter.Detach）——缓存单例模式。
         try { _audioOutput?.Dispose(); } catch { }
         try { _videoFramePool?.Dispose(); } catch { }
         try { _audioFramePool?.Dispose(); } catch { }

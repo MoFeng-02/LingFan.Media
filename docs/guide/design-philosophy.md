@@ -14,6 +14,21 @@ The library must publish as a NativeAOT binary with zero trim/analyze warnings.
 - **`[LibraryImport]`, never `[DllImport]`** — P/Invoke uses source-generated marshalling (`[LibraryImport]`), the only AOT-correct static P/Invoke. `[DllImport]` relies on a runtime reflection-based marshaller and is banned.
 - **Sealed types, `ValueTask` hot paths, compile-time-known types.**
 
+### Current limitations
+
+The codebase itself is written to be fully AOT-correct — no reflection, `[LibraryImport]`, sealed types, compile-time-known types. The principal residual friction comes from **third-party GPU interop libraries** (the Vortice / SharpGen-generated Direct3D bindings) that rely on generated, reflection-based marshalling and therefore emit trim/analyze warnings under `PublishAot`.
+
+Today this is *contained, not eliminated*, through:
+
+- `TrimmerRootAssembly` entries that keep those bindings from being aggressively trimmed, and
+- targeted `NoWarn` suppressions for the known IL2xxx analyzer IDs they raise.
+
+This keeps the published binary fully functional and AOT-publishable; the warnings are suppressed at the toolchain level rather than removed at the source.
+
+The planned direction is to **gradually replace the reflection-based binding surface with native dynamic interop** — explicit vtable dispatch over raw function pointers (already the model used for all our COM/P/Invoke boundaries). As more of the third-party surface is brought under that model, the root-assembly shims and warning suppressions can be retired, reaching zero trim/analyze warnings without suppression.
+
+Net: the limitation is known and understood, does not block AOT publishing, and is on a clear removal path.
+
 ## 3. Backend-replaceable
 
 FFmpeg / VLC / MediaFoundation are interoperable and independently selectable. Your application code never names a backend.

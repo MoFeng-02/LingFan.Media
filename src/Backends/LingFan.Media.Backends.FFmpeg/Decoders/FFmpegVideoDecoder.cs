@@ -45,13 +45,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     // D3D11VA NV12 硬解帧 → RGBA32 的 GPU 转换器（位于中性互操作模块 LingFan.Media.GPUShare.D3D11）。
     // 仅 GPU 零拷贝路径（Windows）使用；其持有的共享设备包装不 Dispose（见转换器注释）。
     private LingFan.Media.GPUShare.D3D11.D3D11Nv12ToRgbaConverter? _nv12ToRgbaConverter;
-    // D3D11VA 所用 D3D11 设备（分支 215=渲染器共享设备；分支 237=ffmpeg 自有设备）。
-    // 分支 237 零拷贝：渲染器为 GL/Vulkan 时，ffmpeg 须拥有【独立 D3D11 设备】做 D3D11VA
+    // D3D11VA 所用 D3D11 设备（渲染器共享设备场景 / ffmpeg 自有设备场景）。
+    // ffmpeg 自有设备零拷贝：渲染器为 GL/Vulkan 时，ffmpeg 须拥有【独立 D3D11 设备】做 D3D11VA
     // （GL/VK 的 IGpuDeviceContext.DeviceHandle 是 GL/Vk 设备，非 ID3D11Device，绝不可喂给 D3D11VA），
     // 经 NV12→RGBA 转换 + 共享句柄导出，再由 GL/VK 生产者导入零拷贝。
     private IntPtr _vaDeviceHandle;
     private IntPtr _vaContextHandle;
-    private Vortice.Direct3D11.ID3D11Device? _vaOwnedDevice;        // 仅分支 237 非 D3D11 渲染器时非空（ffmpeg 自有，须我方 Dispose）
+    private Vortice.Direct3D11.ID3D11Device? _vaOwnedDevice;        // 仅 ffmpeg 自有设备场景（非 D3D11 渲染器）时非空（ffmpeg 自有，须我方 Dispose）
     private Vortice.Direct3D11.ID3D11DeviceContext? _vaOwnedContext;
     private readonly FFmpegOptions? _options;
     private SafeAVCodecContextHandle? _codecContextHandle;
@@ -237,7 +237,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 // 零拷贝链路：硬解输出 ID3D11Texture2D → D3D11HardwareFrameResource → D3D11Renderer
                 try
                 {
-                    // 分支 215 用渲染器共享 D3D11 设备（InitializeD3D11VA 统一读 _vaDeviceHandle/_vaContextHandle）。
+                    // 渲染器共享设备场景用渲染器共享 D3D11 设备（InitializeD3D11VA 统一读 _vaDeviceHandle/_vaContextHandle）。
                     _vaDeviceHandle = _gpuContext.DeviceHandle;
                     _vaContextHandle = _gpuContext.ContextHandle;
                 // 配套：硬解帧现在由 D3D11HardwareFrameResource 持引用保活切片（详见该类注释），
@@ -267,7 +267,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 {
                     // 同 D3D11 分支：纹理数组须留余量供管线长期持有切片（见 D3D11VA 注释）。
                     ctx->extra_hw_frames = D3D11VAExtraHwFrames;
-                    // 分支 237：渲染器为 GL/Vulkan，其 IGpuDeviceContext.DeviceHandle 是 GL/Vk 设备（非 ID3D11Device），
+                    // ffmpeg 自有设备场景：渲染器为 GL/Vulkan，其 IGpuDeviceContext.DeviceHandle 是 GL/Vk 设备（非 ID3D11Device），
                     // 不可喂给 ffmpeg D3D11VA。故 ffmpeg 须【自有独立 D3D11 设备】做 D3D11VA→NV12，
                     // 转换/导出共享句柄亦用此同一设备；该设备由本解码器创建并持有（_vaOwnedDevice），Dispose 释放。
                     _vaOwnedDevice = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
@@ -842,8 +842,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         // 释放 NV12→RGBA 转换器（仅释放其内部 QI 的视频设备/上下文与处理器；共享设备包装不 Dispose）。
         _nv12ToRgbaConverter?.Dispose();
         _nv12ToRgbaConverter = null;
-        // 释放分支 237 的 ffmpeg 自有 D3D11 设备（与 Initialize 中创建配对）。转换器包装不 Dispose 该设备，
-        // 故此处必须显式释放，否则 D3D11 设备泄漏。分支 215 的共享设备由渲染器工厂持有，此处不 Dispose。
+        // 释放 ffmpeg 自有 D3D11 设备（与 Initialize 中创建配对）。转换器包装不 Dispose 该设备，
+        // 故此处必须显式释放，否则 D3D11 设备泄漏。渲染器共享设备由渲染器工厂持有，此处不 Dispose。
         _vaOwnedContext?.Dispose();
         _vaOwnedContext = null;
         _vaOwnedDevice?.Dispose();
@@ -1176,8 +1176,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <param name="ctx">FFmpeg 编解码上下文（设置其 hw_device_ctx 字段）。</param>
     private unsafe void InitializeD3D11VA(AVCodecContext* ctx)
     {
-        // 统一读 _vaDeviceHandle/_vaContextHandle（分支 215=渲染器共享 D3D11 设备；分支 237=ffmpeg 自有 D3D11 设备）。
-        // 绝不可直接用 _gpuContext.DeviceHandle：分支 237 渲染器为 GL/Vulkan 时它是 GL/Vk 设备，非 ID3D11Device。
+        // 统一读 _vaDeviceHandle/_vaContextHandle（渲染器共享设备场景 / ffmpeg 自有设备场景）。
+        // 绝不可直接用 _gpuContext.DeviceHandle：ffmpeg 自有设备场景下渲染器为 GL/Vulkan 时它是 GL/Vk 设备，非 ID3D11Device。
         if (_vaDeviceHandle == IntPtr.Zero)
             throw new InvalidOperationException("GPU 设备句柄无效");
         if (_vaContextHandle == IntPtr.Zero)
@@ -1202,8 +1202,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             //   即 av_buffer_unref 引用归零时 d3d11va_device_free() 会对 device 与 device_context
             //   各调用一次 Release —— 无论指针是不是用户塞进来的。
             //
-            //   分支 215：这里塞的是渲染器工厂（D3D11RendererFactory，Singleton）持有的共享设备，工厂自己
-            //   在 Dispose 时还要 Release 一次。分支 237：这里塞的是本解码器 _vaOwnedDevice（ffmpeg 自有，
+            //   渲染器共享设备场景：这里塞的是渲染器工厂（D3D11RendererFactory，Singleton）持有的共享设备，工厂自己
+            //   在 Dispose 时还要 Release 一次。ffmpeg 自有设备场景：这里塞的是本解码器 _vaOwnedDevice（ffmpeg 自有，
             //   我方 Dispose 时 Release 一次）。两种情形若不补 AddRef，ffmpeg 那次 Release 会吃掉那份引用
             //   ⇒ 设备/上下文提前销毁 ⇒ 确定性 AccessViolation。故写入 hwctx 前各 AddRef 一次。
             //

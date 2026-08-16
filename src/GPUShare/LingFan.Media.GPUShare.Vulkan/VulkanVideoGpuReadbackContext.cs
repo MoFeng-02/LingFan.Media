@@ -140,7 +140,7 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
         VulkanNative.CmdCopyImageToBuffer(_commandBuffer, src, ImageLayout.TransferSrcOptimal, _stagingBuffer, 1, &yCopy);
 
         // Copy plane1 (UV, R8G8) → offset yPlaneSize; UV plane 尺寸 W/2 x H/2，buffer 行 stride = W/2（紧密，2 字节/texel → W 字节/行）。
-        // ⚠️ 此前误用 BufferRowLength=w（texels）→ 每行写 2w 字节，h/2 行共越界 ~0.5·W·H 字节（staging 仅 1.5·W·H），
+        // 此前误用 BufferRowLength=w（texels）→ 每行写 2w 字节，h/2 行共越界 ~0.5·W·H 字节（staging 仅 1.5·W·H），
         //    GPU 越界写 → 下一 submit（渲染）VK_ERROR_DEVICE_LOST。修正为 w/2 与下方 ui 读取的紧密行距一致。
         BufferImageCopy uvCopy = new()
         {
@@ -189,8 +189,8 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
         };
         fixed (Fence* pFence = &_fence)
         {
-            // ⚠️ 第 4 参是 VkFence *句柄值*（64 位不透明句柄），不是 Fence 结构指针。
-            // 误传 &_fence（栈地址）作句柄会被驱动解引用 → 0xC0000005。须与解码器一致传 _fence.Handle。
+            // 第 4 参是 VkFence *句柄值*（64 位不透明句柄），不是 Fence 结构指针。
+            // 误传 &_fence（栈地址）作句柄会被驱动解引用 → 原生访问违规。须与解码器一致传 _fence.Handle。
             if (VulkanNative.QueueSubmit(_readbackQueue, 1, &submitInfo, (nint)_fence.Handle) != Result.Success)
                 throw new InvalidOperationException("readback: QueueSubmit 失败");
             if (VulkanNative.WaitForFences(_device, 1, pFence, 1, 5_000_000_000UL) != Result.Success)

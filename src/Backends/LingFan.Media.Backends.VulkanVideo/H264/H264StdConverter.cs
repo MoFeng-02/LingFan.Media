@@ -80,7 +80,7 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         Sps.Flags.ConstraintSet5Flag = (uint)((constraintByte >> 2) & 1);
         Sps.SeqParameterSetId = (byte)spsId;
 
-        // ⚠️ 规范铁律（H.264 Annex A SPS RBSP 语法）：
+        // 规范铁律（H.264 Annex A SPS RBSP 语法）：
         // chroma_format_idc / bit_depth_luma_minus8 / bit_depth_chroma_minus8 /
         // qpprime_y_zero_transform_bypass_flag / seq_scaling_matrix_present_flag 仅当 profile 属
         // 「high」档族（上列 profile_idc）时才出现在比特流；Baseline(66)/Main(77)/Extended(88) 等档位

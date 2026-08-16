@@ -538,7 +538,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
                 // 拷贝 PTS 到局部变量：Wait 期间若发生 Flush，队头帧可能经 FrameQueue.Clear 归还池
                 // 后被复用并改写 Timestamp；使用进入本循环时拷贝的值，避免读到回收后的垃圾时间戳
-                // （同时消除 R-2：旧 Wait 分支在帧所有权已转移后越界读 frame.Timestamp 的隐患）。
+                // （同时消除旧 Wait 分支在帧所有权已转移后越界读 frame.Timestamp 的隐患）。
                 var headTimestamp = head.Timestamp;
                 var action = _synchronizer.CheckVideoFrame(head);
 
@@ -819,8 +819,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// 仅在 LongRunning 专用实时线程上调用（热路径零 await，无续体调度延迟）。
     /// </summary>
     /// <remarks>
-    /// <para>主体：<see cref="Thread.Sleep"/> 睡到「目标时刻前 ~1.5ms」，每轮只读一次平滑主时钟
-    /// （A 修复的 QPC 插值，跨线程 COM 仅 2~3 次/帧）；尾部用<b>本地 QPC 自旋</b>精确收口，
+    /// <para>主体：<see cref="Thread.Sleep"/> 睡到「目标时刻前的一个小提前量（补偿平滑时钟读取开销）」，每轮只读一次平滑主时钟
+    /// （QPC 插值优化，跨线程 COM 仅 2~3 次/帧）；尾部用<b>本地 QPC 自旋</b>精确收口，
     /// 彻底去掉原 WaitUntilDueAsync 每帧上千次跨线程 <c>IAudioClock::GetPosition</c> 的 CPU/缓存行争用。
     /// 专用线程上 Thread.Sleep 不阻塞任何线程池工作，且 Highest 优先级下不被 OS 抢占。</para>
     /// <para>与 <see cref="Synchronizer.CheckVideoFrame"/> 使用同一主时钟源与同一阈值，判据一致。</para>
@@ -845,8 +845,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         var entryMaster = _synchronizer.GetCurrentMasterTime();
         long entryQpc = System.Diagnostics.Stopwatch.GetTimestamp();
 
-        // 主体：睡到目标前 ~1.5ms，每轮一次平滑时钟读取。Stop() 取消时立即返回，
-        // 避免专用实时线程在退出/暂停时仍按帧时睡眠（round-21 引入的回归：原 Thread.Sleep 不感知取消）。
+        // 主体：睡到目标前的一个小提前量（补偿平滑时钟读取开销），每轮一次平滑时钟读取。Stop() 取消时立即返回，
+        // 避免专用实时线程在退出/暂停时仍按帧时睡眠（回归：原 Thread.Sleep 不感知取消）。
         while (true)
         {
             if (ct.IsCancellationRequested) return;

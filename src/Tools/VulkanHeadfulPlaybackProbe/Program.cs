@@ -833,7 +833,7 @@ internal static class Program
     {
         try
         {
-            // 与 FFmpegVideoDecoder 分支 237 同构：D3D11CreateDevice(DriverType.Hardware) 不指定适配器
+            // 与 FFmpegVideoDecoder 的 ffmpeg 自有设备路径同构：D3D11CreateDevice(DriverType.Hardware) 不指定适配器
             // → 默认适配器，正是 D3D11VA 共享纹理（NV12→RGBA 转换器）所在 GPU。
             using ID3D11Device dev = D3D11.D3D11CreateDevice(DriverType.Hardware, DeviceCreationFlags.BgraSupport);
             using IDXGIDevice dxgiDev = dev.QueryInterface<IDXGIDevice>();
