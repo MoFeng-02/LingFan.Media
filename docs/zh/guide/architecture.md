@@ -22,7 +22,7 @@ LingFan.Media 组织为一个位于一组**基础设施模块**之上的**契约
 | 05 | `Video` | 视频 track、processor chain、deinterlace/scale/color、stats |
 | 06 | `Audio` | 音频 track、mixer、volume、effects chain、stats |
 | 07 | `Backends` | `FFmpeg` / `VLC` / `MediaFoundation`（实现）；`WebRTC`（stub） |
-| 08 | `Renderers` | `D3D11`（实现）；`Vulkan` / `Metal` / `OpenGL`（stubs/partial） |
+| 08 | `Renderers` | `D3D11`（实现）；`Vulkan`（已验证，FFmpeg 零拷贝，Windows）/ `Metal` / `OpenGL`（部分） |
 | 09 | `Outputs` | `WASAPI`、`OpenAL`、`OpenSL ES`、`AAudio`、… |
 | 10 | `Platforms` | 平台能力探测与 interop |
 | 11 | `Avalonia` | `VideoView`、`MediaControl`、Skia / Composition presenters |

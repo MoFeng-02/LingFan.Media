@@ -27,6 +27,16 @@ FFmpeg 与 LibVLC 是**跨平台保底**。二者均为 LGPL 授权，可在每�
 
 二者今天已在 Windows、macOS、iOS、Android 上发布并可用。Linux **不是目标平台**，但因 FFmpeg / LibVLC 跨平台，它们仍可在那里提供播放——「排除」仅针对构建*原生* Linux 后端。
 
+## 各后端 GPU 零拷贝能力
+
+零拷贝指解码出的 GPU 纹理不经过 CPU 回拷、直接交给渲染器上屏。由于帧路由与后端无关，该能力取决于解码后端能否暴露可被导入的 GPU 纹理：
+
+| 后端 | 硬件解码 | GPU 零拷贝 | 说明 |
+| --- | --- | --- | --- |
+| **FFmpeg** | 是（Windows 上 D3D11VA / DXVA2） | **是**（Windows：D3D11、Vulkan、OpenGL） | 解码帧导出为 D3D11 共享纹理并由渲染器导入。已在 Windows 验证，含混合显卡场景——此时 Vulkan 设备对齐到 D3D11 默认适配器。 |
+| **Media Foundation** | 是（DXVA2 / D3D11VA） | 否 | MFT 管线不暴露可外部导入的共享纹理，因此帧经 CPU 内存拷贝。 |
+| **LibVLC / VLC** | 是 | 否（3.x 下） | `libvlc_video_set_callbacks` API 交付 CPU 像素。真·零拷贝需要 libvlc 4.0 的 output-callbacks API，目前尚未采用。 |
+
 ## 平台原生后端（逐步集成）
 
 当某平台提供第一方媒体 API 时，LingFan.Media 会**按平台逐步集成**——这不是因为跨平台后端不够用，而是为了使用最高效、由操作系统提供的管线。Linux 是例外：它**没有标准的第一方媒体 API**（不像 Media Foundation、AVFoundation 或 MediaCodec），因此按设计排除在原生后端路线之外。
@@ -68,7 +78,7 @@ FFmpeg 与 LibVLC 是**跨平台保底**。二者均为 LGPL 授权，可在每�
 
 </div>
 
-> **范畴说明：**「受支持平台」指项目*目标并已测试*的表面，区别于第三方库本身的技术能力。Vulkan / OpenGL / Metal 渲染器作为存根 / 部分实现存在，不属于 V1 受支持表面。
+> **范畴说明：**「受支持平台」指项目*目标并已测试*的表面，区别于第三方库本身的技术能力。**Vulkan** 渲染器已在 Windows 的 FFmpeg 零拷贝路径上验证，但不属于 V1 受支持表面；OpenGL / Metal 仍为部分实现。
 
 ## 打开 → 就绪 时序
 

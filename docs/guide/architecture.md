@@ -22,7 +22,7 @@ LingFan.Media is organised as a **contract layer** (`Abstractions`) above a set 
 | 05 | `Video` | Video track, processor chain, deinterlace/scale/color, stats |
 | 06 | `Audio` | Audio track, mixer, volume, effects chain, stats |
 | 07 | `Backends` | `FFmpeg` / `VLC` / `MediaFoundation` (real); `WebRTC` (stub) |
-| 08 | `Renderers` | `D3D11` (real); `Vulkan` / `Metal` / `OpenGL` (stubs/partial) |
+| 08 | `Renderers` | `D3D11` (real); `Vulkan` (validated, FFmpeg zero-copy, Windows) / `Metal` / `OpenGL` (partials) |
 | 09 | `Outputs` | `WASAPI`, `OpenAL`, `OpenSL ES`, `AAudio`, … |
 | 10 | `Platforms` | Platform capability detection & interop |
 | 11 | `Avalonia` | `VideoView`, `MediaControl`, Skia / Composition presenters |

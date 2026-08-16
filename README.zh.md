@@ -45,16 +45,21 @@
 | MediaFoundation 后端 | **已验证** |
 | FFmpeg 后端 | **已验证** |
 | LibVLC 后端 | **已验证** |
+| GPU 零拷贝 —— FFmpeg 后端（Windows：D3D11、Vulkan） | **已验证** |
+| GPU 零拷贝 —— FFmpeg 后端（Windows：OpenGL） | 已实现（同一导入路径） |
 | 网络源（`NetworkMediaSource` + SSRF） | 已实现，待验证 |
 | 流式播放 | 已实现，待验证 |
 | Linux（FFmpeg + LibVLC + Vulkan / OpenGL） | **验证中** |
-| Vulkan / OpenGL 渲染器 | **验证中** |
+| Vulkan 渲染器（FFmpeg 零拷贝路径，Windows） | **已验证** |
+| OpenGL 渲染器（FFmpeg 零拷贝路径，Windows） | 已实现 |
 | macOS / iOS / Android | 路线图 |
 | WebRTC / GStreamer | 不在范围 |
 
 > 已验证的 Windows 路径在本地文件上实测了核心抽象、渲染、音频输出与无头帧投递。网络源与流式播放虽已实现（含基于 DNS-pinning 的 SSRF 防护），但尚未端到端实测——在运行时验证之前，请按实验性对待。
 
-> **硬件解码说明：** 在 Windows 上，MediaFoundation 的解码器会把帧经由 CPU 内存交回（混合解码 / 半硬解）。这是平台 MFT 管线的固有特性，并非本库的缺陷。FFmpeg 与 LibVLC 后端则提供完整的 GPU 驻留硬件解码路径。三种后端均可在 Windows 上正常播放本地文件。
+> **硬件解码说明：** 在 Windows 上，Media Foundation 的解码器会把帧经由 CPU 内存交回（混合解码 / 半硬解）——这是平台 MFT 管线的固有特性，并非本库的缺陷。FFmpeg 与 LibVLC 后端均在 GPU 上解码。
+>
+> **GPU 零拷贝：** FFmpeg 后端把解码后的帧作为 GPU 纹理直接交由 D3D11 / Vulkan / OpenGL 渲染器导入上屏，不经过 CPU 回拷。该能力已在 Windows 验证，包含混合显卡场景——此时 Vulkan 物理设备会自动对齐到 D3D11 默认适配器，确保共享纹理在同一张 GPU 上被导入。Media Foundation 无法暴露可外部导入的共享纹理（MFT 限制），因此回退为 CPU 拷贝。LibVLC 3.x 通过回调 API 交付 CPU 像素，同样走 CPU 拷贝；LibVLC 的真·零拷贝需要 libvlc 4.0，目前尚未采用。
 
 ## 安装
 

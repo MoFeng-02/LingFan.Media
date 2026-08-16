@@ -17,6 +17,9 @@
 		<ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
 		<!-- 共享 Vulkan 原生绑定（渲染 + B4 硬解共用，单一零反射 AOT 友好层） -->
 		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Vulkan\LingFan.Media.GPUShare.Vulkan.csproj" />
+		<!-- 零拷贝跨 GPU 对齐：取默认 D3D11 适配器 LUID（D3D11AdapterLuid，中性互操作模块；
+		     单向消费，无环）。仅 Windows 下 EnsureDeviceCreated 调用，非 Windows 不触发。 -->
+		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.D3D11\LingFan.Media.GPUShare.D3D11.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

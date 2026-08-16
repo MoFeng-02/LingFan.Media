@@ -27,6 +27,16 @@ FFmpeg and LibVLC are the **cross-platform safety net**. Both are LGPL-licensed 
 
 Both already ship and work on Windows, macOS, iOS, and Android today. Linux is **not a targeted platform**, but because FFmpeg / LibVLC are cross-platform they still provide playback there — the exclusion applies only to building a *native* Linux backend.
 
+## GPU zero-copy capability by backend
+
+Zero-copy means a decoded GPU texture is handed straight to the renderer without a CPU round-trip. Because frame routing is backend-agnostic, the capability depends on whether the decoding backend can surface an importable GPU texture:
+
+| Backend | Hardware decode | GPU zero-copy | Notes |
+| --- | --- | --- | --- |
+| **FFmpeg** | Yes (D3D11VA / DXVA2 on Windows) | **Yes** (Windows: D3D11, Vulkan, OpenGL) | Decoded frames are exported as D3D11 shared textures and imported by the renderer. Validated on Windows, including hybrid-GPU systems where the Vulkan device is aligned to the D3D11 default adapter. |
+| **Media Foundation** | Yes (DXVA2 / D3D11VA) | No | The MFT pipeline does not expose an externally importable shared texture, so frames are copied through CPU memory. |
+| **LibVLC / VLC** | Yes | No (with 3.x) | The `libvlc_video_set_callbacks` API delivers CPU pixels. True zero-copy needs libvlc 4.0's output-callbacks API, which is not yet adopted. |
+
 ## Platform-native backends (progressive integration)
 
 Where a platform offers a first-party media API, LingFan.Media integrates it **progressively, one platform at a time** — not because the cross-platform backends are insufficient, but to use the most efficient OS-provided pipeline. Linux is the exception: it has **no standard first-party media API** (unlike Media Foundation, AVFoundation, or MediaCodec), so it is excluded from the native-backend roadmap by design.
@@ -68,7 +78,7 @@ Today only Media Foundation is wired. AVFoundation and MediaCodec are on the roa
 
 </div>
 
-> **Scope note:** "supported platform" is the project's *targeted and tested* surface, distinct from the raw capability of the third-party libraries. Vulkan / OpenGL / Metal renderers exist as stubs / partials and are not part of the V1 supported surface.
+> **Scope note:** "supported platform" is the project's *targeted and tested* surface, distinct from the raw capability of the third-party libraries. The **Vulkan** renderer is validated for the FFmpeg zero-copy path on Windows but is not part of the V1 supported surface; OpenGL / Metal remain partials.
 
 ## Open → Ready sequence (timing)
 

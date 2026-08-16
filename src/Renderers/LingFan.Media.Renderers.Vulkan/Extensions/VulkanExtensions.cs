@@ -1,4 +1,5 @@
 using LingFan.Media.Renderers.Shared;
+using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Renderers.Vulkan;
 
@@ -25,7 +26,15 @@ public static class VulkanExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        builder.Services.AddSingleton<VulkanRendererFactory>();
+        // 零拷贝跨 GPU 对齐：按构建期硬解开关默认开启（EnableHardwareDecode 默认 true，
+        // 等价于探针 --hw 默认行为）。硬件解码关闭时回落「独显优先」启发式，纯 Vulkan 渲染性能最优。
+        bool alignToD3D11 = builder.Options.EnableHardwareDecode;
+        builder.Services.AddSingleton<VulkanRendererFactory>(sp =>
+        {
+            var factory = new VulkanRendererFactory(sp.GetRequiredService<ILoggerFactory>());
+            factory.AlignToD3D11DefaultAdapter = alignToD3D11;
+            return factory;
+        });
         builder.Services.AddSingleton<IVideoRendererFactory>(sp => sp.GetRequiredService<VulkanRendererFactory>());
 
         // 中立 GPU 设备上下文（Abstractions 契约），由 VulkanRendererFactory 注入能力。

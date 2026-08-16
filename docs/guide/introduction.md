@@ -21,7 +21,7 @@ Most .NET media stacks are thin wrappers over a single native backend (typically
 
 V1 is the only platform with a supported, tested surface (Windows + D3D11 + WASAPI). macOS / iOS / Android already work today through the LGPL-cross-platform FFmpeg / LibVLC shared libraries; their first-party native backends (AVFoundation, MediaCodec) will be integrated progressively over time. **Linux is excluded from the native-backend roadmap** — it has no standard first-party media API, so no native Linux backend will be built; however, FFmpeg / LibVLC still provide playback there, so Linux is simply not a targeted or tested surface.
 
-> **Not in scope:** WebRTC and GStreamer backends are explicitly out of scope (they exist only as empty scaffolding / stubs). Vulkan / OpenGL / Metal renderers are stubs / partials and are not part of the V1 supported surface.
+> **Not in scope:** WebRTC and GStreamer backends are explicitly out of scope (they exist only as empty scaffolding / stubs). The **Vulkan** renderer is validated for the FFmpeg zero-copy path on Windows but is not part of the V1 supported surface; OpenGL / Metal remain partials.
 
 ## Package layout (12 logical modules)
 
@@ -34,7 +34,7 @@ V1 is the only platform with a supported, tested surface (Windows + D3D11 + WASA
 | 05 | `Video` | Video domain: track, processor chain, stats |
 | 06 | `Audio` | Audio domain: mixer, volume, effects, stats |
 | 07 | `Backends` | Pluggable backends: FFmpeg / VLC / MediaFoundation (WebRTC stub) |
-| 08 | `Renderers` | GPU renderers: D3D11 (real), Vulkan / Metal / OpenGL (stubs/partial) |
+| 08 | `Renderers` | GPU renderers: D3D11 (real); Vulkan (validated, FFmpeg zero-copy, Windows) / Metal / OpenGL (partials) |
 | 09 | `Outputs` | Audio outputs: WASAPI, OpenAL, OpenSL ES, AAudio, … |
 | 10 | `Platforms` | Platform capability detection & interop |
 | 11 | `Avalonia` | UI presentation: `VideoView`, `MediaControl`, Skia / Composition presenters |

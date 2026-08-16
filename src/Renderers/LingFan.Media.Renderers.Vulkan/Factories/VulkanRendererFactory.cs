@@ -1,4 +1,5 @@
 using LingFan.Media.Abstractions;
+using LingFan.Media.GPUShare.D3D11;
 using LingFan.Media.Renderers.Shared;
 
 namespace LingFan.Media.Renderers.Vulkan;
@@ -46,6 +47,10 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     // （跨厂商/跨 GPU 导入会被驱动拒绝，报 ErrorOutOfDeviceMemory）。默认 null = 不强制，
     // 沿用「独显优先」启发式（纯 Vulkan 渲染性能最优）。
     private byte[]? _preferredAdapterLuid;
+    // 零拷贝跨 API 导入对齐开关（自动路径）：true 时 EnsureDeviceCreated 内将自动查询默认 D3D11 适配器
+    // LUID 并注入 _preferredAdapterLuid（与 PreferredAdapterLuid 手动 set 二选一，手动 set 优先）。
+    // 仅 Windows 生效；非 Windows 跳过（无 DXGI LUID 概念）。
+    private bool _alignToD3D11DefaultAdapter;
     // 是否已为 no-airspace 共享表面启用外部内存/信号量扩展。
     private bool _externalSharingEnabled;
     // Apple / MoltenVK：是否已启用 VK_EXT_metal_objects（无空域零拷贝经其导出 IOSurface / MTLSharedEvent）。
@@ -75,6 +80,18 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     {
         get => _preferredAdapterLuid;
         set => _preferredAdapterLuid = value;
+    }
+
+    /// <summary>
+    /// 零拷贝跨 API 导入对齐（自动路径）开关：为 <see langword="true"/> 时，
+    /// <see cref="EnsureDeviceCreated"/> 内将自动查询默认 D3D11 适配器 LUID 并注入
+    /// <see cref="PreferredAdapterLuid"/>（与手动 set <see cref="PreferredAdapterLuid"/> 二选一，手动优先）。
+    /// </summary>
+    /// <remarks>仅 Windows 生效；非 Windows 跳过（无 DXGI LUID 概念）。默认 <see langword="false"/>。</remarks>
+    public bool AlignToD3D11DefaultAdapter
+    {
+        get => _alignToD3D11DefaultAdapter;
+        set => _alignToD3D11DefaultAdapter = value;
     }
 
     public VulkanRendererFactory(ILoggerFactory loggerFactory)
@@ -232,6 +249,23 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     if (enumResult != Result.Success)
                         throw new InvalidOperationException($"vkEnumeratePhysicalDevices (第二次) 失败: {enumResult}");
                 }
+                // 零拷贝跨 GPU 对齐（自动路径）：启用且 Windows 且尚未手动指定 LUID 时，
+                // 查询默认 D3D11 适配器 LUID 并注入，强制 Vulkan 选与 D3D11VA 共享纹理同 GPU。
+                if (_alignToD3D11DefaultAdapter && OperatingSystem.IsWindows() && _preferredAdapterLuid is null)
+                {
+                    byte[]? luid = D3D11AdapterLuid.QueryDefaultAdapterLuid();
+                    if (luid is not null)
+                    {
+                        _preferredAdapterLuid = luid;
+                        _logger.LogInformation("零拷贝跨 GPU 对齐：已对齐 Vulkan 物理设备选择到 D3D11 默认适配器 LUID（{LuidHex}）",
+                            Convert.ToHexString(luid));
+                    }
+                    else
+                    {
+                        _logger.LogWarning("零拷贝跨 GPU 对齐：查询默认 D3D11 适配器 LUID 失败，跳过对齐（单卡/独显机器通常无需对齐）");
+                    }
+                }
+
                 // ── 选择物理设备——不再盲取 physDevices[0] ──
                 // 硬条件：具备图形队列族；偏好序：独显 > 集显 > 虚拟 GPU > 其他。
                 // 注：Present 能力查询需要 Surface，而工厂在无 Surface 阶段创建共享设备，

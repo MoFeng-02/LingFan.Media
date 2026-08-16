@@ -45,16 +45,21 @@ The library is further along in some areas than others. The table below marks ea
 | MediaFoundation backend | **Validated** |
 | FFmpeg backend | **Validated** |
 | LibVLC backend | **Validated** |
+| GPU zero-copy — FFmpeg backend (Windows: D3D11, Vulkan) | **Validated** |
+| GPU zero-copy — FFmpeg backend (Windows: OpenGL) | Implemented (same import path) |
 | Network sources (`NetworkMediaSource` + SSRF) | Implemented, not yet validated |
 | Streaming playback | Implemented, not yet validated |
 | Linux (FFmpeg + LibVLC + Vulkan / OpenGL) | **Validation in progress** |
-| Vulkan / OpenGL renderers | **Validation in progress** |
+| Vulkan renderer (FFmpeg zero-copy path, Windows) | **Validated** |
+| OpenGL renderer (FFmpeg zero-copy path, Windows) | Implemented |
 | macOS / iOS / Android | Roadmap |
 | WebRTC / GStreamer | Out of scope |
 
 > The validated Windows path exercises the core abstraction, rendering, audio output, and headless frame delivery on a local file. Network and streaming paths are implemented (including DNS-pinning SSRF protection) but have not yet been exercised end-to-end — treat them as experimental until validated at runtime.
 
-> **Hardware decode:** MediaFoundation's decoder returns frames through CPU memory (hybrid decode) on Windows. This is a characteristic of the platform's MFT pipeline, not a defect in LingFan.Media. The FFmpeg and LibVLC backends provide full GPU-resident hardware decode. All three backends play local files correctly on Windows.
+> **Hardware decode:** On Windows, Media Foundation's decoder returns frames through CPU memory (hybrid decode) — a characteristic of the platform's MFT pipeline, not a defect in LingFan.Media. The FFmpeg and LibVLC backends decode on the GPU.
+>
+> **GPU zero-copy:** The FFmpeg backend presents decoded frames as GPU textures that the D3D11 / Vulkan / OpenGL renderers import directly, with no CPU round-trip. This is validated on Windows, including hybrid-GPU systems where the Vulkan physical device is automatically aligned to the D3D11 default adapter so the shared texture is imported on the same GPU. Media Foundation cannot expose an importable shared texture (an MFT limitation), so it falls back to a CPU copy. LibVLC 3.x delivers CPU pixels through its callback API, so it also uses a CPU copy; true zero-copy for LibVLC requires libvlc 4.0 and is not yet adopted.
 
 ## Installation
 

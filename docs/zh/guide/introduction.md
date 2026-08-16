@@ -21,7 +21,7 @@
 
 V1 是唯一具备受支持、经测试表面的平台（Windows + D3D11 + WASAPI）。macOS / iOS / Android 今天已可借助本身即 LGPL 跨平台的 FFmpeg / LibVLC 共享库工作；其第一方原生后端（AVFoundation、MediaCodec）将随时间逐步集成。**Linux 被排除在原生后端路线之外**——它没有标准的第一方媒体 API，故不会构建原生 Linux 后端；不过 FFmpeg / LibVLC 仍可在那里提供播放，因此 Linux 只是不被作为目标或已测试的表面。
 
-> **范围之外：** WebRTC 与 GStreamer 后端明确不在范围内（仅以空脚手架 / 存根形式存在）。Vulkan / OpenGL / Metal 渲染器为存根 / 部分实现，不属于 V1 受支持表面。
+> **范围之外：** WebRTC 与 GStreamer 后端明确不在范围内（仅以空脚手架 / 存根形式存在）。**Vulkan** 渲染器已在 Windows 的 FFmpeg 零拷贝路径上验证，但不属于 V1 受支持表面；OpenGL / Metal 仍为部分实现。
 
 ## 包结构（12 个逻辑模块）
 
@@ -34,7 +34,7 @@ V1 是唯一具备受支持、经测试表面的平台（Windows + D3D11 + WASAP
 | 05 | `Video` | 视频域：轨道、处理器链、统计 |
 | 06 | `Audio` | 音频域：混音、音量、效果、统计 |
 | 07 | `Backends` | 可插拔后端：FFmpeg / VLC / MediaFoundation（WebRTC 桩） |
-| 08 | `Renderers` | GPU 渲染器：D3D11（实装）、Vulkan / Metal / OpenGL（桩/部分） |
+| 08 | `Renderers` | GPU 渲染器：D3D11（实装）；Vulkan（已验证，FFmpeg 零拷贝，Windows）/ Metal / OpenGL（部分） |
 | 09 | `Outputs` | 音频输出：WASAPI、OpenAL、OpenSL ES、AAudio，… |
 | 10 | `Platforms` | 平台能力探测与互操作 |
 | 11 | `Avalonia` | UI 呈现：`VideoView`、`MediaControl`、Skia / Composition 呈现器 |
