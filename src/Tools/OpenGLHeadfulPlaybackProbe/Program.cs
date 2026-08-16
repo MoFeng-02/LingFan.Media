@@ -77,11 +77,14 @@ internal static class Program
         bool doAudio = !HasFlag(args, "--no-audio");
         bool visible = HasFlag(args, "--visible");
         bool enableCategory = HasFlag(args, "--category");
-        // OpenGL 仅消费 SoftwareFrameResource（CPU 帧）：CPU NV12/BGRA/RGBA → GL 纹理 → 着色器上屏，
-        // 无法消费 D3D11 DXVA 纹理，故恒强制软件解码（与 Vulkan 探针同源约束）。--software-decode 等价保留为同源对照。
+        // OpenGL 默认消费 SoftwareFrameResource（CPU 帧）；--hw 时 ffmpeg 经 D3D11VA→NV12→RGBA 共享句柄
+        // 由 OpenGLGpuFrameProducer 导入为 GL 纹理零拷贝上屏（与 Vulkan 同源机制）。--software-decode 等价保留为同源对照。
         bool softwareDecode = HasFlag(args, "--software-decode");
+        // --hw：开启硬解零拷贝验收。默认（不带 --hw）强制软件解码以隔离上屏路径；
+        // 带 --hw 时 ffmpeg 走 D3D11VA 共享句柄零拷贝，mf 半 DXVA，vlc 回拷 CPU。
+        bool hwMode = HasFlag(args, "--hw");
         // —— 后端选择开关：让同一套 OpenGL 渲染路径覆盖 MF / FFmpeg / VLC 三条后端 ——
-        // 三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource（NV12/BGRA），OpenGL 上传上屏。
+        // 默认三者强制软件解码；--hw 时 ffmpeg 改走 D3D11VA 共享句柄零拷贝上屏。
         string backendArg = ParseOption(args, "--backend")?.ToLowerInvariant() ?? "mf";
         if (backendArg is not ("mf" or "ffmpeg" or "vlc"))
         {
@@ -89,6 +92,7 @@ internal static class Program
             return 2;
         }
         Console.WriteLine($"[HEADFUL-BACKEND] {backendArg}");
+        Console.WriteLine($"[HEADFUL-HW] hwMode={hwMode}");
         // VLC 原生库定位：必须在解析 VLC 后端单例之前把 libvlc 目录前置 PATH，
         // 使原生加载器（LoadLibrary 搜 PATH）稳定找到 libvlc.dll。
         if (backendArg == "vlc")
@@ -155,8 +159,9 @@ internal static class Program
 
         if (saveFrames > 0)
             Console.WriteLine($"[HEADFUL-SAVE] 每 {saveFrames} 帧落盘 -> {saveDir}");
-        Console.WriteLine("[HEADFUL-SAVE] OpenGL 恒强制软件解码（CPU 帧 → GL 纹理上屏；" +
-                          (softwareDecode ? "与 --software-decode 等价）" : "忽略 --software-decode 与否）"));
+        Console.WriteLine("[HEADFUL-SAVE] OpenGL 默认强制软件解码（CPU 帧 → GL 纹理上屏）；" +
+                          (softwareDecode ? "与 --software-decode 等价）" : "忽略 --software-decode 与否）") +
+                          "；硬解零拷贝验收请用 --hw");
 
         if (!doVideo && !doAudio)
         {
@@ -186,24 +191,26 @@ internal static class Program
         {
             "ffmpeg" => services.AddLingFanMedia().AddFFmpeg(o =>
             {
-                // 恒软解：OpenGL 无法消费 D3D11 DXVA 纹理，关闭硬件加速使帧恒为 CPU SoftwareFrameResource。
+                // --hw 时开启 D3D11VA 零拷贝：ffmpeg 产 NV12→RGBA 共享句柄，OpenGLGpuFrameProducer 导入为 GL 纹理零拷贝上屏；
+                // 默认关闭硬件加速使帧恒为 CPU SoftwareFrameResource。
                 o.FFmpegLibraryPath = AppContext.BaseDirectory;
                 o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
-                o.HardwareAcceleration = false;
+                o.HardwareAcceleration = hwMode;
             }),
             "vlc" => services.AddLingFanMedia().AddVLCNative(o =>
             {
                 // VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
-                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；EnableHardwareDecoding=false 仍交付 CPU BGRA32，
-                // 由下方 OpenGL 渲染器上传上屏（非零拷贝）。
-                o.EnableHardwareDecoding = false;
+                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；--hw 时 EnableHardwareDecoding 注入 --avcodec-hw=any
+                // （有头 D3D11VA 真硬解但仍回拷 CPU BGRA32，设计上恒非零拷贝），由下方 OpenGL 渲染器上传上屏。
+                o.EnableHardwareDecoding = hwMode;
                 o.Headless = true;
             }),
             _ => services.AddLingFanMedia().AddMediaFoundation(o =>
             {
-                // 恒软解：OpenGL 无法消费 D3D11 DXVA 纹理，强制软件解码使帧恒为 CPU SoftwareFrameResource。
-                o.EnableHardwareDecoding = false;
-                o.EnableDxva = false;
+                // --hw 时开启 DXVA（半硬解：硬解激活但 MFT 把纹理读回系统内存，非真零拷贝）；
+                // 默认关闭硬件解码使帧恒为 CPU SoftwareFrameResource。
+                o.EnableHardwareDecoding = hwMode;
+                o.EnableDxva = hwMode;
             }),
         }).AddOpenGLRenderer();
 
@@ -263,6 +270,7 @@ internal static class Program
 
         RenderWindow? win = null;
         int presentCount = 0;
+        long gpuServed = 0, cpuServed = 0;   // 零拷贝验收：出餐端 IGpuTextureResource 计数
         bool videoPass = !doVideo;
         bool audioPass = !doAudio;
         // 重播 Ended→Playing 判定（外层声明，使 try 内的重播块与 try 外的 overall 共享作用域）。
@@ -349,6 +357,11 @@ internal static class Program
                 // OpenGL 经统一 FrameChannel 订阅 Present（与 D3D11/Vulkan 行为一致）。
                 // 不订阅则 PresentCount 恒为 0，验证失效。
                 player.VideoFrameAvailable += f => countingFactory.Last?.Present(f);
+                player.VideoFrameAvailable += f =>
+                {
+                    if (f.Resource is IGpuTextureResource) Interlocked.Increment(ref gpuServed);
+                    else Interlocked.Increment(ref cpuServed);
+                };
             }
 
             await player.PlayAsync();
@@ -422,6 +435,15 @@ internal static class Program
                                   $"{(videoPass ? "PASS" : "FAIL (present<5)")}");
                 // 诊断：视频丢帧数。与 present 计数对照可判断尾帧是被 Synchronizer 判定丢弃还是已呈现。
                 Console.WriteLine($"[HEADFUL-VIDEO-DROP] droppedFrames={player.VideoDroppedFrames} present={presentCount}");
+                // —— 全链路零拷贝判定（出餐端实测，仅 --hw 有意义）——
+                if (hwMode)
+                {
+                    Console.WriteLine($"[HEADFUL-ZEROCOPY] GPU纹理帧={gpuServed} CPU内存帧={cpuServed}");
+                    if (backendArg == "ffmpeg")
+                        Console.WriteLine($"[HEADFUL-ZEROCOPY] ffmpeg硬解零拷贝 => {(gpuServed > 0 ? "PASS" : "FAIL (无 GPU 纹理帧，已回落 CPU)")}");
+                    else
+                        Console.WriteLine($"[HEADFUL-ZEROCOPY] 注：--backend {backendArg} 设计上不走零拷贝（VLC 恒回拷 CPU / MF 半 DXVA），仅作计数参考");
+                }
             }
             if (doAudio)
             {
@@ -494,7 +516,7 @@ internal static class Program
             try { win?.Dispose(); } catch { }
         }
 
-        bool overall = videoPass && audioPass && replayPass;
+        bool overall = videoPass && audioPass && replayPass && (!hwMode || backendArg != "ffmpeg" || gpuServed > 0);
         Console.WriteLine();
         if (saveFrames > 0)
             Console.WriteLine($"[HEADFUL-SAVE] 共落盘 {FrameDumper.DumpedCount} 张帧 -> {saveDir}");

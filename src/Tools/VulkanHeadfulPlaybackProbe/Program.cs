@@ -29,7 +29,8 @@ namespace VulkanHeadfulPlaybackProbe;
 /// <remarks>
 /// <para>命令行开关用于隔离变量：</para>
 /// <list type="bullet">
-///   <item><c>--backend</c>：后端选择 <c>mf</c>（默认）/ <c>ffmpeg</c> / <c>vlc</c>，三者均强制软件解码以产出 CPU 帧喂给 Vulkan 上屏。</item>
+///   <item><c>--backend</c>：后端选择 <c>mf</c>（默认）/ <c>ffmpeg</c> / <c>vlc</c>。默认（无 <c>--hw</c>）三者强制软件解码以产出 CPU 帧喂给 Vulkan 上屏；<c>--hw</c> 时按后端能力开启硬解零拷贝（仅 ffmpeg 经 D3D11VA→NV12→RGBA 共享句柄由 VulkanGpuFrameProducer 导入零拷贝，VLC/MF 仍回拷 CPU 仅作计数参考）。</item>
+///   <item><c>--hw</c>：硬解零拷贝验收开关。开启后按后端打开硬解，并打印 <c>[HEADFUL-ZEROCOPY]</c> GPU 纹理帧 / CPU 内存帧计数；<c>--backend ffmpeg</c> 时 GPU 纹理帧=0 判 FAIL。</item>
 ///   <item><c>--visible</c>：窗口真正可见，便于肉眼确认上屏。</item>
 ///   <item><c>--no-video</c>：只验 WASAPI 出声。</item>
 ///   <item><c>--no-audio</c>：只验 Vulkan 上屏。</item>
@@ -83,8 +84,11 @@ internal static class Program
         bool visible = HasFlag(args, "--visible");
         bool enableCategory = HasFlag(args, "--category");
         bool softwareDecode = HasFlag(args, "--software-decode");
+        bool hwMode = HasFlag(args, "--hw");
         // —— 后端选择开关：让同一套 Vulkan 渲染路径覆盖 MF / FFmpeg / VLC 三条后端 ——
-        // 三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource（YUV/BGRA），Vulkan 上传上屏。
+        // 默认软解（three隔离变量）；--hw 时按后端能力开启硬解零拷贝：ffmpeg 经 D3D11VA→NV12→RGBA 共享句柄
+        // 由 VulkanGpuFrameProducer 导入零拷贝上屏；VLC 恒回拷 CPU / MF 半 DXVA 不走零拷贝（仅作计数参考）。
+        Console.WriteLine($"[HEADFUL-HW] hwMode={hwMode}");
         string backendArg = ParseOption(args, "--backend")?.ToLowerInvariant() ?? "mf";
         if (backendArg is not ("mf" or "ffmpeg" or "vlc"))
         {
@@ -192,32 +196,35 @@ internal static class Program
         services.AddSingleton<ILoggerFactory>(loggerFactory);
         // AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
         // 必须接在 builder 链上调用，不能对 ServiceCollection 直接调用。
-        // 后端选择由 --backend 决定（mf/ffmpeg/vlc），三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource，
+        // 后端选择由 --backend 决定（mf/ffmpeg/vlc）。默认（无 --hw）三者强制软件解码，使帧恒为 CPU SoftwareFrameResource，
         // Vulkan 渲染器走「CPU 软解帧 → VkImage 上传 → SwapChain 上屏」路径（GPU shader 做 YUV→RGB + 缩放）。
-        // 注：Vulkan 无法消费 D3D11 DXVA 纹理，故各后端一律软解；硬解零拷贝走 IGpuTextureResource（本探针不验）。
+        // --hw 时：ffmpeg 经 D3D11VA 产 NV12 → 共享句柄由 VulkanGpuFrameProducer 导入零拷贝上屏；
+        // VLC 恒回拷 CPU / MF 半 DXVA 不走零拷贝（仅作 GPU/CPU 计数参考，不判 PASS）。
         MediaBuilder builder = backendArg switch
         {
             "ffmpeg" => services.AddLingFanMedia().AddFFmpeg(o =>
             {
-                // 恒软解：Vulkan 走「CPU 软解帧 → VkImage 上传 → SwapChain 上屏」，无法消费 D3D11VA 纹理，
-                // 故关闭 HardwareAcceleration，帧恒为 CPU SoftwareFrameResource，Vulkan 可上传上屏。
+                // --hw 时开启 D3D11VA 硬解：产 NV12 → 共享句柄由 VulkanGpuFrameProducer 导入零拷贝上屏；
+                // 无 --hw 则强制软解，帧恒为 CPU SoftwareFrameResource，Vulkan 走「VkImage 上传」路径上屏。
                 o.FFmpegLibraryPath = AppContext.BaseDirectory;
                 o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
-                o.HardwareAcceleration = false;
+                o.HardwareAcceleration = hwMode;
             }),
             "vlc" => services.AddLingFanMedia().AddVLCNative(o =>
             {
                 // VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
-                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；EnableHardwareDecoding=false 仍交付 CPU BGRA32，
-                // 由下方 Vulkan 渲染器上传上屏（非零拷贝）。
-                o.EnableHardwareDecoding = false;
+                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；即便 --hw 置 EnableHardwareDecoding=true，
+                // 本仓 VLCVideoDecoder.IsHardwareAccelerated 硬编码 false、帧恒包成 CPU BGRA32（设计如此，非缺陷），
+                // 故 Vulkan 仍走「VkImage 上传」路径（非零拷贝）——本探针仅作 GPU/CPU 计数参考，不判 PASS。
+                o.EnableHardwareDecoding = hwMode;
                 o.Headless = true;
             }),
             _ => services.AddLingFanMedia().AddMediaFoundation(o =>
             {
-                // 恒软解：Vulkan 无法消费 D3D11 DXVA 纹理，强制软件解码使帧恒为 CPU SoftwareFrameResource。
-                o.EnableHardwareDecoding = false;
-                o.EnableDxva = false;
+                // MF 为半 DXVA（硬解激活但 MFT 把纹理读回系统内存，GPU 零拷贝=0），非真零拷贝，故本探针不判 PASS。
+                // --hw 时开启 EnableHardwareDecoding/EnableDxva 作对照，帧仍回拷 CPU；无 --hw 则纯软解。
+                o.EnableHardwareDecoding = hwMode;
+                o.EnableDxva = hwMode;
             }),
         };
 
@@ -237,6 +244,9 @@ internal static class Program
             // 保住 IGpuDeviceContext 注册：AddVulkanRenderer() 原本会注册它（cast 回 VulkanRendererFactory），
             // 手动装饰时必须补回，否则依赖它的层拿不到 GPU 能力上下文。
             builder.Services.AddSingleton<IGpuDeviceContext>(sp => vulkanFactory.Context);
+            // 零拷贝关键：注册 IGpuFrameProducer，否则 ffmpeg 的 _gpuProducer 为 null → --hw 回落软解。
+            // 这与 AddVulkanRenderer()/OpenGLExtensions 的注册同源（vulkanFactory.CreateFrameProducer()）。
+            builder.Services.AddSingleton<IGpuFrameProducer>(sp => vulkanFactory.CreateFrameProducer());
         }
         else
         {
@@ -278,6 +288,7 @@ internal static class Program
 
         RenderWindow? win = null;
         int presentCount = 0;
+        long gpuServed = 0, cpuServed = 0;
         bool videoPass = !doVideo;
         bool audioPass = !doAudio;
         // 重播 Ended→Playing 判定（外层声明，使 try 内的重播块与 try 外的 overall 共享作用域）。
@@ -373,6 +384,12 @@ internal static class Program
                 // 不订阅则 PresentCount 恒为 0，验证失效。
                 player.VideoFrameAvailable += f => countingFactory.Last?.Present(f);
             }
+            // 零拷贝计数：出餐端按资源类型区分 GPU 纹理帧 / CPU 内存帧（全链路判定依据）。
+            player.VideoFrameAvailable += f =>
+            {
+                if (f.Resource is IGpuTextureResource) Interlocked.Increment(ref gpuServed);
+                else Interlocked.Increment(ref cpuServed);
+            };
 
             await player.PlayAsync();
             Console.WriteLine("  PlayAsync 完成，开始轮询…");
@@ -448,6 +465,16 @@ internal static class Program
                                   $"{(videoPass ? "PASS" : "FAIL (present<5)")}");
                 // 诊断：视频丢帧数。与 present 计数对照可判断尾帧是被 Synchronizer 判定丢弃还是已呈现。
                 Console.WriteLine($"[HEADFUL-VIDEO-DROP] droppedFrames={player.VideoDroppedFrames} present={presentCount}");
+                // 零拷贝验收（仅 --hw 打印）：ffmpeg 经 D3D11VA→NV12→RGBA 共享句柄由 VulkanGpuFrameProducer
+                // 导入零拷贝上屏，GPU 纹理帧>0 才算真零拷贝；VLC 恒回拷 CPU / MF 半 DXVA 仅作计数参考，不判 PASS。
+                if (hwMode)
+                {
+                    Console.WriteLine($"[HEADFUL-ZEROCOPY] GPU纹理帧={gpuServed} CPU内存帧={cpuServed}");
+                    if (backendArg == "ffmpeg")
+                        Console.WriteLine($"[HEADFUL-ZEROCOPY] ffmpeg硬解零拷贝 => {(gpuServed > 0 ? "PASS" : "FAIL (无 GPU 纹理帧，已回落 CPU)")}");
+                    else
+                        Console.WriteLine($"[HEADFUL-ZEROCOPY] 注：--backend {backendArg} 设计上不走零拷贝（VLC 恒回拷 CPU / MF 半 DXVA），仅作计数参考");
+                }
                 // 诊断：分相计时——定位每帧 ~92ms 开销归属（CPU 转换 vs GPU 同步 QueueWaitIdle）。
                 // 若 GPU 同步占比极高 → 瓶颈在每帧全队列同步，需改 fence 环消除串行；
                 // 若 CPU 转换占比极高 → 瓶颈在软解 NV12→BGRA，需 SIMD/降分辨率上传等。
@@ -533,7 +560,7 @@ internal static class Program
             try { win?.Dispose(); } catch { }
         }
 
-        bool overall = videoPass && audioPass && replayPass;
+        bool overall = videoPass && audioPass && replayPass && (!hwMode || backendArg != "ffmpeg" || gpuServed > 0);
         Console.WriteLine();
         if (saveFrames > 0)
             Console.WriteLine($"[HEADFUL-SAVE] 共落盘 {FrameDumper.DumpedCount} 张帧 -> {saveDir}");

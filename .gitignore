@@ -507,3 +507,4 @@ ThirdParty/
 /docs/.vitepress/dist
 /docs/.vitepress/dist_*
 /docs/.vitepress/cache
+/vk_settings
