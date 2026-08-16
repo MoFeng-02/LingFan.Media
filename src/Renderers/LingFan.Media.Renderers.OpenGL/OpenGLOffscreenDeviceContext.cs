@@ -28,6 +28,10 @@ public sealed unsafe class OpenGLOffscreenDeviceContext : IGpuDeviceContext, IDi
 {
     private readonly ILogger? _logger;
     private readonly object _lock = new();
+    // GL 访问串行锁：共享组所有者 HGLRC 可能被多线程并发 MakeCurrent（解码线程 import / 渲染线程 dispose），
+    // 而一个 HGLRC 同时只能 current 于一条线程，并发会令另一线程的 WGL 函数指针失效 → AV。
+    // 所有经本上下文的 MakeCurrent/GL 操作须在此锁内串行（生产者 import 与帧资源 dispose 共用同一实例锁）。
+    private readonly object _glAccessLock = new();
     private IGlContext? _offscreen;
     private GpuDeviceCapabilities _capabilities = new("Unknown", 0, 0, 16384, false, false, -1);
     private bool _disposed;
@@ -55,6 +59,10 @@ public sealed unsafe class OpenGLOffscreenDeviceContext : IGpuDeviceContext, IDi
 
     /// <summary>离屏上下文的平台显示句柄（HDC / EGLDisplay）。共享组所有者所在显示——上屏上下文须在其上创建，共享组才有效（EGL 要求同一 EGLDisplay）。</summary>
     public nint OffscreenDisplay => _offscreen?.PlatformDisplay ?? nint.Zero;
+
+    /// <summary>GL 访问串行锁。生产者（解码线程 import）与帧资源（渲染线程 dispose）对共享组所有者 HGLRC 的
+    /// MakeCurrent/GL 操作须在此锁内串行，避免同一 HGLRC 并发 current 于两线程导致 WGL 函数指针失效（AV）。</summary>
+    public object GlAccessLock => _glAccessLock;
 
     /// <summary>将离屏上下文绑定到调用线程（供 <see cref="GLTextureResource"/> 回读/释放纹理）。</summary>
     public void MakeCurrent() => _offscreen?.MakeCurrent();

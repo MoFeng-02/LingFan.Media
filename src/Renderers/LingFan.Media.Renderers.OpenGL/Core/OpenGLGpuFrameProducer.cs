@@ -47,9 +47,9 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
     private readonly ILogger? _logger;
     private readonly object _lock = new();
 
-    // Windows 桥接 D3D11 设备 + WGL 互操作句柄（懒创建、跨帧缓存复用；所有权归生产者）。
+    // Windows 桥接 D3D11 设备（懒创建、跨帧复用；所有权归生产者）。
+    // WGL 互操作句柄不在此处持有——它由 on-screen 渲染上下文（OpenGLShaderPipeline.EnsureWglInteropDevice）现场打开并在管线 Dispose 时关闭。
     private ID3D11Device? _bridgeDevice;
-    private nint _wglInteropDevice;
     private bool _disposed;
 
     /// <summary>初始化 <see cref="OpenGLGpuFrameProducer"/> 的新实例。</summary>
@@ -99,14 +99,15 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
     {
         texture = null;
 
-        // 须先建立并绑定 GL 上下文：WGL 扩展函数经 wglGetProcAddress 解析，仅当 GL 上下文 current 时才返回有效指针
-        // （无上下文静默返 null）。故可用性探测（内部触发函数指针解析）必须发生在 MakeCurrent 之后，
-        // 否则会误判"不可用"并经静态缓存永久禁用零拷贝路径（S_OK≠被接受 的反面：假不可用）。
+        // 在 owner 离屏上下文上完成能力自报 + 行为副作用验证：扩展可用、桥接设备可创建、共享句柄可打开。
+        // 真正的 WGL register/lock 推迟到 on-screen 渲染上下文绘制时执行（见 OpenGLShaderPipeline.PresentWglInteropTexture），
+        // 以规避 owner 上下文注册的对象在 on-screen 上下文上可能无法正确 lock/采样的驱动实现问题。
         _glContext.EnsureCreated();
+        lock (_glContext.GlAccessLock)
+        {
         _glContext.MakeCurrent();
         ID3D11Device1? device1 = null;
         ID3D11Texture2D? d3dTex = null;
-        uint glTex = 0;
         try
         {
             if (!GLNative.IsWglDxInteropAvailable())
@@ -118,7 +119,6 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
 
             // WGL_NV_DX_interop2 无法可移植地采样 NV12 D3D11 纹理（D3D11 渲染器自身亦确认 NV12 硬解纹理不可绑 SRV、须 CPU 往返）。
             // 故 NV12/NV21 不进入 WGL 零拷贝路径，回落 CPU NV12 → GL 着色器（已有 NV12 路径、零新增代码、与 D3D11 渲染器一致）。
-            // 真·零拷贝 NV12 需桥接 D3D11 设备经 ID3D11VideoProcessor 转 RGBA（后续增强，GPU 直转、无 CPU 回读）。
             if (source.Format is PixelFormat.NV12 or PixelFormat.NV21)
             {
                 _logger?.LogDebug("[OPENGL-ZEROCOPY] D3D11 共享纹理为 NV12/NV21，WGL 不可移植采样 → 回落 CPU NV12 路径（与 D3D11 渲染器一致）。");
@@ -139,26 +139,13 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
                 return false;
             }
 
-            GLNative.glGenTextures(1, &glTex);
-            GLNative.glBindTexture(GLNative.GlTexture2DConst, glTex);
-
-            // 把 D3D11 纹理注册为 GL 纹理对象（零拷贝；解码输出仅只读采样）。注册需 GL 上下文 current（已绑定）。
-            // 返回的对象句柄独立于 GL 纹理 ID：unregister / lock / unlock 均须用此句柄（WGL_NV_DX_interop2 规范）。
-            nint interopObj = GLNative.WglDXRegisterObjectNV(
-                _wglInteropDevice, (void*)d3dTex.NativePointer, glTex,
-                (uint)GLNative.GlTexture2DConst, (uint)GLNative.WglAccessReadOnlyNV);
-            if (interopObj == nint.Zero)
-            {
-                _logger?.LogWarning("[OPENGL-ZEROCOPY] wglDXRegisterObjectNV 失败，回落软件解码。");
-                return false;
-            }
-
+            // 导入成功：把 D3D 纹理引用交给 GLD3D11InteropTexture；真正的 GL 注册在 on-screen 上下文绘制时进行。
             texture = new GLD3D11InteropTexture(
                 width: source.Width, height: source.Height, format: source.Format,
-                textureId: glTex, interopDevice: _wglInteropDevice, interopObject: interopObj, d3dTexture: d3dTex,
+                d3dTexture: d3dTex, bridgeDevice: _bridgeDevice,
                 glContext: _glContext, subresourceIndex: source.SubresourceIndex);
 
-            // 所有权移交 GLD3D11InteropTexture：本方法不再释放 d3dTex（桥接设备与互操作句柄由生产者持有）。
+            // 所有权移交 GLD3D11InteropTexture：本方法不再释放 d3dTex。
             // NT 共享句柄：OpenSharedResource1 已为生产者建立独立纹理引用，此处关闭句柄（不销毁资源，防内核句柄泄漏）。
             d3dTex = null;
             CloseHandle(source.Handle);
@@ -166,7 +153,6 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         }
         catch
         {
-            if (glTex != 0) GLNative.glDeleteTextures(1, &glTex);
             d3dTex?.Dispose();
             CloseHandle(source.Handle);
             throw;
@@ -175,6 +161,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         {
             device1?.Dispose();
             _glContext.ReleaseCurrent();
+        }
         }
     }
 
@@ -191,23 +178,12 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
             _glContext.EnsureCreated();
 
             // 桥接 D3D11 设备：仅用于把解码侧共享句柄打开为纹理并与 GL 互操作，不参与呈现（呈现由 on-screen GL 上下文完成）。
+            // 注意：此处不打开 WGL 互操作设备——WGL interop 句柄强关联「打开它的 GL 上下文」，必须在 on-screen 渲染上下文
+            // （OpenGLShaderPipeline.EnsureWglInteropDevice）上现场打开，否则在离屏 owner 上下文打开的 interop 句柄在 on-screen 上无法正确注册/lock。
             ID3D11Device device = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
                 DriverType.Hardware,
                 DeviceCreationFlags.BgraSupport);
-            try
-            {
-                nint interop = GLNative.WglDXOpenDeviceNV((void*)device.NativePointer);
-                if (interop == nint.Zero)
-                    throw new InvalidOperationException("wglDXOpenDeviceNV 失败（WGL_NV_DX_interop2 不可用或驱动不兼容）。");
-
-                _bridgeDevice = device;
-                _wglInteropDevice = interop;
-            }
-            catch
-            {
-                device.Dispose();
-                throw;
-            }
+            _bridgeDevice = device;
         }
     }
 
@@ -219,12 +195,15 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
 
         // 须先建立并绑定 EGL/GL 上下文：EGL 扩展函数经 eglGetProcAddress 解析，仅当 EGL 上下文 current 时返回有效指针。
         // 可用性探测必须发生在 MakeCurrent 之后，否则误判"不可用"并经静态缓存永久禁用零拷贝路径。
+        // 整个 EGL 段须在同一锁内串行（同 WGL 路径：共享组所有者上下文不能并发 current 于两线程）。
         _glContext.EnsureCreated();
-        _glContext.MakeCurrent();
-        nint eglImage = nint.Zero;
-        uint glTex = 0;
-        try
+        lock (_glContext.GlAccessLock)
         {
+            _glContext.MakeCurrent();
+            nint eglImage = nint.Zero;
+            uint glTex = 0;
+            try
+            {
             if (!GLNative.IsEglDmaBufImportAvailable())
             {
                 _logger?.LogWarning("[OPENGL-ZEROCOPY] EGL_EXT_image_dma_buf_import 不可用，回落软件解码。");
@@ -277,6 +256,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         {
             _glContext.ReleaseCurrent();
         }
+        }
     }
 
     /// <inheritdoc/>
@@ -285,8 +265,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         if (_disposed) return;
         _disposed = true;
 
-        if (_wglInteropDevice != nint.Zero && GLNative.IsWglDxInteropAvailable())
-            GLNative.WglDXCloseDeviceNV(_wglInteropDevice);
+        // 桥接 D3D11 设备直接释放；WGL 互操作句柄由 on-screen 渲染上下文（OpenGLShaderPipeline）持有并在其 Dispose 时关闭。
         _bridgeDevice?.Dispose();
         _bridgeDevice = null;
     }

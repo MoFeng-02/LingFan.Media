@@ -215,22 +215,20 @@ internal static class Program
         }).AddOpenGLRenderer();
 
         // —— 视频侧 ——
-        CountingVideoRendererFactory? countingFactory = null;
         if (doVideo)
         {
-            // 必须显式注册 OpenGL 工厂（装饰器包裹）。AddLingFanMedia 只注册契约骨架，
-            // 不注册具体渲染器；缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
-            // 装饰器包裹真实 OpenGLRendererFactory 以精确统计 Present 调用。
-            // OpenGL 走「CPU 软解帧 → GL 纹理上传 → 着色器上屏」，无法消费 D3D11 DXVA 纹理，
-            // 故本探针恒强制软件解码（见下方 AddMediaFoundation 的 EnableHardwareDecoding/EnableDxva=false）。
-            var glFactory = new OpenGLRendererFactory(loggerFactory.CreateLogger<OpenGLRenderer>())
+            // 复用 AddOpenGLRenderer() 已注册的 OpenGLRendererFactory DI 单例（含工厂级离屏 GL 设备上下文单例），
+            // 以 CountingVideoRendererFactory 装饰器包裹注册为 IVideoRendererFactory。
+            // 关键：生产者(IGpuFrameProducer)与 on-screen 渲染器必须共享【同一】OpenGLOffscreenDeviceContext
+            // （GL 共享组所有者），零拷贝导入的 GL 纹理才对渲染器可见。若此处另 new 一个 OpenGLRendererFactory，
+            // 会产生第二个离屏上下文 → ① RegisterClassExW 同名类重复注册报 1410；② 两个 GL 共享组互不连通 → 黑屏。
+            // 故此处经 DI 单例解析同一工厂，仅用装饰器加计数（countingFactory 引用在 BuildServiceProvider 后取出）。
+            builder.Services.AddSingleton<IVideoRendererFactory>(sp =>
             {
-                ScaleMode = scaleMode
-            };
-            countingFactory = new CountingVideoRendererFactory(glFactory, saveFrames, saveDir);
-            builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
-            // 备注：OpenGL 渲染器无 IGpuDeviceContext 概念（GL 上下文为渲染器实例级，非工厂共享 Device 单例），
-            // 故不注册 IGpuDeviceContext。
+                var glFactory = sp.GetRequiredService<OpenGLRendererFactory>();
+                glFactory.ScaleMode = scaleMode;
+                return new CountingVideoRendererFactory(glFactory, saveFrames, saveDir);
+            });
         }
         else
         {
@@ -250,6 +248,11 @@ internal static class Program
             builder.AddSilentAudioOutput();
 
         await using var sp = services.BuildServiceProvider();
+        // countingFactory 引用：IVideoRendererFactory 经 DI 解析为「装饰器包裹的 OpenGLRendererFactory 单例」，
+        // 与生产者(IGpuFrameProducer)共享同一 OpenGLOffscreenDeviceContext（GL 共享组）。doAudio 用例不建视频工厂。
+        CountingVideoRendererFactory? countingFactory = doVideo
+            ? (CountingVideoRendererFactory)sp.GetRequiredService<IVideoRendererFactory>()
+            : null;
         var player = sp.GetRequiredService<IMediaPlayer>();
 
         // 音频进度观测量：累计进入提交链的采样数（区分「真丢帧」与「时钟 lag」）

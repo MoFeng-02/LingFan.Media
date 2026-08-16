@@ -41,6 +41,11 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     // 所选物理设备的身份（供 no-airspace 源验证「同 GPU 对齐」）。
     private byte[] _physicalDeviceUuid = [];
     private byte[] _physicalDeviceLuid = [];
+    // 零拷贝跨 API 导入对齐：优先选择 LUID 与此一致的物理设备。
+    // ffmpeg 的 D3D11VA 共享纹理由「默认 D3D11 适配器」创建，Vulkan 必须选同一 GPU 才能导入
+    // （跨厂商/跨 GPU 导入会被驱动拒绝，报 ErrorOutOfDeviceMemory）。默认 null = 不强制，
+    // 沿用「独显优先」启发式（纯 Vulkan 渲染性能最优）。
+    private byte[]? _preferredAdapterLuid;
     // 是否已为 no-airspace 共享表面启用外部内存/信号量扩展。
     private bool _externalSharingEnabled;
     // Apple / MoltenVK：是否已启用 VK_EXT_metal_objects（无空域零拷贝经其导出 IOSurface / MTLSharedEvent）。
@@ -55,6 +60,22 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     /// <summary>软帧缩放模式（契约层 <see cref="AspectRatioMode"/>）。默认 <see cref="AspectRatioMode.Uniform"/>（信箱）。</summary>
     /// <remarks>创建渲染器单例时透传至其实例；运行时改此值对缓存单例立即生效。</remarks>
     public AspectRatioMode ScaleMode { get; set; } = AspectRatioMode.Uniform;
+
+    /// <summary>
+    /// 零拷贝跨 API 导入对齐：优先选择 LUID 与此字节数组（8 字节）一致的 Vulkan 物理设备。
+    /// </summary>
+    /// <remarks>
+    /// <para>用于 D3D11VA 零拷贝场景——ffmpeg 的 D3D11 共享纹理由「默认 D3D11 适配器」创建，
+    /// 若 Vulkan 渲染器选了另一张 GPU（如独显优先选中与 D3D11 默认适配器不同的卡），
+    /// 导入 D3D11 共享句柄会被驱动拒绝（<c>ErrorOutOfDeviceMemory</c>）。设此值可强制 Vulkan
+    /// 选与 D3D11 纹理同 GPU 的设备，使零拷贝成立。</para>
+    /// <para>默认 null：不强制对齐，沿用「独显优先」启发式（纯 Vulkan 渲染性能最优）。</para>
+    /// </remarks>
+    public byte[]? PreferredAdapterLuid
+    {
+        get => _preferredAdapterLuid;
+        set => _preferredAdapterLuid = value;
+    }
 
     public VulkanRendererFactory(ILoggerFactory loggerFactory)
     {
@@ -234,6 +255,31 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                         PhysicalDeviceType.VirtualGpu => 1,
                         _ => 0,
                     };
+
+                    // 零拷贝跨 API 导入对齐：若指定了首选适配器 LUID（D3D11 默认适配器），
+                    // 命中则大幅提权，压过独显优先启发式——跨 GPU/厂商导入 D3D11 共享纹理会被驱动拒绝。
+                    if (_preferredAdapterLuid is { } wantLuid)
+                    {
+                        PhysicalDeviceIDProperties candIdProps = new()
+                        {
+                            SType = StructureType.PhysicalDeviceIDProperties,
+                        };
+                        PhysicalDeviceProperties2 candProps2 = new()
+                        {
+                            SType = StructureType.PhysicalDeviceProperties2,
+                            PNext = &candIdProps,
+                        };
+                        VulkanNative.GetPhysicalDeviceProperties2(candidate, &candProps2);
+                        // 不校验 DeviceLuidValid：本 Silk.NET 版本无该字段；无效 LUID 恒为 0，
+                        // 与真实 D3D11 适配器 LUID（非 0）比较必不命中，安全回落独显优先。
+                        if (LuidEquals(candIdProps.DeviceLuid, wantLuid))
+                        {
+                            score += 100;
+                            _logger.LogDebug("Vulkan 物理设备选择：候选命中首选适配器 LUID，提权对齐零拷贝导入（{Name}）",
+                                GetDeviceNameSafe(candProps.DeviceName));
+                        }
+                    }
+
                     if (score > bestScore)
                     {
                         bestScore = score;
@@ -467,6 +513,24 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 return i;
         }
         return uint.MaxValue;
+    }
+
+    /// <summary>从 Vulkan 固定 256 字节设备名缓冲安全取 UTF-8 字符串（诊断用）。</summary>
+    private static unsafe string GetDeviceNameSafe(byte* name)
+    {
+        if (name is null) return "(unknown)";
+        ReadOnlySpan<byte> span = new(name, 256);
+        int nul = span.IndexOf((byte)0);
+        return System.Text.Encoding.UTF8.GetString(nul >= 0 ? span[..nul] : span);
+    }
+
+    /// <summary>比较 Vulkan 设备 LUID（8 字节固定缓冲）与目标 LUID 字节数组（8 字节）是否一致。</summary>
+    private static unsafe bool LuidEquals(byte* a, byte[] b)
+    {
+        if (a is null || b is null || b.Length < 8) return false;
+        for (int i = 0; i < 8; i++)
+            if (a[i] != b[i]) return false;
+        return true;
     }
 
     // 先枚举设备实际支持的扩展再过滤——直接请求未支持的扩展会让

@@ -17,6 +17,7 @@ public sealed class FFmpegVideoDecoderFactory : IVideoDecoderFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly IGpuDeviceContext? _gpuContext;
     private readonly FFmpegOptions? _options;
+    private readonly IEnumerable<IGpuFrameProducer>? _frameProducers;
 
     /// <summary>
     /// 初始化 <see cref="FFmpegVideoDecoderFactory"/> 的新实例。
@@ -24,17 +25,19 @@ public sealed class FFmpegVideoDecoderFactory : IVideoDecoderFactory
     /// <param name="loggerFactory">日志工厂。</param>
     /// <param name="gpuContext">可选 GPU 设备上下文（注册了 D3D11 渲染器时由 DI 注入，启用 D3D11VA 硬解）。</param>
     /// <param name="options">可选 FFmpeg 配置（AddFFmpeg 注册的 Singleton；含 MediaCodec Surface 注入点）。</param>
-    public FFmpegVideoDecoderFactory(ILoggerFactory loggerFactory, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null)
+    /// <param name="frameProducers">可选零拷贝帧生产者（GL/Vulkan 渲染器注册，供分支 237 GPU 零拷贝导入）。</param>
+    public FFmpegVideoDecoderFactory(ILoggerFactory loggerFactory, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null, IEnumerable<IGpuFrameProducer>? frameProducers = null)
     {
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _gpuContext = gpuContext;
         _options = options;
+        _frameProducers = frameProducers;
     }
 
     /// <inheritdoc/>
     public IVideoDecoder Create(VideoCodec codec, VideoSettings settings)
     {
-        var decoder = new FFmpegVideoDecoder(_loggerFactory.CreateLogger<FFmpegVideoDecoder>(), _gpuContext, _options);
+        var decoder = new FFmpegVideoDecoder(_loggerFactory.CreateLogger<FFmpegVideoDecoder>(), _gpuContext, _options, _frameProducers);
         decoder.Initialize(codec, settings);
         return decoder;
     }

@@ -201,6 +201,10 @@ public static unsafe partial class VulkanNative
             _createImage = (delegate* unmanaged[Stdcall]<Device, ImageCreateInfo*, AllocationCallbacks*, Image*, Result>)vkGetDeviceProcAddr(h, "vkCreateImage");
             _destroyImage = (delegate* unmanaged[Stdcall]<Device, Image, AllocationCallbacks*, void>)vkGetDeviceProcAddr(h, "vkDestroyImage");
             _getImageMemoryRequirements = (delegate* unmanaged[Stdcall]<Device, Image, MemoryRequirements*, void>)vkGetDeviceProcAddr(h, "vkGetImageMemoryRequirements");
+            // 外部内存导入纹理的内存需求必须用 v2（带回 VkMemoryDedicatedRequirements）取权威 size/memoryTypeBits；
+            // v1 vkGetImageMemoryRequirements 对带 VK_EXTERNAL_MEMORY 的 image 返回的 memoryTypeBits/size 在导入场景下不可靠
+            // （NVIDIA 上尤甚，导致 vkAllocateMemory 误判为真实分配 → ErrorOutOfDeviceMemory）。
+            _getImageMemoryRequirements2 = (delegate* unmanaged[Stdcall]<Device, ImageMemoryRequirementsInfo2*, MemoryRequirements2*, void>)vkGetDeviceProcAddr(h, "vkGetImageMemoryRequirements2");
             _allocateMemory = (delegate* unmanaged[Stdcall]<Device, MemoryAllocateInfo*, AllocationCallbacks*, DeviceMemory*, Result>)vkGetDeviceProcAddr(h, "vkAllocateMemory");
             _freeMemory = (delegate* unmanaged[Stdcall]<Device, DeviceMemory, AllocationCallbacks*, void>)vkGetDeviceProcAddr(h, "vkFreeMemory");
             _bindImageMemory = (delegate* unmanaged[Stdcall]<Device, Image, DeviceMemory, ulong, Result>)vkGetDeviceProcAddr(h, "vkBindImageMemory");
@@ -362,6 +366,7 @@ public static unsafe partial class VulkanNative
     private static unsafe delegate* unmanaged[Stdcall]<Device, ImageCreateInfo*, AllocationCallbacks*, Image*, Result> _createImage;
     private static unsafe delegate* unmanaged[Stdcall]<Device, Image, AllocationCallbacks*, void> _destroyImage;
     private static unsafe delegate* unmanaged[Stdcall]<Device, Image, MemoryRequirements*, void> _getImageMemoryRequirements;
+    private static unsafe delegate* unmanaged[Stdcall]<Device, ImageMemoryRequirementsInfo2*, MemoryRequirements2*, void> _getImageMemoryRequirements2;
     private static unsafe delegate* unmanaged[Stdcall]<Device, MemoryAllocateInfo*, AllocationCallbacks*, DeviceMemory*, Result> _allocateMemory;
     private static unsafe delegate* unmanaged[Stdcall]<Device, DeviceMemory, AllocationCallbacks*, void> _freeMemory;
     private static unsafe delegate* unmanaged[Stdcall]<Device, Image, DeviceMemory, ulong, Result> _bindImageMemory;
@@ -580,6 +585,20 @@ public static unsafe partial class VulkanNative
 
     public static unsafe void GetImageMemoryRequirements(Device device, Image image, MemoryRequirements* pMemoryRequirements)
         => _getImageMemoryRequirements(device, image, pMemoryRequirements);
+
+    /// <summary>
+    /// 外部内存导入纹理的需求查询必须用 v2（带回 <see cref="MemoryDedicatedRequirements"/>）取权威 size / memoryTypeBits。
+    /// Vulkan 1.1+ 为 core；若设备未提供（1.0 且未启用 VK_KHR_get_memory_requirements2）则为 null，
+    /// 调用方应回退到 <see cref="GetImageMemoryRequirements"/>。
+    /// </summary>
+    public static bool HasImageMemoryRequirements2 => _getImageMemoryRequirements2 != null;
+
+    public static unsafe void GetImageMemoryRequirements2(Device device, ImageMemoryRequirementsInfo2* pInfo, MemoryRequirements2* pMemoryRequirements)
+    {
+        if (_getImageMemoryRequirements2 == null)
+            throw new InvalidOperationException("vkGetImageMemoryRequirements2 不可用（请确认 Vulkan 1.1+ 或已启用 VK_KHR_get_memory_requirements2）。");
+        _getImageMemoryRequirements2(device, pInfo, pMemoryRequirements);
+    }
 
     public static unsafe Result AllocateMemory(Device device, ref MemoryAllocateInfo pAllocateInfo, AllocationCallbacks* pAllocator, out DeviceMemory pMemory)
     {

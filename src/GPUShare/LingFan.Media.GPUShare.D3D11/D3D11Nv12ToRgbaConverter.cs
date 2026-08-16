@@ -35,6 +35,10 @@ public sealed class D3D11Nv12ToRgbaConverter : IDisposable
     private int _contentHeight = -1;
     private bool _disposed;
 
+    // 跨设备共享纹理（SharedKeyedMutex）的 KeyedMutex 超时（毫秒）。
+    // 转换器在解码线程执行，写入后须立即释放锁供渲染器（跨 API）消费；超时即认为消费方阻塞，丢帧回落软解。
+    private const int KeyedMutexTimeoutMs = 5000;
+
     public D3D11Nv12ToRgbaConverter(IntPtr deviceHandle, IntPtr contextHandle)
     {
         // 包装既有共享设备指针（Vortice 构造不 AddRef；Dispose 时显式跳过本两项）。
@@ -113,56 +117,71 @@ public sealed class D3D11Nv12ToRgbaConverter : IDisposable
 
             try
             {
-            // 2. 输入/输出视图
-            // 注意：CreateVideoProcessor*View 返回的视图 COM 对象由本方法持有，必须显式 Dispose，
-            // 否则每帧泄漏 2 个视频处理器视图。blt+Flush 后 GPU 在途命令由 D3D11 运行时保活，可安全释放视图。
-            var inputDesc = new VideoProcessorInputViewDescription
-            {
-                FourCC = 0,
-                ViewDimension = VideoProcessorInputViewDimension.Texture2D,
-                Texture2D = new Texture2DVideoProcessorInputView
+                // 2. 输入/输出视图
+                // 注意：CreateVideoProcessor*View 返回的视图 COM 对象由本方法持有，必须显式 Dispose，
+                // 否则每帧泄漏 2 个视频处理器视图。blt+Flush 后 GPU 在途命令由 D3D11 运行时保活，可安全释放视图。
+                var inputDesc = new VideoProcessorInputViewDescription
                 {
-                    ArraySlice = (uint)subresourceIndex,
-                    MipSlice = 0,
-                },
-            };
-
-            // nv12TexturePtr 是 FFmpeg 拥有的 NV12 纹理；Vortice IntPtr 构造不 AddRef（不接管所有权），
-            // 须抑制其包装器终结器，禁止 finalizer 对该纹理调用 Release（否则双重释放 / use-after-free）。
-            var nv12Resource = new ID3D11Resource(nv12TexturePtr);
-            try
-            {
-                using ID3D11VideoProcessorInputView inputView =
-                    _videoDevice.CreateVideoProcessorInputView(nv12Resource, _enumerator!, inputDesc);
-
-                var outputDesc = new VideoProcessorOutputViewDescription
-                {
-                    ViewDimension = VideoProcessorOutputViewDimension.Texture2D,
-                    Texture2D = new Texture2DVideoProcessorOutputView { MipSlice = 0 },
+                    FourCC = 0,
+                    ViewDimension = VideoProcessorInputViewDimension.Texture2D,
+                    Texture2D = new Texture2DVideoProcessorInputView
+                    {
+                        ArraySlice = (uint)subresourceIndex,
+                        MipSlice = 0,
+                    },
                 };
-                using ID3D11VideoProcessorOutputView outputView =
-                    _videoDevice.CreateVideoProcessorOutputView(output, _enumerator!, outputDesc);
 
-                // 3. VideoProcessorBlt：NV12 → RGBA（GPU 硬件视频处理器）
-                var stream = new VideoProcessorStream
+                // nv12TexturePtr 是 FFmpeg 拥有的 NV12 纹理；Vortice IntPtr 构造不 AddRef（不接管所有权），
+                // 须抑制其包装器终结器，禁止 finalizer 对该纹理调用 Release（否则双重释放 / use-after-free）。
+                var nv12Resource = new ID3D11Resource(nv12TexturePtr);
+                IDXGIKeyedMutex? keyedMutex = null;
+                bool acquired = false;
+                try
                 {
-                    Enable = true,
-                    InputSurface = inputView,
-                    InputFrameOrField = 0,
-                    OutputIndex = 0,
-                };
-                _videoContext.VideoProcessorBlt(_processor, outputView, 0, 1, new[] { stream });
+                    using ID3D11VideoProcessorInputView inputView =
+                        _videoDevice.CreateVideoProcessorInputView(nv12Resource, _enumerator!, inputDesc);
 
-                // 4. 确保 GPU 命令提交
-                _context.Flush();
-            }
-            finally
-            {
-                GC.SuppressFinalize(nv12Resource);
-            }
+                    var outputDesc = new VideoProcessorOutputViewDescription
+                    {
+                        ViewDimension = VideoProcessorOutputViewDimension.Texture2D,
+                        Texture2D = new Texture2DVideoProcessorOutputView { MipSlice = 0 },
+                    };
+                    using ID3D11VideoProcessorOutputView outputView =
+                        _videoDevice.CreateVideoProcessorOutputView(output, _enumerator!, outputDesc);
 
-            // 5. 取 DXGI 共享句柄（Vortice 干净封装，不碰 raw vtable；output 纹理仍由本方法持有并 out 返回）
-            rgbaSharedHandle = D3D11SharedHandle.GetSharedHandle(output);
+                    // 输出纹理以 SharedKeyedMutex 创建，跨设备共享须先 Acquire 再写入。
+                    try { keyedMutex = output.QueryInterface<IDXGIKeyedMutex>(); }
+                    catch (Exception) { keyedMutex = null; }
+                    if (keyedMutex is not null)
+                    {
+                        keyedMutex.AcquireSync(0, KeyedMutexTimeoutMs);
+                        acquired = true;
+                    }
+
+                    // 3. VideoProcessorBlt：NV12 → RGBA（GPU 硬件视频处理器）
+                    var stream = new VideoProcessorStream
+                    {
+                        Enable = true,
+                        InputSurface = inputView,
+                        InputFrameOrField = 0,
+                        OutputIndex = 0,
+                    };
+                    _videoContext.VideoProcessorBlt(_processor, outputView, 0, 1, new[] { stream });
+
+                    // 4. 确保 GPU 命令提交
+                    _context.Flush();
+                }
+                finally
+                {
+                    // 写入完成即释放锁，使跨 API 消费者（GL/Vulkan）可安全采样。
+                    if (acquired && keyedMutex is not null)
+                        keyedMutex.ReleaseSync(0);
+                    keyedMutex?.Dispose();
+                    GC.SuppressFinalize(nv12Resource);
+                }
+
+                // 5. 取 DXGI 共享句柄（Vortice 干净封装，不碰 raw vtable；output 纹理仍由本方法持有并 out 返回）
+                rgbaSharedHandle = D3D11SharedHandle.GetSharedHandle(output);
                 if (rgbaSharedHandle == IntPtr.Zero)
                 {
                     output.Dispose();

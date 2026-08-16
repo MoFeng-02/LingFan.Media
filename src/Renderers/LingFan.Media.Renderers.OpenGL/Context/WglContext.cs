@@ -211,7 +211,14 @@ internal sealed unsafe class WglContext : IGlContext
             };
             ushort atom = GLNative.RegisterClassExW(ref wc);
             if (atom == 0)
-                throw new InvalidOperationException($"WGL 离屏窗口类注册失败(err={Marshal.GetLastPInvokeError()})。");
+            {
+                // 窗口类 LingFanGLDeviceCtx 为进程级全局名。本进程另一离屏 GL 上下文（共享组所有者）已注册过同名类时，
+                // RegisterClassExW 返回 0 且 GetLastError=ERROR_CLASS_ALREADY_EXISTS(1410)，属可复用既有类的良性情形，非失败。
+                // 若不特判，多实例（如探针同时持有装饰器工厂与 DI 单例工厂）会在此误抛，阻断零拷贝导入。
+                const int ERROR_CLASS_ALREADY_EXISTS = 1410;
+                if (Marshal.GetLastPInvokeError() != ERROR_CLASS_ALREADY_EXISTS)
+                    throw new InvalidOperationException($"WGL 离屏窗口类注册失败(err={Marshal.GetLastPInvokeError()})。");
+            }
             nint hwnd = GLNative.CreateWindowExW(0, OffscreenClassName, "", 0, 0, 0, 1, 1,
                 nint.Zero, nint.Zero, nint.Zero, nint.Zero);
             if (hwnd == nint.Zero)

@@ -19,6 +19,9 @@ using LingFan.Media.Renderers.Vulkan;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Vortice.DXGI;
+using Vortice.Direct3D;
+using Vortice.Direct3D11;
 
 namespace VulkanHeadfulPlaybackProbe;
 
@@ -239,6 +242,25 @@ internal static class Program
             // 故本探针恒强制软件解码（见下方 AddMediaFoundation 的 EnableHardwareDecoding/EnableDxva=false）。
             var vulkanFactory = new VulkanRendererFactory(loggerFactory);
             vulkanFactory.ScaleMode = scaleMode;
+            // 零拷贝跨 GPU 对齐：ffmpeg 的 D3D11VA 共享纹理由「默认 D3D11 适配器」创建
+            // （D3D11CreateDevice(DriverType.Hardware) 不指定适配器 → 默认适配器），而 Vulkan 渲染器
+            // 默认「独显优先」。在 AMD 集显 + 3060 这类混合显卡上二者会落到不同 GPU，
+            // 跨 GPU/厂商导入 D3D11 共享句柄会被驱动拒绝（vkAllocateMemory ErrorOutOfDeviceMemory）。
+            // 取默认 D3D11 适配器 LUID 注入工厂，强制 Vulkan 选同一张卡使零拷贝成立。
+            // 纯软解（无 --hw）无 D3D11 互操作，无需对齐，跳过以免改变纯 Vulkan 性能选择。
+            if (hwMode)
+            {
+                byte[]? d3d11Luid = QueryDefaultD3D11AdapterLuid();
+                if (d3d11Luid is not null)
+                {
+                    vulkanFactory.PreferredAdapterLuid = d3d11Luid;
+                    Console.WriteLine("[HEADFUL-GPUALIGN] 已对齐 Vulkan 物理设备选择到 D3D11 默认适配器 LUID（零拷贝跨 GPU 修复）");
+                }
+                else
+                {
+                    Console.WriteLine("[HEADFUL-GPUALIGN] 取 D3D11 默认适配器 LUID 失败，零拷贝对齐跳过（纯独显机器通常无需对齐）");
+                }
+            }
             countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir);
             builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
             // 保住 IGpuDeviceContext 注册：AddVulkanRenderer() 原本会注册它（cast 回 VulkanRendererFactory），
@@ -799,6 +821,41 @@ internal static class Program
             dir = dir.Parent;
         }
         return null;
+    }
+
+    // ── 零拷贝跨 GPU 对齐：取默认 D3D11 适配器 LUID ──
+    // 以与 ffmpeg 零拷贝分支完全相同的 D3D11CreateDevice(DriverType.Hardware) 创建一次性设备，
+    // 经 IDXGIDevice 查其所属适配器，返回 LUID（8 字节）。该 LUID 即 D3D11VA 共享纹理所在 GPU，
+    // 用于对齐 Vulkan 物理设备选择（跨 GPU/厂商导入 D3D11 共享句柄会被驱动拒绝）。
+
+    /// <summary>取「默认 D3D11 适配器」LUID（8 字节），用于对齐 Vulkan 物理设备选择到零拷贝共享纹理所在 GPU。</summary>
+    private static unsafe byte[]? QueryDefaultD3D11AdapterLuid()
+    {
+        try
+        {
+            // 与 FFmpegVideoDecoder 分支 237 同构：D3D11CreateDevice(DriverType.Hardware) 不指定适配器
+            // → 默认适配器，正是 D3D11VA 共享纹理（NV12→RGBA 转换器）所在 GPU。
+            using ID3D11Device dev = D3D11.D3D11CreateDevice(DriverType.Hardware, DeviceCreationFlags.BgraSupport);
+            using IDXGIDevice dxgiDev = dev.QueryInterface<IDXGIDevice>();
+            if (dxgiDev.GetAdapter(out IDXGIAdapter? adapter) != 0 || adapter is null)
+                return null;
+            using (adapter)
+            {
+                // Vortice.DXGI 3.8.3：适配器描述经属性暴露，无 GetDesc1 方法。
+                // IDXGIAdapter1.Description1 返回 AdapterDescription1，其 Luid 字段为 Vortice.Luid(LowPart:uint, HighPart:int)。
+                using IDXGIAdapter1 adapter1 = adapter.QueryInterface<IDXGIAdapter1>();
+                AdapterDescription1 desc = adapter1.Description1;
+                byte[] luid = new byte[8];
+                BinaryPrimitives.WriteUInt32LittleEndian(luid.AsSpan(0), desc.Luid.LowPart);
+                BinaryPrimitives.WriteInt32LittleEndian(luid.AsSpan(4), desc.Luid.HighPart);
+                return luid;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[HEADFUL-GPUALIGN] 查询默认 D3D11 适配器 LUID 异常: {ex.Message}");
+            return null;
+        }
     }
 
     // ── VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH ──

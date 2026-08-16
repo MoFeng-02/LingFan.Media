@@ -6,105 +6,67 @@ using Vortice.DXGI;
 namespace LingFan.Media.Renderers.OpenGL;
 
 /// <summary>
-/// 跨 API 零拷贝 GL 纹理帧资源（Windows：WGL_NV_DX_interop2 导入的 D3D11 共享纹理）。
+/// 跨 API 零拷贝 GL 纹理帧资源（Windows：WGL_NV_DX_interop2 待导入的 D3D11 共享纹理）。
 /// </summary>
 /// <remarks>
-/// <para>由 <see cref="OpenGLGpuFrameProducer"/> 经 WGL_NV_DX_interop2 把 D3D11 共享纹理注册为 GL 纹理后构造，
-/// 经中立 <see cref="IGpuTextureResource"/> 交由 <see cref="OpenGLShaderPipeline.PresentGpuTexture"/> 直接采样（零拷贝）。</para>
-/// <para><b>生命周期</b>：Dispose 须在当前 GL 上下文（共享组）下完成——先 <c>wglDXUnregisterObjectNV</c> 解除 D3D 绑定，
-/// 再 <c>glDeleteTextures</c>，最后释放每帧的 D3D11 共享纹理引用。桥接 D3D11 设备与 WGL 互操作句柄由生产者持有，
-/// 此处不释放（避免与在途帧竞争）。</para>
-/// <para><b>线程安全</b>：GL 上下文具线程亲和，Dispose 经 <see cref="OpenGLOffscreenDeviceContext"/> 绑定/解绑，
-/// 与渲染线程交替安全（同 <see cref="IGlContext"/> 约定）。</para>
+/// <para>本类本身<b>不</b>持有已注册的 GL 纹理，而是把解码侧打开的每帧 D3D11 共享纹理引用 + 桥接 D3D11 设备
+/// 交给 <see cref="OpenGLShaderPipeline.PresentGpuTexture"/>；管线在绘制时于当前 on-screen GL 上下文上执行
+/// <c>wglDXOpenDeviceNV / wglDXRegisterObjectNV / wglDXLockObjectsNV</c>，绘制后立即 unregister/delete/close。
+/// 这样避免 owner 离屏上下文与 on-screen 渲染上下文对同一 WGL 互操作对象的跨上下文歧义（共享组虽可共享纹理名，
+/// 但 WGL 互操作对象由 NVIDIA 实现强关联注册上下文；在 on-screen 上下文上重注册是可靠做法）。</para>
+/// <para><b>生命周期</b>：Dispose 仅释放本类拥有的每帧 D3D11 共享纹理引用；GL/WGL 资源由管线在单帧内用完即释。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
 /// </remarks>
 public sealed unsafe class GLD3D11InteropTexture : IFrameResource, IGpuTextureResource
 {
-    private readonly uint _textureId;
-    private readonly int _subresourceIndex;
-    private readonly nint _interopDevice;
-    private readonly nint _interopObject;   // wglDXRegisterObjectNV 返回的对象句柄（≠ GL 纹理 ID）
     private readonly ID3D11Texture2D _d3dTexture;
+    private readonly ID3D11Device _bridgeDevice;
     private readonly OpenGLOffscreenDeviceContext _glContext;
-    private readonly object _lock = new();
+    private readonly int _subresourceIndex;
     private bool _disposed;
 
     public int Width { get; }
     public int Height { get; }
     public PixelFormat Format { get; }
 
+    /// <summary>用于在 on-screen 上下文上打开 WGL 互操作设备的桥接 D3D11 设备。</summary>
+    internal ID3D11Device BridgeDevice => _bridgeDevice;
+
+    /// <summary>解码侧经 <c>OpenSharedResource1</c> 打开的每帧 D3D11 共享纹理。</summary>
+    internal ID3D11Texture2D D3dTexture => _d3dTexture;
+
     /// <summary>初始化 <see cref="GLD3D11InteropTexture"/> 的新实例。</summary>
     /// <param name="width">纹理宽度。</param>
     /// <param name="height">纹理高度。</param>
     /// <param name="format">像素格式。</param>
-    /// <param name="textureId">GL 纹理 ID（已与 D3D11 共享纹理注册）。</param>
-    /// <param name="interopDevice">WGL_NV_DX_interop2 互操作句柄（生产者持有，本类仅引用）。</param>
-    /// <param name="interopObject">wglDXRegisterObjectNV 返回的对象句柄（unregister / lock / unlock 须用此，非 GL 纹理 ID）。</param>
     /// <param name="d3dTexture">每帧 D3D11 共享纹理（本类拥有，Dispose 释放）。</param>
-    /// <param name="glContext">共享设备上下文（unregister / 释放 GL 纹理所需）。</param>
+    /// <param name="bridgeDevice">桥接 D3D11 设备（用于管线在 on-screen 上下文打开 WGL 互操作设备）。</param>
+    /// <param name="glContext">共享组所有者离屏上下文（Linux EGL / 未来回读路径所需）。</param>
     /// <param name="subresourceIndex">子资源索引（默认 0）。</param>
     public GLD3D11InteropTexture(
         int width, int height, PixelFormat format,
-        uint textureId, nint interopDevice, nint interopObject, ID3D11Texture2D d3dTexture,
+        ID3D11Texture2D d3dTexture, ID3D11Device bridgeDevice,
         OpenGLOffscreenDeviceContext glContext, int subresourceIndex = 0)
     {
         Width = width;
         Height = height;
         Format = format;
-        _textureId = textureId;
-        _interopDevice = interopDevice;
-        _interopObject = interopObject;
         _d3dTexture = d3dTexture;
+        _bridgeDevice = bridgeDevice;
         _glContext = glContext;
         _subresourceIndex = subresourceIndex;
     }
 
-    IntPtr IGpuTextureResource.NativeTextureHandle => (IntPtr)_textureId;
+    /// <summary>无已注册 GL 纹理；管线在绘制时现场注册，不依赖此句柄。</summary>
+    IntPtr IGpuTextureResource.NativeTextureHandle => IntPtr.Zero;
 
     int IGpuTextureResource.SubresourceIndex => _subresourceIndex;
-
-    /// <summary>采样前获取 D3D 资源访问权（WGL_NV_DX_interop2 强制栅栏：防止解码侧写入与 GL 读取竞态/撕裂）。</summary>
-    /// <remarks>须在当前 GL 上下文（与注册时同共享组）下调用；<see cref="OpenGLShaderPipeline.PresentGpuTexture"/> 绑定+绘制前调用。</remarks>
-    internal void AcquireForRendering()
-    {
-        if (_interopObject == nint.Zero) return;
-        nint obj = _interopObject;
-        GLNative.WglDXLockObjectsNV(_interopDevice, 1, &obj);
-    }
-
-    /// <summary>采样后释放 D3D 资源访问权，交还解码侧写入（与 <see cref="AcquireForRendering"/> 配对）。</summary>
-    internal void ReleaseForRendering()
-    {
-        if (_interopObject == nint.Zero) return;
-        nint obj = _interopObject;
-        GLNative.WglDXUnlockObjectsNV(_interopDevice, 1, &obj);
-    }
 
     /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed) return;
-        lock (_lock)
-        {
-            if (_disposed) return;
-            _disposed = true;
-        }
-
-        _glContext.EnsureCreated();
-        _glContext.MakeCurrent();
-        try
-        {
-            // 先解除 D3D 绑定（WGL 互操作对象句柄），再删 GL 纹理，次序不可反（否则未定义行为）。
-            if (_interopObject != nint.Zero && GLNative.IsWglDxInteropAvailable())
-                GLNative.WglDXUnregisterObjectNV(_interopDevice, _interopObject);
-            uint tex = _textureId;
-            GLNative.glDeleteTextures(1, &tex);
-        }
-        finally
-        {
-            _glContext.ReleaseCurrent();
-        }
-
+        _disposed = true;
         _d3dTexture.Dispose();
     }
 
@@ -340,15 +302,18 @@ public sealed unsafe class GLEglDmaBufTexture : IFrameResource, IGpuTextureResou
         }
 
         _glContext.EnsureCreated();
-        _glContext.MakeCurrent();
-        try
+        lock (_glContext.GlAccessLock)
         {
-            uint tex = _textureId;
-            GLNative.glDeleteTextures(1, &tex);
-        }
-        finally
-        {
-            _glContext.ReleaseCurrent();
+            _glContext.MakeCurrent();
+            try
+            {
+                uint tex = _textureId;
+                GLNative.glDeleteTextures(1, &tex);
+            }
+            finally
+            {
+                _glContext.ReleaseCurrent();
+            }
         }
 
         if (_eglImage != nint.Zero)

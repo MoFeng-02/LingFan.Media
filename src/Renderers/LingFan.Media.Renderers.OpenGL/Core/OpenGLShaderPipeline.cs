@@ -2,6 +2,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using LingFan.Media.Abstractions;
 using Microsoft.Extensions.Logging;
+using Vortice.Direct3D11;
+using Vortice.DXGI;
 
 namespace LingFan.Media.Renderers.OpenGL;
 
@@ -146,6 +148,12 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
     private int _cachedWidth;
     private int _cachedHeight;
     private PixelFormat _cachedFormat = (PixelFormat)(-1);
+
+    // ── WGL_NV_DX_interop2 每绘制上下文缓存 ──
+    // 由 on-screen GL 上下文打开，与该上下文同生同死；绘制时现场 register/lock/draw/unlock/unregister，
+    // 避免 owner 离屏上下文与 on-screen 上下文对同一 WGL 互操作对象的跨上下文歧义。
+    private ID3D11Device? _wglBridgeDevice;
+    private nint _wglInteropDevice;
 
     /// <summary>初始化 <see cref="OpenGLShaderPipeline"/>（仅保存日志器；GL 资源延迟到首次 <see cref="Present"/>，
     /// 彼时 GL 上下文已在渲染线程 current）。</summary>
@@ -503,10 +511,12 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
     /// 用 Shader 路径将零拷贝 GPU 纹理（<see cref="IGpuTextureResource"/>）呈现到当前 GL 帧缓冲（不交换缓冲，由调用方 SwapBuffers）。
     /// </summary>
     /// <remarks>
-    /// <para>解码侧经共享组产出的 GL 纹理（<see cref="IGpuTextureResource.NativeTextureHandle"/> 为 GL 纹理 ID）
-    /// 在当前已 current 的 on-screen 上下文中直接绑定 + 采样，无需 CPU 回读，即零拷贝。</para>
-    /// <para>外部纹理按 RGBA8 上传（VAAPI / ffmpeg interop 标准输出），故走 <c>_rgbProgram</c> 且 <c>uIsBgra=0</c>（无需 BGR 交换）。
-    /// 与 D3D11 的 <c>case IGpuTextureResource</c> 各自为政、只处理本 API 纹理同源。</para>
+    /// <para>Windows WGL 路径：每帧在<b>当前 on-screen GL 上下文</b>上现场打开/注册/锁定 D3D11 共享纹理，
+    /// 绘制后立即解锁/注销/删除 GL 纹理。这规避 owner 离屏上下文注册的对象在 on-screen 上下文上可能无法正确
+    /// lock/采样的驱动实现问题（WGL_NV_DX_interop2 互操作对象强关联注册上下文）。</para>
+    /// <para>Linux EGL dma_buf 路径：直接绑定 <see cref="IGpuTextureResource.NativeTextureHandle"/> 采样。</para>
+    /// <para>外部纹理按 RGBA8（WGL 从 DXGI B8G8R8A8_UNORM 映射后由 shader 按 RGBA 采样，与 D3D11
+    /// 原数据一致，故 <c>uIsBgra=0</c> 不做 BGR 交换）。</para>
     /// </remarks>
     internal void PresentGpuTexture(IGpuTextureResource gpu, int dstWidth, int dstHeight, AspectRatioMode mode)
     {
@@ -515,36 +525,137 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
 
         EnsureInitialized();
 
+        // Windows WGL_NV_DX_interop2：在 on-screen 上下文上现场注册并绘制，用完即释。
+        if (gpu is GLD3D11InteropTexture wglTex)
+        {
+            PresentWglInteropTexture(wglTex, dstWidth, dstHeight, mode);
+            return;
+        }
+
         uint tex = unchecked((uint)gpu.NativeTextureHandle);
 
-        // WGL_NV_DX_interop2 栅栏：采样前 Acquire（锁 D3D 资源，防解码侧写入与 GL 读取竞态/撕裂），绘制后 Release。
-        // GLD3D11InteropTexture 与本管线同程序集，可直接识别并调用；非 WGL 互操作纹理（如 EGL dma_buf）无操作。
-        GLD3D11InteropTexture? interop = gpu as GLD3D11InteropTexture;
-        interop?.AcquireForRendering();
+        GLNative.ActiveTexture((uint)GlTexture0);
+        GLNative.glBindTexture(GlTexture2D, tex);
+
+        // 按 ScaleMode 计算目标视口矩形（与 Present 同源）
+        ComputeScaleRects(gpu.Width, gpu.Height, dstWidth, dstHeight, mode,
+            out int vx, out int vy, out int vw, out int vh);
+
+        GLNative.glViewport(0, 0, dstWidth, dstHeight);
+        GLNative.glClearColor(0f, 0f, 0f, 1f);
+        GLNative.glClear(GlColorBufferBit);
+
+        GLNative.glViewport(vx, dstHeight - vy - vh, vw, vh);
+        GLNative.BindVertexArray(_vao);
+        GLNative.UseProgram(_rgbProgram);
+        GLNative.Uniform1i(_rgbUTex, 0);
+        GLNative.Uniform1i(_rgbUIsBgra, 0);
+        GLNative.glDrawArrays(GlTriangleStrip, 0, 4);
+    }
+
+    /// <summary>
+    /// WGL_NV_DX_interop2 零拷贝绘制：在当前 on-screen GL 上下文上把每帧 D3D11 共享纹理注册为 GL 纹理，
+    /// lock → 绘制 → unlock → unregister/delete，全程单帧内完成。
+    /// </summary>
+    private unsafe void PresentWglInteropTexture(GLD3D11InteropTexture tex, int dstWidth, int dstHeight, AspectRatioMode mode)
+    {
+        EnsureWglInteropDevice(tex.BridgeDevice);
+
+        // 跨设备 SharedKeyedMutex 发布栅栏：WGL_NV_DX_interop2 *不* 自动处理 keyed mutex
+        // （Firefox SharedSurfaceD3D11Interop.cpp 与本项目 ReadbackToCpu 均显式 AcquireSync）。
+        // 桥接设备须在 lock 之前先 AcquireSync(0) 取得转换器（ffmpeg 设备）ReleaseSync(0) 释放的访问权，
+        // GL 才能读到有效像素；否则纹理处于未授权访问态，采样结果为未定义（实测全黑）。
+        // 绘制结束再 ReleaseSync(0)。S_OK≠被接受：AcquireSync 失败（栅栏未就绪）则跳过本帧，避免死锁/黑屏蔓延。
+        IDXGIKeyedMutex? keyedMutex = null;
+        bool acquired = false;
+        try { keyedMutex = tex.D3dTexture.QueryInterface<IDXGIKeyedMutex>(); }
+        catch (Exception) { keyedMutex = null; }
+
+        if (keyedMutex is not null)
+        {
+            try { keyedMutex.AcquireSync(0, unchecked((int)0xFFFFFFFF)); acquired = true; }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "[OPENGL-ZEROCOPY] 桥接设备 AcquireSync 失败，跳过本帧绘制（防死锁）。");
+                keyedMutex.Dispose();
+                return;
+            }
+        }
+
+        uint glTex = 0;
+        nint interopObj = nint.Zero;
         try
         {
-            GLNative.ActiveTexture((uint)GlTexture0);
-            GLNative.glBindTexture(GlTexture2D, tex);
+            GLNative.glGenTextures(1, &glTex);
 
-            // 按 ScaleMode 计算目标视口矩形（与 Present 同源）
-            ComputeScaleRects(gpu.Width, gpu.Height, dstWidth, dstHeight, mode,
-                out int vx, out int vy, out int vw, out int vh);
+            // 在 on-screen 上下文上注册 D3D 纹理为 GL 纹理对象（零拷贝只读采样）。
+            interopObj = GLNative.WglDXRegisterObjectNV(
+                _wglInteropDevice, (void*)tex.D3dTexture.NativePointer, glTex,
+                (uint)GlTexture2D, (uint)GLNative.WglAccessReadOnlyNV);
+            if (interopObj == nint.Zero)
+                throw new InvalidOperationException("wglDXRegisterObjectNV 在 on-screen 上下文上失败。");
 
-            GLNative.glViewport(0, 0, dstWidth, dstHeight);
-            GLNative.glClearColor(0f, 0f, 0f, 1f);
-            GLNative.glClear(GlColorBufferBit);
+            // register 后绑定并设置采样参数，避免 texture incomplete 黑屏。
+            GLNative.glBindTexture(GlTexture2D, glTex);
+            GLNative.glTexParameteri(GlTexture2D, (uint)GlTextureMinFilter, GlLinear);
+            GLNative.glTexParameteri(GlTexture2D, (uint)GlTextureMagFilter, GlLinear);
 
-            GLNative.glViewport(vx, dstHeight - vy - vh, vw, vh);
-            GLNative.BindVertexArray(_vao);
-            GLNative.UseProgram(_rgbProgram);
-            GLNative.Uniform1i(_rgbUTex, 0);
-            GLNative.Uniform1i(_rgbUIsBgra, 0); // 外部零拷贝纹理按 RGBA8 上传，无需 BGR 交换
-            GLNative.glDrawArrays(GlTriangleStrip, 0, 4);
+            // 取得跨设备访问权（keyed mutex 已在本方法入口 AcquireSync 取得）。
+            GLNative.WglDXLockObjectsNV(_wglInteropDevice, 1, &interopObj);
+            try
+            {
+                // 按 ScaleMode 计算目标视口矩形（与 Present 同源）
+                ComputeScaleRects(tex.Width, tex.Height, dstWidth, dstHeight, mode,
+                    out int vx, out int vy, out int vw, out int vh);
+
+                GLNative.glViewport(0, 0, dstWidth, dstHeight);
+                GLNative.glClearColor(0f, 0f, 0f, 1f);
+                GLNative.glClear(GlColorBufferBit);
+
+                GLNative.glViewport(vx, dstHeight - vy - vh, vw, vh);
+                GLNative.BindVertexArray(_vao);
+                GLNative.UseProgram(_rgbProgram);
+                GLNative.Uniform1i(_rgbUTex, 0);
+                // WGL_NV_DX_interop2 将 DXGI B8G8R8A8_UNORM 注册为 GL 纹理后，
+                // GL 采样按 RGBA 通道顺序解释，无需额外红蓝交换（uIsBgra=0）。
+                GLNative.Uniform1i(_rgbUIsBgra, 0);
+                GLNative.glDrawArrays(GlTriangleStrip, 0, 4);
+            }
+            finally
+            {
+                GLNative.WglDXUnlockObjectsNV(_wglInteropDevice, 1, &interopObj);
+            }
         }
         finally
         {
-            interop?.ReleaseForRendering();
+            if (interopObj != nint.Zero)
+                GLNative.WglDXUnregisterObjectNV(_wglInteropDevice, interopObj);
+            if (glTex != 0)
+                GLNative.glDeleteTextures(1, &glTex);
+            // 释放跨设备发布栅栏（与 AcquireSync 配对），使转换器下一帧可再次写入。
+            if (acquired && keyedMutex is not null)
+                keyedMutex.ReleaseSync(0);
+            keyedMutex?.Dispose();
         }
+    }
+
+    /// <summary>确保当前 on-screen GL 上下文已打开与桥接 D3D11 设备对应的 WGL 互操作设备（按桥接设备缓存）。</summary>
+    private unsafe void EnsureWglInteropDevice(ID3D11Device bridgeDevice)
+    {
+        if (_wglInteropDevice != nint.Zero && _wglBridgeDevice == bridgeDevice) return;
+
+        if (_wglInteropDevice != nint.Zero)
+        {
+            GLNative.WglDXCloseDeviceNV(_wglInteropDevice);
+            _wglInteropDevice = nint.Zero;
+            _wglBridgeDevice = null;
+        }
+
+        _wglInteropDevice = GLNative.WglDXOpenDeviceNV((void*)bridgeDevice.NativePointer);
+        if (_wglInteropDevice == nint.Zero)
+            throw new InvalidOperationException("wglDXOpenDeviceNV 在 on-screen 上下文上失败（WGL_NV_DX_interop2 不可用）。");
+
+        _wglBridgeDevice = bridgeDevice;
     }
 
     /// <summary>
@@ -627,5 +738,12 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
         if (_vao != 0) { fixed (uint* p = &_vao) GLNative.DeleteVertexArrays(1, p); }
         if (_vbo != 0) { fixed (uint* p = &_vbo) GLNative.DeleteBuffers(1, p); }
         _vao = _vbo = 0;
+
+        if (_wglInteropDevice != nint.Zero)
+        {
+            GLNative.WglDXCloseDeviceNV(_wglInteropDevice);
+            _wglInteropDevice = nint.Zero;
+            _wglBridgeDevice = null;
+        }
     }
 }
