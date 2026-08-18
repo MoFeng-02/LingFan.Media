@@ -508,3 +508,4 @@ ThirdParty/
 /docs/.vitepress/dist_*
 /docs/.vitepress/cache
 /vk_settings
+/Copy-ToWsl.ps1
