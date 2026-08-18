@@ -22,7 +22,7 @@ FFmpeg and LibVLC are the **cross-platform safety net**. Both are LGPL-licensed 
 
 | Backend | License | Platforms | Role | Status |
 | --- | --- | --- | --- | --- |
-| **FFmpeg** | LGPL 2.1+ (shared build) | Windows, macOS, iOS, Android | Primary demux / decode via `FFmpeg.AutoGen` | ✅ Implemented |
+| **FFmpeg** | LGPL 2.1+ (shared build) | Windows, macOS, iOS, Android | Primary demux / decode via self-written native binding | ✅ Implemented |
 | **LibVLC / VLC** | LGPL 2.1+ | Windows, macOS, iOS, Android | Fallback backend, auto-switched by the middleware | ✅ Implemented |
 
 Both already ship and work on Windows, macOS, iOS, and Android today. Linux is **not a targeted platform**, but because FFmpeg / LibVLC are cross-platform they still provide playback there — the exclusion applies only to building a *native* Linux backend.

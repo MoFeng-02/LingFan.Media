@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.FFmpeg.Interop;
 using LingFan.Media.Backends.FFmpeg.Models;
 using LingFan.Media.Backends.FFmpeg.SafeHandles;
@@ -42,6 +43,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private readonly IEnumerable<IGpuFrameProducer>? _frameProducers;
     private IGpuFrameProducer? _gpuProducer;
     private bool _gpuImportMode;
+    // Linux VAAPI 硬件解码导出（真实零拷贝路径）：IVaApiExport 由 Platforms.Linux 注册（依赖倒置，后端不引用 Platforms）。
+    private IVaApiExport? _vaApiExport;
+    private nint _vaDisplay; // VAAPI VADisplay（VA Surface → dma_buf 导出所需）
     // D3D11VA NV12 硬解帧 → RGBA32 的 GPU 转换器（位于中性互操作模块 LingFan.Media.GPUShare.D3D11）。
     // 仅 GPU 零拷贝路径（Windows）使用；其持有的共享设备包装不 Dispose（见转换器注释）。
     private LingFan.Media.GPUShare.D3D11.D3D11Nv12ToRgbaConverter? _nv12ToRgbaConverter;
@@ -96,9 +100,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private long _cpuFallbackFrames;  // 软解 / CPU 内存帧
     private bool _frameSummaryLogged;
 
-    /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 ffmpeg.AVERROR(ffmpeg.EAGAIN) 计算，
+    /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 FF.AVERROR(FF.EAGAIN) 计算，
     /// 禁止硬编码 -11（Windows 正确，但 macOS/iOS 的 EAGAIN=35，会误判"需要更多数据"为解码失败）。</summary>
-    private static readonly int EAGAIN = ffmpeg.AVERROR(ffmpeg.EAGAIN);
+    private static readonly int EAGAIN = FF.AVERROR(FF.EAGAIN);
 
     /// <summary>
     /// 初始化 <see cref="FFmpegVideoDecoder"/> 的新实例。
@@ -106,12 +110,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <param name="logger">日志器。</param>
     /// <param name="gpuContext">可选 GPU 设备上下文（D3D11VA 硬解需要，null=软件解码）。</param>
     /// <param name="options">可选 FFmpeg 配置（含 MediaCodec Surface 注入点）。</param>
-    public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null, IEnumerable<IGpuFrameProducer>? frameProducers = null)
+    public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null, IEnumerable<IGpuFrameProducer>? frameProducers = null, IVaApiExport? vaApiExport = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _gpuContext = gpuContext;
         _options = options;
         _frameProducers = frameProducers;
+        _vaApiExport = vaApiExport;
         // 解析匹配当前激活渲染器的零拷贝生产者（依赖倒置：解码器只依赖 IGpuFrameProducer 抽象）。
         // 仅当容器注册了与当前 IGpuDeviceContext.ApiType 同型的生产者时才非空；否则不进入 GPU 零拷贝路径。
         // 与 Vulkan 同源守卫，不硬编码任一渲染器——FFmpeg D3D11VA 在 Windows 上为 Vulkan/OpenGL 渲染器均产出 D3D11 共享句柄。
@@ -167,7 +172,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             string? mcName = GetMediaCodecDecoderName(codec);
             if (mcName is not null)
             {
-                avCodec = ffmpeg.avcodec_find_decoder_by_name(mcName);
+                avCodec = FF.avcodec_find_decoder_by_name(mcName);
                 useMediaCodec = avCodec != null;
                 if (!useMediaCodec)
                     _logger.LogWarning("FFmpeg 未编译 MediaCodec 解码器 {Name}，回退到软件解码", mcName);
@@ -176,12 +181,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         // 查找解码器（软件路径 / MediaCodec 未命中回退）
         if (avCodec == null)
-            avCodec = ffmpeg.avcodec_find_decoder(codecId);
+            avCodec = FF.avcodec_find_decoder(codecId);
         if (avCodec == null)
             throw new NotSupportedException($"FFmpeg 未找到视频解码器: {codec} (codec_id={codecId})");
 
         // 分配上下文
-        AVCodecContext* ctx = ffmpeg.avcodec_alloc_context3(avCodec);
+        AVCodecContext* ctx = FF.avcodec_alloc_context3(avCodec);
         if (ctx == null)
             throw new InvalidOperationException("avcodec_alloc_context3 失败");
 
@@ -256,6 +261,23 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 IsHardwareAccelerated = false;
             }
         }
+        else if (hwEnabled && OperatingSystem.IsLinux() && _vaApiExport is not null)
+        {
+            // Linux VAAPI 硬件解码（真实零拷贝路径）：
+            // 有匹配 GPU 生产者(_gpuProducer) → VA Surface 经 dma_buf 零拷贝导入 GL/Vulkan；
+            // 无生产者（如 Phase 1 无头探针）→ 硬解 + CPU 回读（仍属硬解，仅非零拷贝）。
+            try
+            {
+                InitializeVAAPI(ctx);
+                IsHardwareAccelerated = true;
+                if (_gpuProducer is not null) _gpuImportMode = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "VAAPI 硬件解码初始化失败，回退软件解码");
+                IsHardwareAccelerated = false;
+            }
+        }
         else if (hwEnabled && _gpuContext is not null && _gpuContext.ApiType != GPUApiType.D3D11 && _gpuProducer is not null)
         {
             // GPU 零拷贝硬解：FFmpeg 仍走 D3D11VA 产出 D3D11 纹理（Windows），
@@ -320,7 +342,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
 
         // 打开解码器
-        int ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
+        int ret = FF.avcodec_open2(ctx, avCodec, null);
         if (ret < 0 && useMediaCodec)
         {
             // MediaCodec 打开失败（如宿主未调 MediaCodecInterop.SetJavaVM）→ 回退软件解码
@@ -332,14 +354,14 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             _codecContextHandle = null;
             IsHardwareAccelerated = false;
 
-            avCodec = ffmpeg.avcodec_find_decoder(codecId);
+            avCodec = FF.avcodec_find_decoder(codecId);
             if (avCodec == null)
                 throw new NotSupportedException($"FFmpeg 未找到视频解码器: {codec} (codec_id={codecId})");
-            ctx = ffmpeg.avcodec_alloc_context3(avCodec);
+            ctx = FF.avcodec_alloc_context3(avCodec);
             if (ctx == null)
                 throw new InvalidOperationException("avcodec_alloc_context3 失败（软件回退）");
             _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
-            ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
+            ret = FF.avcodec_open2(ctx, avCodec, null);
         }
         if (ret < 0 && IsHardwareAccelerated)
         {
@@ -353,14 +375,14 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             _codecContextHandle = null;
             IsHardwareAccelerated = false;
 
-            avCodec = ffmpeg.avcodec_find_decoder(codecId);
+            avCodec = FF.avcodec_find_decoder(codecId);
             if (avCodec == null)
                 throw new NotSupportedException($"FFmpeg 未找到视频解码器: {codec} (codec_id={codecId})");
-            ctx = ffmpeg.avcodec_alloc_context3(avCodec);
+            ctx = FF.avcodec_alloc_context3(avCodec);
             if (ctx == null)
                 throw new InvalidOperationException("avcodec_alloc_context3 失败（软件回退）");
             _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
-            ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
+            ret = FF.avcodec_open2(ctx, avCodec, null);
         }
         if (ret < 0)
         {
@@ -401,7 +423,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
 
         string filterName = codec == VideoCodec.H265 ? "hevc_mp4toannexb" : "h264_mp4toannexb";
-        AVBitStreamFilter* filter = ffmpeg.av_bsf_get_by_name(filterName);
+        AVBitStreamFilter* filter = FF.av_bsf_get_by_name(filterName);
         if (filter == null)
         {
             _logger.LogWarning("未找到比特流过滤器 {Filter}，回退仅设置 extradata（HEVC/H264 可能仍无法解码）", filterName);
@@ -410,7 +432,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
 
         AVBSFContext* bsfCtx = null;
-        int ret = ffmpeg.av_bsf_alloc(filter, &bsfCtx);
+        int ret = FF.av_bsf_alloc(filter, &bsfCtx);
         if (ret < 0 || bsfCtx == null)
         {
             _logger.LogWarning("av_bsf_alloc 失败 ({Error})，回退仅设置 extradata", GetErrorString(ret));
@@ -418,29 +440,29 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             return;
         }
 
-        bsfCtx->par_in->codec_id = codecId;
-        bsfCtx->par_in->codec_type = AVMediaType.AVMEDIA_TYPE_VIDEO;
+        ((AVCodecParameters*)bsfCtx->par_in)->codec_id = codecId;
+        ((AVCodecParameters*)bsfCtx->par_in)->codec_type = AVMediaType.AVMEDIA_TYPE_VIDEO;
 
         // 用 ffmpeg 分配器拷贝 extradata（av_bsf_free 释放时须同分配器）。
         int size = cfg.Length;
         int padded = size + 64;
-        byte* edata = (byte*)ffmpeg.av_malloc((UIntPtr)padded);
+        byte* edata = (byte*)FF.av_malloc((UIntPtr)padded);
         if (edata == null)
         {
-            ffmpeg.av_bsf_free(&bsfCtx);
+            FF.av_bsf_free(&bsfCtx);
             SetExtradata(ctx, cfg);
             return;
         }
         cfg.Span.CopyTo(new Span<byte>(edata, size));
         new Span<byte>(edata + size, 64).Clear();
-        bsfCtx->par_in->extradata = edata;
-        bsfCtx->par_in->extradata_size = size;
+        ((AVCodecParameters*)bsfCtx->par_in)->extradata = edata;
+        ((AVCodecParameters*)bsfCtx->par_in)->extradata_size = size;
 
-        ret = ffmpeg.av_bsf_init(bsfCtx);
+        ret = FF.av_bsf_init(bsfCtx);
         if (ret < 0)
         {
             _logger.LogWarning("av_bsf_init 失败 ({Error})，回退仅设置 extradata", GetErrorString(ret));
-            ffmpeg.av_bsf_free(&bsfCtx);
+            FF.av_bsf_free(&bsfCtx);
             SetExtradata(ctx, cfg);
             return;
         }
@@ -452,7 +474,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         //   （表现仍是 "No start code is found. / Error splitting the input into NAL units."）。
         //   av_bsf_init 之后 par_out->extradata 即为 BSF 产出的 Annex-B 参数集（VPS/SPS/PPS），
         //   用它设置解码器才自洽。par_out 为空属理论异常，回退原始 cfg 并告警。
-        AVCodecParameters* parOut = bsfCtx->par_out;
+        AVCodecParameters* parOut = (AVCodecParameters*)bsfCtx->par_out;
         if (parOut != null && parOut->extradata != null && parOut->extradata_size > 0)
         {
             SetExtradata(ctx, new ReadOnlySpan<byte>(parOut->extradata, parOut->extradata_size).ToArray());
@@ -497,13 +519,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// </summary>
     private unsafe AVPacket* ConvertToConv(MediaPacket packet)
     {
-        AVPacket* pkt = ffmpeg.av_packet_alloc();
+        AVPacket* pkt = FF.av_packet_alloc();
         if (pkt == null)
             return null;
-        int allocRet = ffmpeg.av_new_packet(pkt, packet.Data.Length);
+        int allocRet = FF.av_new_packet(pkt, packet.Data.Length);
         if (allocRet < 0)
         {
-            ffmpeg.av_packet_free(&pkt);
+            FF.av_packet_free(&pkt);
             return null;
         }
         packet.Data.Span.CopyTo(new Span<byte>(pkt->data, packet.Data.Length));
@@ -511,41 +533,41 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         double timeBase = _tbSeconds;
         pkt->pts = timeBase > 0
             ? (long)(packet.Timestamp.TotalSeconds / timeBase)
-            : ffmpeg.AV_NOPTS_VALUE;
+            : FF.AV_NOPTS_VALUE;
         pkt->dts = pkt->pts;
         if (packet.KeyFrame)
-            pkt->flags |= ffmpeg.AV_PKT_FLAG_KEY;
+            pkt->flags |= FF.AV_PKT_FLAG_KEY;
 
         if (_bsfContext == null)
             return pkt; // 无 BSF：pkt 即待发送包
 
         // 经 BSF 转换（BSF 内部引用 pkt 数据；pkt 随后释放安全）
-        int bret = ffmpeg.av_bsf_send_packet(_bsfContext, pkt);
+        int bret = FF.av_bsf_send_packet(_bsfContext, pkt);
         if (bret < 0 && bret != EAGAIN)
         {
-            if (bret != ffmpeg.AVERROR_EOF)
+            if (bret != FF.AVERROR_EOF)
                 _logger.LogWarning("av_bsf_send_packet 返回 {Ret}: {Error}", bret, GetErrorString(bret));
-            ffmpeg.av_packet_free(&pkt);
+            FF.av_packet_free(&pkt);
             return null;
         }
-        AVPacket* conv = ffmpeg.av_packet_alloc();
+        AVPacket* conv = FF.av_packet_alloc();
         if (conv == null)
         {
-            ffmpeg.av_packet_free(&pkt);
+            FF.av_packet_free(&pkt);
             return null;
         }
-        bret = ffmpeg.av_bsf_receive_packet(_bsfContext, conv);
-        ffmpeg.av_packet_free(&pkt); // 转换完成，原始包释放（conv 为独立分配）
-        if (bret == EAGAIN || bret == ffmpeg.AVERROR_EOF)
+        bret = FF.av_bsf_receive_packet(_bsfContext, conv);
+        FF.av_packet_free(&pkt); // 转换完成，原始包释放（conv 为独立分配）
+        if (bret == EAGAIN || bret == FF.AVERROR_EOF)
         {
             // 1:1 过滤器下罕见：BSF 暂未产出。pkt 已被 BSF 消费，conv 未用。
-            ffmpeg.av_packet_free(&conv);
+            FF.av_packet_free(&conv);
             return null;
         }
         if (bret < 0)
         {
             _logger.LogWarning("av_bsf_receive_packet 返回 {Ret}: {Error}", bret, GetErrorString(bret));
-            ffmpeg.av_packet_free(&conv);
+            FF.av_packet_free(&conv);
             return null;
         }
         return conv;
@@ -561,6 +583,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         var hwFmt = (AVPixelFormat)avFrame->format;
         if (hwFmt is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
             return CreateHardwareFrameFromAVFrame(avFrame);
+        if (hwFmt == AVPixelFormat.AV_PIX_FMT_VAAPI)
+            return CreateVaApiFrame(avFrame);
         if (hwFmt == AVPixelFormat.AV_PIX_FMT_MEDIACODEC)
             return CreateMediaCodecSurfaceFrame(avFrame);
         return CreateVideoFrameFromAVFrame(avFrame);
@@ -598,7 +622,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         if (conv != null)
             _pendingConv.Enqueue((IntPtr)conv);
 
-        AVFrame* avFrame = ffmpeg.av_frame_alloc();
+        AVFrame* avFrame = FF.av_frame_alloc();
         if (avFrame == null)
             throw new InvalidOperationException("av_frame_alloc 失败");
         try
@@ -607,34 +631,34 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             while (_pendingConv.Count > 0)
             {
                 AVPacket* p = (AVPacket*)_pendingConv.Peek();
-                int ret = ffmpeg.avcodec_send_packet(ctx, p);
+                int ret = FF.avcodec_send_packet(ctx, p);
                 if (ret == 0)
                 {
                     _pendingConv.Dequeue();
-                    ffmpeg.av_packet_free(&p);
+                    FF.av_packet_free(&p);
                 }
                 else if (ret == EAGAIN)
                 {
                     break; // 解码器输入满，稍后重试（包仍保留在队中）
                 }
-                else if (ret == ffmpeg.AVERROR_EOF)
+                else if (ret == FF.AVERROR_EOF)
                 {
                     _pendingConv.Dequeue();
-                    ffmpeg.av_packet_free(&p);
+                    FF.av_packet_free(&p);
                 }
                 else
                 {
                     _logger.LogWarning("avcodec_send_packet 返回 {Ret}: {Error}", ret, GetErrorString(ret));
                     _pendingConv.Dequeue();
-                    ffmpeg.av_packet_free(&p);
+                    FF.av_packet_free(&p);
                 }
             }
 
             // 3) 排空解码器已产出的所有帧，一律入队（保证 FIFO 帧序，绝不丢弃）
             while (true)
             {
-                int ret = ffmpeg.avcodec_receive_frame(ctx, avFrame);
-                if (ret == EAGAIN || ret == ffmpeg.AVERROR_EOF)
+                int ret = FF.avcodec_receive_frame(ctx, avFrame);
+                if (ret == EAGAIN || ret == FF.AVERROR_EOF)
                     break;
                 if (ret < 0)
                 {
@@ -658,13 +682,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                     }
                     _pendingFrames.Enqueue(f);
                 }
-                ffmpeg.av_frame_unref(avFrame);
+                FF.av_frame_unref(avFrame);
             }
         }
         finally
         {
             AVFrame* af = avFrame;
-            ffmpeg.av_frame_free(&af);
+            FF.av_frame_free(&af);
         }
 
         // 4) 从队首取一帧返回（多余帧留待后续调用返回，帧序严格 FIFO）
@@ -701,26 +725,26 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         while (_pendingConv.Count > 0)
         {
             AVPacket* pending = (AVPacket*)_pendingConv.Peek();
-            int sret = ffmpeg.avcodec_send_packet(ctx, pending);
+            int sret = FF.avcodec_send_packet(ctx, pending);
             if (sret == EAGAIN)
                 break;
             _pendingConv.Dequeue();
-            ffmpeg.av_packet_free(&pending);
-            if (sret < 0 && sret != ffmpeg.AVERROR_EOF)
+            FF.av_packet_free(&pending);
+            if (sret < 0 && sret != FF.AVERROR_EOF)
                 _logger.LogWarning("avcodec_send_packet(flush) 返回 {Ret}: {Error}", sret, GetErrorString(sret));
         }
 
         // 2) 待发队列排空后才进入 draining 模式（重复发 null packet 是安全的）
         if (_pendingConv.Count == 0)
-            ffmpeg.avcodec_send_packet(ctx, null);
+            FF.avcodec_send_packet(ctx, null);
 
         int ret;
-        AVFrame* avFrame = ffmpeg.av_frame_alloc();
+        AVFrame* avFrame = FF.av_frame_alloc();
         if (avFrame == null)
             throw new InvalidOperationException("av_frame_alloc 失败");
         try
         {
-            ret = ffmpeg.avcodec_receive_frame(ctx, avFrame);
+            ret = FF.avcodec_receive_frame(ctx, avFrame);
             if (ret < 0)
                 return null;
 
@@ -730,6 +754,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             if (hwFmtFlush is AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD or AVPixelFormat.AV_PIX_FMT_D3D11)
             {
                 return CreateHardwareFrameFromAVFrame(avFrame);
+            }
+
+            // Flush 时同样需检查 VAAPI 硬解输出格式（与 DecodeCore 一致）
+            if (hwFmtFlush == AVPixelFormat.AV_PIX_FMT_VAAPI)
+            {
+                return CreateVaApiFrame(avFrame);
             }
 
             // Flush 时同样需检查 MediaCodec 表面输出格式（与 DecodeCore 一致）
@@ -743,7 +773,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         finally
         {
             AVFrame* p = avFrame;
-            ffmpeg.av_frame_free(&p);
+            FF.av_frame_free(&p);
         }
     }
 
@@ -765,7 +795,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         while (_pendingConv.Count > 0)
         {
             AVPacket* p = (AVPacket*)_pendingConv.Dequeue();
-            ffmpeg.av_packet_free(&p);
+            FF.av_packet_free(&p);
         }
         while (_pendingFrames.Count > 0)
         {
@@ -798,7 +828,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             {
                 AVBSFContext* local = _bsfContext;
                 _bsfContext = null;
-                ffmpeg.av_bsf_free(&local);
+                FF.av_bsf_free(&local);
             }
             _codecContextHandle.Dispose();
             _codecContextHandle = null;
@@ -850,11 +880,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         _vaOwnedDevice = null;
         _vaDeviceHandle = IntPtr.Zero;
         _vaContextHandle = IntPtr.Zero;
+        _vaDisplay = nint.Zero;
         // 先释放比特流过滤器（其内部 par_in->extradata 由 ffmpeg 分配器管理）
         if (_bsfContext != null)
         {
             AVBSFContext* local = _bsfContext;
-            ffmpeg.av_bsf_free(&local);
+            FF.av_bsf_free(&local);
             _bsfContext = null;
         }
         // 再释放本类持有的 extradata 缓冲（ctx->extradata 已被解码器读取，先于 codec context 释放安全）
@@ -916,13 +947,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
         resource ??= CreateCopyResource(avFrame, width, height, pixFmt, format);
 
-        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
+        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
             ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
             ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
-        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
+        bool keyFrame = (avFrame->flags & FF.AV_FRAME_FLAG_KEY) != 0;
 
         // 从池中 Rent 帧壳并 Reset 填充数据，复用 VideoFrame 实例。
         // 用 resource.Format（解包路径下为 BGRA32）而非 format，避免枚举/实际布局不一致。
@@ -943,14 +974,14 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             return null; // 异常尺寸交由拷贝路径统一报错
 
         // av_frame_clone = av_frame_alloc + av_frame_ref：共享所有 buf（引用计数 +1），不拷贝像素
-        AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
+        AVFrame* clone = FF.av_frame_clone(avFrame);
         if (clone == null)
             return null;
 
         var owner = new SafeAVFrameHandle((IntPtr)clone);
 
         int stride = clone->linesize[0];
-        if (stride <= 0 || clone->data[0] == null)
+        if (stride <= 0 || clone->data[0] == IntPtr.Zero)
         {
             // 负 stride（自底向上布局）或空数据：不支持零拷贝，释放克隆回退
             owner.Dispose();
@@ -971,7 +1002,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         AVFrame* avFrame, int width, int height, AVPixelFormat pixFmt, PixelFormat format)
     {
         // 使用 FFmpeg av_image_get_buffer_size 计算所需缓冲区大小
-        int bufSize = ffmpeg.av_image_get_buffer_size(pixFmt, width, height, 1);
+        int bufSize = FF.av_image_get_buffer_size(pixFmt, width, height, 1);
         if (bufSize <= 0)
             throw new InvalidOperationException(
                 $"av_image_get_buffer_size 返回 {bufSize}（format={pixFmt}, {width}x{height}）");
@@ -979,27 +1010,29 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         // 使用 ArrayPool 租借内存，减少 GC 压力（60fps 每秒 60 个帧）
         var resource = new SoftwareFrameResource(width, height, format, bufSize);
 
-        // AVFrame.data/linesize 是 Array8，av_image_copy_to_buffer 需要 Array4，需转换
-        var srcData = new byte_ptrArray4();
-        srcData[0] = avFrame->data[0];
-        srcData[1] = avFrame->data[1];
-        srcData[2] = avFrame->data[2];
-        srcData[3] = avFrame->data[3];
-
-        var srcLinesize = new int_array4();
-        srcLinesize[0] = avFrame->linesize[0];
-        srcLinesize[1] = avFrame->linesize[1];
-        srcLinesize[2] = avFrame->linesize[2];
-        srcLinesize[3] = avFrame->linesize[3];
+        byte*[] srcData =
+        {
+            (byte*)(void*)avFrame->data[0], (byte*)(void*)avFrame->data[1],
+            (byte*)(void*)avFrame->data[2], (byte*)(void*)avFrame->data[3]
+        };
+        int[] srcLinesize =
+        {
+            avFrame->linesize[0], avFrame->linesize[1],
+            avFrame->linesize[2], avFrame->linesize[3]
+        };
 
         // 使用 av_image_copy_to_buffer 正确处理所有像素格式（YUV420P/YUV422P/YUV444P/NV12 等），
         // 避免手动计算色度平面高度导致的非 YUV420 格式数据损坏。
         // Pin Memory<byte> 获取原始指针供 FFmpeg 互操作（using var 确保方法返回前释放 GCHandle）
         using var pin = resource.Data.Pin();
-        ffmpeg.av_image_copy_to_buffer(
-            (byte*)pin.Pointer, bufSize,
-            srcData, srcLinesize,
-            pixFmt, width, height, 1);
+        fixed (byte** pSrc = srcData)
+        fixed (int* pLines = srcLinesize)
+        {
+            FF.av_image_copy_to_buffer(
+                (byte*)pin.Pointer, bufSize,
+                pSrc, pLines,
+                pixFmt, width, height, 1);
+        }
 
         return resource;
     }
@@ -1023,8 +1056,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         int bgraBufSize = width * height * 4;
         var resource = new SoftwareFrameResource(width, height, PixelFormat.BGRA32, bgraBufSize);
 
-        byte* yPlane = avFrame->data[0];
-        byte* uvPlane = avFrame->data[1];
+        byte* yPlane = (byte*)(void*)avFrame->data[0];
+        byte* uvPlane = (byte*)(void*)avFrame->data[1];
         int yStride = avFrame->linesize[0];
         int uvStride = avFrame->linesize[1];
         if (yPlane == null || uvPlane == null || yStride <= 0 || uvStride <= 0)
@@ -1087,9 +1120,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         int bgraBufSize = width * height * 4;
         var resource = new SoftwareFrameResource(width, height, PixelFormat.BGRA32, bgraBufSize);
 
-        byte* yPlane = avFrame->data[0];
-        byte* uPlane = avFrame->data[1];
-        byte* vPlane = avFrame->data[2];
+        byte* yPlane = (byte*)(void*)avFrame->data[0];
+        byte* uPlane = (byte*)(void*)avFrame->data[1];
+        byte* vPlane = (byte*)(void*)avFrame->data[2];
         int yStride = avFrame->linesize[0];
         int uStride = avFrame->linesize[1];
         int vStride = avFrame->linesize[2];
@@ -1184,7 +1217,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             throw new InvalidOperationException("GPU 设备上下文句柄无效");
 
         // 1. 分配 D3D11VA 硬件设备上下文
-        AVBufferRef* hwRef = ffmpeg.av_hwdevice_ctx_alloc(AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA);
+        AVBufferRef* hwRef = FF.av_hwdevice_ctx_alloc(AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA);
         if (hwRef == null)
             throw new InvalidOperationException("av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA) 返回 null");
 
@@ -1217,12 +1250,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             hwctxPtrs[1] = _vaContextHandle;    // device_context (ID3D11DeviceContext*)
 
             // 3. 初始化设备上下文（FFmpeg 检测 device 已设 → 使用共享设备，创建默认 lock/unlock）
-            int ret = ffmpeg.av_hwdevice_ctx_init(hwRef);
+            int ret = FF.av_hwdevice_ctx_init(hwRef);
             if (ret < 0)
                 throw new InvalidOperationException($"av_hwdevice_ctx_init 失败: {GetErrorString(ret)} (code={ret})");
 
             // 4. 设置到编解码上下文（av_buffer_ref 增加引用计数）
-            AVBufferRef* ctxRef = ffmpeg.av_buffer_ref(hwRef);
+            AVBufferRef* ctxRef = FF.av_buffer_ref(hwRef);
             if (ctxRef == null)
                 throw new InvalidOperationException("av_buffer_ref 返回 null（内存不足）");
             ctx->hw_device_ctx = ctxRef;
@@ -1234,7 +1267,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         {
             // 失败时释放 hwRef（av_buffer_unref 通过 SafeHandle 在 Dispose 中处理）
             AVBufferRef* p = hwRef;
-            ffmpeg.av_buffer_unref(&p);
+            FF.av_buffer_unref(&p);
             throw;
         }
 
@@ -1258,13 +1291,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         int width = avFrame->width;
         int height = avFrame->height;
 
-        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
+        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
             ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
             ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
-        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
+        bool keyFrame = (avFrame->flags & FF.AV_FRAME_FLAG_KEY) != 0;
 
         // GPU 零拷贝：D3D11VA 纹理 → DXGI 共享句柄 → 渲染器生产者（Vulkan/OpenGL）导入为 GPU 纹理上屏。
         if (_gpuImportMode && _gpuProducer is not null)
@@ -1280,7 +1313,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         // 切片保活：av_frame_clone = av_frame_alloc + av_frame_ref，对 buf[0]（池内切片）引用计数 +1。
         //    不拷贝任何显存，纯引用计数操作，零拷贝语义不变。
-        AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
+        AVFrame* clone = FF.av_frame_clone(avFrame);
         if (clone == null)
             throw new InvalidOperationException("av_frame_clone 失败（D3D11VA 硬解帧，内存不足）");
 
@@ -1372,19 +1405,167 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <remarks>同步原生调用（无 I/O），属于 CPU 拷贝路径；NV12 走 CreateCopyResource 拷贝，释放临时帧安全。</remarks>
     private unsafe VideoFrame TransferHardwareFrameToCpu(AVFrame* avFrame)
     {
-        AVFrame* sw = ffmpeg.av_frame_alloc();
+        AVFrame* sw = FF.av_frame_alloc();
         if (sw == null)
             throw new InvalidOperationException("av_frame_alloc 失败（GPU 零拷贝回落 CPU）");
         try
         {
-            int ret = ffmpeg.av_hwframe_transfer_data(sw, avFrame, 0);
+            int ret = FF.av_hwframe_transfer_data(sw, avFrame, 0);
             if (ret < 0)
                 throw new InvalidOperationException($"av_hwframe_transfer_data 失败: {GetErrorString(ret)}");
             return CreateVideoFrameFromAVFrame(sw);
         }
         finally
         {
-            ffmpeg.av_frame_free(&sw);
+            FF.av_frame_free(&sw);
+        }
+    }
+
+    // ── Linux VAAPI 硬件解码（真实零拷贝路径）──
+
+    /// <summary>
+    /// 初始化 VAAPI 硬件解码设备上下文（Linux 真实零拷贝路径）。
+    /// </summary>
+    /// <remarks>
+    /// <para>同步操作（sync 分类）：av_hwdevice_ctx_create + 原生指针读取均为同步原生调用，无 I/O await。</para>
+    /// <para><c>av_hwdevice_ctx_create(AV_HWDEVICE_TYPE_VAAPI, device, ...)</c> 内部经 libva 打开 VADisplay
+    /// （X11：取 $DISPLAY；或 DRM render 节点）并 vaInitialize，返回已初始化的 hw 设备上下文。
+    /// 解码器随后自动把 hw 像素格式（AV_PIX_FMT_VAAPI）前置到 pix_fmts，收帧时
+    /// <c>format==AV_PIX_FMT_VAAPI</c>、<c>data[3]=VASurfaceID</c>，经 <see cref="IVaApiExport"/> 导出 dma_buf
+    /// 直投 GPU（零拷贝）。复用 D3D11VA 范式：不自定义 get_format（FFmpeg 自动前置 hw 格式）。</para>
+    /// </remarks>
+    private unsafe void InitializeVAAPI(AVCodecContext* ctx)
+    {
+        if (_vaApiExport is null)
+            throw new InvalidOperationException("IVaApiExport 未注入（VAAPI 不可用）");
+
+        // 1) 默认设备：ffmpeg 据 $DISPLAY(X11) 或默认 DRM render 节点自动选；失败回退显式 render 节点。
+        AVBufferRef* hwRef = null;
+        int ret = FF.av_hwdevice_ctx_create(
+            &hwRef, AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI, null, null, 0);
+        if (ret < 0)
+        {
+            _logger.LogWarning(
+                "av_hwdevice_ctx_create(VAAPI, 默认设备) 失败({Error})，回退 /dev/dri/renderD128",
+                GetErrorString(ret));
+            ret = FF.av_hwdevice_ctx_create(
+                &hwRef, AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI, "/dev/dri/renderD128", null, 0);
+        }
+        if (ret < 0 || hwRef == null)
+            throw new InvalidOperationException($"av_hwdevice_ctx_create(VAAPI) 失败: {GetErrorString(ret)} (code={ret})");
+
+        try
+        {
+            // 2) 取 VADisplay：AVHWDeviceContext.hwctx -> AVVAAPIDeviceContext.display（首字段，VADisplay=void*）
+            var hwCtx = (AVHWDeviceContext*)hwRef->data;
+            nint display = hwCtx->hwctx == null ? nint.Zero : *(nint*)hwCtx->hwctx;
+            if (display == nint.Zero)
+                throw new InvalidOperationException("VAAPI display 为空（vaInitialize 未成功）");
+            _vaDisplay = display;
+
+            // 3. 设置到编解码上下文（av_buffer_ref 增加引用计数）
+            AVBufferRef* ctxRef = FF.av_buffer_ref(hwRef);
+            if (ctxRef == null)
+                throw new InvalidOperationException("av_buffer_ref 返回 null（内存不足）");
+            ctx->hw_device_ctx = ctxRef;
+
+            // 4. SafeHandle 管理 hwRef 生命周期（在 try 内——OOM 时 catch 可释放）
+            _hwDeviceCtx = new SafeAVBufferRefHandle((nint)hwRef);
+        }
+        catch
+        {
+            AVBufferRef* p = hwRef;
+            FF.av_buffer_unref(&p);
+            throw;
+        }
+
+        _logger.LogInformation(
+            "VAAPI 硬件解码已初始化（display={Display}, 零拷贝导入={ZeroCopy}）",
+            _vaDisplay, _gpuProducer is not null);
+    }
+
+    /// <summary>
+    /// 从 VAAPI 硬解输出的 AVFrame 创建 VideoFrame（Linux 真实零拷贝 GPU 纹理路径）。
+    /// </summary>
+    /// <remarks>
+    /// <para>VAAPI 帧布局：<c>data[3]</c> = VASurfaceID（uint）。经 <see cref="IVaApiExport"/> 把 VA Surface
+    /// 导出为 dma_buf（DRM_PRIME_2 / composed NV12 单 fd 双平面），再经匹配的渲染器生产者
+    /// （GL/Vulkan）导入为 GPU 纹理上屏（零 CPU 回读）。</para>
+    /// <para>切片保活：av_frame_clone 持有 VA Surface 引用，解码器 DecodeCore 的 finally 会 av_frame_free 原帧；
+    /// dma_buf 导出后由 EGL/Vulkan 纹理持有独立引用，surface 回收安全。</para>
+    /// <para>无匹配生产者 / 导出或导入失败 → 回落 av_hwframe_transfer_data CPU 传输（仍属硬解，仅非零拷贝），计入 CPU 拷贝。</para>
+    /// </remarks>
+    private unsafe VideoFrame CreateVaApiFrame(AVFrame* avFrame)
+    {
+        int width = avFrame->width;
+        int height = avFrame->height;
+
+        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        TimeSpan duration = avFrame->duration > 0
+            ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
+            : TimeSpan.Zero;
+        bool keyFrame = (avFrame->flags & FF.AV_FRAME_FLAG_KEY) != 0;
+
+        // 未初始化 VAAPI / 无导出能力 → 硬解帧回读 CPU（仍属硬解，仅非零拷贝）
+        if (_vaDisplay == nint.Zero || _vaApiExport is null)
+            return TransferHardwareFrameToCpu(avFrame);
+
+        uint surfaceId = (uint)(nint)avFrame->data[3]; // VASurfaceID
+
+        // 克隆帧保活 surface（原帧将在 DecodeCore finally 被 av_frame_free）
+        AVFrame* clone = FF.av_frame_clone(avFrame);
+        if (clone == null)
+            return TransferHardwareFrameToCpu(avFrame);
+
+        var frameOwner = new SafeAVFrameHandle((nint)clone);
+        try
+        {
+            if (_vaApiExport.TryExportSurfaceToDmaBuf(_vaDisplay, surfaceId, out var desc) && desc is not null
+                && _gpuProducer is not null)
+            {
+                var source = new GpuFrameImportSource
+                {
+                    Kind = GpuFrameImportKind.LinuxDmaBufFd,
+                    Handle = (nint)desc.ObjectFds![0],
+                    Width = width,
+                    Height = height,
+                    Format = PixelFormat.NV12,
+                    DrmModifier = desc.Modifier,
+                    DrmFourcc = (int)desc.DrmFourcc,
+                    PlaneCount = desc.PlaneOffsets!.Length,
+                    PlaneFds = desc.ObjectFds,
+                    PlaneOffsets = desc.PlaneOffsets,
+                    PlanePitches = desc.PlanePitches,
+                    SubresourceIndex = 0,
+                    ArrayLayers = 1,
+                };
+                if (_gpuProducer.TryImport(source, out var tex) && tex is not null)
+                {
+                    var frame = _framePool?.Rent() ?? new VideoFrame();
+                    frame.Reset(width, height, PixelFormat.NV12, tex, timestamp, duration, keyFrame);
+                    System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
+                    return frame;
+                }
+                _logger.LogWarning("VAAPI dma_buf 导入未接受（S_OK≠被接受），本帧回落 CPU 传输。");
+            }
+            else
+            {
+                _logger.LogWarning("VAAPI 表面导出 dma_buf 失败，本帧回落 CPU 传输。");
+            }
+
+            // 回落 CPU 传输（硬解帧 → CPU 像素帧）；TransferHardwareFrameToCpu 内部计入 CPU 拷贝。
+            return TransferHardwareFrameToCpu(clone);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "VAAPI 零拷贝导出/导入异常，本帧回落 CPU 传输。");
+            return TransferHardwareFrameToCpu(clone);
+        }
+        finally
+        {
+            frameOwner.Dispose(); // 释放克隆帧（av_frame_free）；dma_buf 已由 GL/VK 纹理持有独立引用
         }
     }
 
@@ -1395,8 +1576,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// </summary>
     /// <remarks>
     /// <para>同步操作（sync 分类）：FFmpeg hwdevice_ctx API 均为同步原生调用，无 I/O await。</para>
-    /// <para>FFmpeg.AutoGen 8.1.0 无 <c>av_mediacodec_alloc_context</c> 包装（反射探针核验）→
-    /// 走通用 <c>av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_MEDIACODEC)</c> + 原始指针设置
+    /// <para>MediaCodec 设备上下文无高层封装，故直接走通用 <c>av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_MEDIACODEC)</c> + 原始指针设置
     /// <c>AVMediaCodecDeviceContext</c>（与 D3D11VA 同款手法）。</para>
     /// <para>AVMediaCodecDeviceContext 布局（FFmpeg 8 hwcontext_mediacodec.h）：
     /// <c>surface(void*)</c>, <c>native_window(void*)</c>, <c>create_window(int)</c>。</para>
@@ -1409,7 +1589,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         IntPtr nativeWindow = _options?.MediaCodecNativeWindow ?? IntPtr.Zero;
 
         // 1. 分配 MediaCodec 硬件设备上下文
-        AVBufferRef* hwRef = ffmpeg.av_hwdevice_ctx_alloc(AVHWDeviceType.AV_HWDEVICE_TYPE_MEDIACODEC);
+        AVBufferRef* hwRef = FF.av_hwdevice_ctx_alloc(AVHWDeviceType.AV_HWDEVICE_TYPE_MEDIACODEC);
         if (hwRef == null)
             throw new InvalidOperationException("av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_MEDIACODEC) 返回 null");
 
@@ -1424,12 +1604,12 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 mcCtx[1] = nativeWindow;   // native_window (ANativeWindow*)
 
             // 3. 初始化设备上下文
-            int ret = ffmpeg.av_hwdevice_ctx_init(hwRef);
+            int ret = FF.av_hwdevice_ctx_init(hwRef);
             if (ret < 0)
                 throw new InvalidOperationException($"av_hwdevice_ctx_init(MEDIACODEC) 失败: {GetErrorString(ret)} (code={ret})");
 
             // 4. 设置到编解码上下文（av_buffer_ref 增加引用计数）
-            AVBufferRef* ctxRef = ffmpeg.av_buffer_ref(hwRef);
+            AVBufferRef* ctxRef = FF.av_buffer_ref(hwRef);
             if (ctxRef == null)
                 throw new InvalidOperationException("av_buffer_ref 返回 null（内存不足）");
             ctx->hw_device_ctx = ctxRef;
@@ -1440,7 +1620,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         catch
         {
             AVBufferRef* p = hwRef;
-            ffmpeg.av_buffer_unref(&p);
+            FF.av_buffer_unref(&p);
             throw;
         }
 
@@ -1463,7 +1643,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         int height = avFrame->height;
 
         // 克隆帧（共享引用计数缓冲）保活 AVMediaCodecBuffer
-        AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
+        AVFrame* clone = FF.av_frame_clone(avFrame);
         if (clone == null)
             throw new InvalidOperationException("av_frame_clone 失败（MediaCodec 表面帧，内存不足）");
 
@@ -1477,13 +1657,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         var resource = new MediaCodecFrameResource(mcBuffer, width, height, frameOwner);
 
-        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
+        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
             ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
             ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
-        bool keyFrame = (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0;
+        bool keyFrame = (avFrame->flags & FF.AV_FRAME_FLAG_KEY) != 0;
 
         var frame = _framePool?.Rent() ?? new VideoFrame();
         frame.Reset(width, height, PixelFormat.NV12, resource, timestamp, duration, keyFrame);
@@ -1535,8 +1715,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     {
         unsafe
         {
-            byte* buf = stackalloc byte[ffmpeg.AV_ERROR_MAX_STRING_SIZE];
-            ffmpeg.av_strerror(errorCode, buf, ffmpeg.AV_ERROR_MAX_STRING_SIZE);
+            byte* buf = stackalloc byte[FF.AV_ERROR_MAX_STRING_SIZE];
+            FF.av_strerror(errorCode, buf, (UIntPtr)FF.AV_ERROR_MAX_STRING_SIZE);
             return Marshal.PtrToStringUTF8((IntPtr)buf) ?? $"error code {errorCode}";
         }
     }

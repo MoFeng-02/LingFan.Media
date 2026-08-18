@@ -32,7 +32,7 @@ internal sealed class SafeAVBufferRefHandle : SafeHandle
             unsafe
             {
                 var pp = (AVBufferRef*)handle;
-                ffmpeg.av_buffer_unref(&pp);
+                FF.av_buffer_unref(&pp);
             }
             handle = IntPtr.Zero;
         }

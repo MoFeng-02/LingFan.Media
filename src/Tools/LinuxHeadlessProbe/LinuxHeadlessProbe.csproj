@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LinuxHeadlessProbe</RootNamespace>
+    <AssemblyName>LinuxHeadlessProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- FFmpeg 后端经自写原生绑定（[LibraryImport] + NativeLibrary 版本自适应加载）调用原生库；
+         D3D11VA 硬件加速与 GPUShare.D3D11 为 Windows-only：抑制 CA1416。 -->
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 跨平台后端/渲染/消费链：ffmpeg 解码 + 无头 NoOp 渲染 + 静音输出。
+         全部 net10.0，可在 Linux/WSL2 直接 dotnet run / dotnet publish -r linux-x64。 -->
+    <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 真实媒体资源（与测试工程同源），默认参数 file 指向 Resources/Video/m1.mp4 -->
+    <None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
+    ffmpeg 原生库（Linux）：不走 Windows 的 CopyFFmpegNative(.dll) 逻辑。
+    Linux 下自写 FF 加载器按 lib{name}.so.{ver} 名称 dlopen（如 libavutil.so.60），
+    BtbN lgpl-shared 构建已直接提供这些文件。
+    运行时通过环境变量 LF_FFMPEG_LIB 指向 BtbN 的 lib/ 目录（详见交付说明），
+    并在运行环境 export LD_LIBRARY_PATH=$LF_FFMPEG_LIB 以保证依赖链 dlopen 可见。
+    自写 FF 加载器仅处理 .so 带版本名，Linux 上无需 .dll 无版本别名兜底。
+  -->
+
+</Project>

@@ -45,6 +45,9 @@
     <Project Path="src/Tools/FfmpegHeadfulPlaybackProbe/FfmpegHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/FfmpegPlaybackProbe/FfmpegPlaybackProbe.csproj" />
     <Project Path="src/Tools/HeadfulPlaybackProbe/HeadfulPlaybackProbe.csproj" />
+    <Project Path="src/Tools/LinuxHeadlessOpenGlProbe/LinuxHeadlessOpenGlProbe.csproj" />
+    <Project Path="src/Tools/LinuxHeadlessProbe/LinuxHeadlessProbe.csproj" />
+    <Project Path="src/Tools/LinuxHeadlessVulkanProbe/LinuxHeadlessVulkanProbe.csproj" />
     <Project Path="src/Tools/MediaCorrectnessProbe/MediaCorrectnessProbe.csproj" />
     <Project Path="src/Tools/MediaPlaybackProbe/MediaPlaybackProbe.csproj" />
     <Project Path="src/Tools/OpenGLHeadfulPlaybackProbe/OpenGLHeadfulPlaybackProbe.csproj" />

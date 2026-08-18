@@ -30,7 +30,7 @@ internal sealed class SafeSwsContextHandle : SafeHandle
             unsafe
             {
                 var p = (SwsContext*)handle;
-                ffmpeg.sws_freeContext(p);
+                FF.sws_freeContext(p);
             }
             handle = IntPtr.Zero;
         }

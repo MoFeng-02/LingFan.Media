@@ -34,8 +34,8 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
     // AVIO 回调委托（必须保持引用防止 GC 回收）
     // 用 object 存储避免 unsafe 字段声明（委托类型含指针参数需要 unsafe 上下文）
-    private readonly object _readDelegate;
-    private readonly object _seekDelegate;
+    private readonly AVIOReadFunc _readDelegate;
+    private readonly AVIOSeekFunc _seekDelegate;
 
     // 流引用（AVIO 回调使用）
     private IMediaStream? _stream;
@@ -65,8 +65,8 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _readDelegate = new avio_alloc_context_read_packet(ReadPacketCallback);
-        _seekDelegate = new avio_alloc_context_seek(SeekCallback);
+        _readDelegate = new AVIOReadFunc(ReadPacketCallback);
+        _seekDelegate = new AVIOSeekFunc(SeekCallback);
     }
 
     /// <inheritdoc/>
@@ -143,13 +143,13 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
                 // 委托实例已作为字段保持引用，回调通过实例方法访问 _stream
                 Dbg("avio_alloc_context 之前");
-                AVIOContext* avioCtx = ffmpeg.avio_alloc_context(
+                AVIOContext* avioCtx = FF.avio_alloc_context(
                     (byte*)_avioBuffer, AvioBufferSize,
                     0, // write_flag = 0 (read-only)
                     null, // opaque
-                    (avio_alloc_context_read_packet)_readDelegate,
+                    _readDelegate,
                     null, // write_packet (null = read-only)
-                    stream.CanSeek ? (avio_alloc_context_seek)_seekDelegate : null);
+                    stream.CanSeek ? _seekDelegate : null);
 
                 if (avioCtx == null)
                     throw new InvalidOperationException("avio_alloc_context 失败：内存不足");
@@ -157,12 +157,12 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 Dbg("avio_alloc_context OK");
 
                 // 2. 分配 AVFormatContext 并设置自定义 AVIO
-                fmtCtx = ffmpeg.avformat_alloc_context();
+                fmtCtx = FF.avformat_alloc_context();
 
                 if (fmtCtx == null)
                     throw new InvalidOperationException("avformat_alloc_context 失败");
                 fmtCtx->pb = avioCtx;
-                fmtCtx->flags |= ffmpeg.AVFMT_FLAG_CUSTOM_IO;
+                fmtCtx->flags |= FF.AVFMT_FLAG_CUSTOM_IO;
                 Dbg("avformat_alloc_context OK");
             }
 
@@ -172,7 +172,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 // 不手动碰 pb/flags，彻底规避结构体布局漂移导致的 AV。
                 Dbg($"avformat_open_input（file 协议: {stream.Location}）之前");
                 pFmtCtx = null;
-                int openRet = ffmpeg.avformat_open_input(&pFmtCtx, stream.Location, null, null);
+                int openRet = FF.avformat_open_input(&pFmtCtx, stream.Location, null, null);
                 Dbg($"avformat_open_input 返回 ret={openRet}");
                 if (openRet < 0)
                 {
@@ -185,7 +185,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                 // 3. 打开输入（自定义 AVIO，url 传 null）
                 pFmtCtx = fmtCtx;
                 Dbg("avformat_open_input 之前");
-                int openRet = ffmpeg.avformat_open_input(&pFmtCtx, null, null, null);
+                int openRet = FF.avformat_open_input(&pFmtCtx, null, null, null);
                 Dbg($"avformat_open_input 返回 ret={openRet}");
                 if (openRet < 0)
                 {
@@ -199,7 +199,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
             Dbg("avformat_open_input OK，开始 find_stream_info");
 
             // 4. 查找流信息
-            int ret = ffmpeg.avformat_find_stream_info(pFmtCtx, null);
+            int ret = FF.avformat_find_stream_info(pFmtCtx, null);
             Dbg($"avformat_find_stream_info 返回 ret={ret}");
             if (ret < 0)
             {
@@ -260,18 +260,18 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         AVFormatContext* fmtCtx = (AVFormatContext*)_formatContextHandle!.DangerousGetHandle();
 
         // 分配临时 AVPacket
-        AVPacket* pkt = ffmpeg.av_packet_alloc();
+        AVPacket* pkt = FF.av_packet_alloc();
         if (pkt == null)
             throw new InvalidOperationException("av_packet_alloc 失败");
 
         try
         {
-            int ret = ffmpeg.av_read_frame(fmtCtx, pkt);
+            int ret = FF.av_read_frame(fmtCtx, pkt);
 
             if (ret < 0)
             {
                 // AVERROR_EOF 或其他错误 → 返回 null 表示流结束
-                if (ret != ffmpeg.AVERROR_EOF)
+                if (ret != FF.AVERROR_EOF)
                     _logger.LogWarning("av_read_frame 返回 {Ret}: {Error}", ret, GetErrorString(ret));
                 return null;
             }
@@ -280,24 +280,24 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
             // 共享 FFmpeg 内部 buffer（引用计数 +1，非引用计数包内部自动降级为拷贝），
             // 消除 new byte[] + Marshal.Copy 托管拷贝。
             // 克隆包生命周期由 SafeAVPacketHandle 控制（MediaPacket.Dispose → av_packet_free → 引用计数 -1）。
-            AVPacket* clone = ffmpeg.av_packet_clone(pkt);
+            AVPacket* clone = FF.av_packet_clone(pkt);
             if (clone == null)
                 throw new InvalidOperationException("av_packet_clone 失败（内存不足）");
             var owner = new SafeAVPacketHandle((IntPtr)clone);
 
             ReadOnlyMemory<byte> data = clone->size > 0 && clone->data != null
-                ? new NativeBufferMemoryManager((IntPtr)clone->data, clone->size).Memory
+                ? new NativeBufferMemoryManager((IntPtr)clone->data, (int)clone->size).Memory
                 : ReadOnlyMemory<byte>.Empty;
 
             // 提取时间戳和元数据
             double timeBase = GetTimeBase(fmtCtx, pkt->stream_index);
-            TimeSpan timestamp = pkt->pts != ffmpeg.AV_NOPTS_VALUE
+            TimeSpan timestamp = pkt->pts != FF.AV_NOPTS_VALUE
                 ? TimeSpan.FromTicks((long)(pkt->pts * timeBase * TimeSpan.TicksPerSecond))
                 : TimeSpan.Zero;
             TimeSpan duration = pkt->duration != 0
                 ? TimeSpan.FromTicks((long)(pkt->duration * timeBase * TimeSpan.TicksPerSecond))
                 : TimeSpan.Zero;
-            bool keyFrame = (pkt->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
+            bool keyFrame = (pkt->flags & FF.AV_PKT_FLAG_KEY) != 0;
 
             // 重播归零诊断：SeekAsync 设 _logFirstPacketAfterSeek=true 后，
             // 这里打印 seek 后首包的时间戳，确证「回到起点」落点已回到 ≈0（而非回绕到末关键帧）。
@@ -309,7 +309,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
                     "[SEEK-DIAG] seek 后首包: stream={Stream} pts={Pts} dts={Dts} key={Key} targetTs={TargetTs} " +
                     "(pts≈0 表示已正确回到起点；pts≠0 表示回绕到末关键帧)",
                     pkt->stream_index, timestamp,
-                    pkt->dts != ffmpeg.AV_NOPTS_VALUE
+                    pkt->dts != FF.AV_NOPTS_VALUE
                         ? TimeSpan.FromTicks((long)(pkt->dts * timeBase * TimeSpan.TicksPerSecond))
                         : TimeSpan.Zero,
                     keyFrame, _lastSeekTargetTs);
@@ -319,9 +319,9 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         }
         finally
         {
-            ffmpeg.av_packet_unref(pkt);
+            FF.av_packet_unref(pkt);
             AVPacket* p = pkt;
-            ffmpeg.av_packet_free(&p);
+            FF.av_packet_free(&p);
         }
     }
 
@@ -339,7 +339,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
         // 伪异步：av_seek_frame 为同步 C 调用，Task.Run 仅卸载到线程池。
         // 标记诊断：下个首包打印时间戳，确证回到起点的落点。
-        long reqTs = (long)(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
+        long reqTs = (long)(position.TotalSeconds * FF.AV_TIME_BASE);
         _lastSeekTargetTs = reqTs;
         _logFirstPacketAfterSeek = true;
         return await Task.Run(() => SeekCore(position, ct), ct).ConfigureAwait(false);
@@ -355,7 +355,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         AVFormatContext* fmtCtx = (AVFormatContext*)_formatContextHandle!.DangerousGetHandle();
 
         // 转换为 FFmpeg 时间戳（AV_TIME_BASE = 微秒）
-        long targetTs = (long)(position.TotalSeconds * ffmpeg.AV_TIME_BASE);
+        long targetTs = (long)(position.TotalSeconds * FF.AV_TIME_BASE);
 
         int ret;
         if (targetTs <= 0)
@@ -365,13 +365,13 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
             // 视频比音频(主时钟=0)超前较多，同步器令呈现线程 WaitUntilDue 休眠等主时钟追上 → 画面冻结。
             // 改用 nearest（flags=0）：落点=最接近 0 的关键帧 = 文件首关键帧@0，杜绝回绕到末关键帧。
             // 兜底：nearest 仍失败则回退 BACKWARD（至少保证能 seek，由诊断日志暴露落点异常）。
-            ret = ffmpeg.av_seek_frame(fmtCtx, -1, 0, 0);
+            ret = FF.av_seek_frame(fmtCtx, -1, 0, 0);
             if (ret < 0)
-                ret = ffmpeg.av_seek_frame(fmtCtx, -1, 0, ffmpeg.AVSEEK_FLAG_BACKWARD);
+                ret = FF.av_seek_frame(fmtCtx, -1, 0, FF.AVSEEK_FLAG_BACKWARD);
         }
         else
         {
-            ret = ffmpeg.av_seek_frame(fmtCtx, -1, targetTs, ffmpeg.AVSEEK_FLAG_BACKWARD);
+            ret = FF.av_seek_frame(fmtCtx, -1, targetTs, FF.AVSEEK_FLAG_BACKWARD);
         }
         if (ret < 0)
         {
@@ -429,20 +429,20 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         try
         {
             if (_stream == null || _disposed)
-                return ffmpeg.AVERROR_EOF;
+                return FF.AVERROR_EOF;
 
             if (bufSize <= 0)
-                return ffmpeg.AVERROR_EOF;
+                return FF.AVERROR_EOF;
 
             Span<byte> span = new(buf, bufSize);
             int read = _stream.Read(span);
 
-            return read <= 0 ? ffmpeg.AVERROR_EOF : read;
+            return read <= 0 ? FF.AVERROR_EOF : read;
         }
         catch (Exception ex)
         {
             try { _logger.LogError(ex, "AVIO ReadPacketCallback 异常（已吞除以防逃逸进原生 ffmpeg）"); } catch { }
-            return ffmpeg.AVERROR_EOF;
+            return FF.AVERROR_EOF;
         }
     }
 
@@ -455,13 +455,13 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         try
         {
             if (_stream == null || _disposed || !_stream.CanSeek)
-                return ffmpeg.AVERROR_EOF;
+                return FF.AVERROR_EOF;
 
             // AVSEEK_SIZE：查询流大小
-            if (whence == ffmpeg.AVSEEK_SIZE)
+            if (whence == FF.AVSEEK_SIZE)
             {
                 long len = _stream.Length;
-                return len < 0 ? ffmpeg.AVERROR_EOF : len;
+                return len < 0 ? FF.AVERROR_EOF : len;
             }
 
             SeekOrigin origin = whence switch
@@ -477,7 +477,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         catch (Exception ex)
         {
             try { _logger.LogError(ex, "AVIO SeekCallback 异常（已吞除以防逃逸进原生 ffmpeg）"); } catch { }
-            return ffmpeg.AVERROR_EOF;
+            return FF.AVERROR_EOF;
         }
     }
 
@@ -489,7 +489,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         if (streamIndex < 0 || streamIndex >= (int)fmtCtx->nb_streams)
             return 0;
         AVRational tb = fmtCtx->streams[streamIndex]->time_base;
-        return ffmpeg.av_q2d(tb);
+        return FF.av_q2d(tb);
     }
 
     /// <summary>从 ffmpeg 流参数拷贝 <c>extradata</c>（SPS+PPS / AudioSpecificConfig 等）到托管内存。
@@ -512,7 +512,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         for (uint i = 0; i < fmtCtx->nb_streams; i++)
         {
             AVStream* avStream = fmtCtx->streams[i];
-            AVCodecParameters* codecPar = avStream->codecpar;
+            AVCodecParameters* codecPar = (AVCodecParameters*)avStream->codecpar;
             string? language = GetStreamLanguage(avStream);
             double timeBase = GetTimeBase(fmtCtx, (int)i);
             TimeSpan streamDuration = avStream->duration > 0
@@ -590,7 +590,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     private static unsafe MediaMetadata ParseMetadata(AVFormatContext* fmtCtx)
     {
         TimeSpan duration = fmtCtx->duration > 0
-            ? TimeSpan.FromTicks(fmtCtx->duration * TimeSpan.TicksPerSecond / ffmpeg.AV_TIME_BASE)
+            ? TimeSpan.FromTicks(fmtCtx->duration * TimeSpan.TicksPerSecond / FF.AV_TIME_BASE)
             : TimeSpan.Zero;
 
         string? fmtName = null;
@@ -608,7 +608,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         AVDictionaryEntry* entry = null;
         while (true)
         {
-            entry = ffmpeg.av_dict_get(fmtCtx->metadata, "", entry, ffmpeg.AV_DICT_IGNORE_SUFFIX);
+            entry = FF.av_dict_get(fmtCtx->metadata, "", entry, FF.AV_DICT_IGNORE_SUFFIX);
             if (entry == null) break;
 
             string key = Marshal.PtrToStringUTF8((IntPtr)entry->key) ?? string.Empty;
@@ -639,7 +639,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     /// <summary>获取流语言标签。</summary>
     private static unsafe string? GetStreamLanguage(AVStream* stream)
     {
-        AVDictionaryEntry* entry = ffmpeg.av_dict_get(stream->metadata, "language", null, 0);
+        AVDictionaryEntry* entry = FF.av_dict_get(stream->metadata, "language", null, 0);
         if (entry == null) return null;
         return Marshal.PtrToStringUTF8((IntPtr)entry->value);
     }
@@ -664,7 +664,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
             // 先将 buffer 置空防止 avio_closep 释放我们的 buffer（我们自己管理）
             avioCtx->buffer = null;
             avioCtx->buffer_size = 0;
-            ffmpeg.avio_closep(&avioCtx);
+            FF.avio_closep(&avioCtx);
             _avioContext = IntPtr.Zero;
         }
 
@@ -680,8 +680,8 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     {
         unsafe
         {
-            byte* buf = stackalloc byte[ffmpeg.AV_ERROR_MAX_STRING_SIZE];
-            ffmpeg.av_strerror(errorCode, buf, ffmpeg.AV_ERROR_MAX_STRING_SIZE);
+            byte* buf = stackalloc byte[FF.AV_ERROR_MAX_STRING_SIZE];
+            FF.av_strerror(errorCode, buf, (UIntPtr)FF.AV_ERROR_MAX_STRING_SIZE);
             return Marshal.PtrToStringUTF8((IntPtr)buf) ?? $"error code {errorCode}";
         }
     }

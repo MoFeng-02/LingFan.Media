@@ -9,7 +9,7 @@ Linux 为 `.so`；其余平台若未来启用，则为对应平台的共享库�
 程序集。
 
 > **托管绑定层需单独判断**：上述结论针对的是**原生共享库**。位于 .NET 侧的托管绑定程序集另有各自的许可证——
-> `FFmpeg.AutoGen` 为 **MIT**（无 copyleft），而 VLC 后端所用的 `VLCNative` 绑定为本项目**自有代码、以 Apache-2.0 授权**
+> `FFmpeg` 的托管绑定层为本项目**自有自写 P/Invoke（Apache-2.0）**，无第三方程序集（无 copyleft）；而 VLC 后端所用的 `VLCNative` 绑定亦为本项目**自有代码、以 Apache-2.0 授权**
 > （自写 P/Invoke，零第三方 LGPL 托管依赖）。因此两个后端的托管绑定层在 **NativeAOT 发布**下均不产生附加 copyleft 义务；
 > 受 LGPL 约束的仅为运行时动态加载的 `libvlc` 原生共享库，详见 [第 6 节](#6-nativeaot-发布与托管绑定层)。
 
@@ -21,16 +21,15 @@ Linux 为 `.so`；其余平台若未来启用，则为对应平台的共享库�
   （`libswscale`）、重采样（`libswresample`）、工具（`libavutil`）。
 - **许可证**：LGPL 2.1+（本仓库使用的构建为 **LGPL 共享构建**，未启用 `--enable-gpl` /
   `--enable-nonfree`，不包含任何 GPL 专属编解码器）。
-- **动态链接说明**：本项目通过 `FFmpeg.AutoGen` 的 `DynamicallyLoaded` 绑定在**运行时**动态加载
+- **动态链接说明**：本项目通过**自写原生绑定**（[LibraryImport] + `NativeLibrary` 版本自适应加载）在**运行时**动态加载
   FFmpeg 共享库（Windows 为 `avcodec-*.dll` 等，Linux 为 `libavcodec.so*` 等）。FFmpeg 的 **LGPL 共享构建
   在 Windows 与 Linux 上均可用**：Windows 采用 BtbN 的 `lgpl-shared` 变体（见下）；Linux 采用对应的
   `lgpl-shared` 变体（如 BtbN 提供的 `ffmpeg-master-latest-linux64-lgpl-shared`）。原生共享库不随本项目
   源码分发，而是由宿主/测试程序在部署时放置于可搜索路径（本仓库 `ThirdParty/ffmpeg/` 仅作本地开发用，已被
   `.gitignore` 忽略）。
-- **版本对齐（ABI）**：本项目绑定 **FFmpeg.AutoGen 8.1.0**，其 ABI 与 **FFmpeg 8.x** 严格对齐（如
-  `avutil-60`）。因此须使用与 FFmpeg.AutoGen 8.1.0 ABI 匹配的 **FFmpeg 8.x LGPL 共享构建**；BtbN 当前
-  发布的 `ffmpeg-master-latest-*-lgpl-shared` 即跟踪该主版本线。请勿使用 `master` 之外的、主版本明显领先
-  的构建，以免 ABI 不匹配。
+- **版本覆盖（ABI）**：本项目自写绑定**覆盖 FFmpeg 4.x–9.0**（avutil 主版本 56–61），加载器按带版本号主版本成组探测
+  （如 `avutil-61.dll` / `libavutil.so.61` / `libavutil.61.dylib`），加载后调用 `avutil_version()` 做版本门禁。
+  推荐使用与最新兼容的 **FFmpeg 8.x / 9.0 LGPL 共享构建**（BtbN `lgpl-shared`）；若使用较旧 4.x–7.x 构建，须确保同一发布内各组件主版本一致。
 - **可替换性（LGPL 要求）**：原生共享库的路径通过 `FFmpegOptions.FFmpegLibraryPath`
   显式配置（默认指向应用程序基目录）。用户可在不重新编译本项目的前提下，
   替换/升级这些共享库（例如修复安全漏洞或切换构建）。
@@ -43,14 +42,13 @@ Linux 为 `.so`；其余平台若未来启用，则为对应平台的共享库�
 
 ---
 
-## 2. FFmpeg.AutoGen（MIT 许可证）
+## 2. FFmpeg 托管绑定层（本项目自有，Apache-2.0）
 
-- **用途**：.NET 与 FFmpeg 原生 API 之间的绑定（P/Invoke 生成）。
-- **许可证**：MIT（<https://github.com/Ruslan-B/FFmpeg.AutoGen>）。
-- **绑定变体**：本项目使用 `FFmpeg.AutoGen.Bindings.DynamicallyLoaded`（MIT），
-  它在运行时动态解析 FFmpeg 共享库，与 LGPL 动态链接要求一致。
-- **版本**：当前固定为 **8.1.0**（与 FFmpeg 8.x 的 ABI 对齐）。
-- **NativeAOT 友好性**：MIT 不含 copyleft 条款，因此该绑定层即便被 AOT 静态编译进单一可执行文件，
+- **用途**：.NET 与 FFmpeg 原生 API 之间的绑定（本项目**自写** P/Invoke，基于 `[LibraryImport]` 源生成，零第三方托管包）。
+- **许可证**：Apache-2.0（与本项目同源，自有代码）。
+- **绑定形态**：不使用任何第三方自动生成绑定（如 `FFmpeg.AutoGen`），亦无 `PackageReference` 依赖；所有 P/Invoke 声明均为项目自有代码，
+  经 `NativeLibrary.SetDllImportResolver` 把 `[LibraryImport("avutil")]` 等解析到已加载的原生句柄，与 LGPL 动态链接要求一致。
+- **NativeAOT 友好性**：Apache-2.0 不含 copyleft 条款，该绑定层即便被 AOT 静态编译进单一可执行文件，
   也**不产生任何附加分发义务**；同时真正受 LGPL 约束的 FFmpeg 原生共享库始终为运行时动态加载、可独立替换。
   故 **FFmpeg 后端在 NativeAOT 下是完全干净的路径**。
 
@@ -61,8 +59,7 @@ Linux 为 `.so`；其余平台若未来启用，则为对应平台的共享库�
 - **许可证**：Apache-2.0。
 - **组合方式**：本项目自身的源码以 Apache-2.0 许可证发布；对 FFmpeg / LibVLC 的**原生共享库**仅作**动态链接**调用，
   未修改其源码、未将其合并进本项目程序集、未采用静态链接。
-- **本项目自身的分发形态**：本项目在 NuGet 上分发的是**中间语言（IL）程序集**；第三方托管绑定层
-  `FFmpeg.AutoGen` 以 `PackageReference` 形式作为**独立程序集**传递给下游。VLC 后端的 `VLCNative` 绑定为本项目
+- **本项目自身的分发形态**：本项目在 NuGet 上分发的是**中间语言（IL）程序集**；FFmpeg 的托管绑定层**为本项目自有源代码**（Apache-2.0），随本项目一同编译分发，并非第三方托管程序集，亦无 `PackageReference` 依赖。VLC 后端的 `VLCNative` 绑定为本项目
   **自有源代码（Apache-2.0）**，随本项目一同编译分发，并非第三方托管程序集。因此就本项目自身的分发行为而言，
   不存在对任何 LGPL 托管层的静态链接。是否触发 LGPL 静态链接义务，取决于**下游最终应用的发布方式**
   （详见第 6 节；当前 VLC 后端已在 AOT 下无此类义务）。
@@ -92,14 +89,14 @@ Linux 为 `.so`；其余平台若未来启用，则为对应平台的共享库�
 
 | 要求 | 本项目做法 |
 | --- | --- |
-| 动态链接（非静态合并） | ✅ `FFmpeg.AutoGen.DynamicallyLoaded` 运行时 `LoadLibrary` 共享库 |
+| 动态链接（非静态合并） | ✅ 自写 FF 绑定（`NativeLibrary` 版本自适应加载）运行时动态加载共享库 |
 | 不引入 GPL 代码路径 | ✅ 仅用 LGPL 共享构建；wrapper 只调 FFmpeg 公共 LGPL API |
 | 允许用户替换/升级共享库 | ✅ `FFmpegOptions.FFmpegLibraryPath` 可配置；共享库不内嵌 |
 | 提供许可证与署名 | ✅ 本文件 |
 | 不修改 FFmpeg / LibVLC 源码 | ✅ 仅调用，未 vendoring 或修改 |
 | 允许用户替换/升级 LibVLC | ✅ 原生共享库由 `VideoLAN.LibVLC.Windows` 按 Windows RID 提供、不入库、可替换 |
 | 本项目许可证不被 LGPL 传染 | ✅ 仅动态链接、不改源码、不合并；自有代码始终 Apache-2.0（见第 3 节） |
-| 托管绑定层独立 / 自有 | ✅ `FFmpeg.AutoGen` 经 `PackageReference` 传递；`VLCNative` 为本项目自有 Apache-2.0 代码，二者均未 ILMerge / ILRepack；NuGet 分发 IL 程序集 |
+| 托管绑定层独立 / 自有 | ✅ FFmpeg 绑定为本项目自有代码（无 `PackageReference` 第三方托管依赖）；`VLCNative` 为本项目自有 Apache-2.0 代码，二者均未 ILMerge / ILRepack；NuGet 分发 IL 程序集 |
 | NativeAOT 静态链接情形 | ✅ VLC 后端的 `VLCNative` 绑定为本项目自有 Apache-2.0 代码，AOT 下无 copyleft 义务；`libvlc` 原生库始终运行时动态加载、不受 AOT 影响；见第 6 节 |
 
 ---
@@ -148,7 +145,7 @@ NativeAOT 由 ILC 将**全部托管程序集**（含所有 NuGet 依赖）提前
 | 后端 | 托管绑定层 | 绑定层许可证 | AOT 静态链接后 |
 | --- | --- | --- | --- |
 | **Media Foundation** | 本项目自有 P/Invoke | Apache-2.0 | ✅ 无第三方义务（系统内置组件） |
-| **FFmpeg** | `FFmpeg.AutoGen` | **MIT** | ✅ 无 copyleft，无附加义务 |
+| **FFmpeg** | 自写 P/Invoke（[LibraryImport]，零托管包） | 原生 LGPL 2.1+（运行时动态链接）；托管层 Apache-2.0 自有 | ✅ 无 copyleft，无附加义务 |
 | **VLC** | `VLCNative`（本项目自有，Apache-2.0） | **Apache-2.0** | ✅ 无 copyleft，无附加义务（原生 libvlc 始终动态链接） |
 
 三者的**原生**共享库（`avcodec-*.dll` / `libvlc.dll` 等）在任何发布模式下都是运行时动态加载、可独立替换，
@@ -159,7 +156,7 @@ NativeAOT 由 ILC 将**全部托管程序集**（含所有 NuGet 依赖）提前
 自 VLC 后端改用本项目自写的 Apache-2.0 P/Invoke 绑定 `VLCNative`（替代原先的 `LibVLCSharp` 第三方 LGPL 托管绑定）后，
 **VLC 后端在 NativeAOT 下已无任何附加 copyleft 义务**：
 
-- 托管绑定层 `VLCNative` 为本项目自有 Apache-2.0 代码，与 `FFmpeg.AutoGen`（MIT）一样，AOT 静态编入单一可执行文件时不产生任何 copyleft 分发义务；
+- 托管绑定层 `VLCNative` 为本项目自有 Apache-2.0 代码，与 FFmpeg 自写绑定（Apache-2.0）一样，AOT 静态编入单一可执行文件时不产生任何 copyleft 分发义务；
 - 受 LGPL 2.1 约束的 `libvlc` 原生共享库始终在运行时由 `VLCNative` 动态加载、可独立替换，**不受 AOT 影响**，始终满足 LGPL 2.1 第 6 条 (b) 款的共享库条件。
 
 因此「FFmpeg / VLC / Media Foundation」三个后端在 NativeAOT 发布下的授权影响一致：**均无第三方 copyleft 义务**。下游只需按常规 LGPL 要求随产品附带 libvlc 的许可证文本与源码获取途径（见第 5 节）。
@@ -182,7 +179,7 @@ NativeAOT 由 ILC 将**全部托管程序集**（含所有 NuGet 依赖）提前
 
 | 后端 | 授权 | 当前可用平台 | 说明 |
 | --- | --- | --- | --- |
-| FFmpeg | LGPL 2.1+（共享构建） | Windows（已验证）/ Linux（验证中） | 主后端，经 `FFmpeg.AutoGen` 动态链接 |
+| FFmpeg | LGPL 2.1+（共享构建） | Windows（已验证）/ Linux（验证中） | 主后端，经自写原生绑定动态链接 |
 | LibVLC / VLC | 原生库 LGPL 2.1+（引擎+播放模块）；托管绑定 `VLCNative` Apache-2.0（自有） | Windows（已验证）/ Linux（验证中） | 备用后端，经自写 `VLCNative`（Apache-2.0）P/Invoke 动态链接 libvlc；NativeAOT 下无附加义务（见第 6 节） |
 | Media Foundation | Windows 操作系统内置组件 | Windows only | 由系统提供，无需随产品分发独立第三方授权 |
 

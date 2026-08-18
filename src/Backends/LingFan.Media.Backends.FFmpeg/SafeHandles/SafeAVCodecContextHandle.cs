@@ -30,7 +30,7 @@ internal sealed class SafeAVCodecContextHandle : SafeHandle
             unsafe
             {
                 var pp = (AVCodecContext*)handle;
-                ffmpeg.avcodec_free_context(&pp);
+                FF.avcodec_free_context(&pp);
             }
             handle = IntPtr.Zero;
         }

@@ -8,7 +8,7 @@
 		<RootNamespace>FfmpegHeadfulPlaybackProbe</RootNamespace>
 		<AssemblyName>FfmpegHeadfulPlaybackProbe</AssemblyName>
 		<IsPackable>false</IsPackable>
-		<!-- FFmpeg 后端经 FFmpeg.AutoGen 调用原生 DLL；D3D11VA / WASAPI 为 Windows-only：抑制 CA1416。
+		<!-- FFmpeg 后端经自写原生绑定（LingFan.Media.Backends.FFmpeg.Interop：[LibraryImport] + NativeLibrary 版本自适应加载）调用原生 DLL；D3D11VA / WASAPI 为 Windows-only：抑制 CA1416。
 		     Vortice/SharpGen 经反射构建 COM vtable，NativeAOT 下 trim 标注不全，整族 IL2xxx 均为第三方缺陷；
 		     已用 TrimmerRootAssembly 根留这些程序集保证运行时存在，此处仅静默分析器级告警。 -->
 		<NoWarn>CA1416;IL2067;IL2070;IL2072;IL2075;IL2080;IL2087;IL2091</NoWarn>
@@ -55,14 +55,14 @@
 	<ItemGroup>
 		<!-- 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布到发布目录：
 		     AOT publish 不会自动携带「构建期复制」的原生 DLL，须显式声明为发布内容项，
-		     否则运行目录为空 → EnsureUnversionedAliases 建不出无版本别名 → AutoGen 桩抛 NotSupportedException。
-		     无版本别名由 FFmpegBackend.EnsureUnversionedAliases 运行时兜底创建。 -->
+		     否则运行目录为空 → 自写 FF 加载器（NativeLibrary.TryLoad 按简单名映射到带版本 handle）找不到原生 DLL，
+		     首个 ffmpeg 调用崩溃。无版本别名由 CopyFFmpegNative 在构建/发布期复制兜底。 -->
 		<None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 	</ItemGroup>
 
 	<!--
     LGPL 合规关键步骤：把「合规的 ffmpeg 共享构建（LGPL，BtbN lgpl-shared）」复制到输出目录，
-    使 FFmpeg.AutoGen 的 DynamicallyLoaded 绑定在运行时从应用目录动态加载 avcodec-*.dll 等。
+    使自写 FF 绑定（NativeLibrary 版本自适应加载）在运行时从应用目录动态加载 avcodec-*.dll 等（绝不静态合并）。
     - 动态链接（绝不静态合并 ffmpeg 进本程序集）；
     - 路径显式可控（FFmpegOptions.FFmpegLibraryPath 默认指向 AppContext.BaseDirectory），
       用户可替换/升级这些 DLL 而不重编译本库。
@@ -76,8 +76,8 @@
 	<Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
 		<ItemGroup>
 			<FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
-			<!-- 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载，
-           但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名。 -->
+			<!-- 无版本号别名：自写 FF 加载器按简单名（avutil）映射到带版本 handle（avutil-60.dll）；
+           但 BtbN lgpl-shared 仅提供带版本文件。CopyFFmpegNative 额外复制同名无版本别名（avutil.dll）作兜底。 -->
 			<FFmpegDll>
 				<Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
 			</FFmpegDll>

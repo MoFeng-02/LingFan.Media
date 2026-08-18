@@ -49,9 +49,9 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     public int OutputChannels { get; private set; }
     private bool _initialized;
 
-    /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 ffmpeg.AVERROR(ffmpeg.EAGAIN) 计算，
+    /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 FF.AVERROR(FF.EAGAIN) 计算，
     /// 禁止硬编码 -11（Windows 正确，但 macOS/iOS 的 EAGAIN=35，会误判"需要更多数据"为解码失败）。</summary>
-    private static readonly int EAGAIN = ffmpeg.AVERROR(ffmpeg.EAGAIN);
+    private static readonly int EAGAIN = FF.AVERROR(FF.EAGAIN);
 
     /// <summary>
     /// 初始化 <see cref="FFmpegAudioDecoder"/> 的新实例。
@@ -82,11 +82,11 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         Codec = codec;
         AVCodecID codecId = MapAudioCodecToFFmpeg(codec);
 
-        AVCodec* avCodec = ffmpeg.avcodec_find_decoder(codecId);
+        AVCodec* avCodec = FF.avcodec_find_decoder(codecId);
         if (avCodec == null)
             throw new NotSupportedException($"FFmpeg 未找到音频解码器: {codec} (codec_id={codecId})");
 
-        AVCodecContext* ctx = ffmpeg.avcodec_alloc_context3(avCodec);
+        AVCodecContext* ctx = FF.avcodec_alloc_context3(avCodec);
         if (ctx == null)
             throw new InvalidOperationException("avcodec_alloc_context3 失败");
 
@@ -108,7 +108,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         // 否则 avcodec_send_packet 返回 Invalid data。
         ApplyCodecConfiguration(ctx, settings.CodecConfiguration);
 
-        int ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
+        int ret = FF.avcodec_open2(ctx, avCodec, null);
         if (ret < 0)
         {
             _codecContextHandle.Dispose();
@@ -134,11 +134,11 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         if (needResample)
         {
             AVChannelLayout outLayout;
-            ffmpeg.av_channel_layout_default(&outLayout, _targetChannels);
+            FF.av_channel_layout_default(&outLayout, _targetChannels);
 
             SwrContext* swr = null;
             SwrContext** pSwr = &swr;
-            int sret = ffmpeg.swr_alloc_set_opts2(
+            int sret = FF.swr_alloc_set_opts2(
                 pSwr,
                 &outLayout, _targetSampleFormat, _targetSampleRate,
                 &ctx->ch_layout, ctx->sample_fmt, ctx->sample_rate,
@@ -147,7 +147,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             {
                 throw new InvalidOperationException($"swr_alloc_set_opts2 失败: {GetErrorString(sret)} (code={sret})");
             }
-            sret = ffmpeg.swr_init(swr);
+            sret = FF.swr_init(swr);
             if (sret < 0)
             {
                 var bad = new SafeSwrContextHandle((IntPtr)swr);
@@ -198,14 +198,14 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     {
         AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle!.DangerousGetHandle();
 
-        AVPacket* pkt = ffmpeg.av_packet_alloc();
+        AVPacket* pkt = FF.av_packet_alloc();
         if (pkt == null)
             throw new InvalidOperationException("av_packet_alloc 失败");
 
         try
         {
             // 使用 av_new_packet 分配（含 AV_INPUT_BUFFER_PADDING_SIZE 填充）
-            int allocRet = ffmpeg.av_new_packet(pkt, packet.Data.Length);
+            int allocRet = FF.av_new_packet(pkt, packet.Data.Length);
             if (allocRet < 0)
                 throw new InvalidOperationException($"av_new_packet 失败: {GetErrorString(allocRet)} (code={allocRet})");
             packet.Data.Span.CopyTo(new Span<byte>(pkt->data, packet.Data.Length));
@@ -213,23 +213,23 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             double timeBase = _tbSeconds;
             pkt->pts = timeBase > 0
                 ? (long)(packet.Timestamp.TotalSeconds / timeBase)
-                : ffmpeg.AV_NOPTS_VALUE;
+                : FF.AV_NOPTS_VALUE;
 
-            int ret = ffmpeg.avcodec_send_packet(ctx, pkt);
+            int ret = FF.avcodec_send_packet(ctx, pkt);
             if (ret < 0 && ret != EAGAIN)
             {
-                if (ret != ffmpeg.AVERROR_EOF)
+                if (ret != FF.AVERROR_EOF)
                     _logger.LogWarning("avcodec_send_packet 返回 {Ret}: {Error}", ret, GetErrorString(ret));
                 return null;
             }
 
-            AVFrame* avFrame = ffmpeg.av_frame_alloc();
+            AVFrame* avFrame = FF.av_frame_alloc();
             if (avFrame == null)
                 throw new InvalidOperationException("av_frame_alloc 失败");
             try
             {
-                ret = ffmpeg.avcodec_receive_frame(ctx, avFrame);
-                if (ret == EAGAIN || ret == ffmpeg.AVERROR_EOF)
+                ret = FF.avcodec_receive_frame(ctx, avFrame);
+                if (ret == EAGAIN || ret == FF.AVERROR_EOF)
                     return null;
                 if (ret < 0)
                 {
@@ -242,15 +242,15 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
             finally
             {
                 AVFrame* p = avFrame;
-                ffmpeg.av_frame_free(&p);
+                FF.av_frame_free(&p);
             }
         }
         finally
         {
             // av_packet_unref 释放 av_new_packet 分配的内部缓冲（通过 pkt->buf 引用计数）
-            ffmpeg.av_packet_unref(pkt);
+            FF.av_packet_unref(pkt);
             AVPacket* p = pkt;
-            ffmpeg.av_packet_free(&p);
+            FF.av_packet_free(&p);
         }
     }
 
@@ -270,16 +270,16 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     {
         AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle!.DangerousGetHandle();
 
-        int ret = ffmpeg.avcodec_send_packet(ctx, null);
+        int ret = FF.avcodec_send_packet(ctx, null);
         if (ret < 0)
             return null;
 
-        AVFrame* avFrame = ffmpeg.av_frame_alloc();
+        AVFrame* avFrame = FF.av_frame_alloc();
         if (avFrame == null)
             throw new InvalidOperationException("av_frame_alloc 失败");
         try
         {
-            ret = ffmpeg.avcodec_receive_frame(ctx, avFrame);
+            ret = FF.avcodec_receive_frame(ctx, avFrame);
             if (ret < 0)
                 return null;
             return ReceiveToAudioFrame(avFrame, ctx);
@@ -287,7 +287,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         finally
         {
             AVFrame* p = avFrame;
-            ffmpeg.av_frame_free(&p);
+            FF.av_frame_free(&p);
         }
     }
 
@@ -302,7 +302,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     {
         if (!_initialized || _codecContextHandle == null) return;
         AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle.DangerousGetHandle();
-        ffmpeg.avcodec_flush_buffers(ctx);
+        FF.avcodec_flush_buffers(ctx);
         _logger.LogDebug("音频解码器已重置");
     }
 
@@ -342,7 +342,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     /// </remarks>
     private unsafe AudioFrame CreateAudioFrameFromAVFrame(AVFrame* avFrame, AVCodecContext* ctx)
     {
-        TimeSpan timestamp = avFrame->pts != ffmpeg.AV_NOPTS_VALUE
+        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
             ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
 
@@ -359,8 +359,8 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
 
         SampleFormat outFormat = MapSampleFormatFromFFmpeg(sampleFmt);
 
-        bool isPlanar = ffmpeg.av_sample_fmt_is_planar(sampleFmt) != 0;
-        int bytesPerSample = ffmpeg.av_get_bytes_per_sample(sampleFmt);
+        bool isPlanar = FF.av_sample_fmt_is_planar(sampleFmt) != 0;
+        int bytesPerSample = FF.av_get_bytes_per_sample(sampleFmt);
         if (bytesPerSample <= 0)
             throw new InvalidOperationException($"无效的音频采样格式: {sampleFmt}");
         int planeSize = frameCount * bytesPerSample; // 每个平面的数据大小
@@ -376,8 +376,8 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
                 throw new InvalidOperationException($"无效的音频行大小: {dataSize}");
 
             // 引用计数共享原生 buffer；克隆失败（非引用计数帧/OOM）回退拷贝
-            AVFrame* clone = ffmpeg.av_frame_clone(avFrame);
-            if (clone != null && clone->data[0] != null)
+            AVFrame* clone = FF.av_frame_clone(avFrame);
+            if (clone != null && clone->data[0] != IntPtr.Zero)
             {
                 var owner = new SafeAVFrameHandle((IntPtr)clone);
                 data = new NativeBufferMemoryManager((IntPtr)clone->data[0], dataSize).Memory;
@@ -388,7 +388,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
                 if (clone != null)
                 {
                     AVFrame* p = clone;
-                    ffmpeg.av_frame_free(&p);
+                    FF.av_frame_free(&p);
                 }
                 var buffer = new byte[dataSize];
                 Marshal.Copy((IntPtr)avFrame->data[0], buffer, 0, dataSize);
@@ -439,24 +439,24 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     /// <remarks>纯原生同步操作（swr_convert_frame），不引入异步。</remarks>
     private unsafe AVFrame* ConvertWithSwr(AVFrame* inFrame)
     {
-        AVFrame* outFrame = ffmpeg.av_frame_alloc();
+        AVFrame* outFrame = FF.av_frame_alloc();
         if (outFrame == null)
             throw new InvalidOperationException("av_frame_alloc 失败（重采样输出）");
         try
         {
             outFrame->format = (int)_targetSampleFormat;
             outFrame->sample_rate = _targetSampleRate;
-            ffmpeg.av_channel_layout_default(&outFrame->ch_layout, _targetChannels);
+            FF.av_channel_layout_default(&outFrame->ch_layout, _targetChannels);
 
             SwrContext* swr = (SwrContext*)_swrContext!.DangerousGetHandle();
-            int outSamples = ffmpeg.swr_get_out_samples(swr, inFrame->nb_samples);
+            int outSamples = FF.swr_get_out_samples(swr, inFrame->nb_samples);
             outFrame->nb_samples = outSamples > 0 ? outSamples : inFrame->nb_samples;
 
-            int ret = ffmpeg.av_frame_get_buffer(outFrame, 0);
+            int ret = FF.av_frame_get_buffer(outFrame, 0);
             if (ret < 0)
                 throw new InvalidOperationException($"av_frame_get_buffer 失败: {GetErrorString(ret)} (code={ret})");
 
-            ret = ffmpeg.swr_convert_frame(swr, outFrame, inFrame);
+            ret = FF.swr_convert_frame(swr, outFrame, inFrame);
             if (ret < 0)
                 throw new InvalidOperationException($"swr_convert_frame 失败: {GetErrorString(ret)} (code={ret})");
             return outFrame;
@@ -464,7 +464,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         catch
         {
             AVFrame* p = outFrame;
-            ffmpeg.av_frame_free(&p);
+            FF.av_frame_free(&p);
             throw;
         }
     }
@@ -480,14 +480,14 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         try
         {
             // 重采样不改变时间戳：源帧无 PTS 时沿用源，确保音频时间轴连续
-            if (outFrame->pts == ffmpeg.AV_NOPTS_VALUE)
+            if (outFrame->pts == FF.AV_NOPTS_VALUE)
                 outFrame->pts = avFrame->pts;
             return CreateAudioFrameFromAVFrame(outFrame, ctx);
         }
         finally
         {
             AVFrame* p = outFrame;
-            ffmpeg.av_frame_free(&p);
+            FF.av_frame_free(&p);
         }
     }
 
@@ -526,8 +526,8 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     {
         unsafe
         {
-            byte* buf = stackalloc byte[ffmpeg.AV_ERROR_MAX_STRING_SIZE];
-            ffmpeg.av_strerror(errorCode, buf, ffmpeg.AV_ERROR_MAX_STRING_SIZE);
+            byte* buf = stackalloc byte[FF.AV_ERROR_MAX_STRING_SIZE];
+            FF.av_strerror(errorCode, buf, (UIntPtr)FF.AV_ERROR_MAX_STRING_SIZE);
             return Marshal.PtrToStringUTF8((IntPtr)buf) ?? $"error code {errorCode}";
         }
     }

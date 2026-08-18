@@ -29,8 +29,9 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// 属运行期验收项（设计假设，由宿主 probe 验证）。</para>
 /// <para><b>AOT</b>：GL/WGL/EGL 互操作函数指针经 <see cref="GLNative"/> 零反射解析；D3D11 桥接设备经 Vortice 类型安全 API；
 /// 无 [DllImport]/[ComImport]/反射；跨平台经 OperatingSystem.IsXxx() 运行时分发，无 #if。</para>
-/// <para><b>v1 范围</b>：Windows(D3D11→GL) 为主路径；Linux(VAAPI→GL) 结构就绪但解码侧 VAAPI→GL 导入为未来端点，
-/// 当前调用方不产出 <see cref="GpuFrameImportKind.LinuxDmaBufFd"/>，可用性探测失败即回落软解。Android(AHardwareBuffer)/Apple(IOSurface) 为后续端点，当前返回 false。</para>
+/// <para><b>v1 范围</b>：Windows(D3D11→GL) 与 Linux(VAAPI→GL) 均为已启用主路径。
+/// Linux 路径：VAAPI 解出 VA Surface → <c>vaExportSurfaceHandle(DRM_PRIME_2, COMPOSED_LAYERS)</c> 导出单 fd 双平面 NV12 dma_buf
+/// → 拆为 Y(R8) / UV(GR88) 两 EGLImage → 两 GL 纹理 → NV12 shader 零拷贝上屏。Android(AHardwareBuffer)/Apple(IOSurface) 为后续端点，当前返回 false。</para>
 /// <para><b>异步策略</b>：<see cref="TryImport"/> 为同步（native 分类）——GPU 纹理导入是同步原生调用，无 I/O await；
 /// 实现保持同步，不补 async（补即伪异步）。</para>
 /// <para><b>句柄所有权契约（单一责任人）</b>：原生共享句柄（NT HANDLE / dma_buf fd）的所有权自
@@ -200,63 +201,143 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         lock (_glContext.GlAccessLock)
         {
             _glContext.MakeCurrent();
-            nint eglImage = nint.Zero;
-            uint glTex = 0;
+            nint eglImageY = nint.Zero, eglImageUV = nint.Zero;
+            uint texY = 0, texUV = 0;
+            int fd = source.Handle == IntPtr.Zero ? -1 : (int)source.Handle;
             try
             {
-            if (!GLNative.IsEglDmaBufImportAvailable())
-            {
-                _logger?.LogWarning("[OPENGL-ZEROCOPY] EGL_EXT_image_dma_buf_import 不可用，回落软件解码。");
-                return false;
+                if (!GLNative.IsEglDmaBufImportAvailable())
+                {
+                    _logger?.LogWarning("[OPENGL-ZEROCOPY] EGL_EXT_image_dma_buf_import 不可用，回落软件解码。");
+                    return false;
+                }
+
+                nint display = _glContext.OffscreenDisplay; // EGLDisplay（离屏共享组所有者）
+                bool hasModifier = source.DrmModifier != 0;
+
+                // Y 平面：单平面 R8（DRM_FORMAT_R8 = 0x20203852）。composed NV12 双平面共享同一 fd。
+                var yAttribs = BuildDmaBufPlaneAttribs(
+                    fd, source.Width, source.Height,
+                    source.PlaneOffsets?.Length > 0 ? source.PlaneOffsets[0] : 0,
+                    source.PlanePitches?.Length > 0 ? source.PlanePitches[0] : (uint)source.Width,
+                    0x20203852, hasModifier, source.DrmModifier);
+                fixed (int* p = yAttribs)
+                    eglImageY = GLNative.EglCreateImageKHR(display, nint.Zero, (uint)GLNative.EglLinuxDmaBufExt, p);
+                if (eglImageY == nint.Zero)
+                {
+                    _logger?.LogWarning("[OPENGL-ZEROCOPY] eglCreateImageKHR(Y 平面) 失败，回落软件解码。");
+                    return false;
+                }
+
+                // UV 平面：单平面 GR88（DRM_FORMAT_GR88 = fourcc('G','R','8','8') = 0x38385247），与 Y 同 fd、独立 offset/pitch。
+                // 注：0x38385247 字节序为 G,R,8,8；EGL 导入为 RG8 纹理后 .rg = (U, V)，与 NV12(UV 交错) 含义一致（uSwap=0）。
+                uint uvOffset = source.PlaneOffsets?.Length > 1 ? source.PlaneOffsets[1]
+                    : (uint)(source.Height * (source.PlanePitches?.Length > 0 ? source.PlanePitches[0] : (uint)source.Width));
+                uint uvPitch = source.PlanePitches?.Length > 1 ? source.PlanePitches[1] : (uint)source.Width;
+                var uvAttribs = BuildDmaBufPlaneAttribs(
+                    fd, (int)(source.Width / 2), (int)(source.Height / 2), uvOffset, uvPitch,
+                    0x38385247, hasModifier, source.DrmModifier);
+                fixed (int* p = uvAttribs)
+                    eglImageUV = GLNative.EglCreateImageKHR(display, nint.Zero, (uint)GLNative.EglLinuxDmaBufExt, p);
+                if (eglImageUV == nint.Zero)
+                {
+                    _logger?.LogWarning("[OPENGL-ZEROCOPY] eglCreateImageKHR(UV 平面) 失败，回落软件解码。");
+                    return false;
+                }
+
+                GLNative.glGenTextures(1, &texY);
+                GLNative.glBindTexture(GLNative.GlTexture2DConst, texY);
+                GLNative.GlEGLImageTargetTexture2DOES((uint)GLNative.GlTexture2DConst, eglImageY);
+                SetDmaBufTexParams();
+
+                GLNative.glGenTextures(1, &texUV);
+                GLNative.glBindTexture(GLNative.GlTexture2DConst, texUV);
+                GLNative.GlEGLImageTargetTexture2DOES((uint)GLNative.GlTexture2DConst, eglImageUV);
+                SetDmaBufTexParams();
+
+                texture = new GLDmaBufNv12Texture(
+                    width: source.Width, height: source.Height,
+                    yTexture: texY, uvTexture: texUV,
+                    eglDisplay: display, eglImageY: eglImageY, eglImageUV: eglImageUV,
+                    glContext: _glContext);
+
+                // fd 已被两个 EGLImage 导入（dma_buf 由 EGLImage 持有独立引用），关闭 fd 防泄漏（单一责任人）
+                CloseFd(fd);
+                return true;
             }
-
-            nint display = _glContext.OffscreenDisplay; // EGLDisplay（离屏共享组所有者）
-
-            // EGL_DMA_BUF 属性表。解码侧 VAAPI→GL 完整多平面（offset/stride/modifier）为未来端点；
-            // 此处以单平面 + 零偏移 + 推导 stride（NV12 约 width*4 字节/行）的近似属性表尝试导入，
-            // 信息缺失时导入多失败 → 回落软解（S_OK≠被接受）。EGLint 属性表（EGL 1.4 KHR Image 语义；
-            // EGL 1.5 宿主若以 64 位 EGLAttrib 期望则需适配，属运行期验收项）。
-            Span<int> attribs = stackalloc int[]
+            catch
             {
-                GLNative.EglWidth, source.Width,
-                GLNative.EglHeight, source.Height,
-                GLNative.EglDmaBufPlane0FdExt, unchecked((int)source.Handle),
-                GLNative.EglDmaBufPlane0OffsetExt, 0,
-                GLNative.EglDmaBufPlane0PitchExt, source.Width * 4,
+                if (texY != 0) GLNative.glDeleteTextures(1, &texY);
+                if (texUV != 0) GLNative.glDeleteTextures(1, &texUV);
+                if (eglImageY != nint.Zero) GLNative.EglDestroyImageKHR(_glContext.OffscreenDisplay, eglImageY);
+                if (eglImageUV != nint.Zero) GLNative.EglDestroyImageKHR(_glContext.OffscreenDisplay, eglImageUV);
+                if (fd >= 0) CloseFd(fd); // 失败出口：fd 尚未被消费，须关闭防泄漏
+                throw;
+            }
+            finally
+            {
+                _glContext.ReleaseCurrent();
+            }
+        }
+    }
+
+    /// <summary>构造单平面 dma_buf EGLImage 属性表（R8 / GR88 等单平面格式）。</summary>
+    private static int[] BuildDmaBufPlaneAttribs(
+        int fd, int width, int height, uint offset, uint pitch, int drmFourcc, bool hasModifier, ulong modifier)
+    {
+        if (hasModifier)
+        {
+            return new[]
+            {
+                GLNative.EglWidth, width,
+                GLNative.EglHeight, height,
+                GLNative.EglDmaBufPlane0FdExt, fd,
+                GLNative.EglDmaBufPlane0OffsetExt, (int)offset,
+                GLNative.EglDmaBufPlane0PitchExt, (int)pitch,
+                GLNative.EglDmaBufPlane0ModifierLoExt, (int)(modifier & 0xFFFFFFFF),
+                GLNative.EglDmaBufPlane0ModifierHiExt, (int)(modifier >> 32),
                 GLNative.EglDmaBufPlaneCountExt, 1,
-                GLNative.EglLinuxDrmFourccExt, 0x3231564E, // DRM_FORMAT_NV12 ('NV12')
+                GLNative.EglLinuxDrmFourccExt, drmFourcc,
                 GLNative.EglNone,
             };
-            fixed (int* p = attribs)
-                eglImage = GLNative.EglCreateImageKHR(display, nint.Zero, (uint)GLNative.EglLinuxDmaBufExt, p);
-
-            if (eglImage == nint.Zero)
-            {
-                _logger?.LogWarning("[OPENGL-ZEROCOPY] eglCreateImageKHR 失败，回落软件解码。");
-                return false;
-            }
-
-            GLNative.glGenTextures(1, &glTex);
-            GLNative.glBindTexture(GLNative.GlTexture2DConst, glTex);
-            GLNative.GlEGLImageTargetTexture2DOES((uint)GLNative.GlTexture2DConst, eglImage);
-
-            texture = new GLEglDmaBufTexture(
-                width: source.Width, height: source.Height, format: source.Format,
-                textureId: glTex, eglDisplay: display, eglImage: eglImage,
-                glContext: _glContext, subresourceIndex: source.SubresourceIndex);
-            return true;
         }
-        catch
+        return new[]
         {
-            if (glTex != 0) GLNative.glDeleteTextures(1, &glTex);
-            if (eglImage != nint.Zero) GLNative.EglDestroyImageKHR(_glContext.OffscreenDisplay, eglImage);
-            throw;
-        }
-        finally
-        {
-            _glContext.ReleaseCurrent();
-        }
-        }
+            GLNative.EglWidth, width,
+            GLNative.EglHeight, height,
+            GLNative.EglDmaBufPlane0FdExt, fd,
+            GLNative.EglDmaBufPlane0OffsetExt, (int)offset,
+            GLNative.EglDmaBufPlane0PitchExt, (int)pitch,
+            GLNative.EglDmaBufPlaneCountExt, 1,
+            GLNative.EglLinuxDrmFourccExt, drmFourcc,
+            GLNative.EglNone,
+        };
+    }
+
+    /// <summary>关闭 Linux dma_buf 文件描述符（导入完成后由导入方负责关闭，防 fd 泄漏）。</summary>
+    [LibraryImport("libc")]
+    private static partial int close(int fd);
+
+    private static void CloseFd(int fd)
+    {
+        if (fd >= 0) _ = close(fd);
+    }
+
+    // 单平面 R8 / 双通道 GR88 EGLImage 纹理须显式设过滤/环绕参数：默认 MIN_FILTER 为 NEAREST_MIPMAP_LINEAR
+    // 且无 mipmap → 纹理「不完整」，采样恒返回 (0,0,0,1)。必须置 LINEAR + CLAMP_TO_EDGE 才能正常采样。
+    private const int GlTexMinFilter = 0x2801;
+    private const int GlTexMagFilter = 0x2800;
+    private const int GlTexWrapS = 0x2802;
+    private const int GlTexWrapT = 0x2803;
+    private const int GlLinear = 0x2601;
+    private const int GlClampToEdge = 0x812F;
+
+    private static void SetDmaBufTexParams()
+    {
+        GLNative.glTexParameteri((uint)GLNative.GlTexture2DConst, (uint)GlTexMinFilter, GlLinear);
+        GLNative.glTexParameteri((uint)GLNative.GlTexture2DConst, (uint)GlTexMagFilter, GlLinear);
+        GLNative.glTexParameteri((uint)GLNative.GlTexture2DConst, (uint)GlTexWrapS, GlClampToEdge);
+        GLNative.glTexParameteri((uint)GLNative.GlTexture2DConst, (uint)GlTexWrapT, GlClampToEdge);
     }
 
     /// <inheritdoc/>

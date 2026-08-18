@@ -60,10 +60,10 @@
 		<None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>
 
-	<!-- LGPL 合规关键步骤：把「合规的 ffmpeg 共享构建（BtbN lgpl-shared）」复制到输出目录，
-	     使 FFmpeg.AutoGen 的 DynamicallyLoaded 绑定在运行时从应用目录动态加载 avcodec-*.dll 等。
+	<!-- LGPL 合规关键步骤：把「合规的 ffmpeg 共享构建（BtbN lgpl-shared）」复制到输出/发布目录，
+	     使自写 FF 绑定（[LibraryImport] + NativeLibrary 版本自适应加载）在运行时从应用目录动态加载 avcodec-*.dll 等。
 	     - 动态链接（绝不静态合并 ffmpeg 进本程序集）；
-	     - FFmpegOptions.FFmpegLibraryPath 默认指向 AppContext.BaseDirectory（见 Program.cs AddFFmpeg 配置），
+	     - 自写 FF 加载器默认从 AppContext.BaseDirectory 解析带版本名 avutil-60.dll 等（见 Program.cs AddFFmpeg 配置），
 	       用户可替换/升级这些 DLL 而不重编译本库。
 	     原生 DLL 来自 ThirdParty/ffmpeg/<解压目录>/bin，不入库（gitignore）。 -->
 	<ItemGroup>
@@ -73,8 +73,8 @@
 		      CopyToPublishDirectory="PreserveNewest" />
 	</ItemGroup>
 
-	<!-- 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载，
-	     但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名，否则 AutoGen 加载失败。
+	<!-- 无版本号别名：自写 FF 加载器按简单名（avutil/avcodec/...）映射到带版本 handle（avutil-60.dll 等），
+	     BtbN lgpl-shared 仅提供带版本文件，须同时复制同名无版本别名作兜底，否则首个 ffmpeg.* 调用静默崩（退出码 127）。
 	     别名 = 去掉文件名末尾 -<数字>（如 avutil-60 → avutil）。
 	     AOT 发布关键：dotnet publish 不会自动把「构建期复制」的原生 ffmpeg DLL 带进 publish/，须显式复制到 $(PublishDir)。 -->
 	<Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">

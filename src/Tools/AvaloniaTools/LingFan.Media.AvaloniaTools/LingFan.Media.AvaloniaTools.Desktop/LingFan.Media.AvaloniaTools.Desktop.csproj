@@ -22,9 +22,9 @@
   </ItemGroup>
 
   <!-- 原生 ffmpeg 共享库随 dotnet run / publish 一并复制进输出目录：
-       FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载，
-       但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名，
-       否则运行目录为空 → EnsureUnversionedAliases 建不出别名 → AutoGen 桩抛 NotSupportedException。
+       自写 FF 加载器按简单名（avutil/avcodec/...）映射到带版本 handle（avutil-60.dll 等），
+       但 BtbN lgpl-shared 仅提供带版本文件，须同时复制同名无版本别名作兜底，
+       否则运行目录为空 → 首个 ffmpeg.* 调用静默崩（退出码 127）。
        源：仓库根 ThirdParty/ffmpeg/<解压目录>/bin/*.dll（本工程比 PlaybackProbe 深两级，故 5 个 ..）。
        AOT 发布关键：dotnet publish 不会自动携带构建期复制的原生 DLL，须显式复制到 $(PublishDir)。 -->
   <ItemGroup>
@@ -34,7 +34,7 @@
   <Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
     <ItemGroup>
       <FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
-      <!-- 无版本号别名：avutil-60 → avutil（FFmpeg.AutoGen 8.1 按无版本名加载） -->
+      <!-- 无版本号别名：avutil-60 → avutil（自写 FF 加载器按简单名加载，BtbN 只给带版本文件） -->
       <FFmpegDll>
         <Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
       </FFmpegDll>

@@ -11,7 +11,6 @@ using LingFan.Media.Renderers.D3D11;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using FFmpeg.AutoGen;
 
 namespace FfmpegPlaybackProbe;
 
@@ -23,7 +22,7 @@ namespace FfmpegPlaybackProbe;
 /// <remarks>
 /// <para>与 MF 探针分工：MF 后端无法在当前进程激活 Store HEVC MFT（GPL/静态约束）；本工具用 FFmpeg 后端
 /// 独立验证 HEVC 解码，是「HEVC 在 Windows 走 ffmpeg 后端」的最小测试。</para>
-/// <para>LGPL 合规：FFmpeg 经 <see cref="FFmpeg.AutoGen"/> 的 DynamicallyLoaded 绑定在运行时<b>动态加载</b>共享 DLL，
+/// <para>LGPL 合规：FFmpeg 经本项目的自写原生绑定（<c>LingFan.Media.Backends.FFmpeg.Interop</c>）在运行时<b>动态加载</b>共享 DLL，
 /// 不静态合并；DLL 来自合规的 BtbN lgpl-shared 构建（见仓库 ThirdParty/ffmpeg 与说明）。</para>
 /// <para>用法：</para>
 /// <code>
@@ -86,7 +85,7 @@ internal static class Program
         Console.WriteLine();
 
         // ---- FFmpeg 原生库预检（调试用）----
-        // 目的：FFmpeg.AutoGen 的惰性加载会在首个 ffmpeg.* 调用时才真正加载原生 DLL，
+        // 目的：自写原生绑定在后端初始化时才真正加载原生 DLL，
         // 一旦失败（缺运行库 / ABI 不匹配 / 依赖解析失败）表现为「只打印头部 + 静默退出码 127」，
         // 毫无诊断信息。此处显式按依赖顺序加载并报告真实 Win32 错误码，把静默死亡变成可读错误。
         string ffmpegDir = AppContext.BaseDirectory;
@@ -119,29 +118,17 @@ internal static class Program
             Console.WriteLine();
             Console.WriteLine("FFmpeg 原生库加载失败。排查方向：");
             Console.WriteLine("  1) 目标机是否安装 Microsoft Visual C++ 2015-2022 Redistributable (x64)（vcruntime140.dll 等）；");
-            Console.WriteLine("  2) ThirdParty/ffmpeg 共享 DLL 与 FFmpeg.AutoGen 绑定版本是否匹配（均为 8.1）；");
+            Console.WriteLine("  2) ThirdParty/ffmpeg 共享 DLL 版本是否在 4.x–9.0 范围（avutil 56–61，本构建为 7.x/8.0 系列）；");
             Console.WriteLine("  3) FFmpegOptions.FFmpegLibraryPath 是否指向含上述 DLL 的目录。");
             return 3;
         }
 
-        // ---- FFmpeg.AutoGen 绑定核验（决定性诊断）----
-        // FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「无版本号」名（avutil/avcodec/...）加载原生库，
-        // 但 BtbN 共享构建只提供 avutil-60.dll 等带版本号文件。上一步 NativeLibrary.TryLoad 成功仅证明
-        // 「文件可加载」，不代表 AutoGen 能找到它要的无版本名。此处直接触发首个 AutoGen 调用核验绑定：
-        // 若 AutoGen 找不到无版本名 avutil.dll，ffmpeg.av_log_set_level 委托为 null → 调用抛异常（被捕获）。
-        try
-        {
-            ffmpeg.RootPath = ffmpegDir;
-            ffmpeg.av_log_set_level(16 /* AV_LOG_ERROR */);
-            Console.WriteLine("  FFmpeg.AutoGen 原生绑定就绪（无版本别名到位）。");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"  [失败] FFmpeg.AutoGen 绑定失败: {ex.GetType().Name}: {ex.Message}");
-            Console.WriteLine("         通常是找不到无版本名 avutil.dll（BtbN 仅提供 avutil-60.dll）。");
-            Console.WriteLine("         须由复制步骤同时产出 avutil.dll / avcodec.dll 等无版本别名（见 CopyFFmpegNative）。");
-            return 3;
-        }
+        // ---- 自绑定原生库核验（决定性诊断）----
+        // 自写原生绑定按带版本号名（如 avutil-60.dll / libavutil.so.60）加载，并通过
+        // NativeLibrary.SetDllImportResolver 把 [LibraryImport("avutil")] 等解析到已加载句柄，无需文件系统别名。
+        // 上一步 NativeLibrary.TryLoad 成功已证明文件可加载且依赖可解析；真正的绑定与版本门禁在 FFmpeg 后端
+        // 构造时执行（FF.Initialize → avutil_version() 校验 4.x–9.0），失败时由下方 [FATAL] 捕获并打印可读错误。
+        Console.WriteLine("  自绑定加载将在后端初始化时进行（见 OpenAsync 前的诊断输出）。");
 
         Console.WriteLine("  FFmpeg 原生库预检通过。");
         Console.WriteLine();

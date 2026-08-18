@@ -116,7 +116,7 @@ internal sealed class D3D11HardwareFrameResource : IGpuTextureResource
     public unsafe GpuTextureReadback ReadbackToCpu()
     {
         // 与 SafeHandle 共享同一 COM 指针的 Vortice 包装：仅用于取设备/上下文，不 Dispose（避免重复 Release）。
-        // 完全限定：FFmpeg.AutoGen 同样导出 ID3D11Texture2D，须显式指向 Vortice 版本。
+        // 完全限定：须显式指向 Vortice 版本，避免与本项目其它 GPU 互操作层暴露的同名 ID3D11Texture2D 类型歧义。
         var srcTexture = new Vortice.Direct3D11.ID3D11Texture2D(_texturePtr);
         try
         {

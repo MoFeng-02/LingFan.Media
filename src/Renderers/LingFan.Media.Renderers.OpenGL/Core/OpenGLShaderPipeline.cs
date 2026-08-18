@@ -532,6 +532,13 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
             return;
         }
 
+        // Linux EGL dma_buf：composed NV12 双平面（Y=R8 / UV=GR88），用 NV12 shader 采样（零拷贝）。
+        if (gpu is GLDmaBufNv12Texture nvTex)
+        {
+            PresentDmaBufNv12(nvTex, dstWidth, dstHeight, mode);
+            return;
+        }
+
         uint tex = unchecked((uint)gpu.NativeTextureHandle);
 
         GLNative.ActiveTexture((uint)GlTexture0);
@@ -550,6 +557,30 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
         GLNative.UseProgram(_rgbProgram);
         GLNative.Uniform1i(_rgbUTex, 0);
         GLNative.Uniform1i(_rgbUIsBgra, 0);
+        GLNative.glDrawArrays(GlTriangleStrip, 0, 4);
+    }
+
+    /// <summary>
+    /// Linux EGL dma_buf 零拷贝绘制：composed NV12（Y=R8 / UV=GR88 双 GL 纹理）经 NV12 shader 采样上屏（零 CPU 回读）。
+    /// </summary>
+    private void PresentDmaBufNv12(GLDmaBufNv12Texture nvTex, int dstWidth, int dstHeight, AspectRatioMode mode)
+    {
+        // 按 ScaleMode 计算目标视口矩形（与 Present 同源）
+        ComputeScaleRects(nvTex.Width, nvTex.Height, dstWidth, dstHeight, mode,
+            out int vx, out int vy, out int vw, out int vh);
+
+        GLNative.glViewport(0, 0, dstWidth, dstHeight);
+        GLNative.glClearColor(0f, 0f, 0f, 1f);
+        GLNative.glClear(GlColorBufferBit);
+
+        GLNative.glViewport(vx, dstHeight - vy - vh, vw, vh);
+        GLNative.BindVertexArray(_vao);
+
+        // Y 平面（R8）→ unit0；UV 平面（GR88）→ unit1；NV12 半平面 shader（uSwap=0：U=R、V=G）
+        GLNative.UseProgram(_nvProgram);
+        BindPlane(0, nvTex.YTexture, _nvUY);
+        BindPlane(1, nvTex.UVTexture, _nvUUV);
+        GLNative.Uniform1i(_nvUSwap, 0);
         GLNative.glDrawArrays(GlTriangleStrip, 0, 4);
     }
 

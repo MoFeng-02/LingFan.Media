@@ -6,7 +6,7 @@ LingFan.Media's own source code is released under **Apache-2.0**. It optionally 
 
 LingFan.Media never statically merges FFmpeg or LibVLC into its own assemblies, and never modifies their source. It loads them at runtime as shared libraries:
 
-- **FFmpeg** is consumed through `FFmpeg.AutoGen.Bindings.DynamicallyLoaded` (MIT), which resolves the shared libraries (`avcodec-*.dll`, etc.) at runtime via `LoadLibrary`.
+- **FFmpeg** is consumed through LingFan.Media's own Apache-2.0 P/Invoke binding (self-written `[LibraryImport]` + `NativeLibrary` version-adaptive loading), which resolves the shared libraries (`avcodec-*.dll`, etc.) at runtime.
 - **LibVLC** is consumed through LingFan.Media's own Apache-2.0 P/Invoke binding (`VLCNative`), which dynamically loads `libvlc` / `libvlccore` at runtime.
 
 Because the project only links dynamically, copies the libraries unmodified, and does not combine them into its own binary, **LingFan.Media's own code is not a derivative work of the LGPL libraries** (LGPL 2.1, section 6). Its source and assemblies remain **Apache-2.0** — pure and unencumbered. The LGPL obligations attach only to the distributed native binaries themselves.
@@ -20,7 +20,7 @@ Because the project only links dynamically, copies the libraries unmodified, and
 
 | Requirement | How LingFan.Media satisfies it |
 | --- | --- |
-| Dynamic linking (no static merge) | `FFmpeg.AutoGen.DynamicallyLoaded` loads shared DLLs at runtime |
+| Dynamic linking (no static merge) | Self-written FF binding (`NativeLibrary` version-adaptive loading) loads shared libraries at runtime |
 | No GPL code path | LGPL shared builds only; wrappers call only public LGPL APIs |
 | User may replace / upgrade the native libs | `FFmpegOptions.FFmpegLibraryPath` is configurable; DLLs are not embedded |
 | License & attribution provided | This file (`THIRD_PARTY_NOTICES.md`) ships with the product |

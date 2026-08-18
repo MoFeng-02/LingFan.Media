@@ -58,6 +58,28 @@ public readonly struct GpuFrameImportSource
     /// <summary>导入纹理的数组层数（D3D11 纹理数组 = 切片总数）。生产者据此创建整数组 VkImage（单切片为 1）。
     /// 缺省 1：v1 渐进式 H.264/H.265 常见 arrayLayers=1；D3D11VA 纹理数组>1 时必须填真实层数，否则外部内存导入校验失败回落软解。</summary>
     public int ArrayLayers { get; init; } = 1;
+
+    // ── Linux VAAPI dma_buf 多平面描述（真实零拷贝，composed NV12 = 单 fd + 双平面）──
+    // 单 Handle（nint）仅承载主 fd，不足以表达 Y/UV 双平面的 offset/pitch/修饰符，
+    // 故在此中性桥补逐平面视图；Windows D3D11 路径不读这些字段（保持向后兼容）。
+
+    /// <summary>DRM 格式修饰符（全 64 位）。composed NV12 单对象共享。0 表示线性/未指定。</summary>
+    public ulong DrmModifier { get; init; }
+
+    /// <summary>DRM fourcc（如 <c>0x3231564E</c> = 'NV12'），供生产者选 EGL/Vulkan 平面格式。</summary>
+    public int DrmFourcc { get; init; }
+
+    /// <summary>平面数（NV12=2）。</summary>
+    public int PlaneCount { get; init; }
+
+    /// <summary>每平面 dma_buf fd（长度 = <see cref="PlaneCount"/>；composed NV12 两平面共享同一 fd）。</summary>
+    public int[]? PlaneFds { get; init; }
+
+    /// <summary>每平面在 fd 内的字节偏移（长度 = <see cref="PlaneCount"/>）。</summary>
+    public uint[]? PlaneOffsets { get; init; }
+
+    /// <summary>每平面的行字节步幅（长度 = <see cref="PlaneCount"/>）。</summary>
+    public uint[]? PlanePitches { get; init; }
 }
 
 /// <summary>

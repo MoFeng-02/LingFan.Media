@@ -30,7 +30,7 @@ internal sealed class SafeSwrContextHandle : SafeHandle
             unsafe
             {
                 var pp = (SwrContext*)handle;
-                ffmpeg.swr_free(&pp);
+                FF.swr_free(&pp);
             }
             handle = IntPtr.Zero;
         }

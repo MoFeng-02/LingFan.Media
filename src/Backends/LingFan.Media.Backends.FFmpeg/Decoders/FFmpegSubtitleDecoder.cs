@@ -28,9 +28,9 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
     private bool _initialized;
     private AVCodecID _boundCodecId;
 
-    /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 ffmpeg.AVERROR(ffmpeg.EAGAIN) 计算，
+    /// <summary>FFmpeg EAGAIN 错误码（跨平台）。必须用 FF.AVERROR(FF.EAGAIN) 计算，
     /// 禁止硬编码 -11（Windows 正确，但 macOS/iOS 的 EAGAIN=35，会误判"需要更多数据"为解码失败）。</summary>
-    private static readonly int EAGAIN = ffmpeg.AVERROR(ffmpeg.EAGAIN);
+    private static readonly int EAGAIN = FF.AVERROR(FF.EAGAIN);
 
     /// <summary>
     /// 初始化 <see cref="FFmpegSubtitleDecoder"/> 的新实例。
@@ -69,17 +69,17 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
         if (_boundCodecId == default)
             throw new InvalidOperationException("字幕解码器未绑定流（请通过工厂 Create 绑定）");
 
-        AVCodec* avCodec = ffmpeg.avcodec_find_decoder(_boundCodecId);
+        AVCodec* avCodec = FF.avcodec_find_decoder(_boundCodecId);
         if (avCodec == null)
             throw new NotSupportedException($"FFmpeg 未找到字幕解码器: {SubtitleCodec} (codec_id={_boundCodecId})");
 
-        AVCodecContext* ctx = ffmpeg.avcodec_alloc_context3(avCodec);
+        AVCodecContext* ctx = FF.avcodec_alloc_context3(avCodec);
         if (ctx == null)
             throw new InvalidOperationException("avcodec_alloc_context3 失败");
 
         _codecContextHandle = new SafeAVCodecContextHandle((IntPtr)ctx);
 
-        int ret = ffmpeg.avcodec_open2(ctx, avCodec, null);
+        int ret = FF.avcodec_open2(ctx, avCodec, null);
         if (ret < 0)
         {
             _codecContextHandle.Dispose();
@@ -110,14 +110,14 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
     {
         AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle!.DangerousGetHandle();
 
-        AVPacket* pkt = ffmpeg.av_packet_alloc();
+        AVPacket* pkt = FF.av_packet_alloc();
         if (pkt == null)
             throw new InvalidOperationException("av_packet_alloc 失败");
 
         try
         {
             // 使用 av_new_packet 分配（含 AV_INPUT_BUFFER_PADDING_SIZE 填充）
-            int allocRet = ffmpeg.av_new_packet(pkt, packet.Data.Length);
+            int allocRet = FF.av_new_packet(pkt, packet.Data.Length);
             if (allocRet < 0)
                 throw new InvalidOperationException($"av_new_packet 失败: {GetErrorString(allocRet)} (code={allocRet})");
             packet.Data.Span.CopyTo(new Span<byte>(pkt->data, packet.Data.Length));
@@ -129,7 +129,7 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
             try
             {
                 int gotSub = 0;
-                int ret = ffmpeg.avcodec_decode_subtitle2(ctx, &avSub, &gotSub, pkt);
+                int ret = FF.avcodec_decode_subtitle2(ctx, &avSub, &gotSub, pkt);
 
                 if (ret < 0 || gotSub == 0)
                     return null;
@@ -138,15 +138,15 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
             }
             finally
             {
-                ffmpeg.avsubtitle_free(&avSub);
+                FF.avsubtitle_free(&avSub);
             }
         }
         finally
         {
             // av_packet_unref 释放 av_new_packet 分配的内部缓冲（通过 pkt->buf 引用计数）
-            ffmpeg.av_packet_unref(pkt);
+            FF.av_packet_unref(pkt);
             AVPacket* p = pkt;
-            ffmpeg.av_packet_free(&p);
+            FF.av_packet_free(&p);
         }
     }
 
@@ -162,7 +162,7 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
     {
         if (!_initialized || _codecContextHandle == null) return;
         AVCodecContext* ctx = (AVCodecContext*)_codecContextHandle.DangerousGetHandle();
-        ffmpeg.avcodec_flush_buffers(ctx);
+        FF.avcodec_flush_buffers(ctx);
         _logger.LogDebug("字幕解码器已重置");
     }
 
@@ -194,16 +194,16 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
 
         for (uint i = 0; i < avSub->num_rects; i++)
         {
-            AVSubtitleRect* rect = avSub->rects[i];
-            if (rect->type == AVSubtitleType.SUBTITLE_TEXT)
+            AVSubtitleRect* rect = ((AVSubtitleRect**)avSub->rects)[i];
+            if ((AVSubtitleType)rect->type == AVSubtitleType.SUBTITLE_TEXT)
             {
-                if (rect->text != null)
+                if (rect->text != IntPtr.Zero)
                     sb.AppendLine(Marshal.PtrToStringUTF8((IntPtr)rect->text));
             }
-            else if (rect->type == AVSubtitleType.SUBTITLE_ASS)
+            else if ((AVSubtitleType)rect->type == AVSubtitleType.SUBTITLE_ASS)
             {
                 // ASS 格式：解析 Dialogue 行，提取文本部分
-                if (rect->ass != null)
+                if (rect->ass != IntPtr.Zero)
                 {
                     string assLine = Marshal.PtrToStringUTF8((IntPtr)rect->ass) ?? string.Empty;
                     string assText = ExtractAssText(assLine);
@@ -283,8 +283,8 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
     {
         unsafe
         {
-            byte* buf = stackalloc byte[ffmpeg.AV_ERROR_MAX_STRING_SIZE];
-            ffmpeg.av_strerror(errorCode, buf, ffmpeg.AV_ERROR_MAX_STRING_SIZE);
+            byte* buf = stackalloc byte[FF.AV_ERROR_MAX_STRING_SIZE];
+            FF.av_strerror(errorCode, buf, (UIntPtr)FF.AV_ERROR_MAX_STRING_SIZE);
             return Marshal.PtrToStringUTF8((IntPtr)buf) ?? $"error code {errorCode}";
         }
     }

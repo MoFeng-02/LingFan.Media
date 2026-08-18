@@ -31,7 +31,7 @@ internal sealed class SafeAVFormatContextHandle : SafeHandle
             unsafe
             {
                 var pp = (AVFormatContext*)handle;
-                ffmpeg.avformat_close_input(&pp);
+                FF.avformat_close_input(&pp);
             }
             handle = IntPtr.Zero;
         }

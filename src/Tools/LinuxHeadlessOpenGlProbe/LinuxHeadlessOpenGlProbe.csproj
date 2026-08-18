@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>LinuxHeadlessOpenGlProbe</RootNamespace>
+    <AssemblyName>LinuxHeadlessOpenGlProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- OpenGL 渲染器在 Linux 走 EGL X11；D3D11VA 硬件加速与 GPUShare.D3D11 为 Windows-only：抑制 CA1416。 -->
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 跨平台后端/渲染/消费链：ffmpeg 解码 + OpenGL 渲染器(EGL X11) + 静音输出。
+         全部 net10.0，Linux/WSL2 下经 Xvfb 虚拟显示提供 X11 窗口即可运行。 -->
+    <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.OpenGL\LingFan.Media.Renderers.OpenGL.csproj" />
+    <ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
+    <!-- Linux VAAPI 零拷贝导出（IVaApiExport → VaApiInterop）：仅 Linux 调用，注册后请求硬解即启用真实零拷贝硬解。 -->
+    <ProjectReference Include="..\..\Platforms\LingFan.Media.Platforms\LingFan.Media.Platforms.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 真实媒体资源（与测试工程同源），默认参数 file 指向 Resources/Video/m1.mp4 -->
+    <None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

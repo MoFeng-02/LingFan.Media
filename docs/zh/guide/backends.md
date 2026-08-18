@@ -22,7 +22,7 @@ FFmpeg 与 LibVLC 是**跨平台保底**。二者均为 LGPL 授权，可在每�
 
 | 后端 | 许可证 | 平台 | 角色 | 状态 |
 | --- | --- | --- | --- | --- |
-| **FFmpeg** | LGPL 2.1+（共享构建） | Windows、macOS、iOS、Android | 主解封装 / 解码，经 `FFmpeg.AutoGen` | ✅ 已实现 |
+| **FFmpeg** | LGPL 2.1+（共享构建） | Windows、macOS、iOS、Android | 主解封装 / 解码，经自写原生绑定 | ✅ 已实现 |
 | **LibVLC / VLC** | LGPL 2.1+ | Windows、macOS、iOS、Android | 回退播放后端，由中间件自动切换 | ✅ 已实现 |
 
 二者今天已在 Windows、macOS、iOS、Android 上发布并可用。Linux **不是目标平台**，但因 FFmpeg / LibVLC 跨平台，它们仍可在那里提供播放——「排除」仅针对构建*原生* Linux 后端。

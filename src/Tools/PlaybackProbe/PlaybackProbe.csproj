@@ -40,28 +40,27 @@
 
   <ItemGroup>
     <!-- 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布：AOT 不会自动携带构建期复制的原生 DLL，
-         否则运行目录为空 → EnsureUnversionedAliases 建不出无版本别名 → AutoGen 桩抛 NotSupportedException。
-         无版本别名由 FFmpegBackend.EnsureUnversionedAliases 运行时兜底创建。 -->
+         否则运行目录为空 → 自写 FF 加载器按简单名（avutil）映射到带版本 handle（avutil-60.dll）失败
+         → 首个 ffmpeg.* 调用静默崩（退出码 127）。无版本别名由下方 CopyFFmpegNative Target 兜底复制。 -->
     <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!--
-    LGPL 合规关键步骤：把「合规的 ffmpeg 共享构建（LGPL，BtbN lgpl-shared）」复制到输出目录，
-    使 FFmpeg.AutoGen 的 DynamicallyLoaded 绑定在运行时从应用目录动态加载 avcodec-*.dll 等。
+    LGPL 合规关键步骤：把「合规的 ffmpeg 共享构建（LGPL，BtbN lgpl-shared）」复制到输出/发布目录，
+    使自写 FF 绑定（[LibraryImport] + NativeLibrary 版本自适应加载）在运行时从应用目录动态加载 avcodec-*.dll 等。
     - 动态链接（绝不静态合并 ffmpeg 进本程序集）；
-    - 路径显式可控（FFmpegOptions.FFmpegLibraryPath 默认指向 AppContext.BaseDirectory），
+    - 路径显式可控（自写 FF 加载器默认从 AppContext.BaseDirectory 解析带版本名 avutil-60.dll 等），
       用户可替换/升级这些 DLL 而不重编译本库。
     原生 DLL 来自 ThirdParty/ffmpeg/<解压目录>/bin，不入库（gitignore）。
     AOT 发布关键：dotnet publish 不会自动把「构建期复制」的原生 ffmpeg DLL 带进 publish/，
-       须显式复制到 $(PublishDir)，否则发布版运行时空目录 → NotSupportedException 桩崩溃。
+       须显式复制到 $(PublishDir)，否则发布版运行时空目录 → 首个 ffmpeg.* 调用静默崩（退出码 127）。
   -->
   <Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
     <ItemGroup>
       <FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
-      <!-- 无版本号别名：FFmpeg.AutoGen 8.1 的 DynamicallyLoaded 绑定按「avutil/avcodec/...」无版本名加载
-           （已用二进制字符串核验 Bindings.DynamicallyLoaded.dll 确含 "avutil" 字面量，无版本号、无 .dll 后缀），
-           但 BtbN lgpl-shared 仅提供 avutil-60.dll 等带版本文件。须同时复制同名无版本别名，否则 AutoGen 加载失败
-           → 首个 ffmpeg.* 调用崩溃（静默退出码 127）。别名 = 去掉文件名末尾 -<数字>（如 avutil-60 → avutil）。 -->
+      <!-- 无版本号别名：自写 FF 加载器按简单名（avutil/avcodec/...）映射到带版本 handle（avutil-60.dll 等），
+           BtbN lgpl-shared 仅提供带版本文件，须同时复制同名无版本别名作兜底，否则首个 ffmpeg.* 调用静默崩（退出码 127）。
+           别名 = 去掉文件名末尾 -<数字>（如 avutil-60 → avutil）。 -->
       <FFmpegDll>
         <Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
       </FFmpegDll>

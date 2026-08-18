@@ -30,7 +30,7 @@ internal sealed class SafeAVFrameHandle : SafeHandle
             unsafe
             {
                 var pp = (AVFrame*)handle;
-                ffmpeg.av_frame_free(&pp);
+                FF.av_frame_free(&pp);
             }
             handle = IntPtr.Zero;
         }
