@@ -595,7 +595,7 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
         // 跨设备 SharedKeyedMutex 发布栅栏：WGL_NV_DX_interop2 *不* 自动处理 keyed mutex
         // （Firefox SharedSurfaceD3D11Interop.cpp 与本项目 ReadbackToCpu 均显式 AcquireSync）。
         // 桥接设备须在 lock 之前先 AcquireSync(0) 取得转换器（ffmpeg 设备）ReleaseSync(0) 释放的访问权，
-        // GL 才能读到有效像素；否则纹理处于未授权访问态，采样结果为未定义（实测全黑）。
+        // GL 才能读到有效像素；否则纹理处于未授权访问态，采样结果为未定义（全黑）。
         // 绘制结束再 ReleaseSync(0)。S_OK≠被接受：AcquireSync 失败（栅栏未就绪）则跳过本帧，避免死锁/黑屏蔓延。
         IDXGIKeyedMutex? keyedMutex = null;
         bool acquired = false;

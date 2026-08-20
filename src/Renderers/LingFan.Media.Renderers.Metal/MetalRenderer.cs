@@ -287,7 +287,7 @@ public sealed class MetalRenderer : IVideoRenderer
         AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("endEncoding"));
         AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("presentDrawable:"), drawable);
         AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("commit"));
-        AppleRuntime.objc_release(cb); // newCommandBuffer 返回 +1；commit 后由命令队列接管，释放我们的 +1
+        AppleRuntime.objc_release(cb); // newCommandBuffer 返回 +1；commit 后由命令队列接管，释放本类持有的 +1
     }
 
     /// <inheritdoc />

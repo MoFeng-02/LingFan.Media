@@ -18,9 +18,12 @@ namespace LingFan.Media.Backends.MediaCodec.Demuxer;
 /// <para><b>仅 Android 可用</b>：非 Android 运行时 OpenAsync 抛 <see cref="PlatformNotSupportedException"/>。</para>
 /// <para><b>数据源选择</b>：</para>
 /// <list type="bullet">
-/// <item>流有 <c>Location</c>（文件/URL/content URI）→ <c>AMediaExtractor_setDataSource</c>（API 21+），NDK 原生读取。</item>
-/// <item>流无 Location（内存/透传）→ <c>AMediaDataSource</c> 桥接 <see cref="IMediaStream"/>（API 28+）；
-/// 低版本运行时该符号缺失，捕获 <see cref="EntryPointNotFoundException"/> 后降级为 <see cref="PlatformNotSupportedException"/>。</item>
+/// <item>本地文件路径 → <c>AMediaExtractor_setDataSourceFd</c>（API 21+）直传文件描述符：
+/// 绕开 NDK 路径解析差异（部分 ROM 对裸路径/file:// 均返 MALFORMED），且无托管回调
+/// （规避 Android 12+ CFI 系统库的 <c>__cfi_check_fail</c> SIGTRAP）。</item>
+/// <item>http(s) URL → <c>AMediaExtractor_setDataSource</c>（API 21+），NDK 原生网络读取。</item>
+/// <item>无地址流（内存/透传）→ <c>AMediaDataSource</c> 桥接 <see cref="IMediaStream"/>（API 28+）；
+/// 注意：Android 12+ CFI 系统库下托管回调会 SIGTRAP，仅低版本/无 CFI 环境适用。</item>
 /// </list>
 /// <para><b>多轨交织</b>：选中全部轨道后，extractor 按 PTS 自动交错返回各轨采样，<see cref="ReadPacketAsync"/> 直接透传，
 /// 调用方按 <c>SampleTrackIndex</c> 路由至对应解码器。</para>
@@ -47,6 +50,10 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
     // 改为可增长读取缓冲（readSampleData 不推进游标，容量不足可安全重读）。
     private byte[] _readScratch = Array.Empty<byte>();
     private int _maxInputSize = 1 << 16; // 64 KiB 下限
+
+    // 诊断节流：每 64 包打一条读包日志（定位真机视频/音频包流动节奏）
+    private int _packetCounter;
+    private const int PacketLogInterval = 64;
 
     /// <summary>初始化 Android 解封装器的新实例。</summary>
     public AndroidDemuxer(AndroidBackend backend, ILogger<AndroidDemuxer> logger)
@@ -111,15 +118,29 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
         try
         {
             var location = _stream!.Location;
-            if (!string.IsNullOrEmpty(location))
+            if (!string.IsNullOrEmpty(location) && !LooksLikeUrl(location))
             {
-                // API 21+：NDK 按地址原生打开（文件路径 / http(s) URL / content URI）
-                _extractor.SetDataSource(location);
+                // 本地文件（API 21+）：setDataSourceFd 直传文件描述符。
+                // ① 绕开 NDK setDataSource 的路径/URI 解析差异（裸路径与 file:// 前缀在部分 ROM 均
+                //    返回 AMEDIA_ERROR_MALFORMED + 误导性日志 "can't create http service"）；
+                // ② 无托管函数指针回调，规避 Android 12+ CFI 系统库的 __cfi_check_fail SIGTRAP
+                //    （setDataSourceCustom 的 AMediaDataSource 回调为托管指针，native 侧 CFI 校验失败）。
+                // NDK 内部会 dup fd，本方法保持文件打开至 OpenCore 结束亦无冲突。
+                using var file = File.OpenRead(location);
+                int fd = checked((int)file.SafeFileHandle.DangerousGetHandle().ToInt64());
+                _extractor.SetDataSourceFd(fd, 0, file.Length);
+            }
+            else if (!string.IsNullOrEmpty(location))
+            {
+                // http(s) URL：NDK 原生网络读取（native 到 native，无 CFI 问题）。
+                // 分支条件已隐含 location 非空，编译器无法从 bool 反推，显式抑制。
+                _extractor.SetDataSource(location!);
             }
             else
             {
-                // 无地址流：API 28+ 自定义数据源桥接 IMediaStream；
-                // 低版本运行时符号缺失 → EntryPointNotFoundException，捕获降级
+                // 无地址流（内存/透传）：API 28+ 自定义数据源桥接 IMediaStream。
+                // 注意：Android 12+ CFI 系统库下托管回调（readAt/getSize/close）会触发
+                // __cfi_check_fail SIGTRAP，仅低版本或无 CFI 环境可用；保留实现并如实注明。
                 try
                 {
                     _dataSource = new AndroidDataSource(_stream);
@@ -160,6 +181,10 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
             throw;
         }
     }
+
+    /// <summary>判定 location 是否带 URL scheme（http(s)://、content:// 等）；本地路径无 scheme。</summary>
+    private static bool LooksLikeUrl(string location)
+        => location.Contains("://", StringComparison.Ordinal);
 
     private MediaMetadata BuildMetadata(AndroidMediaFormat fileFmt)
     {
@@ -314,6 +339,12 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
             bool key = (flags & AndroidMediaConstants.AMEDIAEXTRACTOR_SAMPLE_FLAG_SYNC) != 0;
             var ts = ptsUs >= 0 ? TimeSpan.FromTicks(ptsUs * 10) : TimeSpan.Zero;
             var pkt = new MediaPacket(trackIdx, data, ts, TimeSpan.Zero, key);
+
+            // 诊断节流日志：读包节奏（track/size/pts/key），每 64 包一条
+            if ((_packetCounter++ % PacketLogInterval) == 0)
+                _logger.LogInformation(
+                    "[ANDROID-DEMUX] 读包 track={Track} size={Size} pts={PtsUs}us key={Key} 累计={Total}",
+                    trackIdx, data.Length, ptsUs, key, _packetCounter);
 
             // 不支持 DRM：跳过加密采样，不假装解码
             if ((flags & AndroidMediaConstants.AMEDIAEXTRACTOR_SAMPLE_FLAG_ENCRYPTED) != 0)

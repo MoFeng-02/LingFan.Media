@@ -497,7 +497,7 @@ internal static class Program
                     else
                         Console.WriteLine($"[HEADFUL-ZEROCOPY] 注：--backend {backendArg} 设计上不走零拷贝（VLC 恒回拷 CPU / MF 半 DXVA），仅作计数参考");
                 }
-                // 诊断：分相计时——定位每帧 ~92ms 开销归属（CPU 转换 vs GPU 同步 QueueWaitIdle）。
+                // 诊断：分相计时——定位每帧开销归属（CPU 转换 vs GPU 同步 QueueWaitIdle）。
                 // 若 GPU 同步占比极高 → 瓶颈在每帧全队列同步，需改 fence 环消除串行；
                 // 若 CPU 转换占比极高 → 瓶颈在软解 NV12→BGRA，需 SIMD/降分辨率上传等。
                 string? prof = countingFactory?.Last?.GetInnerProfile();

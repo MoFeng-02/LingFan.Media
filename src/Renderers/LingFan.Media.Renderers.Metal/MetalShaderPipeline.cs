@@ -159,7 +159,7 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
         _yuvPipeline = NewPipeline(vs, fsYuv);
         _nvPipeline = NewPipeline(vs, fsNv);
 
-        // 临时函数对象（newFunctionWithName: 返回 +1）由渲染管线状态内部强引用，此处释放我们的 +1 引用。
+        // 临时函数对象（newFunctionWithName: 返回 +1）由渲染管线状态内部强引用，此处释放本类持有的 +1 引用。
         AppleRuntime.objc_release(vs);
         AppleRuntime.objc_release(fsRgb);
         AppleRuntime.objc_release(fsYuv);
@@ -378,7 +378,7 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
         AppleRuntime.objc_msgSend(enc, AppleRuntime.Sel("endEncoding"));
         AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("presentDrawable:"), drawable);
         AppleRuntime.objc_msgSend(cb, AppleRuntime.Sel("commit"));
-        AppleRuntime.objc_release(cb); // newCommandBuffer 返回 +1；commit 后由命令队列接管直至 GPU 完成，释放我们的 +1
+        AppleRuntime.objc_release(cb); // newCommandBuffer 返回 +1；commit 后由命令队列接管直至 GPU 完成，释放本类持有的 +1
     }
 
     /// <summary>按 <see cref="AspectRatioMode"/> 计算软帧→目标（裁剪空间中心）的缩放因子（offset 恒为 0，居中）。

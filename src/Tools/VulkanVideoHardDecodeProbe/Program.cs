@@ -708,7 +708,7 @@ internal static class FrameDumper
 
     internal static void DumpFrame(VideoFrame frame, int presentIndex, string dir)
     {
-        // 诊断上限：硬解零拷贝绿屏排查只关注前 3 帧（关键帧 + 紧随其后的 P 帧），避免落 359 张 PNG。
+        // 诊断上限：硬解零拷贝诊断只关注前 3 帧（关键帧 + 紧随其后的 P 帧），避免落大量 PNG。
         if (DumpedCount >= 3) return;
         try
         {

@@ -18,8 +18,6 @@
                              Stretch="Uniform" />
         </Border>
 
-        <Button Content="我是测试" Margin="500,0" Grid.Row="0"/>
-
         <StackPanel Grid.Row="1"
                     Orientation="Horizontal"
                     Spacing="12"
@@ -27,6 +25,8 @@
                     HorizontalAlignment="Center">
             <!-- 打开文件：需 TopLevel.StorageProvider，故用 Click 事件在 code-behind 处理 -->
             <Button Content="打开文件" Click="OnOpenClick" />
+            <!-- 打开内置样例：Android 端把打包的 sample.mp4 拷到私有目录后用真实路径打开（绕开 content URI） -->
+            <Button Content="打开内置样例" Click="OnOpenSampleClick" />
             <!-- 播放/暂停：纯 VM 逻辑，直接绑定命令 -->
             <Button Content="播放 / 暂停" Command="{Binding TogglePlayCommand}" />
             <TextBlock Text="{Binding Status}"

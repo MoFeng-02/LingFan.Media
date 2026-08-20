@@ -7,7 +7,7 @@ namespace LingFan.Media.Consumers;
 /// <summary>
 /// 无头 / 服务端场景的空音频输出：不打开音频设备、不初始化 WASAPI、<see cref="Submit"/> 为 no-op。
 /// 供无 <c>VideoView</c> / 无音频设备场景替代具体音频输出，使 <see cref="MediaPlayer"/> 在无头下正常初始化与运行
-/// （C-9.4 对称件：<see cref="NoOpVideoRenderer"/> 解决“无 GPU 设备”，本类解决“无音频设备”）。
+/// （对称件：<see cref="NoOpVideoRenderer"/> 解决“无 GPU 设备”，本类解决“无音频设备”）。
 /// </summary>
 /// <remarks>
 /// <para>无头 A 形态下，视频帧经 <see cref="IMediaPlayer.VideoFrameAvailable"/> 流向计算 sink，
@@ -59,7 +59,7 @@ public sealed class NoOpAudioOutput : IAudioOutput, IRealtimePacedOutput
         // 锚定首帧：记录“首帧在此 wall 时刻开始消费”，后续以「累计提交采样数 / 采样率」推算真实播放进度。
         // 关键：MF 解封装/解码器给出的帧 Timestamp/Duration 可能不可靠（全 0 或基于压缩包大小），
         // 若以其为锚点则 delay 恒 <=0 → 不 sleep → 音频瞬间提交完 → Synchronizer 用 SyncTo 把主时钟
-        // 瞬间拉到片尾 → Position 立即到顶、管线立即 EOF（表现为“几秒播完 21 秒视频”的假完成）。
+        // 瞬间拉到片尾 → Position 立即到顶、管线立即 EOF（表现为几秒播完整段视频的假完成）。
         // 改用「累计采样 / 采样率」与采样率强绑定，与帧时间戳无关，实时节奏恒定可靠，
         // 与真实 WASAPI 由硬件节奏限速语义一致。
         if (!_anchored)

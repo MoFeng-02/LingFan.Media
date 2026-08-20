@@ -25,7 +25,9 @@ internal sealed class AndroidAudioDecoderFactory : IAudioDecoderFactory
     public IAudioDecoder Create(AudioCodec codec, AudioSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        return new AndroidAudioDecoder(_backend, _loggerFactory.CreateLogger<AndroidAudioDecoder>());
+        var decoder = new AndroidAudioDecoder(_backend, _loggerFactory.CreateLogger<AndroidAudioDecoder>());
+        decoder.Initialize(codec, settings); // 契约：工厂负责初始化解码器（同步原生初始化）
+        return decoder;
     }
 
     /// <inheritdoc/>
@@ -33,7 +35,8 @@ internal sealed class AndroidAudioDecoderFactory : IAudioDecoderFactory
     {
         ArgumentNullException.ThrowIfNull(settings);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult<IAudioDecoder>(
-            new AndroidAudioDecoder(_backend, _loggerFactory.CreateLogger<AndroidAudioDecoder>()));
+        var decoder = new AndroidAudioDecoder(_backend, _loggerFactory.CreateLogger<AndroidAudioDecoder>());
+        decoder.Initialize(codec, settings); // 契约：工厂负责初始化解码器（同步原生初始化）
+        return Task.FromResult<IAudioDecoder>(decoder);
     }
 }

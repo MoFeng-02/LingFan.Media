@@ -7,7 +7,7 @@ namespace LingFan.Media.Consumers;
 /// <summary>
 /// 无头 / 服务端场景的空渲染器：不创建 GPU 设备、不初始化 SwapChain、<see cref="Present"/> 为 no-op。
 /// 供无 <c>VideoView</c> / 无窗口场景替代具体渲染器，使 MediaPlayer 在无头下正常初始化与运行
-/// （C-9.4：注册 <see cref="NoOpVideoRendererFactory"/> 而非 D3D11/Vulkan 渲染器工厂）。
+/// （注册 <see cref="NoOpVideoRendererFactory"/> 而非 D3D11/Vulkan 渲染器工厂）。
 /// </summary>
 /// <remarks>
 /// <para>无头 A 形态下，帧经 <see cref="IMediaPlayer.VideoFrameAvailable"/> 流向计算 sink，

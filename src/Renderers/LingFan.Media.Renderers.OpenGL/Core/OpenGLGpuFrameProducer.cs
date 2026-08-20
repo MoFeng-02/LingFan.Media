@@ -4,6 +4,7 @@ using LingFan.Media.Abstractions;
 using Microsoft.Extensions.Logging;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
+using Vortice.DXGI;
 
 namespace LingFan.Media.Renderers.OpenGL;
 
@@ -23,7 +24,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// 再 <c>glEGLImageTargetTexture2DOES</c> 绑为 GL 纹理（零拷贝）。</item>
 /// </list></para>
 /// <para><b>能力自报 + 行为副作用双判据（S_OK≠被接受）</b>：扩展不可用 / 句柄无效 / 注册失败 →
-/// <see cref="TryImport"/> 返回 <see langword="false"/>，调用方回落软解并计 [FRAMEPATH] 统计，绝不报"已就绪"假绿。</para>
+/// <see cref="TryImport"/> 返回 <see langword="false"/>，调用方回落软解并计入 CPU 拷贝统计，绝不报"已就绪"假绿。</para>
 /// <para><b>共享组</b>：导入在工厂级离屏 GL 上下文（共享组所有者，on-screen 上下文以 shareContext 接入）下执行，
 /// 注册的 GL 纹理对渲染器可见——零拷贝链路与 D3D11/Vulkan 完全同源。跨上下文 D3D 绑定共享依赖 GL share-list，
 /// 属运行期验收项（设计假设，由宿主 probe 验证）。</para>
@@ -129,6 +130,16 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
 
             EnsureBridgeDevice();
 
+            // GPU 一致性守卫：WGL_NV_DX_interop2 强关联「打开它的 GL 上下文」所在 GPU。
+            // 桥接 D3D11 设备（独显优先，与解码器同 GPU）若与 on-screen GL 上下文（窗口所在显示器 GPU）不同卡，
+            // wglDXOpenDeviceNV 返回伪句柄 → wglDXRegisterObjectNV 直接访问违例崩溃。
+            // 必须在导入阶段拦截：厂商不匹配 → 回落 CPU（优雅降级，绝不让 on-screen 绘制崩溃）。
+            if (!IsBridgeDeviceGpuCompatibleWithGlContext())
+            {
+                CloseHandle(source.Handle);
+                return false;
+            }
+
             // 把解码侧 DXGI 共享 NT 句柄打开为本桥接 D3D11 设备的纹理（OpenSharedResource1 仅接受 NT 句柄）。
             // Vortice OpenSharedResource1 返回 Result 并 out 纹理；按本仓库 D3D11Interop 既有模式以 out 纹理判空为准（S_OK≠被接受）。
             device1 = _bridgeDevice!.QueryInterface<ID3D11Device1>();
@@ -179,12 +190,88 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
             _glContext.EnsureCreated();
 
             // 桥接 D3D11 设备：仅用于把解码侧共享句柄打开为纹理并与 GL 互操作，不参与呈现（呈现由 on-screen GL 上下文完成）。
-            // 注意：此处不打开 WGL 互操作设备——WGL interop 句柄强关联「打开它的 GL 上下文」，必须在 on-screen 渲染上下文
-            // （OpenGLShaderPipeline.EnsureWglInteropDevice）上现场打开，否则在离屏 owner 上下文打开的 interop 句柄在 on-screen 上无法正确注册/lock。
-            ID3D11Device device = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
-                DriverType.Hardware,
-                DeviceCreationFlags.BgraSupport);
-            _bridgeDevice = device;
+            // 🔴 2026-08-20 真机修复：此前 D3D11CreateDevice(DriverType.Hardware) 无适配器 → 默认落在主显示器 GPU（核显 AMD），
+            //    而 ffmpeg 解码设备是 FindPreferredAdapter 独显优先（NVIDIA）→ 跨 GPU 打开共享句柄 OpenSharedResource1 必失败。
+            //    改与解码器同源：FindPreferredAdapter + D3D11CreateDeviceOnAdapter（独显优先），保证桥接设备与解码设备同一 GPU。
+            //    注意：此处不打开 WGL 互操作设备——WGL interop 句柄强关联「打开它的 GL 上下文」，必须在 on-screen 渲染上下文
+            //    （OpenGLShaderPipeline.EnsureWglInteropDevice）上现场打开，否则在离屏 owner 上下文打开的 interop 句柄在 on-screen 上无法正确注册/lock。
+            IntPtr adapter = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindPreferredAdapter();
+            if (adapter != IntPtr.Zero)
+            {
+                try
+                {
+                    LingFan.Media.GPUShare.D3D11.D3D11Interop.D3D11CreateDeviceOnAdapter(
+                        adapter, out IntPtr devicePtr, out IntPtr contextPtr);
+                    // OpenGL 桥接只需 device（OpenSharedResource1 + WGL 互操作），不需要立即上下文。
+                    if (contextPtr != IntPtr.Zero)
+                        LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(contextPtr);
+                    // devicePtr 为新建自有设备（引用计数 1）：Vortice 包装持有并 Dispose 释放（与解码器 _vaOwnedDevice 同模式）。
+                    _bridgeDevice = new Vortice.Direct3D11.ID3D11Device(devicePtr);
+                }
+                finally
+                {
+                    LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(adapter);
+                }
+            }
+            else
+            {
+                // 无可用适配器（异常环境）：回退默认路径（D3D11CreateDevice 无适配器）。
+                _bridgeDevice = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
+                    Vortice.Direct3D.DriverType.Hardware,
+                    Vortice.Direct3D11.DeviceCreationFlags.BgraSupport);
+            }
+        }
+    }
+
+    // 桥接设备厂商与当前 GL 上下文所在 GPU 是否一致（首次不匹配已通告标志）。
+    private bool _gpuMismatchAnnounced;
+
+    /// <summary>
+    /// 校验桥接 D3D11 设备与当前 GL 上下文是否在同一 GPU。
+    /// <para>WGL_NV_DX_interop2 强关联「打开它的 GL 上下文」所在 GPU；桥接设备（独显）与 GL 上下文
+    /// （窗口所在显示器 GPU，双卡核显）不同卡时，<c>wglDXOpenDeviceNV</c> 返回伪句柄，
+    /// <c>wglDXRegisterObjectNV</c> 直接访问违例崩溃。返回 <see langword="false"/> 时调用方应回落 CPU 传输。</para>
+    /// </summary>
+    private bool IsBridgeDeviceGpuCompatibleWithGlContext()
+    {
+        try
+        {
+            if (_bridgeDevice is null) return false;
+
+            uint bridgeVendorId;
+            using (var dxgiDevice = _bridgeDevice.QueryInterface<Vortice.DXGI.IDXGIDevice>())
+            using (var adapter = dxgiDevice.GetAdapter())
+            {
+                bridgeVendorId = adapter.Description.VendorId;
+            }
+
+            nint p = GLNative.glGetString(GLNative.GlRenderer);
+            string renderer = Marshal.PtrToStringAnsi(p) ?? string.Empty;
+
+            bool bridgeIsNvidia = bridgeVendorId == 0x10DE;
+            bool bridgeIsAmd = bridgeVendorId == 0x1002;
+            bool glIsNvidia = renderer.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase);
+            bool glIsAmd = renderer.Contains("AMD", StringComparison.OrdinalIgnoreCase)
+                || renderer.Contains("Radeon", StringComparison.OrdinalIgnoreCase)
+                || renderer.Contains("ATI", StringComparison.OrdinalIgnoreCase);
+
+            if ((bridgeIsNvidia && glIsNvidia) || (bridgeIsAmd && glIsAmd))
+                return true;
+
+            if (!_gpuMismatchAnnounced)
+            {
+                _gpuMismatchAnnounced = true;
+                _logger?.LogWarning(
+                    $"[OPENGL-ZEROCOPY] GPU 不一致：桥接 D3D11 设备厂商 0x{bridgeVendorId:X4}" +
+                    $"（{(bridgeIsNvidia ? "NVIDIA" : bridgeIsAmd ? "AMD" : "未知")}）与 GL 上下文渲染器「{renderer}」" +
+                    $"不在同一 GPU → WGL 互操作不可用，禁用零拷贝，回落 CPU 传输（WGL 上下文绑定窗口所在显示器 GPU）。");
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[OPENGL-ZEROCOPY] GPU 一致性检查失败，保守禁用零拷贝，回落 CPU。");
+            return false;
         }
     }
 

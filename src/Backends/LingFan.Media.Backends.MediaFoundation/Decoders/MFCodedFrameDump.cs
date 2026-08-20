@@ -82,19 +82,19 @@ internal static class MFCodedFrameDump
             int contentW = codedW - rightPad - leftEdge;
             int contentH = codedH - botPad - topEdge;
 
-            // ── 3. 判定：实测内容边界 vs 当前采用的 offset ────────────────────────
+            // ── 3. 判定：检测出的内容边界 vs 当前采用的 offset ────────────────────
             string verdictX = leftEdge == offX
                 ? $"一致（起裁列 {offX} 正确）"
-                : $"★不一致：实测内容自第 {leftEdge} 列起，当前从第 {offX} 列起裁 ⇒ 画面平移 {offX - leftEdge} 列★";
+                : $"不一致：检测内容自第 {leftEdge} 列起，当前从第 {offX} 列起裁 ⇒ 画面平移 {offX - leftEdge} 列";
             string verdictY = topEdge == offY
                 ? $"一致（起裁行 {offY} 正确）"
-                : $"★不一致：实测内容自第 {topEdge} 行起，当前从第 {offY} 行起裁 ⇒ 画面平移 {offY - topEdge} 行★";
+                : $"不一致：检测内容自第 {topEdge} 行起，当前从第 {offY} 行起裁 ⇒ 画面平移 {offY - topEdge} 行";
             string verdictSize = contentW == displayW && contentH == displayH
-                ? $"实测内容尺寸 {contentW}x{contentH} == 显示孔径 {displayW}x{displayH}"
-                : $"★实测内容尺寸 {contentW}x{contentH} ≠ 显示孔径 {displayW}x{displayH}★";
+                ? $"检测内容尺寸 {contentW}x{contentH} == 显示孔径 {displayW}x{displayH}"
+                : $"检测内容尺寸 {contentW}x{contentH} ≠ 显示孔径 {displayW}x{displayH}";
 
             logger.LogInformation(
-                "[CODED-DUMP] {CW}x{CH} 已落盘 | 左填充={L} 右填充={R} 上填充={T} 下填充={B} | 实测内容={CoW}x{CoH}\n" +
+                "[CODED-DUMP] {CW}x{CH} 已落盘 | 左填充={L} 右填充={R} 上填充={T} 下填充={B} | 检测内容={CoW}x{CoH}\n" +
                 "             X: {VX}\n" +
                 "             Y: {VY}\n" +
                 "             尺寸: {VS}\n" +

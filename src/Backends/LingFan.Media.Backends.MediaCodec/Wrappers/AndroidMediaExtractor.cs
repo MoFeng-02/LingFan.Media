@@ -36,6 +36,17 @@ internal sealed class AndroidMediaExtractor : IDisposable
             throw new InvalidOperationException($"[ANDROID-EXT] setDataSource('{location}') 失败: media_status_t={status}");
     }
 
+    /// <summary>
+    /// 设置数据源为文件描述符（API 21+）。本地文件首选：无路径解析差异、无托管回调（规避 Android 12+
+    /// CFI 的 <c>__cfi_check_fail</c>）。NDK 内部会 dup fd，调用方可在返回后关闭原文件。
+    /// </summary>
+    public void SetDataSourceFd(int fd, long offset, long length)
+    {
+        int status = MediaNdk.AMediaExtractor_setDataSourceFd(_native, fd, offset, length);
+        if (status != AndroidMediaConstants.AMEDIA_OK)
+            throw new InvalidOperationException($"[ANDROID-EXT] setDataSourceFd(fd={fd}) 失败: media_status_t={status}");
+    }
+
     /// <summary>设置数据源为自定义 <see cref="AndroidDataSource"/>（API 28+；低版本抛 EntryPointNotFoundException）。</summary>
     public void SetDataSource(AndroidDataSource dataSource)
     {

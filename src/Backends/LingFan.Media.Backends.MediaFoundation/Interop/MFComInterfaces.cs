@@ -126,7 +126,7 @@ internal delegate int IMFMediaBuffer_SetCurrentLength(IntPtr self, uint cbCurren
 //   注：IMF2DBuffer 自身继承 IUnknown（不继承 IMFMediaBuffer！），故 vtable 头 3 槽仍是 IUnknown 自身方法。
 //   Lock2D 是 IMF2DBuffer 第一方法（槽 3 → slotIndex 0），Unlock2D 第二（槽 4 → slotIndex 1）。
 //   半 DXVA 的治本处理：MS H264 MFT 把帧读回 Direct3DSurface9-backed 2D 内存（实际 pitch 16 对齐），
-//   必须 Lock2D 取真值 pitch + scanline0 逐行拷贝，否则按紧凑 stride 拷贝出现横纹错位（已实测 AMD VendorId=0x1002）。
+//   必须 Lock2D 取真值 pitch + scanline0 逐行拷贝，否则按紧凑 stride 拷贝出现横纹错位（AMD 上已验证）。
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IMF2DBuffer2_Lock2D(IntPtr self, out IntPtr ppbScanline0, out int plPitch);
 

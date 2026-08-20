@@ -6,9 +6,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- D3D11 原生互操作（NV12→RGBA 视频处理器、共享句柄）依赖 Vortice 源生成 COM 绑定（AOT 友好） -->
-    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
-    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
+    <!-- 本工程为仓级 D3D11 原生互操作底座：仅引用 Abstractions + 原生 P/Invoke（d3d11.dll / dxgi.dll），
+         不引 Vortice / SharpGen（其源生成 COM 非真零反射）。AOT 100% 友好：手写 vtable、零反射、零 [ComImport]。 -->
   </ItemGroup>
 
   <ItemGroup>

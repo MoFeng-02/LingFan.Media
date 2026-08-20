@@ -48,11 +48,11 @@ internal static class ClockTuning
     /// 单次调整上限（毫秒，slew rate limit）。低通算出的吸收量再被夹到 ±此值。默认 4ms。
     /// </summary>
     /// <remarks>
-    /// <para>低通系数只按比例缩小偏差，遇到 700ms 级突发时 8% 仍有 ~59ms —— 依旧肉眼可见。
+    /// <para>低通系数只按比例缩小偏差，遇到大偏差突发时 8% 仍可能残留肉眼可见的偏差。
     /// 因此再叠一层绝对幅度钳位：无论偏差多大（只要没到硬跳阈值），每次最多挪 4ms，
     /// 小于半个帧间隔，视觉上完全不可察觉。</para>
     /// <para>收敛能力 = 4ms × 每批 SyncTo 次数（PrerollFrames=16 ⇒ 64ms/批），
-    /// 足以在数批内吃掉 100~200ms 级的稳态偏差。</para>
+    /// 足以在数批内吃掉常见的稳态偏差。</para>
     /// </remarks>
     internal static readonly double MaxStepMs = ParseDouble("LINGFAN_CLOCK_MAX_STEP_MS", 4.0, 0.1, 100.0);
 

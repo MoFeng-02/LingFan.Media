@@ -16,6 +16,11 @@ using LingFan.Media.Consumers;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
 using LingFan.Media.Renderers.D3D11;
+using LingFan.Media.Renderers.OpenGL;
+using LingFan.Media.Renderers.Vulkan;
+using Vortice.Direct3D;
+using Vortice.Direct3D11;
+using Vortice.DXGI;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,16 +28,21 @@ using Microsoft.Extensions.Logging;
 namespace HeadfulPlaybackProbe;
 
 /// <summary>
-/// 有头（Headful）全链路验证程序：真实 D3D11 SwapChain 上屏（GPU Present）与真实 WASAPI 出声，
-/// 二者共用同一个 MediaPlayer 与指定后端（mf/ffmpeg/vlc）解码链。
+/// 有头（Headful）全链路验证程序：真实 SwapChain 上屏（GPU Present）与真实 WASAPI 出声，
+/// 后端与渲染器均可经命令行独立指定，共用同一个 MediaPlayer 解码链。
 /// </summary>
 /// <remarks>
 /// <para>命令行开关用于隔离变量：</para>
 /// <list type="bullet">
-///   <item><c>--backend</c>：后端选择 <c>mf</c>（默认）/ <c>ffmpeg</c> / <c>vlc</c>，三者均强制软件解码以产出 CPU 帧喂给 D3D11 上屏。</item>
+///   <item><c>--backend</c>：后端选择 <c>mf</c> / <c>ffmpeg</c> / <c>vlc</c>；<b>缺省 = 全部注册</b>
+///        （mf+ffmpeg+vlc 链式，按序自动回退选首个能打开媒体源的后端）。默认强制软件解码以产出 CPU 帧喂给渲染器上屏。</item>
+///   <item><c>--renderer</c>：渲染器选择 <c>d3d11</c>（默认）/ <c>vulkan</c> / <c>opengl</c>；
+///        仅当 <c>--backend</c> 也未指定时二者才各自取缺省（后端全部注册走回退链，渲染器取 d3d11）。</item>
+///   <item><c>--hw</c>：开启硬解零拷贝验收。ffmpeg 走 D3D11VA（D3D11 直连 / Vulkan·OpenGL 经 D3D11 共享句柄导入）；
+///        mf 走半 DXVA（非真零拷贝）；vlc 硬解回拷 CPU（非零拷贝）。</item>
 ///   <item><c>--visible</c>：窗口真正可见，便于肉眼确认上屏。</item>
 ///   <item><c>--no-video</c>：只验 WASAPI 出声。</item>
-///   <item><c>--no-audio</c>：只验 D3D11 上屏。</item>
+///   <item><c>--no-audio</c>：只验上屏。</item>
 ///   <item><c>--category</c>：启用 IAudioClient2 会话分类做对照（默认 Movie）。</item>
 /// </list>
 /// <para>窗口代码使用 <c>[LibraryImport]</c> 以满足 AOT 要求。</para>
@@ -76,6 +86,14 @@ internal static class Program
 
     private static async Task<int> RunAsync(string[] args)
     {
+        // --probe-gpus：枚举全部 DXGI 适配器，逐 GPU 查 VideoProcessor 的 NV12/YUY2/BGRA 支持
+        //（诊断 AMD 核显 VP 不支持 NV12 的根因；N 卡独显对照）。
+        if (HasFlag(args, "--probe-gpus"))
+        {
+            ProbeGpuVideoProcessorSupport();
+            return 0;
+        }
+
         bool verbose = HasFlag(args, "-v", "--verbose");
         bool doVideo = !HasFlag(args, "--no-video");
         bool doAudio = !HasFlag(args, "--no-audio");
@@ -86,30 +104,49 @@ internal static class Program
         // 带 --hw 时 ffmpeg 走 D3D11VA 零拷贝（D3D11 直连 / OpenGL·Vulkan 经 D3D11 共享句柄导入），
         // mf 走半 DXVA（非真零拷贝），vlc 恒回拷 CPU（设计上不走零拷贝）。
         bool hwMode = HasFlag(args, "--hw");
-        // —— 后端选择开关：让同一套 D3D11 渲染路径覆盖 MF / FFmpeg / VLC 三条后端 ——
-        // 默认三者强制软件解码，使帧恒为 CPU SoftwareFrameResource（NV12），D3D11 上传上屏；--hw 时改走硬解。
-        string backendArg = ParseOption(args, "--backend")?.ToLowerInvariant() ?? "mf";
-        if (backendArg is not ("mf" or "ffmpeg" or "vlc"))
+        // —— 后端选择开关 ——
+        // --backend mf|ffmpeg|vlc：指定 → 只注册该后端；未指定 → 注册全部后端（mf+ffmpeg+vlc 链式，
+        // BackendFallbackMediaPlayerFactory 按序自动回退，选首个能打开媒体源的后端）。
+        string? backendArg = ParseOption(args, "--backend")?.ToLowerInvariant();
+        if (backendArg is not (null or "mf" or "ffmpeg" or "vlc"))
         {
-            Console.Error.WriteLine($"--backend 仅支持 mf|ffmpeg|vlc，收到：{backendArg}");
+            Console.Error.WriteLine($"--backend 仅支持 mf|ffmpeg|vlc（缺省=全部注册自动回退），收到：{backendArg}");
             return 2;
         }
-        Console.WriteLine($"[HEADFUL-BACKEND] {backendArg}");
+        // —— 渲染器选择开关 ——
+        // --renderer d3d11|vulkan|opengl：指定 → 只注册该渲染器；未指定 → 默认 d3d11（Windows 主渲染器）。
+        // 注：IVideoRendererFactory 是 DI 单值契约（无回退链），「全部注册」只对后端成立；渲染器须显式指定或取默认。
+        string rendererArg = ParseOption(args, "--renderer")?.ToLowerInvariant() ?? "d3d11";
+        if (rendererArg is not ("d3d11" or "vulkan" or "opengl"))
+        {
+            Console.Error.WriteLine($"--renderer 仅支持 d3d11|vulkan|opengl（缺省=d3d11），收到：{rendererArg}");
+            return 2;
+        }
+        Console.WriteLine($"[HEADFUL-BACKEND] {backendArg ?? "(全部: mf+ffmpeg+vlc 自动回退)"}");
+        Console.WriteLine($"[HEADFUL-RENDERER] {rendererArg}");
         Console.WriteLine($"[HEADFUL-HW] hwMode={hwMode}");
         // VLC 原生库定位：必须在解析 VLC 后端单例之前把 libvlc 目录前置 PATH，
         // 使原生加载器（LoadLibrary 搜 PATH）稳定找到 libvlc.dll。
-        if (backendArg == "vlc")
+        // 显式 --backend vlc 时必须找到；全部注册模式找不到仅告警（回退链会跳过 VLC）。
+        if (backendArg is null or "vlc")
         {
             string? vlcDir = LocateLibVlc();
             if (vlcDir is null)
             {
-                Console.Error.WriteLine("[HEADFUL-VLC] 未找到原生 libvlc.dll（原生包未分发且系统未装 VLC），无法验收 VLC 后端。");
-                return 3;
+                if (backendArg == "vlc")
+                {
+                    Console.Error.WriteLine("[HEADFUL-VLC] 未找到原生 libvlc.dll（原生包未分发且系统未装 VLC），无法验收 VLC 后端。");
+                    return 3;
+                }
+                Console.WriteLine("[HEADFUL-VLC] 未找到原生 libvlc.dll；全部注册模式下 VLC 后端将被回退链跳过。");
             }
-            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            if (existingPath.IndexOf(vlcDir, StringComparison.OrdinalIgnoreCase) < 0)
-                Environment.SetEnvironmentVariable("PATH", vlcDir + Path.PathSeparator + existingPath);
-            Console.WriteLine($"[HEADFUL-VLC] libvlc 目录(已前置 PATH): {vlcDir}");
+            else
+            {
+                var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                if (existingPath.IndexOf(vlcDir, StringComparison.OrdinalIgnoreCase) < 0)
+                    Environment.SetEnvironmentVariable("PATH", vlcDir + Path.PathSeparator + existingPath);
+                Console.WriteLine($"[HEADFUL-VLC] libvlc 目录(已前置 PATH): {vlcDir}");
+            }
         }
         // —— WASAPI 模式对照开关 ——
         // --exclusive：强制独占模式（默认共享）。--polling：关闭事件驱动改用轮询（默认事件驱动）。
@@ -186,50 +223,85 @@ internal static class Program
         services.AddSingleton<ILoggerFactory>(loggerFactory);
         // AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
         // 必须接在 builder 链上调用，不能对 ServiceCollection 直接调用。
-        // 后端选择由 --backend 决定（mf/ffmpeg/vlc），三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource，
-        // D3D11 渲染器走「CPU 软解帧 → D3D11 纹理上传 → SwapChain 上屏」路径。
-        // 注：D3D11 渲染器本身可消费 DXVA 纹理，但为隔离上屏路径变量、与 Vulkan 探针同源约束，
-        // 本探针恒强制软件解码（帧恒为 CPU SoftwareFrameResource，D3D11 上传上屏）。
+        // 后端注册：--backend 指定 → 只注册该后端；未指定（null）→ 全部注册（mf+ffmpeg+vlc 链式，
+        // BackendFallbackMediaPlayerFactory 按序自动回退，选首个能打开媒体源的后端）。
+        // 三者默认强制软件解码（帧恒为 CPU SoftwareFrameResource，渲染器上传上屏）；--hw 时按后端能力开启硬解：
+        //   ffmpeg → D3D11VA 零拷贝（D3D11 直连 / Vulkan·OpenGL 经 D3D11 共享句柄导入，走 GPUShare.D3D11）；
+        //   mf     → DXVA（半硬解，MFT 读回系统内存，非真零拷贝）；
+        //   vlc    → 硬解回拷 CPU BGRA32（设计上恒非零拷贝）。
         MediaBuilder builder = backendArg switch
         {
+            null => services.AddLingFanMedia()
+                .AddMediaFoundation(o =>
+                {
+                    o.EnableHardwareDecoding = hwMode;
+                    o.EnableDxva = hwMode;
+                })
+                .AddFFmpeg(o =>
+                {
+                    o.FFmpegLibraryPath = AppContext.BaseDirectory;
+                    o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
+                    o.HardwareAcceleration = hwMode;
+                })
+                .AddVLCNative(o =>
+                {
+                    o.EnableHardwareDecoding = hwMode;
+                    o.Headless = true;
+                }),
             "ffmpeg" => services.AddLingFanMedia().AddFFmpeg(o =>
             {
-                // --hw 时开启 D3D11VA 零拷贝（帧为 D3D11HardwareFrameResource，D3D11 渲染器直连 present）；
-                // 默认关闭硬件加速使帧恒为 CPU SoftwareFrameResource（上屏路径隔离变量）。
                 o.FFmpegLibraryPath = AppContext.BaseDirectory;
                 o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
                 o.HardwareAcceleration = hwMode;
             }),
             "vlc" => services.AddLingFanMedia().AddVLCNative(o =>
             {
-                // VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
-                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；--hw 时 EnableHardwareDecoding 注入 --avcodec-hw=any
-                // （有头 D3D11VA 真硬解但仍回拷 CPU BGRA32，设计上恒非零拷贝），由下方 D3D11 渲染器上传上屏。
                 o.EnableHardwareDecoding = hwMode;
                 o.Headless = true;
             }),
             _ => services.AddLingFanMedia().AddMediaFoundation(o =>
             {
-                // --hw 时开启 DXVA（半硬解：硬解激活但 MFT 把纹理读回系统内存，非真零拷贝）；
-                // 默认关闭硬件解码使帧恒为 CPU SoftwareFrameResource（NV12），D3D11 可上传上屏。
                 o.EnableHardwareDecoding = hwMode;
                 o.EnableDxva = hwMode;
             }),
         };
 
-        // —— 视频侧 ——
+        // —— 视频侧：渲染器按 --renderer 注册（d3d11|vulkan|opengl，缺省 d3d11）——
+        // 必须显式注册渲染器工厂（装饰器包裹）。AddLingFanMedia 只注册契约骨架，
+        // 不注册具体渲染器；缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
+        // 装饰器包裹真实工厂以精确统计 Present 调用；IGpuDeviceContext 须与工厂同源注册
+        // （D3D11/Vulkan 手动补回；OpenGL 由 AddOpenGLRenderer() 注册）。
         CountingVideoRendererFactory? countingFactory = null;
         if (doVideo)
         {
-            // 必须显式注册 D3D11 工厂（装饰器包裹）。AddLingFanMedia 只注册契约骨架，
-            // 不注册具体渲染器；缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
-            // 装饰器包裹真实 D3D11RendererFactory 以精确统计 Present 调用。
-            var d3d11Factory = new D3D11RendererFactory(loggerFactory);
-            countingFactory = new CountingVideoRendererFactory(d3d11Factory, saveFrames, saveDir);
-            builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
-            // 保住 IGpuDeviceContext 注册：AddD3D11Renderer() 原本会注册它（cast 回 D3D11RendererFactory），
-            // 手动装饰时必须补回，否则硬解路径失效而退化为软件解码。
-            builder.Services.AddSingleton<IGpuDeviceContext>(sp => d3d11Factory.Context);
+            if (rendererArg == "vulkan")
+            {
+                var vulkanFactory = new VulkanRendererFactory(loggerFactory);
+                // 🔴 Vulkan 渲染器默认独显优先（NVIDIA），与 ffmpeg 自有 D3D11 设备（NVIDIA 适配器优先）
+                // 同 GPU，共享句柄导入成立；不设 AlignToD3D11DefaultAdapter（那是对齐核显，会破坏零拷贝）。
+                countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir);
+                builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
+                builder.Services.AddSingleton<IGpuDeviceContext>(sp => vulkanFactory.Context);
+                // 零拷贝关键：注册 IGpuFrameProducer，否则 ffmpeg 的 _gpuProducer 为 null → --hw 回落软解。
+                builder.Services.AddSingleton<IGpuFrameProducer>(sp => vulkanFactory.CreateFrameProducer());
+            }
+            else if (rendererArg == "opengl")
+            {
+                // OpenGL：复用 AddOpenGLRenderer() 已注册的 OpenGLRendererFactory DI 单例
+                // （含工厂级离屏 GL 设备上下文 + GL 共享组，零拷贝导入的 GL 纹理才对其可见；
+                // 若另 new 一个工厂，共享组不一致会导致导入纹理对渲染器不可见）。
+                builder.AddOpenGLRenderer();
+                builder.Services.AddSingleton<IVideoRendererFactory>(sp =>
+                    new CountingVideoRendererFactory(
+                        sp.GetRequiredService<OpenGLRendererFactory>(), saveFrames, saveDir));
+            }
+            else
+            {
+                var d3d11Factory = new D3D11RendererFactory(loggerFactory);
+                countingFactory = new CountingVideoRendererFactory(d3d11Factory, saveFrames, saveDir);
+                builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
+                builder.Services.AddSingleton<IGpuDeviceContext>(sp => d3d11Factory.Context);
+            }
         }
         else
         {
@@ -249,6 +321,9 @@ internal static class Program
             builder.AddSilentAudioOutput();
 
         await using var sp = services.BuildServiceProvider();
+        // OpenGL 分支的计数装饰器实例经 DI 惰性创建（工厂依赖容器解析 OpenGLRendererFactory），
+        // 须在容器构建后取回同一实例引用供下方 Attach/Present 计数（其余分支注册时已持有）。
+        countingFactory ??= sp.GetService<IVideoRendererFactory>() as CountingVideoRendererFactory;
         var player = sp.GetRequiredService<IMediaPlayer>();
 
         // 音频进度观测量：累计进入提交链的采样数（区分「真丢帧」与「时钟 lag」）
@@ -843,6 +918,90 @@ internal static class Program
     {
         var v = ParseOption(args, name);
         return double.TryParse(v, out var d) ? d : fallback;
+    }
+
+    /// <summary>
+    /// 查默认适配器与首选适配器（独显优先）的 VideoProcessor 对 NV12/BGRA 的输入/输出支持
+    /// （诊断零拷贝链路的驱动级格式支持矩阵）。--probe-gpus 触发。
+    /// </summary>
+    private static void ProbeGpuVideoProcessorSupport()
+    {
+        ProbeAdapter("默认适配器(通常 AMD 核显)", useAdapter: false, IntPtr.Zero);
+        IntPtr pref = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindPreferredAdapter();
+        if (pref != IntPtr.Zero)
+        {
+            try
+            {
+                ProbeAdapter("首选适配器(独显优先)", useAdapter: true, pref);
+            }
+            finally
+            {
+                LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(pref);
+            }
+        }
+        else
+        {
+            Console.WriteLine("[GPU-PROBE] 无首选适配器（回退默认路径）");
+        }
+    }
+
+    private static void ProbeAdapter(string name, bool useAdapter, IntPtr selectedAdapter)
+    {
+        try
+        {
+            IntPtr dev, ctx;
+            if (useAdapter)
+                LingFan.Media.GPUShare.D3D11.D3D11Interop.D3D11CreateDeviceOnAdapter(selectedAdapter, out dev, out ctx);
+            else
+                LingFan.Media.GPUShare.D3D11.D3D11Interop.D3D11CreateDevice(out dev, out ctx);
+            // 设备→GPU 归属验证（QI IDXGIDevice → GetAdapter → GetDesc1）。
+            var (devVendor, devDesc) = LingFan.Media.GPUShare.D3D11.D3D11Interop.GetDeviceAdapterInfo(dev);
+            Console.WriteLine($"[GPU-PROBE] 设备归属: vendor=0x{devVendor:X4} [{devDesc}] " +
+                              (useAdapter ? "(首选适配器)" : "(默认路径)"));
+            try
+            {
+                IntPtr vdev = LingFan.Media.GPUShare.D3D11.D3D11Interop.QueryInterface(dev, LingFan.Media.GPUShare.D3D11.D3D11Interop.IID_ID3D11VideoDevice);
+                try
+                {
+                    var desc = new LingFan.Media.GPUShare.D3D11.D3D11VideoProcessorContentDescription
+                    {
+                        InputFrameFormat = 0,
+                        InputFrameRate = new LingFan.Media.GPUShare.D3D11.DxgiRational { Numerator = 60, Denominator = 1 },
+                        InputWidth = 1080,
+                        InputHeight = 1920,
+                        OutputFrameRate = new LingFan.Media.GPUShare.D3D11.DxgiRational { Numerator = 60, Denominator = 1 },
+                        OutputWidth = 1080,
+                        OutputHeight = 1920,
+                        Usage = 0,
+                    };
+                    IntPtr enumPtr = LingFan.Media.GPUShare.D3D11.D3D11Interop.CreateVideoProcessorEnumerator(vdev, desc);
+                    try
+                    {
+                        uint nv12 = LingFan.Media.GPUShare.D3D11.D3D11Interop.CheckVideoProcessorFormat(enumPtr, 41);
+                        uint bgra = LingFan.Media.GPUShare.D3D11.D3D11Interop.CheckVideoProcessorFormat(enumPtr, 87);
+                        Console.WriteLine($"[GPU-PROBE] {name}: NV12=0x{nv12:X}[IN={(nv12 & 1) != 0} OUT={(nv12 & 2) != 0}] " +
+                                          $"BGRA=0x{bgra:X}[IN={(bgra & 1) != 0} OUT={(bgra & 2) != 0}]");
+                    }
+                    finally
+                    {
+                        LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(enumPtr);
+                    }
+                }
+                finally
+                {
+                    LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(vdev);
+                }
+            }
+            finally
+            {
+                LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(ctx);
+                LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(dev);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[GPU-PROBE] {name} 探测失败: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     /// <summary>优先用输出目录下随工程复制的 Resources；回退向上找仓库根。</summary>

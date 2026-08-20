@@ -275,6 +275,10 @@ public sealed class MediaPlayer : IMediaPlayer
                 {
                     CodecConfiguration = videoInfo?.CodecConfiguration ?? default,
                     TimeBase = videoInfo?.TimeBase ?? default,
+                    // 透传源宽高：Android MediaCodec 的 configure 在部分设备/解码器要求显式 width/height
+                    //（仅 csd-0 推导不足会 EINVAL），D1 视频解码器据此写入输入格式。
+                    Width = videoInfo?.Width is > 0 ? videoInfo.Width : null,
+                    Height = videoInfo?.Height is > 0 ? videoInfo.Height : null,
                     EnableHardwareAcceleration = _options.EnableHardwareAcceleration
                 });
 
@@ -304,6 +308,10 @@ public sealed class MediaPlayer : IMediaPlayer
                     OutputSampleRate = _options.AudioOutputSampleRate,
                     OutputChannels = _options.AudioOutputChannels,
                     OutputSampleFormat = _options.AudioOutputSampleFormat,
+                    // 透传源采样率/声道数：Android MediaCodec 的 configure 在部分解码器要求显式
+                    // sample-rate/channel-count（仅 csd-0 推导不足会 EINVAL），D1 音频解码器据此写入输入格式。
+                    SourceSampleRate = audioTrack.AudioInfo is { SampleRate: > 0 } ai ? ai.SampleRate : null,
+                    SourceChannels = audioTrack.AudioInfo is { Channels: > 0 } aic ? aic.Channels : null,
                     // 透传轨道 extradata（AAC 的 AudioSpecificConfig）。AAC 在 MP4 中为裸流，
                     // 解码器必须据此设置 ctx->extradata 才能解码，否则 avcodec_send_packet 返回 Invalid data。
                     CodecConfiguration = audioTrack.AudioInfo?.CodecConfiguration ?? default,

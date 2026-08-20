@@ -94,8 +94,8 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
     //    产出 0 帧、也可能产出多帧；且在**输出未被取空前会以 MF_E_NOTACCEPTING 拒收新输入**。
     //    IVideoDecoder 契约是「一次调用最多返回一帧」，故多产出的帧暂存于此队列，由后续调用
     //    依次取走 —— 保证「入包数 == 出帧数」，绝不丢帧。
-    //    旧实现只取 1 个输出且把 NOTACCEPTING 当非致命吞掉，等价于按比例静默丢弃压缩包：
-    //    30fps 源实测只出 22fps，且参考帧缺失 ⇒ 花屏（宏块拖影）+ PTS 缺口（卡顿/回弹）。
+    //    须排空 MFT 的全部输出并重投被拒输入，否则按比例静默丢弃压缩包：
+    //    表现为帧率下降（参考帧缺失 ⇒ 花屏）+ PTS 缺口（卡顿/回弹）。
     private readonly Queue<VideoFrame> _pendingOutputs = new();
     private long _notAcceptingDrops;      // 排空后仍被拒收而不得不丢弃的包数（应恒为 0）
     private bool _drainSent;              // MFT_MESSAGE_COMMAND_DRAIN 只发一次
@@ -114,9 +114,9 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
     private const int MaxOutputsPerDrain = 64;     // 单轮最多取帧数，防异常 MFT 无限吐帧
 
     // ── 显示孔径偏移（MFVideoArea.OffsetX/OffsetY）─────────────────────────────
-    // 旧代码只读 Area.cx/cy 而丢弃 Offset，并在注释里臆断「aperture 偏移为 0」。
-    //    若 OffsetX != 0，从 (0,0) 起裁会使画面整体平移，左/上边缘吃进编码填充（宏块边缘扩展
-    //    = 竖向拉丝），且奇数 OffsetX 在 4:2:0 下令色度错半像素（色噪）。此处改为实测并参与裁剪。
+    // 读取 Area.cx/cy 之外还必须读 OffsetX/OffsetY：若 OffsetX != 0，从 (0,0) 起裁会使画面整体平移，
+    // 左/上边缘吃进编码填充（宏块边缘扩展 = 竖向拉丝），且奇数 OffsetX 在 4:2:0 下令色度错半像素（色噪）。
+    // 偏移参与裁剪（见 TryExtractCodedFrame 的孔径裁剪逻辑）。
     private int _apertureOffsetX;
     private int _apertureOffsetY;
     /// <summary>MFVideoArea blob 的原始 16 字节 hex，仅用于首帧诊断（防止结构布局理解错误时无从对证）。</summary>
@@ -340,7 +340,7 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
                     if (mgrDiag != null)
                         _logger.LogInformation("{Diag}", mgrDiag);
 
-                    // ⑦ 枚举设备真实解码 profile + 逐个验证 NV12，排查 profile 不匹配致 CreateVideoDecoder 失败。
+                    // ⑦ 枚举设备真实解码 profile + 逐个验证 NV12，避免 profile 不匹配致 CreateVideoDecoder 失败。
                     string? profDiag = MfDxvaInterop.ProbeDecoderProfiles(_gpuContext.DeviceHandle);
                     if (profDiag != null)
                         _logger.LogInformation("{Diag}", profDiag);
@@ -1027,7 +1027,7 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
                             cropPath ? "裁剪逐行" : "整块拷贝",
                             currentLength == codedLen ? "成立" : "★破产★");
 
-                        // 显示孔径偏移留证：旧代码臆断为 0，此处摊开实测值 + 原始 blob，供逐字节对证。
+                        // 显示孔径偏移留证：不臆断偏移为 0，摊开实际值 + 原始 blob 供对证。
                         int gapX = _codedWidth - _width;
                         int gapY = _codedHeight - _height;
                         string offVerdict = _apertureOffsetX == 0 && _apertureOffsetY == 0
@@ -1101,8 +1101,8 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
     /// </summary>
     /// <remarks>
     /// <para>优先经当前激活渲染器生产者把 D3D11 纹理导入为 <see cref="IGpuTextureResource"/>（MF DXVA → GPU 零拷贝上屏）；
-    /// 导入不可用 / 失败（扩展缺失、纹理非共享、切片不兼容）→ 回落 <see cref="MfD3D11TextureResource"/>（D3D11 零拷贝），
-    /// 计入 [DXVA-FRAMEPATH] GPU 纹理帧。绝不报"零拷贝已生效"假绿（S_OK≠被接受）。</para>
+    /// 导入不可用 / 失败（扩展缺失、纹理非共享、切片不兼容）→ 回落 <see cref="MfD3D11TextureResource"/>（D3D11 零拷贝）。
+    /// 导入成功与否以行为副作用为准，绝不误报「零拷贝已生效」。</para>
     /// <para>依赖倒置：仅经 <see cref="IGpuFrameProducer"/> 抽象，不引用渲染器模块；
     /// COM 引用计数严守 GetResource 配对（成功导入时释放 tex 的 GetResource 引用，共享句柄由渲染器侧消费）。</para>
     /// </remarks>
@@ -1192,10 +1192,9 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
     /// DXVA 已激活（PROVIDES_SAMPLES=True）但输出 buffer 不支持 <c>IMFDXGIBuffer</c> 时的一次性深度诊断。
     /// 说明 MFT 把 GPU 纹理读回到了系统内存（"半 DXVA"）：解码走硬解，但零拷贝提取失败。
     /// 本方法摊开 buffer 真实身份（是否仍是 IMFMediaBuffer / IMF2DBuffer / ID3D11Texture2D）与
-    /// 输出媒体类型属性（subtype / NominalRange / DefaultStride），用于定位"读回"的成因。
-    /// 全部诊断改用【已核验正确的 IID】+【Lock 实测】两类可信手段：
-    ///    - IID_IMFMediaBuffer 此前字节级错误（0x...3508→0x3507）曾令所有 QI 假阴性，现已订正；
-    ///    - Lock 复用真实 CPU 路径的 vtable 槽位 0/1/2，绝不依赖 QI，故即使 QI 仍异常也能给出真值。
+    /// 输出媒体类型属性（subtype / NominalRange / DefaultStride），用于定位「读回」的成因。
+    /// 诊断手段：IID 与 Lock 槽位均取已核验正确的值——IID 曾字节级错误令所有 QI 假阴性，现已订正；
+    /// Lock 复用真实 CPU 路径的 vtable 槽位 0/1/2，不依赖 QI，故即使 QI 仍异常也能给出真值。
     /// </summary>
     private void DiagnoseNonDxgiBuffer(IntPtr buffer, int dxgiHr)
     {
@@ -1785,7 +1784,7 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
     }
 
     /// <summary>解码器发现诊断总开关：设环境变量 <c>LINGFAN_MF_DECODER_DIAG=1</c> 时打印全部候选 MFT CLSID /
-    /// ActivateObject hr / MF_SA_D3D11_AWARE 等细节（排查 Store HEVC MFT 枚举/激活问题时用），常态关闭避免生产日志噪声。</summary>
+    /// ActivateObject hr / MF_SA_D3D11_AWARE 等细节（诊断 Store HEVC MFT 枚举/激活问题时用），常态关闭避免生产日志噪声。</summary>
     private static bool DiagEnabled => Environment.GetEnvironmentVariable("LINGFAN_MF_DECODER_DIAG") == "1";
 
     /// <summary>临时诊断：打印 transform 关键属性（异步标志、MF_SA_D3D11_AWARE、CLSID），确认 HEVC 解码器能力。</summary>

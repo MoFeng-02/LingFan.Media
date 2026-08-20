@@ -30,8 +30,8 @@ public interface IRendererProfiler
 /// <item><see cref="DisposeAsync"/>：contract，委托 Dispose + CompletedTask，非伪异步</item>
 /// </list>
 /// <para><b>线程安全</b>：<c>_gate</c> 锁串行化所有公开方法。
-/// <see cref="Present"/> 的 vkAcquireNextImage 以 <c>AcquireTimeoutNs</c>（2 秒）超时
-/// 在 <c>_gate</c> 锁内阻塞——并发调用 <see cref="Dispose"/>/<see cref="Detach"/> 最坏被卡约 2 秒后才能获得锁。
+/// <see cref="Present"/> 的 vkAcquireNextImage 以 <c>AcquireTimeoutNs</c> 超时
+/// 在 <c>_gate</c> 锁内阻塞——并发调用 <see cref="Dispose"/>/<see cref="Detach"/> 最坏被卡至超时才能获得锁。
 /// 这是「有限超时替代无限等待」权衡的已知副作用，属预期行为而非死锁。</para>
 /// <para><b>已知性能限制</b>：<see cref="RecordAndSubmitFrame"/> 中使用 <c>vkQueueWaitIdle</c>
 /// 每帧同步 GPU——确保 Command Buffer 可安全复用但消除 GPU 并行。将改用 Fence 或环形 Command Buffer。</para>
@@ -211,7 +211,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 throw new InvalidOperationException("渲染器未附加渲染目标。");
 
             // 1. 获取下一张 SwapChain 图像
-            // 2 秒超时在 _gate 锁内阻塞，并发 Dispose/Detach 最坏等约 2 秒（预期行为，见类级注释）
+            // 超时在 _gate 锁内阻塞，并发 Dispose/Detach 最坏等至超时（预期行为，见类级注释）
             Span<uint> imageIndexSpan = stackalloc uint[1];
             Result result = VulkanNative.AcquireNextImageKHR(
                 _device, _swapchain, AcquireTimeoutNs,
@@ -792,6 +792,29 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         else
         {
             // 尺寸不同（缩放）或格式不同（R/B 顺序 / UNORM↔sRGB 转换）→ Blit（Linear 过滤）
+            // 🔴 修复（2026-08-20）：此前直接 SrcOffsets=整源 → DstOffsets=整目标（拉伸填满），
+            // 未应用 ScaleMode（默认 Uniform 保比例）→ 竖屏视频(1080x1920)在横屏窗口(640x480)被拉变形。
+            // 与软帧路径（UploadSoftwareFrame 的 ComputeBlitRects）对齐：按 ScaleMode 计算源/目标矩形，
+            // Uniform 时先清黑底留信箱边（Fill=拉伸满、Uniform=居中保比例黑边、UniformToFill=cover 裁剪）。
+            ComputeBlitRects(srcW, srcH, (int)dstW, (int)dstH, ScaleMode,
+                out int sX, out int sY, out int sW, out int sH,
+                out int dX, out int dY, out int dW, out int dH, out bool clearBars);
+
+            if (clearBars)
+            {
+                // 信箱模式：先清黑底，再 blit 居中 fit 矩形，四周留黑边（与软帧路径同源手法）。
+                ClearColorValue cc = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 0 };
+                ImageSubresourceRange range = new()
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = 0,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1,
+                };
+                VulkanNative.CmdClearColorImage(_commandBuffer, dstImage, ImageLayout.TransferDstOptimal, &cc, 1, &range);
+            }
+
             ImageBlit blit = new()
             {
                 SrcSubresource = new ImageSubresourceLayers
@@ -809,10 +832,10 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                     LayerCount = 1,
                 },
             };
-            blit.SrcOffsets[0] = new Offset3D(0, 0, 0);
-            blit.SrcOffsets[1] = new Offset3D(srcW, srcH, 1);
-            blit.DstOffsets[0] = new Offset3D(0, 0, 0);
-            blit.DstOffsets[1] = new Offset3D((int)dstW, (int)dstH, 1);
+            blit.SrcOffsets[0] = new Offset3D(sX, sY, 0);
+            blit.SrcOffsets[1] = new Offset3D(sX + sW, sY + sH, 1);
+            blit.DstOffsets[0] = new Offset3D(dX, dY, 0);
+            blit.DstOffsets[1] = new Offset3D(dX + dW, dY + dH, 1);
             VulkanNative.CmdBlitImage(_commandBuffer, srcImage, ImageLayout.TransferSrcOptimal,
                 dstImage, ImageLayout.TransferDstOptimal, 1, &blit, Filter.Linear);
         }

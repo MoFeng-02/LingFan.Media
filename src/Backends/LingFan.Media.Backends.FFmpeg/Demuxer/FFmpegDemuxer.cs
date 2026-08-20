@@ -661,7 +661,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         if (_avioContext != IntPtr.Zero)
         {
             AVIOContext* avioCtx = (AVIOContext*)_avioContext;
-            // 先将 buffer 置空防止 avio_closep 释放我们的 buffer（我们自己管理）
+            // 先将 buffer 置空防止 avio_closep 释放本类自行管理的 buffer
             avioCtx->buffer = null;
             avioCtx->buffer_size = 0;
             FF.avio_closep(&avioCtx);

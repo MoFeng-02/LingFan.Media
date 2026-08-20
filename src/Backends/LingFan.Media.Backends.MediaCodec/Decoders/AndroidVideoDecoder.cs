@@ -32,9 +32,17 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
     private AndroidMediaFormat? _outputFormat;       // 当前输出格式（OUTPUT_FORMAT_CHANGED 时更新）
     private PixelFormat _outputPixelFormat = PixelFormat.YUV420P;
     private int _colorFormat;
+    // 已收到过解码器输出（FORMAT_CHANGED 或帧）——冷启动保护：硬件解码器输出缓冲池慢建时，
+    // FlushAsync 的 EOS 排空须先等解码器开始输出，否则 10ms 排空返回 0 帧 → 管线提前收尾丢帧。
+    private bool _sawOutputFormat;
 
     private readonly Queue<MediaPacket> _pendingInput = new();
     private readonly Queue<VideoFrame> _pendingFrames = new();
+
+    // 诊断节流：收包/产帧计数（定位真机视频包流与出帧节奏）
+    private int _packetsFed;
+    private int _framesProduced;
+    private const int LogInterval = 64;
 
     private VideoCodec _codecType = VideoCodec.Unknown;
     private VideoSettings _settings = null!;
@@ -70,12 +78,20 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
         _codecType = codec;
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
-        var codecObj = AndroidMediaCodec.CreateDecoderByType(mime);
+        var codecObj = CreateVideoCodec(mime, codec);
         try
         {
-            // 构造输入格式：mime + csd-0（来自轨道 extradata）。不设置 width/height（由 csd 推导）。
+            // 构造输入格式：mime + csd-0（来自轨道 extradata）。
             var fmt = new AndroidMediaFormat();
             fmt.SetString(AndroidMediaConstants.KEY_MIME, mime);
+
+            // 部分设备/解码器（如高通 c2.qti.avc.decoder）configure 要求显式 width/height，
+            // 仅 csd-0 推导不足会返回 EINVAL；MediaPlayer 已从轨道信息透传源宽高（见 VideoSettings.Width）。
+            // 缺失时维持现状（由解码器从 csd 推导），诚实失败由调用方捕获。
+            if (settings.Width is > 0)
+                fmt.SetInt32(AndroidMediaConstants.KEY_WIDTH, settings.Width.Value);
+            if (settings.Height is > 0)
+                fmt.SetInt32(AndroidMediaConstants.KEY_HEIGHT, settings.Height.Value);
 
             var csd = settings.CodecConfiguration;
             if (csd.Length > 0)
@@ -99,6 +115,30 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
         _codec = codecObj;
         _initialized = true;
         _logger.LogInformation("[ANDROID-VID] 初始化完成: {Codec} → {Mime}, 输出像素格式 {Fmt}", codec, mime, _outputPixelFormat);
+    }
+
+    /// <summary>
+    /// 创建视频解码器。H264 优先尝试软件解码器（c2.android.avc.decoder，API 29+），失败回退硬件。
+    /// 动机：高通 c2.qti.avc.decoder 硬件解码器（CCodecBuffers 模式）输出缓冲池建立延迟
+    /// 约数秒，期间 dequeueOutputBuffer 恒 TRY_AGAIN_LATER → 视频 0 帧 → 预滚动超时 → 音频先跑 →
+    /// 视频帧 PTS 全部判 Drop → 黑屏。C2 软件解码器走普通 ByteBuffer 输出，无此延迟。
+    /// </summary>
+    private AndroidMediaCodec CreateVideoCodec(string mime, VideoCodec codec)
+    {
+        if (codec == VideoCodec.H264)
+        {
+            try
+            {
+                var sw = AndroidMediaCodec.CreateByCodecName("c2.android.avc.decoder");
+                _logger.LogInformation("[ANDROID-VID] 使用软件解码器 c2.android.avc.decoder（规避硬件 CCodecBuffers 输出缓冲池慢建）");
+                return sw;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or EntryPointNotFoundException)
+            {
+                _logger.LogWarning("[ANDROID-VID] 软件解码器不可用（{Reason}），回退硬件解码器", ex.Message);
+            }
+        }
+        return AndroidMediaCodec.CreateDecoderByType(mime);
     }
 
     /// <inheritdoc/>
@@ -131,6 +171,12 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
 
         if (packet is null) return new ValueTask<VideoFrame?>(ReadOutput());
 
+        // 诊断节流：收包节奏
+        if ((_packetsFed % LogInterval) == 0)
+            _logger.LogInformation("[ANDROID-VID] 收包 #{Count} size={Size} pts={Pts:g} key={Key}",
+                _packetsFed, packet.Data.Length, packet.Timestamp, packet.KeyFrame);
+        _packetsFed++;
+
         _pendingInput.Enqueue(packet);
         FeedInput();
         return new ValueTask<VideoFrame?>(ReadOutput());
@@ -152,7 +198,21 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
             _codec.QueueInputBuffer((nuint)inIdx, 0, 0, 0, AndroidMediaConstants.AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
         }
 
-        // 排空输出（带超时，允许解码器产出尾帧）
+        // EOS 排空冷启动保护：部分硬件解码器（如高通 c2.qti.avc.decoder）输出缓冲池建立有显著延迟，
+        // EOS 到来时解码器可能尚未开始输出；若此时 10ms 排空，返回 0 帧 → DecodeLoop 提前收尾
+        // → 帧队列 Complete → 视频管线死亡，后续即使缓冲池建好也无人消费 → 视频 0 帧黑屏）。
+        // 修复：若从未收到过输出格式/帧（冷启动未完成），先等待解码器开始输出（有界 8s），
+        // 期间 DrainOutput 轮询（FORMAT_CHANGED/帧都会置位 _sawOutputFormat）。
+        if (!_sawOutputFormat)
+        {
+            long deadline = System.Diagnostics.Stopwatch.GetTimestamp() + 8_000_000L; // 8s（100ns ticks）
+            while (!_sawOutputFormat && System.Diagnostics.Stopwatch.GetTimestamp() < deadline)
+            {
+                DrainOutput(100_000); // 100ms 超时轮询
+            }
+        }
+
+        // 排空输出（解码器已开始输出时快速返回剩余帧；冷启动等待期间产出的帧已在 _pendingFrames）
         return new ValueTask<VideoFrame?>(DrainOutput(10_000));
     }
 
@@ -222,6 +282,7 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
                 _outputFormat?.Dispose();
                 _outputFormat = _codec.GetOutputFormat();
                 ReadOutputFormat(_outputFormat);
+                _sawOutputFormat = true; // 解码器已开始输出（冷启动保护依据）
                 continue;
             }
             if (idx == AndroidMediaConstants.AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED)
@@ -244,6 +305,14 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
 
             var frame = ExtractFrame((nuint)idx, info);
             _codec.ReleaseOutputBuffer((nuint)idx, 0); // render=0：仅 CPU 拷贝，不送显存
+            _sawOutputFormat = true; // 已产出帧（冷启动保护依据）
+
+            // 诊断节流：产帧节奏
+            if ((_framesProduced % LogInterval) == 0)
+                _logger.LogInformation("[ANDROID-VID] 产帧 #{Count} {W}x{H} {Fmt} pts={Pts:g}",
+                    _framesProduced, frame.Width, frame.Height, frame.Format, frame.Timestamp);
+            _framesProduced++;
+
             _pendingFrames.Enqueue(frame);
         }
 

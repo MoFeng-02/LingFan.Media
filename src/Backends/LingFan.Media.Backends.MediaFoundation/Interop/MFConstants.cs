@@ -222,7 +222,7 @@ internal static class MFConstants
     // GPU/驱动组合上会在内部 CreateVideoDecoder 阶段静默回落软件解码 —— MFT 仍报 PROVIDES_SAMPLES=True，
     // 但每帧 buffer QI(IMFDXGIBuffer) 得 E_NOINTERFACE（mp4/H264 下出现「第二层半 DXVA」）。
     // 官方推荐路径是让 IMFSourceReader 自己承载解码 MFT：在 MFCreateSourceReaderFromURL 的 attributes 上
-    // 挂 MF_SOURCE_READER_D3D_MANAGER + MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS，SourceReader 会替我们
+    // 挂 MF_SOURCE_READER_D3D_MANAGER + MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS，SourceReader 会
     // 完成「选 MFT → 发 SET_D3D_MANAGER → 分配 DXGI 表面池」的全套编排，ReadSample 直接吐 DXGI 纹理样本。
     //
     // 全部 GUID 已逐字节比对 SDK 头文件实物：

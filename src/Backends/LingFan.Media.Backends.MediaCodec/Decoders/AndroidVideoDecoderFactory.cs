@@ -25,7 +25,9 @@ internal sealed class AndroidVideoDecoderFactory : IVideoDecoderFactory
     public IVideoDecoder Create(VideoCodec codec, VideoSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        return new AndroidVideoDecoder(_backend, _loggerFactory.CreateLogger<AndroidVideoDecoder>());
+        var decoder = new AndroidVideoDecoder(_backend, _loggerFactory.CreateLogger<AndroidVideoDecoder>());
+        decoder.Initialize(codec, settings); // 契约：工厂负责初始化解码器（同步原生初始化）
+        return decoder;
     }
 
     /// <inheritdoc/>
@@ -33,7 +35,8 @@ internal sealed class AndroidVideoDecoderFactory : IVideoDecoderFactory
     {
         ArgumentNullException.ThrowIfNull(settings);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult<IVideoDecoder>(
-            new AndroidVideoDecoder(_backend, _loggerFactory.CreateLogger<AndroidVideoDecoder>()));
+        var decoder = new AndroidVideoDecoder(_backend, _loggerFactory.CreateLogger<AndroidVideoDecoder>());
+        decoder.Initialize(codec, settings); // 契约：工厂负责初始化解码器（同步原生初始化）
+        return Task.FromResult<IVideoDecoder>(decoder);
     }
 }

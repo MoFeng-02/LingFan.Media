@@ -584,7 +584,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     // 音频释放循环（治本修复 VLC amem 突发/停产→WASAPI 欠载）：
     // 抖动缓冲在生产者侧吸收 VLC 突发/停产；释放侧把音频写入独立的 _audioChannel。
     // 音频与视频分走独立通道后，视频的 DropOldest 再也无法误删队首音频，故释放侧无条件写入即可，
-    // 无需 HighWater 节流（早期共享单通道时那样做反而让位视频、饿死音频，制造 462ms 间隙）。
+    // 无需 HighWater 节流（早期共享单通道时那样做反而让位视频、饿死音频，造成音频间隙）。
     // 音频通道仅承载音频、几乎不溢出；通道暂满时 DropOldest 仅丢最旧音频（偶发微疵），不阻塞释放线程。
     // 后端内作用域，不影响 MF/FFmpeg。
     private async Task AudioReleaseLoop(CancellationToken ct)

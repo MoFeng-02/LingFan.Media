@@ -202,12 +202,12 @@ internal static partial class MfDxvaInterop
     internal static bool TryProbeH264DxvaSupport(IntPtr d3d11Device, out bool supported)
         => TryProbeDxvaSupport(d3d11Device, MFConstants.D3D11_DECODER_PROFILE_H264_VLD_NOFGT, out supported);
 
-    // ── ID3D11VideoDevice 解码 profile 枚举（用于彻底排查「profile 不匹配致 CreateVideoDecoder 失败」）──
+    // ── ID3D11VideoDevice 解码 profile 枚举（诊断「profile 不匹配致 CreateVideoDecoder 失败」）──
     //    GetVideoDecoderProfileCount=11(→8), GetVideoDecoderProfile=12(→9)。
     // SDK 实物 d3d11.h:13965-13967：GetVideoDecoderProfileCount 真实签名为
     //     UINT GetVideoDecoderProfileCount(THIS);  —— 直接以【返回值】返回 profile 数量（UINT），【无 out 参数】。
-    //   此前手写委托误写成 (self, out uint count) 导致：真实数量（如 AMD 27）被误读进 hr，count 永远为 0
-    //   ⇒ 误判「设备无视频解码 profile」（假阴性，HRESULT=0x1B 实为 27 个 profile 的返回值）。
+    //   委托签名必须是「返回值承载数量」，若误用 out 参数，真实数量会留在返回值、out 永远为 0
+    //   ⇒ 误判「设备无视频解码 profile」。
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate uint ID3D11VideoDevice_GetVideoDecoderProfileCount(IntPtr self);
 
@@ -259,7 +259,7 @@ internal static partial class MfDxvaInterop
 
     /// <summary>
     /// 枚举设备真实提供的视频解码 profile，并对每个 profile 复测 H264→NV12 支持。
-    /// 用于排查「MFT 实际使用的 profile 与我们的 NOFGT 探针不一致 ⇒ CreateVideoDecoder 失败 ⇒ 静默读回」。
+    /// 用于诊断「MFT 实际使用的 profile 与 NOFGT 探针不一致 ⇒ CreateVideoDecoder 失败 ⇒ 静默读回」。
     /// </summary>
     internal static string? ProbeDecoderProfiles(IntPtr d3d11Device)
     {
@@ -313,7 +313,7 @@ internal static partial class MfDxvaInterop
     /// 这是区分「真 DXVA 零拷贝」与「半 DXVA 读回」的<b>第二道成因探针</b>：
     /// 若设备落在 WARP（Microsoft Basic Render Driver，VendorId=0x1414 DeviceId=0x008C），则
     /// CheckVideoDecoderFormat 可能仍返回格式支持，但硬件视频解码引擎不存在 ⇒ 解码器静默读回系统内存
-    /// （正是我们观察到的「DXVA 激活=True 却 GPU零拷贝=0」）。此时成因是渲染器工厂用 DriverType.Hardware
+    /// （「DXVA 激活=True 却 GPU零拷贝=0」的典型成因）。此时成因是渲染器工厂用 DriverType.Hardware
     /// 选中了错误适配器，修复点=枚举 DXGI 适配器、在支持 H264 DXVA 的真实 GPU 上创建共享设备。
     /// </summary>
     /// <returns>诊断字符串（含 WARP 判定）；设备不支持 IDXGIDevice 时返回 null。</returns>

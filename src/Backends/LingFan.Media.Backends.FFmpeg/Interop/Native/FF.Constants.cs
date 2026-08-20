@@ -9,7 +9,7 @@ namespace LingFan.Media.Backends.FFmpeg.Interop;
 /// </summary>
 internal static partial class FF
 {
-    // ── 常量（值严格对齐 FFmpeg 头文件，跨主版本稳定；取自既有 AutoGen 绑定实测值）──
+    // ── 常量（值严格对齐 FFmpeg 头文件，跨主版本稳定）──
     public const int AVFMT_FLAG_CUSTOM_IO = 0x0080;
     public const int AV_DICT_IGNORE_SUFFIX = 2;
     public const int AVSEEK_FLAG_BACKWARD = 1;

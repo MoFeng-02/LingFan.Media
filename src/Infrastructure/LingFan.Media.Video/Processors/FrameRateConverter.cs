@@ -22,7 +22,7 @@ public sealed class FrameRateConverter : IVideoProcessor
     /// <summary>目标帧率（FPS，如 60）。</summary>
     public float TargetFrameRate { get; set; } = 60f;
 
-    // 我们拥有的“上一帧”副本，用于插帧/对齐；最多保留一帧
+    // 上一帧副本（用于插帧/对齐）；最多保留一帧
     private VideoFrame? _held;
     private long _counter;
 
@@ -71,7 +71,7 @@ public sealed class FrameRateConverter : IVideoProcessor
             // 升帧率：插帧（重复上一帧副本）
             if (_counter % 2 == 0 && _held != null)
             {
-                return CopyFrame(_held); // 转移副本所有权；_held 仍由我们持有
+                return CopyFrame(_held); // 转移副本所有权；_held 仍由本类持有
             }
             // 真实帧回合：转移当前帧，保留其副本供下次插帧
             _held?.Dispose();

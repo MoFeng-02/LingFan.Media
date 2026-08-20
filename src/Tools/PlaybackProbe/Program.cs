@@ -94,7 +94,7 @@ internal static class Program
         long lastVidDurMs = -1;
 
         // 出餐端帧路径检视（「全程零拷贝」的端到端证据）：
-        // 解码器内部的 [FFMPEG-FRAMEPATH]/[DXVA-FRAMEPATH] 只能证明「解码器产出了 GPU 纹理」；
+        // 解码器内部的帧路径统计只能证明「解码器产出了 GPU 纹理」；
         // 这里检视的是**出餐那一刻**帧携带的资源类型——只有 IGpuTextureResource 才说明
         // 纹理一路借到了消费者手上，中途没有被下载回系统内存。两者都为 GPU 才算全链路零拷贝。
         long gpuServed = 0, cpuServed = 0;

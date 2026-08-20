@@ -13,7 +13,7 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <c>ImportMemoryWin32HandleInfoKHR</c>（Windows）/ <c>ImportMemoryFdInfoKHR</c>（Linux）绑定原生共享句柄，
 /// vkBindImageMemory 后即为零拷贝 Vulkan 纹理，由 <see cref="VulkanRenderer.BlitVulkanImageResource"/> 直接 blit 到 SwapChain。</para>
 /// <para><b>能力自报 + 行为副作用双判据（S_OK≠被接受）</b>：扩展不可用 / 句柄无效 / 导入失败 →
-/// <see cref="TryImport"/> 返回 <see langword="false"/>，调用方回落软解并计 [FRAMEPATH] 统计，绝不报"已就绪"假绿。</para>
+/// <see cref="TryImport"/> 返回 <see langword="false"/>，调用方回落软解并计入 CPU 拷贝统计，绝不报"已就绪"假绿。</para>
 /// <para><b>AOT</b>：VulkanNative 为零反射绑定（vkGetDeviceProcAddr 解析外部内存函数指针）；
 /// 无 [DllImport]/[ComImport]/反射；跨平台经 OperatingSystem.IsXxx() 运行时分发，无 #if。</para>
 /// <para><b>v1 范围</b>：Windows(D3D11→VK) + Linux(VAAPI→VK)。Android(AHardwareBuffer)/Apple(IOSurface) 为后续端点，

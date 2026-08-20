@@ -60,6 +60,7 @@ public sealed class VideoView : Control, IRenderTarget
     // 运行期被判定不健康的渲染器工厂（如 Composition 合成器导入失败）→ 拉黑，重建回退链时跳过，避免无限重试。
     private readonly HashSet<Type> _failedFactories = new();
     private Type? _activeFactoryType;
+    private long _presentedFrames; // 诊断节流计数
 
     #region StyledProperties
 
@@ -186,12 +187,20 @@ public sealed class VideoView : Control, IRenderTarget
     {
         ArgumentNullException.ThrowIfNull(frame);
 
+        // 诊断节流：帧到达 VideoView（区分「帧未到达」vs「到达但渲染器未就绪」）
+        if ((_presentedFrames % 64) == 0)
+            _logger?.LogInformation("[VIDEOVIEW] 收到帧 #{Count} {W}x{H} pts={Pts:g} renderer={Renderer}",
+                _presentedFrames, frame.Width, frame.Height, frame.Timestamp,
+                _renderer?.GetType().Name ?? "null");
+        _presentedFrames++;
+
         // 捕获引用防止 TOCTOU 竞态：_renderer 可能被 OnDetachedFromVisualTree（UI 线程）置 null
         var renderer = _renderer;
         if (renderer == null)
         {
             // 渲染器尚未初始化：帧归还由管线 ReturnFrame 统一负责（只读借用契约）。
             // 此处不得 Dispose——统一 FrameChannel 多播下，后续订阅方会读到已释放帧（use-after-free）。
+            _logger?.LogWarning("[VIDEOVIEW] 收到帧但渲染器未就绪，跳过呈现（帧由管线归池）。");
             return;
         }
 

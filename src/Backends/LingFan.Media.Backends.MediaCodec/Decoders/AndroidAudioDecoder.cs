@@ -76,6 +76,13 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
             var fmt = new AndroidMediaFormat();
             fmt.SetString(AndroidMediaConstants.KEY_MIME, mime);
 
+            // 部分解码器（如 c2.android.aac.decoder）configure 要求显式 sample-rate/channel-count，
+            // 仅 csd-0 推导不足会返回 EINVAL；MediaPlayer 已从轨道信息透传（见 AudioSettings.SourceSampleRate）。
+            if (settings.SourceSampleRate is > 0)
+                fmt.SetInt32(AndroidMediaConstants.KEY_SAMPLE_RATE, settings.SourceSampleRate.Value);
+            if (settings.SourceChannels is > 0)
+                fmt.SetInt32(AndroidMediaConstants.KEY_CHANNEL_COUNT, settings.SourceChannels.Value);
+
             var csd = settings.CodecConfiguration;
             if (csd.Length > 0)
                 fmt.SetBuffer(AndroidMediaConstants.KEY_CSD_0, csd.ToArray());
@@ -84,7 +91,12 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
             fmt.Dispose();
             codecObj.Start();
 
-            // 输出格式：采样率 / 声道数 / PCM 编码（采样格式）
+            // 输出格式：采样率 / 声道数 / PCM 编码（采样格式）。
+            // 注意：此处 getOutputFormat 可能返回推测值——HE-AAC v2 码流参数 22050Hz/1ch，
+            // start 后初始报 22050Hz/1ch，首帧 FORMAT_CHANGED 后才上报真实输出 44100Hz/2ch
+            //（SBR+PS 解码上采样）。FORMAT_CHANGED 只在有输入包后才触发，Initialize 阶段无输入，
+            // 轮询探测必然空转超时；真实格式由首帧后的 FORMAT_CHANGED 经 RefreshOutputFormat
+            // 刷新，输出端（OpenSLES）按帧格式运行时重协商，此处无需也无法探测。
             var outFmt = codecObj.GetOutputFormat();
             try
             {

@@ -26,7 +26,7 @@ internal static class PacingDiagnostics
     /// 报告的时间兜底间隔（毫秒，默认 2000）。
     /// </summary>
     /// <remarks>
-    /// 仅按 Present 次数触发会有致命盲区：若视频帧被整批 <c>Drop</c>（正是我们要抓的症状），
+    /// 仅按 Present 次数触发会有致命盲区：若视频帧被整批 <c>Drop</c>，
     /// <c>OnPresent</c> 不被调用 ⇒ 永远不出报告 ⇒ 现场最严重的时刻反而无输出。
     /// 故 Wait / Drop 分支也轮询本间隔强制出报告。
     /// </remarks>
@@ -239,7 +239,7 @@ internal sealed class PresentPacingRecorder
     private long _winDropBase;
     private int _winQueueSum;
 
-    // Thread.Sleep(1) 实测耗时（累计，不随窗口清零）
+    // Thread.Sleep(1) 实际耗时统计（累计，不随窗口清零）
     private long _sleepCount;
     private double _sleepSum;
     private double _sleepMax;
@@ -397,8 +397,8 @@ internal sealed class PresentPacingRecorder
     internal void OnDrop() => Interlocked.Increment(ref _drops);
 
     /// <summary>
-    /// 记录一次 <c>Thread.Sleep(1)</c> 的实测耗时（毫秒）。
-    /// Windows 默认定时器分辨率 15.6ms，实测值远大于 1ms 即证明自旋等待精度不可用。
+    /// 记录一次 <c>Thread.Sleep(1)</c> 的实际耗时（毫秒）。
+    /// Windows 默认定时器分辨率 15.6ms，实际耗时远大于 1ms 即证明自旋等待精度不可用。
     /// </summary>
     internal void OnSleepMeasured(double ms)
     {

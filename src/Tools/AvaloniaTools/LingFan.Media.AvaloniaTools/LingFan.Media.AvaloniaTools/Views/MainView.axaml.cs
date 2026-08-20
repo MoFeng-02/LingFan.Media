@@ -4,6 +4,7 @@ using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using LingFan.Media.Avalonia;
 using LingFan.Media.AvaloniaTools.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 
 namespace LingFan.Media.AvaloniaTools.Views;
@@ -52,5 +53,25 @@ public partial class MainView : UserControl
             // LocalPath 在桌面平台即文件系统路径；移动平台为 content URI，后续按需改为流方式打开。
             vm.OpenFileCommand.Execute(files[0].Path.LocalPath);
         }
+    }
+
+    /// <summary>
+    /// 打开内置样例按钮：经 DI 解析 <see cref="IBundledSampleProvider"/> 取打包样例的本地路径，
+    /// 再交给 ViewModel 打开。无样例（Assets 未放 sample.mp4）时给出可读提示，不崩溃。
+    /// </summary>
+    private void OnOpenSampleClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+            return;
+
+        var provider = App.Services?.GetService<IBundledSampleProvider>();
+        var path = provider?.GetSamplePath();
+        if (string.IsNullOrEmpty(path))
+        {
+            vm.Status = "未找到内置样例：请将 sample.mp4 放入共享工程 LingFan.Media.AvaloniaTools 的 Assets/ 目录后重新生成。";
+            return;
+        }
+
+        vm.OpenFileCommand.Execute(path);
     }
 }

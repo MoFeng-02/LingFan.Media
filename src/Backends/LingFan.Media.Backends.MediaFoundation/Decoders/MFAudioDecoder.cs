@@ -110,8 +110,8 @@ internal sealed class MFAudioDecoder : IAudioDecoder, IAudioSourceFormatAware
 
         if (!_sourceFormatApplied)
         {
-            // 一次性告警：未注入实测格式意味着正在用兜底的 44100/2 解释字节，
-            // 与真实媒体不符时表现为音高/节奏错乱——静默会极难排查。
+            // 一次性告警：未注入实际输出格式意味着正在用兜底的 44100/2 解释字节，
+            // 与真实媒体不符时表现为音高/节奏错乱——静默会极难诊断。
             _sourceFormatApplied = true;
             _logger.LogWarning("MF 音频解码器未收到实测输出格式（IAudioSourceFormatAware 未被调用），" +
                 "回落 {Rate}Hz/{Ch}ch/S16；若与媒体实际格式不符将出现音高异常。", OutputSampleRate, OutputChannels);

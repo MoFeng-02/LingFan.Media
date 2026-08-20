@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Outputs.OpenSLES;
 
@@ -31,11 +32,18 @@ namespace LingFan.Media.Outputs.OpenSLES;
 [SupportedOSPlatform("Android")]
 internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
 {
-    // ── OpenSL ES 常量（NDK OpenSLES.h，milliHz 采样率）──
+    private readonly ILogger<OpenSlesOutput> _logger;
+
+    public OpenSlesOutput(ILogger<OpenSlesOutput> logger)
+    {
+        _logger = logger;
+    }
+
+    // ── OpenSL ES 常量（NDK OpenSLES.h）──
     private const int SL_RESULT_SUCCESS = 0;
-    private const uint SL_BOOLEAN_FALSE = 0; // SLboolean = SLuint32（32 位，OpenSLES.h）
+    private const uint SL_BOOLEAN_FALSE = 0; // SLboolean = SLuint32（32 位，OpenSLES.h:73）
     private const uint SL_BOOLEAN_TRUE = 1;
-    private const uint SL_DATAFORMAT_PCM = 0x00000001;
+    private const uint SL_DATAFORMAT_PCM = 0x00000002; // NDK OpenSLES.h:308（Android 头 PCM=2、MIME=1，与 Khronos 规范相反；误写 1 会被当 MIME 解析）
     private const uint SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE = 0x800007BD;
     private const uint SL_DATALOCATOR_OUTPUTMIX = 0x00000004;
     private const uint SL_SAMPLINGRATE_44_1 = 44100000; // milliHz
@@ -45,16 +53,21 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private const uint SL_PCMSAMPLEFORMAT_FIXED_32 = 32;
     private const uint SL_SPEAKER_FRONT_LEFT = 0x00000001;
     private const uint SL_SPEAKER_FRONT_RIGHT = 0x00000002;
-    private const uint SL_BYTEORDER_LITTLEENDIAN = 0x00000001;
-    private const uint SL_PLAYSTATE_STOPPED = 0x00000000;
-    private const uint SL_PLAYSTATE_PLAYING = 0x00000002;
+    private const uint SL_BYTEORDER_LITTLEENDIAN = 0x00000002; // NDK OpenSLES.h:321（BIGENDIAN=1、LITTLEENDIAN=2；误写 1 报 "unsupported byte order 1"）
+    private const uint SL_PLAYSTATE_STOPPED = 0x00000001; // NDK OpenSLES.h（STOPPED=1、PAUSED=2、PLAYING=3）
+    private const uint SL_PLAYSTATE_PLAYING = 0x00000003;
 
-    // vtable 槽位（SLObjectItf_ / SLEngineItf_ / SLPlayItf_ / SLAndroidSimpleBufferQueueItf_ / SLVolumeItf_）
+    // vtable 槽位（对照本机 NDK OpenSLES.h 权威布局，勿凭记忆）
+    // SLObjectItf_: Realize(0) Resume(1) GetState(2) GetInterface(3) RegisterCallback(4)
+    //               AbortAsyncOperation(5) Destroy(6) SetPriority(7) ...
+    // SLEngineItf_: CreateLEDDevice(0) CreateVibraDevice(1) CreateAudioPlayer(2)
+    //               CreateAudioRecorder(3) CreateMidiPlayer(4) CreateListener(5)
+    //               Create3DGroup(6) CreateOutputMix(7) CreateMetadataExtractor(8) ...
     private const int SLOT_Object_Realize = 0;
-    private const int SLOT_Object_GetInterface = 2;
-    private const int SLOT_Object_Destroy = 3;
-    private const int SLOT_Engine_CreateOutputMix = 0;
-    private const int SLOT_Engine_CreateAudioPlayer = 1;
+    private const int SLOT_Object_GetInterface = 3;
+    private const int SLOT_Object_Destroy = 6;
+    private const int SLOT_Engine_CreateAudioPlayer = 2;
+    private const int SLOT_Engine_CreateOutputMix = 7;
     private const int SLOT_Play_SetPlayState = 0;
     private const int SLOT_BQ_Enqueue = 0;
     private const int SLOT_BQ_Clear = 1;
@@ -99,7 +112,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private delegate int SLResult_VoidDelegate(IntPtr self); // SLresult (*)(self)，如 BufferQueue.Clear
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int SLResult_BoolDelegate(IntPtr self, uint asyncFlag); // SLresult (*Realize)(self, SLboolean)
+    private delegate int SLResult_BoolDelegate(IntPtr self, uint asyncFlag); // SLresult (*Realize)(self, SLboolean=SLuint32)
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void Void_SelfDelegate(IntPtr self); // void (*Destroy)(self)
@@ -189,6 +202,17 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         _sampleRate = sampleRate;
         _channels = channels;
 
+        _logger.LogInformation("[OPENSLES] 播放器创建: {Rate}Hz/{Ch}ch S16", sampleRate, channels);
+        CreatePlayer(sampleRate, channels);
+        _initialized = true;
+    }
+
+    /// <summary>
+    /// 创建 OpenSL ES 音频播放器，绑定采样率/声道数（engine / outputmix 复用）。
+    /// 帧格式变化时经 <see cref="RecreatePlayer"/> 销毁并按新格式重建。
+    /// </summary>
+    private void CreatePlayer(int sampleRate, int channels)
+    {
         uint slSampleRate = sampleRate switch
         {
             44100 => SL_SAMPLINGRATE_44_1,
@@ -209,8 +233,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
             BitsPerSample = SL_PCMSAMPLEFORMAT_FIXED_16,
             ContainerSize = SL_PCMSAMPLEFORMAT_FIXED_16,
             ChannelMask = (channels >= 2) ? (SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT) : SL_SPEAKER_FRONT_LEFT,
-            Endianness = SL_BYTEORDER_LITTLEENDIAN,
-            Representation = 1 // SL_ANDROID_PCM_REPRESENTATION_SIGNED_INT
+            Endianness = SL_BYTEORDER_LITTLEENDIAN
         };
 
         GCHandle bqHandle = default, pcmHandle = default, outMixHandle = default, srcHandle = default, snkHandle = default, idsHandle = default, reqHandle = default;
@@ -242,7 +265,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
 
             // 接口请求：BUFFERQUEUE + VOLUME
             IntPtr[] ids = { GetIid("SL_IID_BUFFERQUEUE"), GetIid("SL_IID_VOLUME") };
-            uint[] req = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE }; // SLboolean[] = SLuint32[]
+            uint[] req = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE }; // SLboolean[] = SLuint32[]（4 字节/元素）
             idsHandle = GCHandle.Alloc(ids, GCHandleType.Pinned);
             reqHandle = GCHandle.Alloc(req, GCHandleType.Pinned);
 
@@ -277,15 +300,13 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
             var registerCb = GetVTable<SLResult_RegisterCallbackDelegate>(_bqItf, SLOT_BQ_RegisterCallback);
             registerCb(_bqItf, _bqCallback, GCHandle.ToIntPtr(_thisHandle));
 
-            // 预分配缓冲池（S16，最大可能大小按 48k*2ch*2B 一帧保守估计由 Submit 动态分配）
-            // 起始不预分配：Submit 按需从池取/分配，回调回收。
+            // 缓冲池起始不预分配：Submit 按需从池取/分配，回调回收。
 
             // 开始播放
             var setState = GetVTable<SLResult_UintDelegate>(_playItf, SLOT_Play_SetPlayState);
             setState(_playItf, SL_PLAYSTATE_PLAYING);
 
             ApplyVolume();
-            _initialized = true;
         }
         finally
         {
@@ -299,6 +320,59 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         }
     }
 
+    /// <summary>
+    /// 按新格式重建播放器：Submit 发现帧采样率/声道数与当前配置不一致时调用。
+    /// 已知事实（HE-AAC v2：码流参数 22050Hz/1ch，SBR+PS 解码后实际输出 44100Hz/2ch）——
+    /// MediaCodec 的 configure 初始输出格式不可信，真实格式仅首帧 FORMAT_CHANGED 后可知，
+    /// 故解码器/MediaPlayer 侧无从预知，正确做法是输出端运行时自适应。
+    /// 仅销毁并重建绑定格式的 player（engine / outputmix 保持）；重建前清空缓冲池
+    /// （旧格式缓冲大小不匹配新格式，复用会越界写），并重置背压信号。
+    /// </summary>
+    private void RecreatePlayer(int sampleRate, int channels)
+    {
+        if (sampleRate <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sampleRate), "采样率必须大于 0。");
+        if (channels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(channels), "声道数必须大于 0。");
+
+        lock (_gate)
+        {
+            // 1. 停止旧播放器（不再消费缓冲 → 不再触发完成回调）
+            if (_playItf != IntPtr.Zero)
+            {
+                try
+                {
+                    var setState = GetVTable<SLResult_UintDelegate>(_playItf, SLOT_Play_SetPlayState);
+                    setState(_playItf, SL_PLAYSTATE_STOPPED);
+                }
+                catch { /* 忽略停止错误 */ }
+            }
+
+            // 2. 清空缓冲池（旧格式缓冲大小不匹配，复用会越界）并重置背压信号
+            while (_inFlightBuffers.TryDequeue(out IntPtr b)) Marshal.FreeHGlobal(b);
+            while (_freeBuffers.TryDequeue(out IntPtr b)) Marshal.FreeHGlobal(b);
+            int deficit = MaxInFlightBuffers - _backpressure.CurrentCount;
+            if (deficit > 0) _backpressure.Release(deficit);
+
+            // 3. 销毁旧 player（play/bq/volume 接口随之失效）并释放回调句柄
+            _playItf = IntPtr.Zero;
+            _bqItf = IntPtr.Zero;
+            _volumeItf = IntPtr.Zero;
+            DestroyObject(ref _playerObject);
+            if (_thisHandle.IsAllocated) _thisHandle.Free();
+        }
+
+        int oldRate = _sampleRate;
+        int oldChannels = _channels;
+        _sampleRate = sampleRate;
+        _channels = channels;
+
+        // 4. 按新格式重建（_gate 外执行，避免长锁；Submit 单线程调用，串行安全）
+        _logger.LogWarning("[OPENSLES] 帧格式与播放器不符，重建播放器: {OldRate}Hz/{OldCh}ch → {NewRate}Hz/{NewCh}ch",
+            oldRate, oldChannels, sampleRate, channels);
+        CreatePlayer(sampleRate, channels);
+    }
+
     /// <inheritdoc/>
     public void Submit(AudioFrame frame)
     {
@@ -306,8 +380,16 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _bqItf == IntPtr.Zero)
             throw new InvalidOperationException("OpenSL ES 输出尚未初始化，无法 Submit。");
-        if (frame.Channels != _channels)
-            throw new ArgumentException($"音频帧声道数 {frame.Channels} 与输出配置 {_channels} 不匹配。", nameof(frame));
+
+        // 运行时格式重协商：帧采样率/声道数与当前播放器配置不一致时重建播放器。
+        // MediaCodec 真实输出格式仅首帧 FORMAT_CHANGED 后可知（configure 初始值不可信），
+        // 首帧到达即触发重建（HE-AAC v2 等场景 1ch→2ch、采样率翻倍）。
+        if (frame.Channels != _channels || frame.SampleRate != _sampleRate)
+        {
+            if (frame.SampleRate <= 0 || frame.Channels <= 0)
+                throw new ArgumentException($"音频帧采样率/声道数非法：{frame.SampleRate}Hz/{frame.Channels}ch。", nameof(frame));
+            RecreatePlayer(frame.SampleRate, frame.Channels);
+        }
 
         // 仅支持 S16（OpenSL ES 输出固定 S16；上游需保证一致，否则由宿主/管线转换）
         if (frame.SampleFormat != SampleFormat.S16)
@@ -352,10 +434,17 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
 
     private void OnBufferCompleted(IntPtr bq, IntPtr context)
     {
-        // 一个缓冲播放完成：回收一个在途缓冲到空闲池，并释放背压信号
-        if (_inFlightBuffers.TryDequeue(out IntPtr buffer))
-            _freeBuffers.Enqueue(buffer);
-        _backpressure.Release();
+        // 一个缓冲播放完成：回收一个在途缓冲到空闲池，并释放背压信号。
+        // 锁 _gate：重建窗口（STOPPED→清池→Destroy）内可能收到迟到回调；
+        // TryDequeue 失败（池已被清空）则不 Release，防止信号量计数溢出（SemaphoreFullException）。
+        lock (_gate)
+        {
+            if (_inFlightBuffers.TryDequeue(out IntPtr buffer))
+            {
+                _freeBuffers.Enqueue(buffer);
+                _backpressure.Release();
+            }
+        }
     }
 
     /// <inheritdoc/>
@@ -517,7 +606,9 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         public uint ContainerSize;
         public uint ChannelMask;
         public uint Endianness;
-        public uint Representation;
+        // 注意：NDK 的 SLDataFormat_PCM 仅 7 字段（28 字节，OpenSLES.h:356-364）；
+        // representation 属扩展格式 SLAndroidDataFormat_PCM_EX（formatType=SL_ANDROID_DATAFORMAT_PCM_EX=4），
+        // 标准 PCM 格式无此字段，加会多出 4 字节污染布局。
     }
 
     [StructLayout(LayoutKind.Sequential)]

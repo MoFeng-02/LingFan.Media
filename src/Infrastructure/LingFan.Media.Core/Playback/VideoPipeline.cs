@@ -461,7 +461,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// 本循环是唯一读者）。采用 **Peek-then-Dequeue**：队头帧不出队就先判定同步动作，
     /// 仅当判 <see cref="SyncAction.Present"/> 才真正取走呈现；判 <see cref="SyncAction.Wait"/>
     /// 时帧**留队头**等待时钟追近（<c>continue</c> 后下一轮重新判定），绝不把超前帧塞回队尾 ——
-    /// 这消除了 R-1 缺陷（超前帧塞队尾→取到更超前帧→队列轮转、期间零呈现→「卡完突然向前」）。
+    /// 消除「超前帧塞队尾→取到更超前帧→队列轮转、期间零呈现→卡完突然向前」的队列轮转缺陷。
     /// 解码延迟已被 <see cref="DecodeLoop"/> 完全隔离，呈现节拍不受解码抖动污染。
     /// </summary>
     private void PipelineLoop()
@@ -652,7 +652,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                         // 包源结束：必须先 DRAIN 解码器把末尾 B 帧重排缓冲（末段 GOP）全部取出入队，
                     // 再 Complete 帧队列 —— 顺序颠倒会让呈现侧提前收尾，末段 GOP 整批丢失。
                     // 修复：原实现只 Complete 不 DRAIN，导致 H.264/H.265 尾部
-                    // 重排帧滞留 MFT 内部缓冲永不吐出 → 最后呈现帧冻结（即"30s 画面不动"缺陷）。
+                    // 重排帧滞留 MFT 内部缓冲永不吐出 → 最后呈现帧冻结（画面尾帧不动）。
                     // 音频无 B 帧（无 ctts）不受影响，故仅视频侧需此 EOS 排空。
                     try
                     {
@@ -753,8 +753,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private void ProcessFrame(VideoFrame frame)
     {
         // 仅处理「呈现」分支。同步决策（Wait / Drop）已上移到 PipelineLoop 的
-        // Peek-then-Dequeue 逻辑：Wait 时帧留队头等待时钟追近（消除 R-1 轮转），
-        // Drop 时取走并归还过期帧。此处被调用即表示队头帧已判定为 Present。
+        // Peek-then-Dequeue 逻辑：Wait 时帧留队头等待时钟追近，Drop 时取走并归还过期帧。此处被调用即表示队头帧已判定为 Present。
         if (PacingDiagnostics.Enabled)
         {
             // 呈现误差：相对"最早可呈现时刻"(frame.Timestamp − 真实上屏延迟)的偏移。

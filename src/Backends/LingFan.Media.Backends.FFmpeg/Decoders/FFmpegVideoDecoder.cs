@@ -49,6 +49,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     // D3D11VA NV12 硬解帧 → RGBA32 的 GPU 转换器（位于中性互操作模块 LingFan.Media.GPUShare.D3D11）。
     // 仅 GPU 零拷贝路径（Windows）使用；其持有的共享设备包装不 Dispose（见转换器注释）。
     private LingFan.Media.GPUShare.D3D11.D3D11Nv12ToRgbaConverter? _nv12ToRgbaConverter;
+    // NV12→RGBA 转换失败详情已打印标志（仅首帧打印完整异常，后续静默防刷屏；重播时重置）。
+    private bool _nv12ConvertFailureLogged;
     // D3D11VA 所用 D3D11 设备（渲染器共享设备场景 / ffmpeg 自有设备场景）。
     // ffmpeg 自有设备零拷贝：渲染器为 GL/Vulkan 时，ffmpeg 须拥有【独立 D3D11 设备】做 D3D11VA
     // （GL/VK 的 IGpuDeviceContext.DeviceHandle 是 GL/Vk 设备，非 ID3D11Device，绝不可喂给 D3D11VA），
@@ -92,8 +94,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private readonly Queue<IntPtr> _pendingConv = new();
     private readonly Queue<VideoFrame> _pendingFrames = new();
 
-    // 帧路径统计（与 MFVideoDecoder 的 [DXVA-FRAMEPATH] 对称）：
-    // 「硬解激活=True」只证明解码器跑在 GPU 上，不证明**出餐**也是 GPU 纹理。
+    // 帧路径统计：「硬解激活=True」只证明解码器跑在 GPU 上，不证明出帧也是 GPU 纹理。
     // 若硬件帧被下载回系统内存（hwframe transfer / sws 转换），硬件就成了摆设。
     // 这两个计数器在 Dispose 时打印，作为「全程零拷贝」的日志佐证。
     private long _gpuZeroCopyFrames;  // D3D11VA / MediaCodec Surface 零拷贝帧（GPU 纹理直出）
@@ -219,6 +220,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         _vaOwnedContext = null;
         _vaDeviceHandle = IntPtr.Zero;
         _vaContextHandle = IntPtr.Zero;
+        _nv12ConvertFailureLogged = false;
 
         // 配置硬件加速
         if (useMediaCodec)
@@ -292,15 +294,54 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                     // ffmpeg 自有设备场景：渲染器为 GL/Vulkan，其 IGpuDeviceContext.DeviceHandle 是 GL/Vk 设备（非 ID3D11Device），
                     // 不可喂给 ffmpeg D3D11VA。故 ffmpeg 须【自有独立 D3D11 设备】做 D3D11VA→NV12，
                     // 转换/导出共享句柄亦用此同一设备；该设备由本解码器创建并持有（_vaOwnedDevice），Dispose 释放。
-                    _vaOwnedDevice = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
-                        Vortice.Direct3D.DriverType.Hardware, Vortice.Direct3D11.DeviceCreationFlags.BgraSupport);
-                    _vaOwnedContext = _vaOwnedDevice.ImmediateContext;
+                    // 必须带 VideoSupport：NV12→RGBA 的 VideoProcessor 输出视图要求设备具视频能力，
+                    //    缺该标志 CreateVideoProcessorOutputView 报 E_INVALIDARG。
+                    // 独显优先（不绑定厂商/型号）：枚举 DXGI 选首选适配器
+                    //    （跳过软件适配器，DedicatedVideoMemory 最大者；无独显退化为集显），
+                    //    再在其上创建 D3D11 设备；未找到回退默认适配器（Hardware）。
+                    IntPtr preferredAdapter = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindPreferredAdapter();
+                    if (preferredAdapter != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            // GPUShare 手写 D3D11CreateDevice 在首选适配器上创建设备
+                            //（DriverType=UNKNOWN + BgraSupport|VideoSupport，pAdapter 非空时 UNKNOWN 必选）。
+                            LingFan.Media.GPUShare.D3D11.D3D11Interop.D3D11CreateDeviceOnAdapter(
+                                preferredAdapter, out _vaDeviceHandle, out _vaContextHandle);
+                            // Vortice 包装 GPUShare 创建的设备/上下文（创建引用=1，Dispose 时 Release 配对；
+                            // 自有指针，Vortice Dispose 语义正确，无需 AddRef）。
+                            _vaOwnedDevice = new Vortice.Direct3D11.ID3D11Device(_vaDeviceHandle);
+                            _vaOwnedContext = new Vortice.Direct3D11.ID3D11DeviceContext(_vaContextHandle);
+                            _logger.LogInformation("ffmpeg 自有 D3D11 设备创建: 首选适配器(独显优先)");
+                        }
+                        finally
+                        {
+                            System.Runtime.InteropServices.Marshal.Release(preferredAdapter);
+                        }
+                    }
+                    else
+                    {
+                        _vaOwnedDevice = Vortice.Direct3D11.D3D11.D3D11CreateDevice(
+                            Vortice.Direct3D.DriverType.Hardware,
+                            Vortice.Direct3D11.DeviceCreationFlags.BgraSupport | Vortice.Direct3D11.DeviceCreationFlags.VideoSupport);
+                        _vaOwnedContext = _vaOwnedDevice.ImmediateContext;
+                        _vaDeviceHandle = _vaOwnedDevice.NativePointer;
+                        _vaContextHandle = _vaOwnedContext.NativePointer;
+                        _logger.LogInformation("ffmpeg 自有 D3D11 设备创建: 无首选适配器，回退默认适配器");
+                    }
                     _vaDeviceHandle = _vaOwnedDevice.NativePointer;
                     _vaContextHandle = _vaOwnedContext.NativePointer;
+                    // 打印自有设备 FeatureLevel（对照 D3D11RendererFactory 共享设备，格式支持集可能随 FeatureLevel 变化）。
+                    _logger.LogInformation(
+                        "ffmpeg 自有 D3D11 设备创建: FeatureLevel={FL}（对照 D3D11RendererFactory 共享设备）",
+                        _vaOwnedDevice.FeatureLevel);
                     InitializeD3D11VA(ctx);
-                    // 解码侧 NV12→RGBA 转换器（GPU 零拷贝必备：Vulkan/GL 无法可移植采样 NV12）。
+                    // 解码侧零拷贝统一路径：ffmpeg NV12 硬解帧经 VideoProcessorBlt 转 RGBA32，
+                    // 导出共享 BGRA 句柄由 Vulkan/GL/D3D11 生产者导入零拷贝（全程 GPU 内、无 CPU 回读）。
                     // 用 ffmpeg 自有 D3D11 设备（非 _gpuContext），与 InitializeD3D11VA 同源。
                     // 构造失败会抛到下方 catch，回落软件解码（_gpuImportMode 保持 false）。
+                    // 注：部分驱动/硬件拒绝「NV12 + 共享标志」纹理（NV12 共享导出不可移植），
+                    // 故统一走 blt→RGBA 的共享 BGRA 路径（该组合已验证可用）。
                     _nv12ToRgbaConverter = new LingFan.Media.GPUShare.D3D11.D3D11Nv12ToRgbaConverter(
                         _vaDeviceHandle, _vaContextHandle);
                     _gpuImportMode = true;
@@ -576,7 +617,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// <summary>由已接收的 AVFrame 构造 <see cref="VideoFrame"/>（区分 D3D11VA/MediaCodec/软件路径）。</summary>
     /// <remarks>
     /// 唯一帧路径分流点：三条支路各自计数（GPU 零拷贝 / CPU 拷贝），构造成功后才计数，
-    /// 避免异常路径污染统计。计数结果由 <see cref="Dispose"/> 打印 <c>[FFMPEG-FRAMEPATH]</c>。
+    /// 避免异常路径污染统计。计数结果由 <see cref="Dispose"/> 打印帧路径统计。
     /// </remarks>
     private unsafe VideoFrame? MakeFrame(AVFrame* avFrame)
     {
@@ -853,7 +894,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         if (_disposed) return;
         _disposed = true;
 
-        // 收尾帧路径统计（零拷贝验证计数）：与 MFVideoDecoder 的 [DXVA-FRAMEPATH] 对称。
+        // 收尾帧路径统计（零拷贝验证计数）。
         // 判据：硬解激活(IsHardwareAccelerated) 且 GPU 零拷贝帧 > 0 才算「硬件没白用」；
         // 若硬解激活但 GPU=0，说明帧被下载回系统内存 —— 属于「半硬解」缺陷，必须暴露而非静默。
         if (!_frameSummaryLogged)
@@ -1337,7 +1378,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     /// （VideoProcessorBlt，无 CPU 回读），再以 DXGI 共享 NT 句柄交给渲染器生产者导入；三渲染器统一收 RGBA 走零拷贝。
     /// 单纹理、ArrayLayers=1（转换器产出即 RGBA 单平面）。</para>
     /// <para>导入失败（扩展不可用 / 句柄无效 / 切片不兼容）→ 回落 CPU 传输（<see cref="TransferHardwareFrameToCpu"/>），
-    /// 计入 [FFMPEG-FRAMEPATH] CPU 拷贝，绝不报"零拷贝已生效"假绿（S_OK≠被接受）。</para>
+    /// 计入 CPU 拷贝计数，绝不误报「零拷贝已生效」（导入成功与否以行为副作用为准）。</para>
     /// </remarks>
     private unsafe VideoFrame CreateGpuImportFrame(
         AVFrame* avFrame, int width, int height, TimeSpan timestamp, TimeSpan duration, bool keyFrame)
@@ -1345,15 +1386,15 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         IntPtr texturePtr = (IntPtr)avFrame->data[0];
         int subresourceIndex = (int)(IntPtr)avFrame->data[1];
 
-        // GPU 零拷贝（解码侧 NV12→RGBA）：D3D11VA 硬解帧经 VideoProcessorBlt 转 RGBA32，
-        // 三渲染器（Vulkan/GL/D3D11）统一收 RGBA 走零拷贝，避开 NV12 双平面不可移植采样。
+        // 解码侧零拷贝统一路径：ffmpeg NV12 硬解帧经 VideoProcessorBlt 转 RGBA32，
+        // 导出共享 BGRA 句柄由生产者（Vulkan/GL/D3D11）导入零拷贝（全程 GPU 内、无 CPU 回读）。
         if (texturePtr != IntPtr.Zero && _nv12ToRgbaConverter is not null)
         {
             try
             {
                 if (_nv12ToRgbaConverter.TryConvert(texturePtr, subresourceIndex, width, height,
-                        out var rgbaHandle, out var rgbaTexture)
-                    && rgbaTexture is not null)
+                        out var rgbaHandle, out var rgbaTexture, out var convertFailure)
+                    && rgbaTexture != IntPtr.Zero)
                 {
                     var source = new GpuFrameImportSource
                     {
@@ -1369,8 +1410,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                     // 无论导入成功或失败，生产者均负责 CloseHandle，本解码器不关，避免双关。
                     if (_gpuProducer!.TryImport(source, out var tex) && tex is not null)
                     {
-                        // 共享引用已转移给渲染器；释放解码侧 RGBA 纹理包装（底层资源由共享句柄保活）。
-                        rgbaTexture.Dispose();
+                        // 共享引用已转移给渲染器；释放解码侧 RGBA 纹理裸指针（底层资源由共享句柄保活）。
+                        Marshal.Release(rgbaTexture);
                         var frame = _framePool?.Rent() ?? new VideoFrame();
                         frame.Reset(width, height, PixelFormat.RGBA32, tex, timestamp, duration, keyFrame);
                         System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
@@ -1379,12 +1420,18 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
                     _logger.LogWarning(
                         "GPU 零拷贝导入未接受（S_OK≠被接受：行为副作用未成立），本帧回落 CPU 传输。");
-                    rgbaTexture.Dispose();
+                    Marshal.Release(rgbaTexture);
                 }
                 else
                 {
-                    _logger.LogWarning(
-                        "NV12→RGBA GPU 转换未成功，本帧回落 CPU 传输。");
+                    // 仅首帧打印完整异常（失败步骤 + HRESULT），后续帧静默避免刷屏；重播时标志已重置。
+                    if (!_nv12ConvertFailureLogged)
+                    {
+                        _nv12ConvertFailureLogged = true;
+                        _logger.LogWarning(convertFailure,
+                            "NV12→RGBA GPU 转换未成功（{Step}），本帧回落 CPU 传输。",
+                            convertFailure is null ? "未知" : convertFailure.GetType().Name);
+                    }
                 }
             }
             catch (Exception ex)

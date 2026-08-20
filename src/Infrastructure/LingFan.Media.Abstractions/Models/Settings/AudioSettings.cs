@@ -8,6 +8,18 @@ public sealed class AudioSettings
     /// <summary>首选编解码器（null 表示自动选择）。</summary>
     public AudioCodec? PreferredCodec { get; init; }
 
+    /// <summary>
+    /// 源采样率（Hz，来自轨道信息；null 表示未知）。
+    /// 供需要显式参数的解码后端使用（如 Android MediaCodec 的 <c>configure</c> 部分解码器
+    /// 要求显式 <c>sample-rate</c>/<c>channel-count</c>，仅 csd-0 推导不足会返回 EINVAL）。
+    /// </summary>
+    public int? SourceSampleRate { get; init; }
+
+    /// <summary>
+    /// 源声道数（来自轨道信息；null 表示未知）。见 <see cref="SourceSampleRate"/>。
+    /// </summary>
+    public int? SourceChannels { get; init; }
+
     /// <summary>输出采样率（null 表示使用源采样率）。</summary>
     public int? OutputSampleRate { get; init; }
 

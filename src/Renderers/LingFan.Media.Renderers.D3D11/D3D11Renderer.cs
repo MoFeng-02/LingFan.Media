@@ -76,7 +76,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// 优先按 DXGI 实际刷新率计算；查询失败回退 60Hz(16.67ms)。Attach 时刷新。
     /// </summary>
     // 真实「Present→上屏」延迟 = 端到端呈现延迟，非单纯刷新周期。
-    // 实测（复测）：仅用刷新周期 16.67ms 作阈值时，视频恒定晚（delta 为负），
+    // 仅用刷新周期 16.67ms 作阈值时，视频恒定晚（delta 为负）；
     // 反推 D3D11 vsync 锁定 swapchain 的真实端到端延迟约 42ms（最坏 vsync 相位 16.67ms
     // + Present()/消费者管线路径的延迟）。故阈值取 40ms：帧在 PTS 前 40ms 释放、经消费者管线
     // 后恰在 PTS 上屏，delta 收敛到约 0。非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 微调（VideoPipeline 叠加）。

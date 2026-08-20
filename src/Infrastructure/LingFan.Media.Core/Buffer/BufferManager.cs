@@ -46,8 +46,12 @@ public sealed class BufferManager : IBufferManager
         _demuxer = demuxer;
         _logger = logger;
 
+        // 队列容量须能容纳「整段媒体」的包（硬件解码器输出缓冲池建立存在显著延迟，
+        // 期间视频解码器 0 帧产出、DecodeLoop 暂停消费；若队列容量太小，demuxer 会因 WriteAsync
+        // 阻塞而停止读包 → 视频包断供 → 解码器无输入 → 永久 0 帧。大容量让 demuxer 持续读完整文件，
+        // 视频解码器恢复输出时随要随有。内存：视频 1024×均值帧大小（~30MB 上限）、音频 4096×~0.4KB）。
         _videoPacketQueue = Channel.CreateBounded<MediaPacket>(
-            new BoundedChannelOptions(256)
+            new BoundedChannelOptions(1024)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
@@ -55,7 +59,7 @@ public sealed class BufferManager : IBufferManager
             });
 
         _audioPacketQueue = Channel.CreateBounded<MediaPacket>(
-            new BoundedChannelOptions(512)
+            new BoundedChannelOptions(4096)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
@@ -307,8 +311,12 @@ public sealed class BufferManager : IBufferManager
             aPacket.Dispose();
 
         // 重建有界通道（恢复可写，参数与原构造一致）
+        // 队列容量须能容纳「整段媒体」的包（硬件解码器输出缓冲池建立存在显著延迟，
+        // 期间视频解码器 0 帧产出、DecodeLoop 暂停消费；若队列容量太小，demuxer 会因 WriteAsync
+        // 阻塞而停止读包 → 视频包断供 → 解码器无输入 → 永久 0 帧。大容量让 demuxer 持续读完整文件，
+        // 视频解码器恢复输出时随要随有。内存：视频 1024×均值帧大小（~30MB 上限）、音频 4096×~0.4KB）。
         _videoPacketQueue = Channel.CreateBounded<MediaPacket>(
-            new BoundedChannelOptions(256)
+            new BoundedChannelOptions(1024)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
@@ -316,7 +324,7 @@ public sealed class BufferManager : IBufferManager
             });
 
         _audioPacketQueue = Channel.CreateBounded<MediaPacket>(
-            new BoundedChannelOptions(512)
+            new BoundedChannelOptions(4096)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,

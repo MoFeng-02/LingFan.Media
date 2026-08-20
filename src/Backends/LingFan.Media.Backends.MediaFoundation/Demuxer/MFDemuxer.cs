@@ -246,7 +246,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
             finally
             {
                 // COM 配对：属性 store 的内容在创建时已被 SourceReader 复制（IUnknown 项自行 AddRef），
-                // 我们持有的这一份引用用完即释放；管理器本体的生命周期归 MfDxgiDeviceManagerProvider。
+                // 本类持有的这一份引用用完即释放；管理器本体的生命周期归 MfDxgiDeviceManagerProvider。
                 if (readerAttributes != IntPtr.Zero) Marshal.Release(readerAttributes);
             }
             if (hr < 0 || readerPtr == IntPtr.Zero)
@@ -287,7 +287,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
 
             // 兜底：若 presentation descriptor 无 MF_PD_DURATION（少数 MP4/ fragmented 文件会缺失），
             // 推算容器时长。优先「末尾定位探测」（O(log n) 索引跳转 + 读少量末帧，远快于整段排空，
-            // 消除 OpenAsync 内同步阻塞导致的启动 2~3s 卡顿）；仅极个别无索引/不可定位源才退化整段排空。
+            // 消除 OpenAsync 内同步阻塞导致的启动卡顿）；仅极个别无索引/不可定位源才退化整段排空。
             // 必须在 _selectedStreamIndices 就绪后调用。
             if (duration <= TimeSpan.Zero)
             {
@@ -394,7 +394,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// 取证 SourceReader 为指定流实际建立的 <b>MFT 链</b>（零拷贝失效成因定位）。
     /// </summary>
     /// <remarks>
-    /// <para><b>为什么必须做</b>：我们已把 <c>MF_SOURCE_READER_D3D_MANAGER</c> +
+    /// <para><b>为什么必须做</b>：已把 <c>MF_SOURCE_READER_D3D_MANAGER</c> +
     /// <c>ENABLE_HARDWARE_TRANSFORMS</c> 挂上且全部返回 <c>S_OK</c>，但 ReadSample 出来的样本
     /// QI <c>IMFDXGIBuffer</c> 仍返 <c>E_NOINTERFACE</c>。设计原则「S_OK≠被接受：能力自报+行为副作用双判据」
     /// 要求此时<b>直接查证拓扑</b>而非继续猜。<c>IMFSourceReaderEx::GetTransformForStream</c>
@@ -845,7 +845,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// ⇒ 帧全程留在显存，<see cref="MediaPacket.DecodedFrameResource"/> 承载纹理所有权，
     /// 一路交到 <c>D3D11Renderer.PresentGpuTexture</c> 做 <c>CopySubresourceRegion</c> 上屏。真·零拷贝。</para>
     /// <para><b>绝不能</b>用 <c>ConvertToContiguousBuffer</c> 取 DXVA buffer：其契约就是「合并并读回连续系统内存」，
-    /// 永远返回 CPU buffer，用它做零拷贝在原理上注定失败（已证伪）。</para>
+    /// 永远返回 CPU buffer，用它做零拷贝在原理上注定失败。</para>
     /// <para><b>路径②（回落）</b>：样本不是 DXGI buffer（=「半 DXVA」：驱动内部把帧读回了系统内存）时，
     /// 走 <c>ConvertToContiguousBuffer</c> 取 NV12 字节，配 <c>Width/Height/Stride</c> 交给下游直通成 <c>VideoFrame</c>。
     /// 仍比改造前好——至少省掉了 MFVideoDecoder 的第二次 MFT 解码。</para>
@@ -960,7 +960,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                                     if (!_loggedVideo2DPathOnce)
                                     {
                                         _loggedVideo2DPathOnce = true;
-                                        // 对齐值必须实测推断，不可硬编「16 对齐」：AMD 实测 pitch=1280（256B 对齐），
+                                        // 对齐值须运行时推断，不可硬编「16 对齐」：GPU 行距对齐随驱动而异（可能 256B 对齐），
                                         //    远大于软件 MFT 惯用的 16B 对齐（1080→1088）。pitch 带 GPU 行距对齐痕迹，
                                         //    本身就是「硬解确已发生、只是最后一步被读回系统内存」的物证。
                                         int alignGuess =
@@ -1355,7 +1355,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// </summary>
     /// <remarks>
     /// 实例方法（非 static）：需要 <c>_logger</c> 上报属性缺失/媒体类型协商失败——这些是静默失败的高发区，
-    /// 无日志会让下游拿到 0Hz/0ch 或压缩裸流而无从排查（勿改回 static）。
+    /// 无日志会让下游拿到 0Hz/0ch 或压缩裸流而无从诊断（勿改回 static）。
     /// </remarks>
     private IReadOnlyList<MediaTrack> ParseTracks(IntPtr readerPtr, TimeSpan containerDuration)
     {
@@ -1631,7 +1631,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
         /// <summary>
         /// 末尾定位探测：把读取位置夹到流末尾，逐流读少量末帧取最大样本时间戳（100ns）作为容器时长。
         /// 用 IMFSourceReader 索引跳转（MP4/MKV 等有索引容器为 O(log n)）替代旧「整段排空到 EOS」，
-        /// 将 OpenAsync 内推算时长的同步阻塞从 ~2~3s 降到近乎瞬时，消灭启动白屏/黑屏后的长延迟。
+        /// 将 OpenAsync 内推算时长的同步阻塞降到近乎瞬时，消灭启动白屏/黑屏后的长延迟。
         /// 探测后复位读取位置到开头，不影响后续正常播放。
         /// </summary>
         /// <remarks>
@@ -1663,7 +1663,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
 
                 // GUID_NULL 时间格式 = 100ns 单位；极大时间戳触发 SourceReader 夹到末样本。
                 // 回归修复：必须检查 hr。seek 失败时（如本源返回负码）旧代码静默忽略，
-                // 导致后续从头读 16 帧 ≈ 0.53s（16/30fps）伪装成真实时长。失败时立即返回 Zero，
+                // 导致后续从头读少量帧（如 16/30fps 即约 0.5s）伪装成真实时长。失败时立即返回 Zero，
                 // 由 OpenCore 回退 ProbeDurationByDraining 拿正确时长（代价是同步阻塞）。
                 var endPos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = long.MaxValue };
                 int seekHr = MfVTable.Get<IMFSourceReader_SetCurrentPosition>(readerPtr, 5)(readerPtr, ref timeFormat, ref endPos);

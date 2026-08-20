@@ -6,7 +6,7 @@ namespace LingFan.Media.Abstractions;
 /// </summary>
 /// <remarks>
 /// <para><b>为什么需要这一层</b>：某些平台的音频子系统在"进程内第一个音频流建立"时会付出一次性冷启动开销
-/// （典型如 Windows WASAPI：首个 <c>IAudioClient.Initialize</c> 触发 audiodg.exe 拉起，实测约 2.5s）。
+/// （典型如 Windows WASAPI：首个 <c>IAudioClient.Initialize</c> 触发 audiodg.exe 拉起，耗时约数秒级）。
 /// 该开销的作用域是<b>操作系统音频引擎</b>而非某个播放会话，因此它必须由一个长生命周期对象承担一次，
 /// 而不是让每个 Session 反复支付。</para>
 /// <para><b>DI 生命周期</b>：<b>Singleton</b>。与 GPU 设备的分层范式一致——

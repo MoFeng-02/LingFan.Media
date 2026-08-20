@@ -206,7 +206,7 @@ internal static partial class FF
 
     /// <summary>
     /// 根因防护：结构体镜像偏移跨 FFmpeg 主版本敏感（hw_device_ctx 等中段字段在 4.x 与 9.0 间可能不同）。
-    /// 这里在加载期分配【真实】原生结构体，用 av_opt 在多个深度写哨兵、再经我们镜像读回，整体校验布局一致性。
+    /// 这里在加载期分配真实原生结构体，用 av_opt 在多个深度写哨兵、再经镜像读回，整体校验布局一致性。
     /// 任一已加载版本（含 4.x）只要镜像与真实库不符，立即 fail-fast 报出具体字段，而非静默内存损坏。
     /// </summary>
     private static void VerifyStructLayout()
@@ -222,7 +222,7 @@ internal static partial class FF
         try
         {
             // 在结构体不同深度布点（覆盖 hw_device_ctx@560 前后区域）。
-            // av_opt_set_int 写入【原生真实偏移】；我们按镜像字段偏移读回；不一致即镜像偏移错误。
+            // av_opt_set_int 写入原生真实偏移；按镜像字段偏移读回；不一致即镜像偏移错误。
             CheckAvOptField(ctx, "strict_std_compliance", 0x62B);
             CheckAvOptField(ctx, "err_recognition", 0x73C);
             CheckAvOptField(ctx, "hwaccel_flags", 0x84D);
@@ -263,7 +263,7 @@ internal static partial class FF
             AVStream* stream = FF.avformat_new_stream(fmt, null);
             if (stream == null) return;
 
-            // codecpar 由 ffmpeg 在 new_stream 时真实分配；若我们镜像的 codecpar 偏移错误，
+            // codecpar 由 ffmpeg 在 new_stream 时真实分配；若镜像的 codecpar 偏移错误，
             // 读到的将是垃圾指针（0 或未对齐）→ fail-fast。
             if ((IntPtr)stream->codecpar == IntPtr.Zero || ((long)(IntPtr)stream->codecpar & 7) != 0)
                 throw new InvalidOperationException(

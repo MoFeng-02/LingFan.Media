@@ -50,7 +50,7 @@ public sealed class MFBackend : IDisposable
 
     /// <summary>
     /// 预热 MediaFoundation：提前打开一次样例媒体、强制激活解码器 MFT，把「进程首次
-    /// <c>MFCreateSourceReaderFromURL</c> 激活 H.264/AAC 解码器」的 2~3s 冷启动成本挪到
+    /// <c>MFCreateSourceReaderFromURL</c> 激活 H.264/AAC 解码器」的冷启动成本挪到
     /// 调用方认为合适的位置（例如真实 App 的启动闪屏期、或探针创建可见窗口之前）。
     /// 正式 <see cref="MFDemuxer.OpenAsync"/> 复用已加载的解码器 DLL，打开几乎瞬时完成。
     /// </summary>
@@ -78,7 +78,7 @@ public sealed class MFBackend : IDisposable
         try
         {
             // 强制激活解码器 MFT：首次 ReadSample 会触发 H.264/AAC 解码器实例初始化，
-            // 进程首次冷启动的 2~3s 主要花在解码器 DLL 加载 + MFT 初始化上。提前付出，
+            // 进程首次冷启动主要花在解码器 DLL 加载 + MFT 初始化上。提前付出，
             // 使正式 OpenAsync 复用已加载的解码器，把卡顿挪到窗口出现之前。
             // MF_SOURCE_READER_FIRST_VIDEO_STREAM = 0xFFFFFFFC（无视频流时该流读取失败属正常，下方 catch 吞掉）。
             var readSample = MfVTable.Get<IMFSourceReader_ReadSample>(reader, 6);

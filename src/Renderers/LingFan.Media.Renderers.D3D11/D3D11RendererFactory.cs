@@ -95,6 +95,8 @@ public sealed class D3D11RendererFactory : IVideoRendererFactory, IDisposable
                     DeviceCreationFlags.BgraSupport);
             }
             _context = _device.ImmediateContext;
+            // DIAG：打印共享设备 FeatureLevel，与 ffmpeg 自有设备对比（VideoProcessor 格式支持差异待定位）。
+            _logger.LogInformation("D3D11RendererFactory 共享设备创建: FeatureLevel={FL}", _device.FeatureLevel);
 
             // 共享设备必须开启多线程保护。
             //    本设备同时被「硬解线程（FFmpeg D3D11VA / MF DXVA 写解码纹理）」与

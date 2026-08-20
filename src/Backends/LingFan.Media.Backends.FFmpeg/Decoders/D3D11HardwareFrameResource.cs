@@ -100,7 +100,7 @@ internal sealed class D3D11HardwareFrameResource : IGpuTextureResource
         SubresourceIndex = subresourceIndex;
         _frameOwner = frameOwner;
 
-        // AddRef：FFmpeg 持有原始引用（随 AVFrame 释放），我们额外增加引用以独立管理纹理对象生命周期。
+        // AddRef：FFmpeg 持有原始引用（随 AVFrame 释放），此处额外增加引用以独立管理纹理对象生命周期。
         // 这一份引用只保「纹理数组对象」不销毁；切片占用权由 _frameOwner 保障，二者缺一不可。
         Marshal.AddRef(texturePtr);
     }

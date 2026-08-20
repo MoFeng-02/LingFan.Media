@@ -911,7 +911,7 @@ internal sealed class WasapiRenderLoop
             _audioClientGetService = ComVTable.Get<IAudioClient_GetService>(pAudioClient, 11);
 
             // 1.5 O10：在 Initialize 之前，通过 IAudioClient2.SetClientProperties 设置会话分类，
-            // 防止 Windows 将后台/非前台/隐藏窗口的音频会话在播放数秒后挂起（声音 ~15s 中断）。
+            // 防止 Windows 将后台/非前台/隐藏窗口的音频会话在播放片刻后挂起（声音中断）。
             // 全程 try/guard：任何不支持/失败都只记日志，不影响后续正常 Initialize（最坏退回旧行为）。
             // 此处槽位须为 13（绝对槽 16），算错一格会直接导致原生访问违规：若误取 12（绝对槽 15），
             // 实际调到 IAudioClient2::IsOffloadCapable —— 它多一个 BOOL* 出参，向未初始化寄存器指向的野地址写入。
@@ -1181,7 +1181,7 @@ internal sealed class WasapiRenderLoop
         //    （preroll 从未 arm）→ 设备永不 Start → 引擎不消费 → 缓冲恒满 → 每帧超时 → 音频饥饿死锁；
         //    且启动锚点永不捕获 → 主时钟恒 0 → 视频管线永久 Wait（现象：present=1、dropped=0，画面全程冻结）。
         //  ②若改为「只写 available、写不下的直接丢弃」：解了死锁，却把背压变成了采样丢弃 →
-        //    持续跳样 → 电音 / 音频加速（现象：submitted≈1.0s 而 played=40.0s）。
+        //    持续跳样 → 电音 / 音频加速（submitted 远小于 played 即此症状）。
         //  ③本实现：循环分段写入直至整帧写完；空间不足时在渲染线程内等一次引擎缓冲事件后续写。
         //    Submit 本就阻塞等待渲染线程完成，故此举等价于「把音频管线节流到设备实时速率」——正确的背压形态，
         //    一个采样都不丢。等待有 BufferWaitTimeoutMs 上限 + _shutdownEvent 立即放弃，绝不退化为无界阻塞。
@@ -1615,7 +1615,7 @@ internal sealed class WasapiRenderLoop
     ///   IAudioClient2 : IsOffloadCapable(15) SetClientProperties(16) GetBufferSizeLimits(17)
     /// 故 SetClientProperties 绝对槽 = 16，ComVTable slotIndex = 16 - 3 = 13。
         /// 若误写为 slotIndex=12（绝对槽 15），实际调到 IsOffloadCapable —— 它有 3 个参数
-        /// (self, Category, BOOL* pbOffloadCapable)，我们只传 2 个，x64 下 R8 是未初始化垃圾值，
+        /// (self, Category, BOOL* pbOffloadCapable)，本处只传 2 个，x64 下 R8 是未初始化垃圾值，
         /// 原生侧向该野地址写 BOOL ⇒ 确定性原生访问违规。
     /// 释放时调用 IUnknown.Release（绝对槽 2）。
     /// </remarks>

@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Outputs.OpenSLES;
 
@@ -13,6 +14,13 @@ namespace LingFan.Media.Outputs.OpenSLES;
 [SupportedOSPlatform("Android")]
 public sealed class OpenSlesOutputFactory : IAudioOutputFactory
 {
+    private readonly ILoggerFactory _loggerFactory;
+
+    public OpenSlesOutputFactory(ILoggerFactory loggerFactory)
+    {
+        _loggerFactory = loggerFactory;
+    }
+
     /// <inheritdoc/>
-    public IAudioOutput Create() => new OpenSlesOutput();
+    public IAudioOutput Create() => new OpenSlesOutput(_loggerFactory.CreateLogger<OpenSlesOutput>());
 }

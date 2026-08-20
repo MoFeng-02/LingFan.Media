@@ -72,9 +72,10 @@ public sealed class MediaPipelineHost
         // 关键时序：WASAPI 主时钟在 audio.StartAsync 的 preroll +
         // 校准锁定期间会从 0 爬到一定值（瞬态期返回 ≈0，之后锁定引擎领先偏移
         // 才跳到可闻位置）。若把 SignalAudioReady 放在 ④ 之后（preroll 跑完、校准已锁定），
-        // 门控放行时主时钟已 ≈0.5s → 0.0~0.33s 的帧被 DropThreshold(200ms) 全判掉，首帧落到 0.33/0.36。
+        // 门控放行时主时钟已明显大于 0 → 开头一小段 PTS 靠前的帧被 DropThreshold 全判掉，
+        // 首帧落到较晚位置。
         // 修正：把放行提前到 ③ —— 让首帧 PTS=0 在「主时钟≈0 的瞬态期」就同刻呈现，完全复刻首播
-        // （首帧 delta≈0）的无缝行为；重播衔接处从「跳到 0.33/0.36」变为「从 0.0 续上」。
+        // （首帧 delta≈0）的无缝行为；重播衔接处从「跳到较晚位置」变为「从 0.0 续上」。
         // GetPlaybackPositionDirect 在设备未开/瞬态期返回 0（不抛），故提前放行安全。
         _videoPipeline?.Start();
         if (_videoPipeline != null)

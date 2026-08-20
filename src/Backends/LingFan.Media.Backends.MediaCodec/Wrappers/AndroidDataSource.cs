@@ -11,6 +11,12 @@ namespace LingFan.Media.Backends.MediaCodec.Wrappers;
 /// <para>用于没有文件地址/URL 的流（内存流、透传流）。NDK 通过 <c>setReadAt</c> /
 /// <c>setGetSize</c> / <c>setClose</c> 接收 C 函数指针，经静态 <c>[UnmanagedCallersOnly]</c> 回调，
 /// 用 <see cref="GCHandle"/> 把 <c>userdata</c> 路由回具体的 <see cref="IMediaStream"/>。</para>
+/// <para><b>CFI 限制</b>：Android 12+ 系统库（libmediandk/libstagefright）默认启用
+/// LLVM CFI（Control Flow Integrity）。<c>setDataSourceCustom</c> 注册的托管回调在 native 侧经
+/// <c>__cfi_check</c> 校验函数指针类型——托管 <c>[UnmanagedCallersOnly]</c> 方法无 LLVM 类型元数据
+/// → 校验失败 → <c>__cfi_check_fail</c> → SIGTRAP。
+/// 因此<b>本地文件一律走 <c>AMediaExtractor_setDataSourceFd</c>（fd 路径，无回调）</b>；
+/// 本类型仅适用于无地址流场景，且仅低版本（&lt; 12）或无 CFI 环境。</para>
 /// <para><b>调用约定</b>：回调显式声明 <see cref="CallConvCdecl"/>，与 <c>MediaNdk</c> 中
 /// <c>delegate* unmanaged[Cdecl]</c> 的声明严格一致（Android Bionic 默认即 Cdecl，此处显式锚定，避免 ABI 错位）。</para>
 /// <para><b>线程安全</b>：NDK 可能从多线程调用 <c>readAt</c>，故每实例持有一把互斥锁串行化对

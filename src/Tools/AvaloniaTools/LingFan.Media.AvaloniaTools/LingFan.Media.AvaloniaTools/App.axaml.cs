@@ -9,8 +9,10 @@ using LingFan.Media.AvaloniaTools.Views;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.MediaFoundation;
 using LingFan.Media.Backends.VLCNative;
+using LingFan.Media.Backends.MediaCodec;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
+using LingFan.Media.Outputs.OpenSLES;
 using LingFan.Media.Renderers.D3D11;
 using LingFan.Media.Renderers.Vulkan;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,9 +70,18 @@ public partial class App : Application
                 .AddCompositionRenderer()
                 .AddWasapiOutput();
         }
-        builder.AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
-                .AddVLCNative();
-                // composer 工厂需要 ILoggerFactory；独立运行的 App 手动 AddLogging 提供。
+        // 后端注册：Android 真机阶段暂只启用 D1（MediaCodec 平台原生后端）。
+        // FFmpeg / VLC 在 Android 上无原生运行时打包（DllNotFoundException: avformat / libvlc），
+        // 注册会白白消耗回退时间；桌面端如需再按需放开（与 MF 同模式注释）。
+        //builder.AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
+        //        .AddVLCNative();
+        builder.AddMediaCodec();
+        // composer 工厂需要 ILoggerFactory；独立运行的 App 手动 AddLogging 提供。
+
+        // Android 真机：注册原生 OpenSL ES 音频输出（O4）。非 Android 调用会抛 PlatformNotSupportedException，
+        // 故用 OperatingSystem.IsAndroid 守卫（与上方 Windows 守卫同构）。不注册则回落 NoOp 静音。
+        if (OperatingSystem.IsAndroid())
+            builder.AddOpenSlesOutput();
         services.AddLogging(options =>
         {
             options.AddConsole();
@@ -80,6 +91,9 @@ public partial class App : Application
 
         // ViewModel 经 DI 解析，构造函数注入 IServiceProvider。
         services.AddTransient<MainViewModel>();
+
+        // 内置样例提供者：跨平台通用（AvaloniaResource 嵌入 Assets/sample.mp4，各平台共用同一实现）。
+        services.AddSingleton<IBundledSampleProvider, BundledSampleProvider>();
 
         Services = builder.Services.BuildServiceProvider();
 

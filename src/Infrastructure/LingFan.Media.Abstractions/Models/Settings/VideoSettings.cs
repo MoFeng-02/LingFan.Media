@@ -17,6 +17,19 @@ public sealed class VideoSettings
     /// <summary>最大解码高度（null 表示不限制）。</summary>
     public int? MaxHeight { get; init; }
 
+    /// <summary>
+    /// 源视频宽度（像素，来自轨道信息；null 表示未知）。
+    /// 供需要显式宽高的解码后端使用（如 Android MediaCodec 的 <c>configure</c> 部分设备/解码器
+    /// 要求显式 <c>width</c>/<c>height</c>，仅 csd-0 推导不足会返回 EINVAL）。
+    /// </summary>
+    public int? Width { get; init; }
+
+    /// <summary>
+    /// 源视频高度（像素，来自轨道信息；null 表示未知）。
+    /// 见 <see cref="Width"/>。
+    /// </summary>
+    public int? Height { get; init; }
+
     /// <summary>输出像素格式（null 表示使用源格式）。</summary>
     public PixelFormat? OutputPixelFormat { get; init; }
 

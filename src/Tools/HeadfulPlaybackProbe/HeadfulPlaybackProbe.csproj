@@ -32,6 +32,9 @@
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
 		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
+		<!-- probe-gpus 用：枚举 DXGI 适配器查各 GPU 的 VideoProcessor NV12 支持（诊断用途） -->
+		<PackageReference Include="Vortice.DXGI" Version="3.8.3" />
+		<PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -46,6 +49,10 @@
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
 		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
+		<!-- renderer=vulkan|opengl 验收用：与 D3D11 同契约（IVideoRendererFactory/IGpuDeviceContext），
+		     hw + ffmpeg 时经 D3D11 共享句柄导入（走 GPUShare.D3D11），Vulkan 侧另做 GPU LUID 对齐。 -->
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.Vulkan\LingFan.Media.Renderers.Vulkan.csproj" />
+		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.OpenGL\LingFan.Media.Renderers.OpenGL.csproj" />
 		<ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
 	</ItemGroup>
 

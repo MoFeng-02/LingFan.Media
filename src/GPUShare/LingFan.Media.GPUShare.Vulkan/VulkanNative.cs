@@ -24,8 +24,8 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// 在 macOS/iOS（MoltenVK）单一 ABI 下 .NET 同样映射为平台默认调用约定，可正确互操作）。
 /// 结构体 / 枚举 / 句柄类型复用 Silk.NET 的纯数据定义（<c>[StructLayout]</c> 值类型 + <c>enum</c>，本身零反射、ABI 精确）。</para>
 /// <para><b>为何不能一次全局派发解析全部</b>：Vulkan 规范要求 <c>vkGetInstanceProcAddr(NULL, …)</c> 只保证返回
-/// 引导子集；其余函数（含 <c>vkDestroyInstance</c> / <c>vkCreateDevice</c>）经 NULL 派发会静默返回 <c>NULL</c>
-/// （本机实测全为 NULL）。这是跨 loader 兼容的强制要求，Silk.NET / volk 均按此分阶段解析。</para>
+/// 引导子集；其余函数（含 <c>vkDestroyInstance</c> / <c>vkCreateDevice</c>）经 NULL 派发会静默返回 <c>NULL</c>。
+/// 这是跨 loader 兼容的强制要求，Silk.NET / volk 均按此分阶段解析。</para>
 /// <para>调用约定：Vulkan 函数指针统一 <c>unmanaged[Stdcall]</c>；z 调用方传参与 Silk.NET 的 <c>Vk</c>/<c>Khr*</c>
 /// 方法签名保持一致（ref/out/数组/指针），故现有调用点只需改名。</para>
 /// </remarks>
@@ -106,7 +106,7 @@ public static unsafe partial class VulkanNative
     /// （<c>vkCreateInstance</c> / <c>vkEnumerateInstanceExtensionProperties</c>）。
     /// <para><b>为什么不能一次解析全部</b>：Vulkan 的全局派发（<c>instance = NULL</c>）只保证返回
     /// 引导子集的函数指针；其余函数（含 <c>vkDestroyInstance</c> / <c>vkCreateDevice</c> 等）经 NULL 派发
-    /// 会静默返回 <c>NULL</c>（本机实测全为 NULL）。这是 Vulkan 跨 loader 兼容的强制要求，
+    /// 会静默返回 <c>NULL</c>。这是 Vulkan 跨 loader 兼容的强制要求，
     /// 也是 Silk.NET / volk 的实际做法：实例级函数用实例句柄、设备级函数用设备句柄二次解析。</para>
     /// <para>须在创建 VkInstance 之前调用一次。</para>
     /// </summary>

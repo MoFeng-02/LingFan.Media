@@ -12,7 +12,7 @@ namespace LingFan.Media.Backends.MediaFoundation;
 /// <remarks>
 /// <para><b>职责</b>：创建一个绑定到 <see cref="IGpuDeviceContext"/> D3D11 设备的 MF DXGI 设备管理器，
 /// 供 <c>MFDemuxer</c> 在 <c>MFCreateSourceReaderFromURL</c> 的 attributes 上以
-/// <c>MF_SOURCE_READER_D3D_MANAGER</c> 挂载。SourceReader 拿到管理器后会替我们完成
+/// <c>MF_SOURCE_READER_D3D_MANAGER</c> 挂载。SourceReader 拿到管理器后会完成
 /// 「选硬件 MFT → 发 MFT_MESSAGE_SET_D3D_MANAGER → 分配 DXGI 输出表面池」的全套编排，
 /// <c>ReadSample</c> 直接吐出可 QI 成 <c>IMFDXGIBuffer</c> 的样本 ⇒ 解码→上屏全程 GPU 纹理，零系统内存往返。</para>
 ///

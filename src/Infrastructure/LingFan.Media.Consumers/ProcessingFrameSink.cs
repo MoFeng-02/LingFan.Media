@@ -17,7 +17,7 @@ namespace LingFan.Media.Consumers;
 /// <para>无侵入：复用现有 <c>videoFrameSink</c> 路由注入机制，管线侧代码零改动；无头场景下帧走 sink 分支，不进渲染器 <c>Present</c>。</para>
 /// <para>依赖倒置：仅依赖 Abstractions 中立类型，不引用任何渲染器 / 后端 / UI 模块。</para>
 /// <para>AOT 兼容：<see langword="sealed"/> 类、无反射、纯接口 pattern matching 分发，遵守库整体 AOT 约束。</para>
-/// <para>生命周期闭环（C-9.3）：<see cref="Dispose"/> / <see cref="DisposeAsync"/> 取消订阅并清空附加状态，防事件泄漏；帧所有权始终归管线，本类永不 Dispose 外部帧。</para>
+/// <para>生命周期闭环：<see cref="Dispose"/> / <see cref="DisposeAsync"/> 取消订阅并清空附加状态，防事件泄漏；帧所有权始终归管线，本类永不 Dispose 外部帧。</para>
 /// </remarks>
 public sealed class ProcessingFrameSink : IHeadlessFrameConsumer
 {

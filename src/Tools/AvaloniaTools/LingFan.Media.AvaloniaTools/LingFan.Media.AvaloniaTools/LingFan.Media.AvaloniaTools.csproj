@@ -16,6 +16,10 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <AvaloniaResource Include="..\..\..\..\..\Resources\Video\sample.mp4" Link="Assets\sample.mp4" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<!-- 自管理版本（不使用中央包管理，避免与仓库其它子树版本冲突） -->
 		<PackageReference Include="Avalonia" Version="12.1.1" />
 		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
@@ -44,6 +48,8 @@
 		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
 		<!-- VLC 后端（自写 Apache-2.0 P/Invoke，零 LGPL）：解封装+解码经 SetVideoCallbacks 内存捕获 BGRA32 帧。 -->
 		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
+		<!-- Android 原生后端（MediaExtractor + MediaCodec）：net10.0，运行时经 IsSupportedAsync=IsAndroid 自守卫，不影响非 Android 构建/运行。 -->
+		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.MediaCodec\LingFan.Media.Backends.MediaCodec.csproj" />
 		<ProjectReference Include="..\..\..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
 		<ProjectReference Include="..\..\..\..\Presenters\LingFan.Media.GpuPresenter\LingFan.Media.GpuPresenter.csproj" />

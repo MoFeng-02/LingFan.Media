@@ -29,6 +29,27 @@ internal sealed class AndroidMediaCodec : IDisposable
         return new AndroidMediaCodec(codec);
     }
 
+    /// <summary>
+    /// 按编解码器名字创建（API 29+，如软件解码器 "c2.android.avc.decoder"）。
+    /// 低版本/符号缺失/名字不存在时抛 <see cref="InvalidOperationException"/>（由调用方回退）。
+    /// </summary>
+    public static AndroidMediaCodec CreateByCodecName(string name)
+    {
+        nint codec;
+        try
+        {
+            codec = MediaNdk.AMediaCodec_createByCodecName(name);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            // API < 29：符号不存在
+            throw new InvalidOperationException($"[ANDROID-CODEC] createByCodecName('{name}') 符号缺失（API < 29）", ex);
+        }
+        if (codec == nint.Zero)
+            throw new InvalidOperationException($"[ANDROID-CODEC] createByCodecName('{name}') 返回 null（设备无此解码器）");
+        return new AndroidMediaCodec(codec);
+    }
+
     /// <summary>配置解码器（ByteBuffer 路径：surface = Zero，crypto = Zero，flags = 0）。</summary>
     public void Configure(AndroidMediaFormat format, nint surface, nint crypto, uint flags)
     {

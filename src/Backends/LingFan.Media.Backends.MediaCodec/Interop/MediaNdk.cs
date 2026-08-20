@@ -57,6 +57,15 @@ internal static unsafe partial class MediaNdk
     [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int AMediaExtractor_setDataSource(nint extractor, string location);
 
+    /// <summary>
+    /// 设置数据源为文件描述符（<b>API 21+</b>）。本地文件首选：不经过路径/URI 解析（部分 ROM 的
+    /// CreateFromURI 差异），且无托管回调（Android 12+ CFI 系统库下 setDataSourceCustom 的托管回调
+    /// 会触发 <c>__cfi_check_fail</c> SIGTRAP）。<paramref name="offset"/>/<paramref name="length"/>
+    /// 为 <c>off64_t</c>（显式 64 位）。
+    /// </summary>
+    [LibraryImport(Library)]
+    public static partial int AMediaExtractor_setDataSourceFd(nint extractor, int fd, long offset, long length);
+
     /// <summary>设置数据源为自定义 <c>AMediaDataSource</c>（<b>API 28+</b>）。</summary>
     [LibraryImport(Library)]
     public static partial int AMediaExtractor_setDataSourceCustom(nint extractor, nint dataSource);
@@ -177,6 +186,10 @@ internal static unsafe partial class MediaNdk
     /// <summary>按 MIME 创建解码器；失败返回 <see cref="nint.Zero"/>。</summary>
     [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
     public static partial nint AMediaCodec_createDecoderByType(string mimeType);
+
+    /// <summary>按编解码器名字创建（API 29+，如 "c2.android.avc.decoder" 软件解码器）；失败返回 <see cref="nint.Zero"/>。</summary>
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    public static partial nint AMediaCodec_createByCodecName(string name);
 
     /// <summary>销毁解码器（media_status_t）。</summary>
     [LibraryImport(Library)]

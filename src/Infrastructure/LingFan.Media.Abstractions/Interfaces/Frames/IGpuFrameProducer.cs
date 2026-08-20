@@ -91,7 +91,7 @@ public readonly struct GpuFrameImportSource
 /// 与 <see cref="IGpuDeviceContext"/> 同为 Abstractions 中立桥，严守依赖倒置——
 /// 解码后端不反向引用渲染器程序集，亦不感知具体 GPU-API 绑定的创建细节（VkImage 创建由生产者完成）。</para>
 /// <para><b>能力自报 + 行为副作用双判据（S_OK≠被接受）</b>：<see cref="TryImport"/> 在扩展不可用、
-/// 原生句柄无效或导入失败时返回 <see langword="false"/>，调用方须回落软件解码并计入 [FRAMEPATH] 统计，
+/// 原生句柄无效或导入失败时返回 <see langword="false"/>，调用方须回落软件解码并计入 CPU 拷贝统计，
 /// 绝不报"已就绪"假绿。</para>
 /// <para><b>异步策略</b>：<see cref="TryImport"/> 为同步（native 分类）——GPU 纹理导入是同步原生调用，无 I/O await；
 /// 实现保持同步，不补 async（补即伪异步）。</para>

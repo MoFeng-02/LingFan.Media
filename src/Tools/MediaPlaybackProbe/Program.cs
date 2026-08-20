@@ -18,7 +18,7 @@ namespace MediaPlaybackProbe;
 /// </summary>
 /// <remarks>
 /// <para>与 <c>WasapiDriverProbe</c> 的分工：后者用官方 <c>[ComImport]</c> 绕开本仓代码、只定性「机器/driver 行不行」；
-/// 本工具恰恰相反——<b>完整走生产代码路径</b>，用于定位「我们自己的管道在第几秒、哪一环出问题」。</para>
+/// 本工具恰恰相反——<b>完整走生产代码路径</b>，用于定位「生产管道在第几秒、哪一环出问题」。</para>
 /// <para>相比 <c>dotnet test</c> 的关键优势：</para>
 /// <list type="number">
 ///   <item>测试工程注入的是 <c>NullLoggerFactory</c>，生产代码里所有 <c>LogWarning</c>（含「批量提交跳过单帧（背压超时）」）

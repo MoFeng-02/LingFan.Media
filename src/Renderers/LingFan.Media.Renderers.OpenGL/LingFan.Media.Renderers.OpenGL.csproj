@@ -24,6 +24,9 @@
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
     <ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
+    <!-- 零拷贝桥接 D3D11 设备创建：与 ffmpeg 解码器同源（FindPreferredAdapter + D3D11CreateDeviceOnAdapter，独显优先），
+         保证桥接设备与解码设备在同一张 GPU（双卡跨 GPU 时 OpenSharedResource1 必失败，2026-08-20 真机实证）。 -->
+    <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.D3D11\LingFan.Media.GPUShare.D3D11.csproj" />
   </ItemGroup>
 
 </Project>

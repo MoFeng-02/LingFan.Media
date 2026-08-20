@@ -340,7 +340,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private const int PrerollFrames = 16;
 
     // (b)① 架构补短：小量子连续提交。
-    // 旧逻辑一次性把 _sampleQueue 全部帧灌入设备（单批 ~750ms 阻塞），管线离场解码时 submittedSamples
+    // 旧逻辑一次性把 _sampleQueue 全部帧灌入设备（单批阻塞可达数百毫秒），管线离场解码时 submittedSamples
     // 冻结、主时钟平滑前进 → 诊断仪误报"音频间隙/stall"。改为每次最多提交 ~MaxSubmitChunkMs 的音频，
     // 使渲染线程的 submittedSamples 连续推进（解决假 stall），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时）。
     private const int MaxSubmitChunkMs = 40;   // 单批提交上限（毫秒）；远小于诊断仪 100ms stall 阈值，留足余量
