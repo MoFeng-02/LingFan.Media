@@ -16,15 +16,17 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <see cref="TryImport"/> 返回 <see langword="false"/>，调用方回落软解并计入 CPU 拷贝统计，绝不报"已就绪"假绿。</para>
 /// <para><b>AOT</b>：VulkanNative 为零反射绑定（vkGetDeviceProcAddr 解析外部内存函数指针）；
 /// 无 [DllImport]/[ComImport]/反射；跨平台经 OperatingSystem.IsXxx() 运行时分发，无 #if。</para>
-/// <para><b>v1 范围</b>：Windows(D3D11→VK) + Linux(VAAPI→VK)。Android(AHardwareBuffer)/Apple(IOSurface) 为后续端点，
-/// 当前返回 false（调用方回落软解），不阻断播放。</para>
+/// <para><b>v1 范围</b>：Windows(D3D11→VK) + Linux(VAAPI→VK) + Android(AHB→VK，外部格式 YCbCr 采样转换)。
+/// Apple(IOSurface) 为后续端点，当前返回 false（调用方回落软解），不阻断播放。</para>
     /// <para><b>多切片</b>：按 <see cref="GpuFrameImportSource.ArrayLayers"/> 创建整数组 VkImage，并据
     /// <see cref="GpuFrameImportSource.SubresourceIndex"/> 在 <see cref="VulkanRenderer.BlitVulkanImageResource"/>
     /// 选 <c>baseArrayLayer</c>，正确处理 D3D11VA 纹理数组（切片索引=avFrame-&gt;data[1]）。</para>
 /// <para><b>句柄所有权契约（单一责任人）</b>：原生共享句柄（NT HANDLE / dma_buf fd）的所有权自
 /// <see cref="TryImport"/> 调用起转移至本生产者；无论导入成功或失败，生产者均在返回前
 /// 经 <c>CloseHandle</c>（NT HANDLE）/ close（fd）关闭句柄（导入成功后资源引用已由 VkImage/VkDeviceMemory 持有，
-/// 关闭句柄不销毁资源）。调用方（解码器）导出句柄后<b>不得</b>再关闭，避免双关。</para>
+/// 关闭句柄不销毁资源）。调用方（解码器）导出句柄后<b>不得</b>再关闭，避免双关。
+/// Android AHardwareBuffer 为<b>例外</b>：AHB 指针由调用方借用（不转移所有权），生产者不 acquire/release/关闭，
+/// 调用方在 TryImport 返回后自行释放 AImage/AHB 引用（详见 <c>TryImportAndroidAHardwareBuffer</c>）。</para>
 /// </remarks>
 public sealed partial class VulkanGpuFrameProducer : IGpuFrameProducer, IDisposable
 {
@@ -34,9 +36,11 @@ public sealed partial class VulkanGpuFrameProducer : IGpuFrameProducer, IDisposa
 
     // NV12 导入转码资源（惰性创建，随生产者生命周期在 Dispose 释放；device/physicalDevice 为共享、不拥有）
     private VulkanNv12ToRgbaConverter? _converter;
+    // Android AHB（外部格式 YCbCr）导入转码资源（惰性创建，随生产者生命周期在 Dispose 释放）
+    private VulkanYcbcrToRgbaConverter? _ycbcrConverter;
     private CommandPool _commandPool;          // 默认 Handle==0：未创建
     private Queue _graphicsQueue;             // 默认 Handle==0：未创建
-    private CommandBuffer _cmdBuffer;          // 默认 Handle==0：未创建
+    private CommandBuffer _cmdBuffer;         // 默认 Handle==0：未创建
     private uint _graphicsQueueFamily = uint.MaxValue;
 
     // 零拷贝导入诊断：仅首帧打印具体失败步骤 + Vulkan Result 码，避免逐帧刷屏（详见 FFmpeg 侧 warn 同步定位）。
@@ -61,6 +65,12 @@ public sealed partial class VulkanGpuFrameProducer : IGpuFrameProducer, IDisposa
             if (source.Handle == IntPtr.Zero || source.Width <= 0 || source.Height <= 0)
                 return false;
 
+            // Android AHB（YUV 外部格式）：先于 NV12 格式分支——AHB 句柄经
+            // VK_ANDROID_external_memory_android_hardware_buffer 导入（UNDEFINED + externalFormat + YCbCr 采样），
+            // 与共享句柄 / dma_buf 的 NV12 导入语义不同，不可落入 TryImportNv12。
+            if (OperatingSystem.IsAndroid() && source.Kind == GpuFrameImportKind.AndroidHardwareBuffer)
+                return TryImportAndroidAHardwareBuffer(source, out texture);
+
             // NV12 外部纹理（VAAPI·Android NV12 / D3D11VA NV12 共享句柄）：导入为 NV12 VkImage
             // → GPU 内转 RGBA（零 CPU 拷贝）→ 交付 RGBA VulkanImageResource。须先于 RGBA 分支。
             if (source.Format == PixelFormat.NV12)
@@ -71,7 +81,7 @@ public sealed partial class VulkanGpuFrameProducer : IGpuFrameProducer, IDisposa
             if (OperatingSystem.IsLinux() && source.Kind == GpuFrameImportKind.LinuxDmaBufFd)
                 return TryImportLinux(source, out texture);
 
-            // Android / iOS：后续端点（AHardwareBuffer / IOSurface），当前回落软解。
+            // iOS：后续端点（IOSurface），当前回落软解。
             return false;
         }
         catch (Exception ex)
@@ -82,6 +92,257 @@ public sealed partial class VulkanGpuFrameProducer : IGpuFrameProducer, IDisposa
             texture = null;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Android AHardwareBuffer 零拷贝导入：把解码器产出的 AHB（YUV 外部格式）经
+    /// <c>VK_ANDROID_external_memory_android_hardware_buffer</c> 导入为外部格式 VkImage（UNDEFINED + externalFormat，
+    /// 仅 SAMPLED 用法），再经 <see cref="VulkanYcbcrToRgbaConverter"/> 用 YCbCr 采样器在 GPU 内转 RGBA，
+    /// 交付 RGBA <see cref="VulkanImageResource"/> 供渲染器 blit 上屏（零 CPU 回读，「1 GPU hop」）。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>句柄所有权契约（与 Win32/fd 路径不同）</b>：AHB 指针由解码器<b>借用</b>给本方法——
+    /// 导入为 dedicated VkDeviceMemory 后资源引用已由 Vulkan 持有，方法返回前即完成转换与 GPU 等待，
+    /// 故本生产者不 acquire、不 release、不关闭 AHB 句柄；解码器在调用返回后自行释放 AImage/AHB 引用。</para>
+    /// <para><b>导入失败</b>（扩展缺失 / externalFormat 无效 / 内存导入被拒）返回 <see langword="false"/>，
+    /// 调用方回落软解，绝不报「已就绪」假绿。</para>
+    /// </remarks>
+    private unsafe bool TryImportAndroidAHardwareBuffer(GpuFrameImportSource source, out IGpuTextureResource? texture)
+    {
+        texture = null;
+
+        // 扩展/函数指针自检（设备未启用 AHB 扩展或 YCbCr 转换不可用 → 诚实回落）。
+        if (!VulkanNative.HasAndroidHardwareBufferProperties || !VulkanNative.HasSamplerYcbcrConversion)
+        {
+            if (_diagRemain > 0)
+            {
+                _diagRemain--;
+                _logger?.LogWarning("[VKFDIAG] AHB 导入不可用：AHB 扩展或 samplerYcbcrConversion 函数未解析（设备未启用）");
+            }
+            return false;
+        }
+
+        // 1) 查询 AHB 属性：内存（allocationSize/memoryTypeBits，AHB 导入的权威值）+ 格式（externalFormat/转换建议值）。
+        AndroidHardwareBufferFormatPropertiesANDROID formatProps = new()
+        {
+            SType = StructureType.AndroidHardwareBufferFormatPropertiesAndroid,
+        };
+        AndroidHardwareBufferPropertiesANDROID props = new()
+        {
+            SType = StructureType.AndroidHardwareBufferPropertiesAndroid,
+            PNext = &formatProps,
+        };
+        if (VulkanNative.GetAndroidHardwareBufferPropertiesANDROID(_device, source.Handle, &props) != Result.Success)
+        {
+            if (_diagRemain > 0) { _diagRemain--; _logger?.LogWarning("[VKFDIAG] vkGetAndroidHardwareBufferPropertiesANDROID 失败"); }
+            return false;
+        }
+        // externalFormat==0 表示该 AHB 无外部格式（如有等价 VkFormat 的 RGBA AHB）——
+        // 当前视频零拷贝路径仅覆盖 YUV 外部格式，诚实回落软解。
+        if (formatProps.ExternalFormat == 0)
+        {
+            if (_diagRemain > 0)
+            {
+                _diagRemain--;
+                _logger?.LogWarning("[VKFDIAG] AHB 无外部格式（externalFormat=0），当前仅支持 YUV AHB 导入");
+            }
+            return false;
+        }
+
+        // 2) 创建外部格式 VkImage：UNDEFINED + AHB 句柄类型 + externalFormat；外部格式图像仅允许 SAMPLED 用法。
+        var extFormat = new ExternalFormatANDROID
+        {
+            SType = StructureType.ExternalFormatAndroid,
+            ExternalFormat = formatProps.ExternalFormat,
+        };
+        var extMem = new ExternalMemoryImageCreateInfo
+        {
+            SType = StructureType.ExternalMemoryImageCreateInfo,
+            HandleTypes = ExternalMemoryHandleTypeFlags.AndroidHardwareBufferBitAndroid,
+            PNext = &extFormat,
+        };
+        var ci = new ImageCreateInfo
+        {
+            SType = StructureType.ImageCreateInfo,
+            ImageType = ImageType.Type2D,
+            Format = Format.Undefined,
+            Extent = new Extent3D((uint)source.Width, (uint)source.Height, 1),
+            MipLevels = 1,
+            ArrayLayers = 1,
+            Samples = SampleCountFlags.Count1Bit,
+            Tiling = ImageTiling.Optimal,
+            Usage = ImageUsageFlags.SampledBit,
+            SharingMode = SharingMode.Exclusive,
+            InitialLayout = ImageLayout.Undefined,
+            PNext = &extMem,
+        };
+
+        Image image;
+        if (VulkanNative.CreateImage(_device, &ci, null, out image) != Result.Success)
+        {
+            if (_diagRemain > 0) { _diagRemain--; _logger?.LogWarning("[VKFDIAG] vkCreateImage（AHB 外部格式）失败"); }
+            return false;
+        }
+
+        DeviceMemory memory = default;
+        ImageView ahbView = default;
+        Image rgbaImage = default;
+        DeviceMemory rgbaMemory = default;
+        ImageView rgbaView = default;
+        bool memoryBound = false, rgbaBuilt = false, viewCreated = false;
+        try
+        {
+            // 3) dedicated 内存导入：AHB 导入强制 dedicated（VkMemoryDedicatedAllocateInfo 挂 ImportAndroidHardwareBufferInfoANDROID
+            //    的 pNext），allocationSize/memoryTypeBits 以属性查询为权威（规范 VUID，勿用 image memory requirements）。
+            nint ahbHandle = source.Handle;
+            var dedicated = new MemoryDedicatedAllocateInfo
+            {
+                SType = StructureType.MemoryDedicatedAllocateInfo,
+                Image = image,
+            };
+            var imp = new ImportAndroidHardwareBufferInfoANDROID
+            {
+                SType = StructureType.ImportAndroidHardwareBufferInfoAndroid,
+                Buffer = &ahbHandle,
+                PNext = &dedicated,
+            };
+            var ai = new MemoryAllocateInfo
+            {
+                SType = StructureType.MemoryAllocateInfo,
+                PNext = &imp,
+                AllocationSize = props.AllocationSize,
+                MemoryTypeIndex = ExternalCompatibleMemoryType(props.MemoryTypeBits),
+            };
+            if (VulkanNative.AllocateMemory(_device, &ai, null, out memory) != Result.Success)
+            {
+                if (_diagRemain > 0)
+                {
+                    _diagRemain--;
+                    _logger?.LogWarning($"[VKFDIAG] vkAllocateMemory（AHB 导入）失败: size={props.AllocationSize} memTypeBits=0x{props.MemoryTypeBits:X} 选用memType={ai.MemoryTypeIndex}");
+                }
+                VulkanNative.DestroyImage(_device, image, null);
+                return false;
+            }
+
+            if (VulkanNative.BindImageMemory(_device, image, memory, 0) != Result.Success)
+            {
+                if (_diagRemain > 0) { _diagRemain--; _logger?.LogWarning("[VKFDIAG] vkBindImageMemory（AHB 导入）失败"); }
+                VulkanNative.FreeMemory(_device, memory, null);
+                VulkanNative.DestroyImage(_device, image, null);
+                return false;
+            }
+            memoryBound = true;
+
+            // 4) RGBA 目标（内部 Vulkan 图像，交付给调用方拥有）
+            Format rgbaFormat = Format.B8G8R8A8Unorm;
+            if (!TryCreateRgbaTarget((uint)source.Width, (uint)source.Height, rgbaFormat, out rgbaImage, out rgbaMemory, out rgbaView))
+            {
+                VulkanNative.DestroyImage(_device, image, null);
+                VulkanNative.FreeMemory(_device, memory, null);
+                return false;
+            }
+            rgbaBuilt = true;
+
+            // 5) YCbCr 转换管线 + 采样视图 + 命令记录/提交/等待
+            _ycbcrConverter ??= new VulkanYcbcrToRgbaConverter(_device, _physicalDevice, _logger);
+            if (!EnsureConvertResources())
+            {
+                ReleaseRgbaTarget(rgbaImage, rgbaMemory, rgbaView);
+                rgbaBuilt = false;
+                VulkanNative.DestroyImage(_device, image, null);
+                VulkanNative.FreeMemory(_device, memory, null);
+                return false;
+            }
+
+            try
+            {
+                _ycbcrConverter.EnsurePipeline(rgbaFormat, formatProps.ExternalFormat, formatProps);
+            }
+            catch (Exception ex)
+            {
+                if (_diagRemain > 0) { _diagRemain--; _logger?.LogWarning(ex, "[VKFDIAG] YCbCr 转换管线构建失败"); }
+                ReleaseRgbaTarget(rgbaImage, rgbaMemory, rgbaView);
+                rgbaBuilt = false;
+                VulkanNative.DestroyImage(_device, image, null);
+                VulkanNative.FreeMemory(_device, memory, null);
+                return false;
+            }
+
+            ahbView = _ycbcrConverter.CreateImageView(image);
+            viewCreated = true;
+
+            if (!RecordAndSubmitAhbConversion(image, ahbView, rgbaImage, rgbaView, (uint)source.Width, (uint)source.Height, rgbaFormat))
+            {
+                _ycbcrConverter.DestroyImageView(ahbView);
+                viewCreated = false;
+                ReleaseRgbaTarget(rgbaImage, rgbaMemory, rgbaView);
+                rgbaBuilt = false;
+                VulkanNative.DestroyImage(_device, image, null);
+                VulkanNative.FreeMemory(_device, memory, null);
+                return false;
+            }
+
+            // 6) 转换完成（GPU 已等待）：销毁瞬态 AHB 侧资源；RGBA 目标所有权转移给调用方。
+            _ycbcrConverter.DestroyImageView(ahbView);
+            viewCreated = false;
+            VulkanNative.DestroyImage(_device, image, null);
+            VulkanNative.FreeMemory(_device, memory, null);
+
+            texture = new VulkanImageResource(_device, rgbaImage, rgbaMemory,
+                source.Width, source.Height, PixelFormat.BGRA32, 0, ImageLayout.TransferSrcOptimal);
+            return true;
+        }
+        catch
+        {
+            if (viewCreated) _ycbcrConverter?.DestroyImageView(ahbView);
+            if (rgbaBuilt) ReleaseRgbaTarget(rgbaImage, rgbaMemory, rgbaView);
+            if (memoryBound) VulkanNative.FreeMemory(_device, memory, null);
+            VulkanNative.DestroyImage(_device, image, null);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// 在一次性命令缓冲内记录 AHB 外部格式图像 → RGBA 的 YCbCr 采样转换，提交并等待 GPU 完成。
+    /// 与 NV12 转码共用命令池/命令缓冲/图形队列（<see cref="EnsureConvertResources"/> 惰性创建）。
+    /// </summary>
+    private unsafe bool RecordAndSubmitAhbConversion(Image ahbImage, ImageView ahbView, Image rgbaImage, ImageView rgbaView, uint width, uint height, Format rgbaFormat)
+    {
+        VulkanNative.ResetCommandBuffer(_cmdBuffer, CommandBufferResetFlags.None);
+        var beginInfo = new CommandBufferBeginInfo
+        {
+            SType = StructureType.CommandBufferBeginInfo,
+            Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
+        };
+        if (VulkanNative.BeginCommandBuffer(_cmdBuffer, ref beginInfo) != Result.Success)
+            return false;
+
+        try
+        {
+            _ycbcrConverter!.Convert(_cmdBuffer, ahbImage, ahbView, width, height, rgbaFormat, rgbaImage, rgbaView);
+        }
+        catch
+        {
+            // 把命令缓冲移出 recording 状态（与 NV12 转码同手法），避免 ResetCommandBuffer 返回 VK_NOT_READY。
+            VulkanNative.EndCommandBuffer(_cmdBuffer);
+            return false;
+        }
+
+        if (VulkanNative.EndCommandBuffer(_cmdBuffer) != Result.Success)
+            return false;
+
+        var submitInfo = new SubmitInfo
+        {
+            SType = StructureType.SubmitInfo,
+            CommandBufferCount = 1,
+        };
+        CommandBuffer cb = _cmdBuffer;
+        submitInfo.PCommandBuffers = &cb;
+        if (VulkanNative.QueueSubmit(_graphicsQueue, 1, &submitInfo, IntPtr.Zero) != Result.Success)
+            return false;
+        if (VulkanNative.QueueWaitIdle(_graphicsQueue) != Result.Success)
+            return false;
+        return true;
     }
 
     /// <summary>关闭 DXGI 共享 NT 句柄（导入完成/失败后由生产者负责关闭，防内核句柄泄漏）。</summary>
@@ -751,5 +1012,7 @@ public sealed partial class VulkanGpuFrameProducer : IGpuFrameProducer, IDisposa
         }
         _converter?.Dispose();
         _converter = null;
+        _ycbcrConverter?.Dispose();
+        _ycbcrConverter = null;
     }
 }

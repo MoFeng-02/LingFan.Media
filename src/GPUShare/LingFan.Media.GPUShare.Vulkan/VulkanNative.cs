@@ -154,6 +154,9 @@ public static unsafe partial class VulkanNative
             _getPhysicalDeviceSurfaceFormatsKHR = (delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, uint*, SurfaceFormatKHR*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceSurfaceFormatsKHR");
             // ── 设备能力查询（UUID/LUID 对齐、设备扩展枚举）──
             _getPhysicalDeviceProperties2 = (delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceProperties2*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceProperties2");
+            // 实例级设备特性查询（Vulkan 1.1 core；首参 VkPhysicalDevice 须 vkGetInstanceProcAddr 解析）：
+            // Android AHB 零拷贝须先经它查询 samplerYcbcrConversion 特性，仅在支持时才于设备创建处链入特性结构。
+            _getPhysicalDeviceFeatures2 = (delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceFeatures2*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceFeatures2");
             _enumerateDeviceExtensionProperties = (delegate* unmanaged[Stdcall]<PhysicalDevice, byte*, uint*, ExtensionProperties*, Result>)vkGetInstanceProcAddr(h, "vkEnumerateDeviceExtensionProperties");
             // ── 物理设备级视频能力查询（VK_KHR_video_queue 实例扩展函数，须经 vkGetInstanceProcAddr）──
             // 注意：vkGetPhysicalDeviceVideoCapabilitiesKHR 首参为 VkPhysicalDevice，属实例级函数；
@@ -261,6 +264,18 @@ public static unsafe partial class VulkanNative
             _getSemaphoreFdKHR = (delegate* unmanaged[Stdcall]<Device, SemaphoreGetFdInfoKHR*, int*, Result>)vkGetDeviceProcAddr(h, "vkGetSemaphoreFdKHR");
             // ── VK_EXT_metal_objects（仅 Apple / MoltenVK；非 Apple 平台为 null，调用方自检）──
             _exportMetalObjectsEXT = (delegate* unmanaged[Stdcall]<Device, ExportMetalObjectsInfoEXT*, void>)vkGetDeviceProcAddr(h, "vkExportMetalObjectsEXT");
+            // ── VK_ANDROID_external_memory_android_hardware_buffer + VK_KHR_sampler_ycbcr_conversion ──
+            // Android AHB 零拷贝导入（MediaCodec 硬解帧 → Vulkan）。非 Android / 未启用扩展时为 null，调用方自检（TryImport 返回 false 回落软解）。
+            // vkCreateSamplerYcbcrConversion 为 Vulkan 1.1 core（无后缀）；仅带 KHR 扩展的 1.0 设备上为 KHR 后缀——两个名字都尝试。
+            _getAndroidHardwareBufferPropertiesANDROID = (delegate* unmanaged[Stdcall]<Device, nint, AndroidHardwareBufferPropertiesANDROID*, Result>)vkGetDeviceProcAddr(h, "vkGetAndroidHardwareBufferPropertiesANDROID");
+            nint ycbcrCreate = vkGetDeviceProcAddr(h, "vkCreateSamplerYcbcrConversion");
+            if (ycbcrCreate == nint.Zero)
+                ycbcrCreate = vkGetDeviceProcAddr(h, "vkCreateSamplerYcbcrConversionKHR");
+            _createSamplerYcbcrConversion = (delegate* unmanaged[Stdcall]<Device, SamplerYcbcrConversionCreateInfo*, AllocationCallbacks*, SamplerYcbcrConversion*, Result>)ycbcrCreate;
+            nint ycbcrDestroy = vkGetDeviceProcAddr(h, "vkDestroySamplerYcbcrConversion");
+            if (ycbcrDestroy == nint.Zero)
+                ycbcrDestroy = vkGetDeviceProcAddr(h, "vkDestroySamplerYcbcrConversionKHR");
+            _destroySamplerYcbcrConversion = (delegate* unmanaged[Stdcall]<Device, SamplerYcbcrConversion, AllocationCallbacks*, void>)ycbcrDestroy;
             AssertDevice();
             _deviceReady = true;
         }
@@ -421,6 +436,7 @@ public static unsafe partial class VulkanNative
     private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, SurfaceCapabilitiesKHR*, Result> _getPhysicalDeviceSurfaceCapabilitiesKHR;
     private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, uint*, SurfaceFormatKHR*, Result> _getPhysicalDeviceSurfaceFormatsKHR;
     private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceProperties2*, Result> _getPhysicalDeviceProperties2;
+    private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceFeatures2*, Result> _getPhysicalDeviceFeatures2;
     private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, byte*, uint*, ExtensionProperties*, Result> _enumerateDeviceExtensionProperties;
 
     private static unsafe delegate* unmanaged[Stdcall]<Device, SwapchainCreateInfoKHR*, AllocationCallbacks*, SwapchainKHR*, Result> _createSwapchainKHR;
@@ -433,6 +449,9 @@ public static unsafe partial class VulkanNative
     private static unsafe delegate* unmanaged[Stdcall]<Device, SemaphoreGetWin32HandleInfoKHR*, void*, Result> _getSemaphoreWin32HandleKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, SemaphoreGetFdInfoKHR*, int*, Result> _getSemaphoreFdKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, ExportMetalObjectsInfoEXT*, void> _exportMetalObjectsEXT;
+    private static unsafe delegate* unmanaged[Stdcall]<Device, nint, AndroidHardwareBufferPropertiesANDROID*, Result> _getAndroidHardwareBufferPropertiesANDROID;
+    private static unsafe delegate* unmanaged[Stdcall]<Device, SamplerYcbcrConversionCreateInfo*, AllocationCallbacks*, SamplerYcbcrConversion*, Result> _createSamplerYcbcrConversion;
+    private static unsafe delegate* unmanaged[Stdcall]<Device, SamplerYcbcrConversion, AllocationCallbacks*, void> _destroySamplerYcbcrConversion;
 
     // ── 包装方法（签名对齐 Silk.NET Vk / Khr*，调用点仅改名）──
 
@@ -646,6 +665,54 @@ public static unsafe partial class VulkanNative
         if (_exportMetalObjectsEXT == null)
             throw new InvalidOperationException("vkExportMetalObjectsEXT 不可用（VK_EXT_metal_objects 未启用或不支持）。");
         _exportMetalObjectsEXT(device, pMetalObjectsInfo);
+    }
+
+    // ── Android AHB 零拷贝导入（VK_ANDROID_external_memory_android_hardware_buffer + sampler YCbCr 转换）──
+
+    /// <summary>是否已解析 <c>vkGetAndroidHardwareBufferPropertiesANDROID</c>（Android 且设备已启用 AHB 扩展时为真）。</summary>
+    public static bool HasAndroidHardwareBufferProperties => _getAndroidHardwareBufferPropertiesANDROID != null;
+
+    /// <summary>是否已解析 <c>vkCreateSamplerYcbcrConversion</c>（Vulkan 1.1 core / KHR 扩展）。</summary>
+    public static bool HasSamplerYcbcrConversion => _createSamplerYcbcrConversion != null;
+
+    /// <summary>
+    /// 查询 AHardwareBuffer 的内存属性（allocationSize / memoryTypeBits）与格式属性（externalFormat / 采样器建议值）。
+    /// <paramref name="buffer"/> 为 AHardwareBuffer 指针（借用，不取得所有权）。
+    /// </summary>
+    public static unsafe Result GetAndroidHardwareBufferPropertiesANDROID(Device device, nint buffer, AndroidHardwareBufferPropertiesANDROID* pProperties)
+    {
+        if (_getAndroidHardwareBufferPropertiesANDROID == null)
+            throw new InvalidOperationException("vkGetAndroidHardwareBufferPropertiesANDROID 不可用（非 Android 或未启用 VK_ANDROID_external_memory_android_hardware_buffer）。");
+        return _getAndroidHardwareBufferPropertiesANDROID(device, buffer, pProperties);
+    }
+
+    /// <summary>创建采样器 Y′CBCR 转换（须设备已启用 samplerYcbcrConversion 特性）。</summary>
+    public static unsafe Result CreateSamplerYcbcrConversion(Device device, SamplerYcbcrConversionCreateInfo* pCreateInfo, AllocationCallbacks* pAllocator, out SamplerYcbcrConversion pYcbcrConversion)
+    {
+        if (_createSamplerYcbcrConversion == null)
+            throw new InvalidOperationException("vkCreateSamplerYcbcrConversion 不可用（Vulkan 1.1 / VK_KHR_sampler_ycbcr_conversion 不支持）。");
+        SamplerYcbcrConversion tmp;
+        Result r = _createSamplerYcbcrConversion(device, pCreateInfo, pAllocator, &tmp);
+        pYcbcrConversion = tmp;
+        return r;
+    }
+
+    /// <summary>销毁采样器 Y′CBCR 转换。</summary>
+    public static unsafe void DestroySamplerYcbcrConversion(Device device, SamplerYcbcrConversion ycbcrConversion, AllocationCallbacks* pAllocator)
+    {
+        if (_destroySamplerYcbcrConversion == null) return;
+        _destroySamplerYcbcrConversion(device, ycbcrConversion, pAllocator);
+    }
+
+    /// <summary>
+    /// 查询物理设备特性（Vulkan 1.1 core 实例级函数；<paramref name="pFeatures"/> 的 pNext 可链
+    /// VkPhysicalDeviceSamplerYcbcrConversionFeatures 等扩展特性结构）。
+    /// </summary>
+    public static unsafe Result GetPhysicalDeviceFeatures2(PhysicalDevice physicalDevice, PhysicalDeviceFeatures2* pFeatures)
+    {
+        if (_getPhysicalDeviceFeatures2 == null)
+            throw new InvalidOperationException("vkGetPhysicalDeviceFeatures2 不可用（Vulkan 1.0 设备且无 KHR 扩展）。");
+        return _getPhysicalDeviceFeatures2(physicalDevice, pFeatures);
     }
 
     public static unsafe Result CreateBuffer(Device device, ref BufferCreateInfo pCreateInfo, AllocationCallbacks* pAllocator, out Buffer pBuffer)

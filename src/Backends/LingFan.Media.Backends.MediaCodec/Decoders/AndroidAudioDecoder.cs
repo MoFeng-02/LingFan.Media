@@ -1,23 +1,23 @@
-using System.Runtime.Versioning;
-using LingFan.Media.Backends.MediaCodec.Interop;
-using LingFan.Media.Backends.MediaCodec.Wrappers;
+using System.Runtime.InteropServices;
+using Android.Media;
+using Java.Nio;
+// 本后端命名空间段为 ...MediaCodec，会遮蔽类型 Android.Media.MediaCodec → 用不撞名的别名。
+using AndroidMediaCodec = Android.Media.MediaCodec;
 
 namespace LingFan.Media.Backends.MediaCodec.Decoders;
 
 /// <summary>
-/// 基于 Android NDK <c>AMediaCodec</c> 的音频解码器（ByteBuffer 软件输出路径，输出 PCM）。
+/// 基于托管 <see cref="AndroidMediaCodec"/> 的音频解码器（ByteBuffer 软件输出路径，输出 PCM；net-android 内置，非手写 P/Invoke）。
 /// </summary>
 /// <remarks>
-/// <para><b>异步策略</b>：<see cref="DecodeAsync"/> / <see cref="FlushAsync"/> 为热路径，内部同步原生调用，
+/// <para><b>异步策略</b>：<see cref="DecodeAsync"/> / <see cref="FlushAsync"/> 为热路径，内部同步托管调用，
 /// 返回 <see cref="ValueTask.FromResult{TResult}"/>（与 FFmpegAudioDecoder 同构）。</para>
-/// <para><b>解码循环</b>：与视频解码器同构——<c>_pendingInput</c> + <c>_pendingFrames</c> FIFO；单包解出 0/1 帧。</para>
-/// <para><b>输出 PCM</b>：MediaCodec 在 ByteBuffer 模式直接吐解码后 PCM；采样格式由输出格式
-/// <c>pcm-encoding</c> 决定（16-bit / float / 32-bit → S16/F32/S32）。8-bit PCM 与 24-bit 打包（3 字节/样本）
-/// 无对应枚举，按“绝不假绿”原则拒绝（<see cref="NotSupportedException"/>）。</para>
+/// <para><b>解码循环</b>：<c>_pendingInput</c> + <c>_pendingFrames</c> FIFO；单包解出 0/1 帧。</para>
+/// <para><b>输出 PCM</b>：ByteBuffer 模式直接吐解码后 PCM；采样格式由输出格式 <c>pcm-encoding</c> 决定
+/// （16-bit / float / 32-bit → S16/F32/S32）。8-bit 与 24-bit 打包（3 字节/样本）无对应枚举，按「绝不假绿」
+/// 原则拒绝（<see cref="NotSupportedException"/>）。</para>
 /// <para><b>仅 Android 可用</b>：非 Android 运行时 <see cref="Initialize"/> 抛 <see cref="PlatformNotSupportedException"/>。</para>
 /// </remarks>
-[UnconditionalSuppressMessage("Trimming", "IL2050",
-    Justification = "无 [ComImport]，使用原始 [LibraryImport] P/Invoke，不会被裁剪器移除。仅 Android 运行时使用。")]
 internal sealed class AndroidAudioDecoder : IAudioDecoder
 {
     private readonly AndroidBackend _backend;
@@ -34,6 +34,13 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
     private int _outputChannels;
     private bool _initialized;
     private bool _disposed;
+
+    // MediaCodec dequeue 返回码（int）：-1=TRY_AGAIN、-2=FORMAT_CHANGED、-3=BUFFERS_CHANGED。
+    // BufferInfo 的 flags 位（公开 AOSP 值）：1=KEY_FRAME、2=CODEC_CONFIG、4=END_OF_STREAM。
+    private const int InfoTryAgainLater = -1;
+    private const int InfoOutputFormatChanged = -2;
+    private const int InfoOutputBuffersChanged = -3;
+    private const int FlagEndOfStream = 4;
 
     public AndroidAudioDecoder(AndroidBackend backend, ILogger<AndroidAudioDecoder> logger)
     {
@@ -73,58 +80,35 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
         var codecObj = AndroidMediaCodec.CreateDecoderByType(mime);
         try
         {
-            var fmt = new AndroidMediaFormat();
-            fmt.SetString(AndroidMediaConstants.KEY_MIME, mime);
+            using var fmt = new MediaFormat();
+            fmt.SetString(MediaFormat.KeyMime, mime);
 
-            // 部分解码器（如 c2.android.aac.decoder）configure 要求显式 sample-rate/channel-count，
-            // 仅 csd-0 推导不足会返回 EINVAL；MediaPlayer 已从轨道信息透传（见 AudioSettings.SourceSampleRate）。
+            // 部分解码器 configure 要求显式 sample-rate/channel-count，仅 csd-0 推导不足会报错；
+            // MediaPlayer 已从轨道信息透传（见 AudioSettings.SourceSampleRate/Channels）。
             if (settings.SourceSampleRate is > 0)
-                fmt.SetInt32(AndroidMediaConstants.KEY_SAMPLE_RATE, settings.SourceSampleRate.Value);
+                fmt.SetInteger(MediaFormat.KeySampleRate, settings.SourceSampleRate.Value);
             if (settings.SourceChannels is > 0)
-                fmt.SetInt32(AndroidMediaConstants.KEY_CHANNEL_COUNT, settings.SourceChannels.Value);
+                fmt.SetInteger(MediaFormat.KeyChannelCount, settings.SourceChannels.Value);
 
             var csd = settings.CodecConfiguration;
             if (csd.Length > 0)
-                fmt.SetBuffer(AndroidMediaConstants.KEY_CSD_0, csd.ToArray());
+                fmt.SetByteBuffer("csd-0", ByteBuffer.Wrap(csd.ToArray())); // 键 "csd-0"（AOSP KEY_CSD0）
 
-            codecObj.Configure(fmt, nint.Zero, nint.Zero, 0);
-            fmt.Dispose();
+            codecObj.Configure(fmt, null, null, 0); // surface/crypto=null → ByteBuffer 输出
             codecObj.Start();
 
             // 输出格式：采样率 / 声道数 / PCM 编码（采样格式）。
-            // 注意：此处 getOutputFormat 可能返回推测值——HE-AAC v2 码流参数 22050Hz/1ch，
-            // start 后初始报 22050Hz/1ch，首帧 FORMAT_CHANGED 后才上报真实输出 44100Hz/2ch
-            //（SBR+PS 解码上采样）。FORMAT_CHANGED 只在有输入包后才触发，Initialize 阶段无输入，
-            // 轮询探测必然空转超时；真实格式由首帧后的 FORMAT_CHANGED 经 RefreshOutputFormat
-            // 刷新，输出端（OpenSLES）按帧格式运行时重协商，此处无需也无法探测。
-            var outFmt = codecObj.GetOutputFormat();
-            try
-            {
-                if (outFmt.TryGetInt32(AndroidMediaConstants.KEY_SAMPLE_RATE, out int sr) && sr > 0)
-                    _outputSampleRate = sr;
-                if (outFmt.TryGetInt32(AndroidMediaConstants.KEY_CHANNEL_COUNT, out int ch) && ch > 0)
-                    _outputChannels = ch;
-                if (outFmt.TryGetInt32(AndroidMediaConstants.KEY_PCM_ENCODING, out int enc))
-                {
-                    var sf = AndroidCodecMaps.PcmEncodingToSampleFormat(enc);
-                    if (sf is null)
-                        throw new NotSupportedException(
-                            $"Android 音频解码器不支持的 pcm-encoding {enc}（当前仅支持 16-bit / float / 24-bit-packed / 32-bit，不含 8-bit）。");
-                    _sampleFormat = sf.Value;
-                }
-                else
-                {
-                    _sampleFormat = SampleFormat.S16; // 缺省兜底（绝大多数设备输出 16-bit）
-                }
-            }
-            finally
-            {
-                outFmt.Dispose();
-            }
+            // 注意：getOutputFormat 可能返回推测值——HE-AAC v2 码流参数 22050Hz/1ch，start 后初始报
+            // 22050Hz/1ch，首帧 FORMAT_CHANGED 后才上报真实 44100Hz/2ch（SBR+PS 上采样）。FORMAT_CHANGED
+            // 只在有输入包后触发，真实格式由首帧后的 FORMAT_CHANGED 经 RefreshOutputFormat 刷新，输出端
+            // 按帧格式运行时重协商，此处无需也无法探测。
+            // getOutputFormat 无参重载在 .NET 绑定映射为 OutputFormat 属性（GetOutputFormat(int) 为按输出缓冲索引的重载）
+            using var outFmt = codecObj.OutputFormat;
+            ReadOutputParams(outFmt);
         }
         catch
         {
-            codecObj.Dispose();
+            codecObj.Release();
             throw;
         }
 
@@ -161,9 +145,9 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
         EnsureInitialized();
 
         FeedInput();
-        nint inIdx = _codec!.DequeueInputBuffer(1000);
+        int inIdx = _codec!.DequeueInputBuffer(1000);
         if (inIdx >= 0)
-            _codec.QueueInputBuffer((nuint)inIdx, 0, 0, 0, AndroidMediaConstants.AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
+            _codec.QueueInputBuffer(inIdx, 0, 0, 0, (MediaCodecBufferFlags)FlagEndOfStream);
 
         return new ValueTask<AudioFrame?>(DrainOutput(10_000));
     }
@@ -179,29 +163,33 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
         _pendingFrames.Clear();
     }
 
+    /// <summary>尽可能把待喂入包拷入解码器输入槽。</summary>
     private void FeedInput()
     {
         while (_pendingInput.Count > 0)
         {
-            nint idx = _codec!.DequeueInputBuffer(0);
-            if (idx < 0) break;
+            int idx = _codec!.DequeueInputBuffer(0);
+            if (idx < 0) break; // 暂无输入槽，保留包待下次
 
             var pkt = _pendingInput.Dequeue();
             try
             {
-                nint buf = _codec.GetInputBuffer((nuint)idx, out nuint cap);
-                if (buf == nint.Zero) continue;
+                ByteBuffer? buf = _codec.GetInputBuffer(idx);
+                if (buf is null) continue;
 
-                int len = (int)Math.Min(pkt.Data.Length, (long)cap);
+                int len = Math.Min(pkt.Data.Length, buf.Remaining());
+                if (len != pkt.Data.Length)
+                    _logger.LogWarning("[ANDROID-AUD] 输入 buffer 容量({Cap})小于包大小({Len})，截断喂入",
+                        buf.Remaining(), pkt.Data.Length);
 
-                // 托管只读内存 → 原生输入 buffer（4 参托管重载，无需 unsafe）
-                if (MemoryMarshal.TryGetArray(pkt.Data, out ArraySegment<byte> seg) && seg.Array is not null)
-                    Marshal.Copy(seg.Array, seg.Offset, buf, len);
+                var mem = pkt.Data;
+                if (MemoryMarshal.TryGetArray(mem, out ArraySegment<byte> seg) && seg.Array is not null)
+                    buf.Put(seg.Array, seg.Offset, len);
                 else
-                    Marshal.Copy(pkt.Data.ToArray(), 0, buf, len);
+                    buf.Put(mem.ToArray(), 0, len);
 
-                ulong ptsUs = pkt.Timestamp.Ticks > 0 ? (ulong)(pkt.Timestamp.Ticks / 10) : 0;
-                _codec.QueueInputBuffer((nuint)idx, 0, (nuint)len, ptsUs, 0);
+                long ptsUs = pkt.Timestamp.Ticks > 0 ? pkt.Timestamp.Ticks / 10 : 0;
+                _codec.QueueInputBuffer(idx, 0, len, ptsUs, (MediaCodecBufferFlags)0);
             }
             finally
             {
@@ -220,71 +208,76 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
     {
         while (true)
         {
-            nint idx = _codec!.DequeueOutputBuffer(out AMediaCodecBufferInfo info, timeoutUs);
-            if (idx == AndroidMediaConstants.AMEDIACODEC_INFO_TRY_AGAIN_LATER) break;
-            if (idx == AndroidMediaConstants.AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED)
+            var info = new AndroidMediaCodec.BufferInfo();
+            int idx = _codec!.DequeueOutputBuffer(info, timeoutUs);
+            if (idx == InfoTryAgainLater) break;
+            if (idx == InfoOutputFormatChanged)
             {
-                // 音频采样率/声道可能随流变化；重新读取输出格式
-                var outFmt = _codec.GetOutputFormat();
-                try { RefreshOutputFormat(outFmt); } finally { outFmt.Dispose(); }
+                // 音频采样率/声道可能随流变化；重新读取输出格式（无参重载为 OutputFormat 属性）
+                using var outFmt = _codec.OutputFormat;
+                ReadOutputParams(outFmt);
                 continue;
             }
-            if (idx == AndroidMediaConstants.AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+            if (idx == InfoOutputBuffersChanged) continue;
             if (idx < 0) break;
 
-            if ((info.flags & AndroidMediaConstants.AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0)
+            if (((int)info.Flags & FlagEndOfStream) != 0)
             {
-                _codec.ReleaseOutputBuffer((nuint)idx, 0);
+                _codec.ReleaseOutputBuffer(idx, false);
                 break;
             }
 
             // 0 字节 buffer 仅承载 EOS/标记，无有效 PCM，丢弃
-            if (info.size <= 0)
+            if (info.Size <= 0)
             {
-                _codec.ReleaseOutputBuffer((nuint)idx, 0);
+                _codec.ReleaseOutputBuffer(idx, false);
                 continue;
             }
 
-            var frame = ExtractFrame((nuint)idx, info);
-            _codec.ReleaseOutputBuffer((nuint)idx, 0);
+            var frame = ExtractFrame(idx, info);
+            _codec.ReleaseOutputBuffer(idx, false);
             _pendingFrames.Enqueue(frame);
         }
 
         return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
     }
 
-    private void RefreshOutputFormat(AndroidMediaFormat outFmt)
+    private void ReadOutputParams(MediaFormat outFmt)
     {
-        if (outFmt.TryGetInt32(AndroidMediaConstants.KEY_SAMPLE_RATE, out int sr) && sr > 0)
-            _outputSampleRate = sr;
-        if (outFmt.TryGetInt32(AndroidMediaConstants.KEY_CHANNEL_COUNT, out int ch) && ch > 0)
-            _outputChannels = ch;
-        if (outFmt.TryGetInt32(AndroidMediaConstants.KEY_PCM_ENCODING, out int enc))
+        if (outFmt.ContainsKey(MediaFormat.KeySampleRate))
+            _outputSampleRate = outFmt.GetInteger(MediaFormat.KeySampleRate);
+        if (outFmt.ContainsKey(MediaFormat.KeyChannelCount))
+            _outputChannels = outFmt.GetInteger(MediaFormat.KeyChannelCount);
+        // KeyPcmEncoding 为 API 24+：低版本无此键，保持当前 _sampleFormat。
+        if (OperatingSystem.IsAndroidVersionAtLeast(24) && outFmt.ContainsKey(MediaFormat.KeyPcmEncoding))
         {
-            var sf = AndroidCodecMaps.PcmEncodingToSampleFormat(enc);
+            var sf = AndroidCodecMaps.PcmEncodingToSampleFormat(outFmt.GetInteger(MediaFormat.KeyPcmEncoding));
             if (sf is not null) _sampleFormat = sf.Value;
         }
     }
 
-    private AudioFrame ExtractFrame(nuint idx, AMediaCodecBufferInfo info)
+    private AudioFrame ExtractFrame(int idx, AndroidMediaCodec.BufferInfo info)
     {
-        nint buf = _codec!.GetOutputBuffer(idx, out nuint _);
-        if (buf == nint.Zero)
+        var buf = _codec!.GetOutputBuffer(idx);
+        if (buf is null)
             throw new InvalidOperationException("[ANDROID-AUD] getOutputBuffer 返回 null");
 
-        int validBytes = info.size <= 0 ? 0 : (int)info.size;
+        int validBytes = info.Size <= 0 ? 0 : info.Size;
         var pcm = new byte[validBytes];
         if (validBytes > 0)
-            // info.offset 是 PCM 数据在输出 buffer 内的起始偏移（NDK 规范），须加偏移再拷贝
-            Marshal.Copy(buf + info.offset, pcm, 0, validBytes);
+        {
+            // getOutputBuffer 返回的 buffer position 指向数据起点（info.Offset）；Get 拷贝 Remaining 字节。
+            buf.Position(info.Offset);
+            buf.Get(pcm);
+        }
 
         int bps = AndroidCodecMaps.BytesPerSample(_sampleFormat);
         int frameCount = bps > 0 && _outputChannels > 0
             ? validBytes / (bps * _outputChannels)
             : 0;
 
-        var ts = info.presentationTimeUs >= 0
-            ? TimeSpan.FromTicks(info.presentationTimeUs * 10)
+        var ts = info.PresentationTimeUs >= 0
+            ? TimeSpan.FromTicks(info.PresentationTimeUs * 10)
             : TimeSpan.Zero;
 
         return new AudioFrame(pcm, _outputSampleRate, _outputChannels, _sampleFormat, ts, TimeSpan.Zero, frameCount);
@@ -317,7 +310,7 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
     {
         while (_pendingInput.Count > 0) _pendingInput.Dequeue().Dispose();
         while (_pendingFrames.Count > 0) _pendingFrames.Dequeue().Dispose();
-        _codec?.Dispose();
+        _codec?.Release();
         _codec = null;
     }
 }

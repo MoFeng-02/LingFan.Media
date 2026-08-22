@@ -314,12 +314,38 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
         int vOff = ySize + chromaW * chromaH;
         int uvOff = ySize;
 
+        // 色彩矩阵选择：默认（未指定 / BT.601-Full）走既有 LUT（BT.601-Full），其余按色彩空间取 float 系数。
+        // limited range 需对 Y 做 (Y-16)×1.1644 补偿；系数来源见行 70-84 文档依据。
+        var ci = sw.ColorInfo;
+        bool useLut = ci is null || !ci.Value.IsSpecified
+            || (ci.Value.Standard == LingFan.Media.Abstractions.ColorStandard.Bt601
+                && ci.Value.Range == LingFan.Media.Abstractions.ColorRange.Full);
+        float kR = 0f, kU = 0f, kV = 0f, kUB = 0f, yScale = 1f;
+        int yOff = 0;
+        if (!useLut)
+        {
+            // 此时 useLut=false ⇒ ci 非空（见上方短路条件）；用 ! 抑制可空告警。
+            var std = ci!.Value.Standard;
+            var range = ci.Value.Range;
+            yScale = range == LingFan.Media.Abstractions.ColorRange.Limited ? 1.1644f : 1f;
+            yOff = range == LingFan.Media.Abstractions.ColorRange.Limited ? 16 : 0;
+            switch (std)
+            {
+                case LingFan.Media.Abstractions.ColorStandard.Bt709:
+                    kR = 1.5748f; kU = 0.1873f; kV = 0.4681f; kUB = 1.8556f; break;
+                case LingFan.Media.Abstractions.ColorStandard.Bt2020:
+                    kR = 1.6787f; kU = 0.1873f; kV = 0.6504f; kUB = 2.1418f; break;
+                default: // BT.601 limited
+                    kR = 1.5960f; kU = 0.3918f; kV = 0.8130f; kUB = 2.0173f; break;
+            }
+        }
+
         for (int y = 0; y < h; y++)
         {
             byte* dstRow = dstBase + (nuint)(y * destStride);
             int yBase = y * w;
             int cRow = vSub ? (y >> 1) : y;
-            int uvRowBase = uvOff + cRow * (w * 2);
+            int uvRowBase = uvOff + cRow * w;
             int uRowBase = uOff + cRow * chromaW;
             int vRowBase = vOff + cRow * chromaW;
 
@@ -329,16 +355,18 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
                 int cu, cv;
                 if (isNv)
                 {
-                    int idx = uvRowBase + x * 2;
+                    // NV12/NV21 标准半平面：UV 行步长 w 字节，每 2 个 luma 共享一组 (U,V)。
+                    // U/V 分别位于偶/奇（NV12: U先V后；NV21: V先U后）。
+                    int uvIdx = uvRowBase + ((x >> 1) << 1);
                     if (sw.Format == LingFan.Media.Abstractions.PixelFormat.NV12)
                     {
-                        cu = sw.Data.Span[idx];
-                        cv = sw.Data.Span[idx + 1];
+                        cu = sw.Data.Span[uvIdx];
+                        cv = sw.Data.Span[uvIdx + 1];
                     }
                     else // NV21: V 在前
                     {
-                        cv = sw.Data.Span[idx];
-                        cu = sw.Data.Span[idx + 1];
+                        cv = sw.Data.Span[uvIdx];
+                        cu = sw.Data.Span[uvIdx + 1];
                     }
                 }
                 else
@@ -348,9 +376,21 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
                     cv = sw.Data.Span[vRowBase + cCol];
                 }
 
-                int r = yv + Rv[cv];
-                int g = yv + Gu[cu] + Gv[cv];
-                int b = yv + Bu[cu];
+                int r, g, b;
+                if (useLut)
+                {
+                    r = yv + Rv[cv];
+                    g = yv + Gu[cu] + Gv[cv];
+                    b = yv + Bu[cu];
+                }
+                else
+                {
+                    int du = cu - 128, dv = cv - 128;
+                    int yl = (int)((yv - yOff) * yScale);
+                    r = yl + (int)(dv * kR);
+                    g = yl - (int)(du * kU) - (int)(dv * kV);
+                    b = yl + (int)(du * kUB);
+                }
                 r = r < 0 ? 0 : r > 255 ? 255 : r;
                 g = g < 0 ? 0 : g > 255 ? 255 : g;
                 b = b < 0 ? 0 : b > 255 ? 255 : b;

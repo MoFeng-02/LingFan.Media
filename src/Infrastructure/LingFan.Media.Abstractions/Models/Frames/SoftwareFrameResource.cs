@@ -49,6 +49,11 @@ public sealed class SoftwareFrameResource : IFrameResource
     public Memory<byte> Data { get; }
 
     /// <summary>
+    /// 帧的色彩空间描述（可空；由解码器透传，渲染端据此选 YUV→RGB 矩阵，null 时用默认）。
+    /// </summary>
+    public VideoColorInfo? ColorInfo { get; set; }
+
+    /// <summary>
     /// 平面 0 的行字节数（stride）。<c>0</c> 表示未指定——数据为紧凑布局（宽度 × 每像素字节数），
     /// 兼容历史构造函数。零拷贝路径传入原生 buffer 的实际 stride，
     /// 可能因对齐填充大于紧凑行宽，渲染方须按行拷贝。

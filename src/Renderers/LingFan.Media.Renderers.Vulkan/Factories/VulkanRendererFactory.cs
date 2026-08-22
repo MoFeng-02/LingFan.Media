@@ -332,6 +332,40 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 var devExts = GetDeviceExtensions(physicalDevice);
                 nint devExtPtr = VulkanNative.StringArrayToPtr(devExts);
 
+                // Android AHB 零拷贝：YCbCr 采样转换特性（samplerYcbcrConversion）须在设备创建期启用。
+                // 先经 vkGetPhysicalDeviceFeatures2 查询支持性——不支持时不链入（保持设备创建合法），
+                // AHB 导入路径由生产者 TryImport 失败回落软解（能力自报 + 行为副作用双判据，不假绿）。
+                PhysicalDeviceSamplerYcbcrConversionFeatures ycbcrFeatures = default;
+                bool enableYcbcrFeatures = false;
+                if (OperatingSystem.IsAndroid()
+                    && Array.IndexOf(devExts, "VK_ANDROID_external_memory_android_hardware_buffer") >= 0)
+                {
+                    PhysicalDeviceSamplerYcbcrConversionFeatures probe = new()
+                    {
+                        SType = StructureType.PhysicalDeviceSamplerYcbcrConversionFeatures,
+                    };
+                    PhysicalDeviceFeatures2 features2 = new()
+                    {
+                        SType = StructureType.PhysicalDeviceFeatures2,
+                        PNext = &probe,
+                    };
+                    enableYcbcrFeatures =
+                        VulkanNative.GetPhysicalDeviceFeatures2(physicalDevice, &features2) == Result.Success
+                        && probe.SamplerYcbcrConversion;
+                    if (enableYcbcrFeatures)
+                    {
+                        ycbcrFeatures = new PhysicalDeviceSamplerYcbcrConversionFeatures
+                        {
+                            SType = StructureType.PhysicalDeviceSamplerYcbcrConversionFeatures,
+                            SamplerYcbcrConversion = true,
+                        };
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Android AHB 零拷贝：物理设备不支持 samplerYcbcrConversion 特性，AHB 导入将回落软解");
+                    }
+                }
+
                 // 视频解码队列族（B4 Vulkan Video 硬解复用同一设备；无则跳过，不影响现有渲染）。
                 // 直接写入字段（与 _device/_queue 等同为方法级工作变量，确保 catch 之后的赋值块仍可见）。
                 _videoQueueFamilyIndex = FindVideoDecodeQueueFamily(physicalDevice);
@@ -370,6 +404,9 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     EnabledExtensionCount = (uint)devExts.Length,
                     PpEnabledExtensionNames = (byte**)devExtPtr,
                 };
+                // Android AHB 零拷贝：链入 samplerYcbcrConversion 特性（局部变量存活至 CreateDevice 返回）。
+                if (enableYcbcrFeatures)
+                    devInfo.PNext = &ycbcrFeatures;
 
                 fixed (DeviceQueueCreateInfo* pQueueInfos = queueInfos)
                 {
@@ -613,6 +650,10 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         {
             AddIfAvail("VK_KHR_external_memory_fd");
             AddIfAvail("VK_KHR_external_semaphore_fd");
+            // Android AHB 零拷贝导入（MediaCodec 硬解帧 → Vulkan）：VK_ANDROID_external_memory_android_hardware_buffer。
+            // 按可用性过滤（缺失则 AHB 导入路径由生产者 TryImport 返回 false 回落软解，不影响渲染）。
+            if (OperatingSystem.IsAndroid())
+                AddIfAvail("VK_ANDROID_external_memory_android_hardware_buffer");
         }
         else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
         {

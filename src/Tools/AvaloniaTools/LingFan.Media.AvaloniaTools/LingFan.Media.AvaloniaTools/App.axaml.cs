@@ -75,7 +75,12 @@ public partial class App : Application
         // 注册会白白消耗回退时间；桌面端如需再按需放开（与 MF 同模式注释）。
         //builder.AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
         //        .AddVLCNative();
-        builder.AddMediaCodec();
+        // 启用 AImageReader Surface 输出（零拷贝甲路径）:MTK/高通等硬件 AVC 解码器在 ByteBuffer 模式下
+        // 输出缓冲池取帧停滞（映射到 c2.mtk.avc.decoder / c2.qti.avc.decoder 时 dequeueOutputBuffer 恒
+        // TRY_AGAIN_LATER、pipeline 积压），本机软件解码器（c2.android.avc.decoder）在 API<29 不可用，
+        // 故必须走 Surface/AImageReader 输出才稳。帧经 AImage_getHardwareBuffer 取 AHB → Vulkan 导入
+        // （无 samplerYcbcr 时自动回落 CPU 平面提取 → SoftwareFrameResource → Skia 渲染，可正确出画）。
+        builder.AddMediaCodec(o => o.EnableHardwareBufferZeroCopy = true);
         // composer 工厂需要 ILoggerFactory；独立运行的 App 手动 AddLogging 提供。
 
         // Android 真机：注册原生 OpenSL ES 音频输出（O4）。非 Android 调用会抛 PlatformNotSupportedException，

@@ -35,6 +35,9 @@ public sealed class VideoFrame : IDisposableFrame
     /// <summary>是否关键帧。</summary>
     public bool KeyFrame { get; internal set; }
 
+    /// <summary>帧的色彩空间描述（可空；渲染端据此选 YUV→RGB 矩阵，null 时用默认。</summary>
+    public VideoColorInfo? ColorInfo { get; set; }
+
     /// <inheritdoc/>
     public bool IsDisposed { get; private set; }
 
@@ -42,7 +45,7 @@ public sealed class VideoFrame : IDisposableFrame
     /// 初始化 <see cref="VideoFrame"/> 的新实例。
     /// </summary>
     public VideoFrame(int width, int height, PixelFormat format, IFrameResource resource,
-        TimeSpan timestamp, TimeSpan duration, bool keyFrame)
+        TimeSpan timestamp, TimeSpan duration, bool keyFrame, VideoColorInfo? colorInfo = null)
     {
         Width = width;
         Height = height;
@@ -51,6 +54,7 @@ public sealed class VideoFrame : IDisposableFrame
         Timestamp = timestamp;
         Duration = duration;
         KeyFrame = keyFrame;
+        ColorInfo = colorInfo;
     }
 
     /// <summary>
@@ -80,7 +84,7 @@ public sealed class VideoFrame : IDisposableFrame
     /// <param name="duration">帧持续时间。</param>
     /// <param name="keyFrame">是否关键帧。</param>
     public void Reset(int width, int height, PixelFormat format, IFrameResource? resource,
-        TimeSpan timestamp, TimeSpan duration, bool keyFrame)
+        TimeSpan timestamp, TimeSpan duration, bool keyFrame, VideoColorInfo? colorInfo = null)
     {
         // 释放旧 Resource（安全：SoftwareFrameResource.Dispose 检查 _disposed）
         Resource?.Dispose();
@@ -92,6 +96,7 @@ public sealed class VideoFrame : IDisposableFrame
         Timestamp = timestamp;
         Duration = duration;
         KeyFrame = keyFrame;
+        ColorInfo = colorInfo;
         IsDisposed = false;
     }
 

@@ -1,7 +1,7 @@
 namespace LingFan.Media.Backends.MediaCodec;
 
 /// <summary>
-/// Android MediaCodec / MediaExtractor 的 MIME 字符串、编解码器枚举、像素格式与采样格式的互映射。
+/// Android MediaCodec / MediaExtractor 的 MIME 字符串、编解码器枚举的互映射（可移植，零外部引用）。
 /// </summary>
 /// <remarks>
 /// <para>MIME 字符串严格取自 AOSP <c>MediaDefs</c>（<c>frameworks/base/media/java/android/media/MediaFormat.java</c>
@@ -12,9 +12,11 @@ namespace LingFan.Media.Backends.MediaCodec;
 /// <item>audio/mp4a-latm（AAC）、audio/mpeg（MP3）、audio/opus、audio/flac、audio/vorbis、
 /// audio/raw（PCM）、audio/ac3。</item>
 /// </list>
-/// <para>均为纯值映射，零外部引用，AOT 安全（无反射、无字典反射）。</para>
+/// <para>本文件为可移植部分（net10.0 与 net10.0-android 共有）；依赖 <c>Android.Media.MediaCodecCapabilities</c>/
+/// <c>Encoding</c> 的颜色格式与采样格式映射在 <c>AndroidCodecMaps.Android.cs</c>（仅 Android 目标编译）。
+/// 均为纯值映射，零外部引用，AOT 安全（无反射、无字典反射）。</para>
 /// </remarks>
-internal static class AndroidCodecMaps
+internal static partial class AndroidCodecMaps
 {
     // ── MIME → 枚举 ──
 
@@ -92,42 +94,35 @@ internal static class AndroidCodecMaps
         return ContainerFormat.Unknown;
     }
 
-    // ── 颜色格式 → 像素格式（ByteBuffer 软件输出路径）──
+    // ── 色彩空间 NDK 值 → LingFan 枚举（YUV→RGB 矩阵选择）──
 
-    /// <summary>将 NDK 颜色格式映射到 LingFan <see cref="PixelFormat"/>；不支持返回 null 由调用方拒绝。</summary>
-    public static PixelFormat? ColorFormatToPixelFormat(int colorFormat)
+    /// <summary>将 AOSP key-color-standard 的 int 值映射到 <see cref="ColorStandard"/>。</summary>
+    public static ColorStandard ColorStandardFromNdk(int value) => value switch
     {
-        return colorFormat switch
-        {
-            // NV12 半平面（含各厂商变体与柔性格式）：Y + 交织 UV
-            AndroidMediaConstants.COLOR_FormatYUV420Flexible => PixelFormat.NV12,
-            AndroidMediaConstants.COLOR_FormatYUV420SemiPlanar => PixelFormat.NV12,
-            AndroidMediaConstants.COLOR_FormatYUV420PackedSemiPlanar => PixelFormat.NV12,
-            AndroidMediaConstants.COLOR_QCOM_FormatYUV420SemiPlanar => PixelFormat.NV12,
-            AndroidMediaConstants.COLOR_TI_FormatYUV420PackedSemiPlanar => PixelFormat.NV12,
-            // I420 三平面：Y + U + V
-            AndroidMediaConstants.COLOR_FormatYUV420Planar => PixelFormat.YUV420P,
-            AndroidMediaConstants.COLOR_FormatYUV420PackedPlanar => PixelFormat.YUV420P,
-            _ => null
-        };
-    }
+        1 => ColorStandard.Bt709,      // COLOR_STANDARD_BT709
+        2 => ColorStandard.Bt601,      // COLOR_STANDARD_BT601_PAL
+        4 => ColorStandard.Bt601,      // COLOR_STANDARD_BT601_NTSC
+        5 => ColorStandard.Bt2020,     // COLOR_STANDARD_BT2020
+        _ => ColorStandard.Unspecified,
+    };
 
-    // ── pcm-encoding → 采样格式（音频解码输出）──
-
-    /// <summary>将 AOSP pcm-encoding 值映射到 LingFan <see cref="SampleFormat"/>；不支持返回 null。</summary>
-    public static SampleFormat? PcmEncodingToSampleFormat(int encoding)
+    /// <summary>将 AOSP key-color-range 的 int 值映射到 <see cref="ColorRange"/>。</summary>
+    public static ColorRange ColorRangeFromNdk(int value) => value switch
     {
-        return encoding switch
-        {
-            AndroidMediaConstants.ENCODING_PCM_16BIT => SampleFormat.S16,
-            AndroidMediaConstants.ENCODING_PCM_FLOAT => SampleFormat.F32,
-            AndroidMediaConstants.ENCODING_PCM_32BIT => SampleFormat.S32,
-            // ENCODING_PCM_8BIT 与 ENCODING_PCM_24BIT_PACKED 均无对应枚举：8-bit 无 S8、24-bit 打包为
-            // 3 字节/样本（非 4 字节），谎报为 S32 会让下游按 4 字节解析错位（假绿）。按“绝不假绿”
-            // 原则两者均拒绝（返回 null → Initialize 抛 NotSupportedException 诚实失败）。
-            _ => null
-        };
-    }
+        1 => ColorRange.Full,          // COLOR_RANGE_FULL
+        2 => ColorRange.Limited,       // COLOR_RANGE_LIMITED
+        _ => ColorRange.Unspecified,
+    };
+
+    /// <summary>将 AOSP key-color-transfer 的 int 值映射到 <see cref="ColorTransfer"/>。</summary>
+    public static ColorTransfer ColorTransferFromNdk(int value) => value switch
+    {
+        1 => ColorTransfer.Linear,     // COLOR_TRANSFER_LINEAR
+        3 => ColorTransfer.SdrVideo,   // COLOR_TRANSFER_SDR_VIDEO
+        6 => ColorTransfer.St2084,     // COLOR_TRANSFER_ST2084
+        7 => ColorTransfer.Hlg,        // COLOR_TRANSFER_HLG
+        _ => ColorTransfer.Unspecified,
+    };
 
     /// <summary>采样格式每样本字节数。</summary>
     public static int BytesPerSample(SampleFormat format) => format switch
