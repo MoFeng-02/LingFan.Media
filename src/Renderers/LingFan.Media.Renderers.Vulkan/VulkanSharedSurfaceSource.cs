@@ -44,6 +44,7 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
     private readonly ILogger<VulkanSharedSurfaceSource> _logger;
     private readonly bool _isWindows;
     private readonly bool _isApple;
+    private readonly bool _isAndroid;
     private readonly SharedGpuHandleKind _handleKind;
     private readonly SharedGpuSemaphoreKind _semaphoreKind;
     private readonly ExternalMemoryHandleTypeFlags _memHandleType;
@@ -89,6 +90,7 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
         _queueFamilyIndex = factory.SharedQueueFamilyIndex;
         _isWindows = OperatingSystem.IsWindows();
         _isApple = OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
+        _isAndroid = OperatingSystem.IsAndroid();
 
         if (_isWindows)
         {
@@ -106,6 +108,16 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
             _semaphoreKind = SharedGpuSemaphoreKind.MetalSharedEvent;
             _memHandleType = 0;
             _semHandleType = 0;
+        }
+        else if (_isAndroid)
+        {
+            // Android：经 VK_ANDROID_external_memory_android_hardware_buffer 把 Vulkan 离屏图像导出为
+            // AHardwareBuffer，交 Avalonia 合成器直接导入采样（无空域零拷贝上屏）。信号量沿用 fd 导出
+            // （VK_KHR_external_semaphore_fd 在 Android 受支持），故 _semHandleType 与 Linux 同取 OpaqueFDBit。
+            _handleKind = SharedGpuHandleKind.AndroidHardwareBuffer;
+            _semaphoreKind = SharedGpuSemaphoreKind.VulkanOpaquePosixFileDescriptor;
+            _memHandleType = ExternalMemoryHandleTypeFlags.AndroidHardwareBufferBitAndroid;
+            _semHandleType = ExternalSemaphoreHandleTypeFlags.OpaqueFDBit;
         }
         else
         {
@@ -480,7 +492,7 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
                 throw new InvalidOperationException($"vkGetMemoryWin32HandleKHR 失败: {hR}");
             _exportedMemoryHandle = hMem;
         }
-        else
+        else if (!_isAndroid)
         {
             MemoryGetFdInfoKHR getInfo = new()
             {
@@ -492,6 +504,23 @@ internal sealed unsafe class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
             if (hR != Result.Success)
                 throw new InvalidOperationException($"vkGetMemoryFdKHR 失败: {hR}");
             _exportedMemoryHandle = (nint)fd;
+        }
+        else
+        {
+            // Android：经 vkGetMemoryAndroidHardwareBufferANDROID 把带 AHB 导出标志的设备内存导出为
+            // AHardwareBuffer 指针（消费侧 Avalonia 合成器直接导入采样，无空域零拷贝上屏）。
+            // 该结构无 HandleType 字段——导出类型已由分配期 ExportMemoryAllocateInfo.HandleTypes
+            // （= AndroidHardwareBufferBitAndroid）决定。内存生命周期仍归本源，句柄由
+            // _exportedMemoryHandle 持有；AHB 自身释放由消费方按平台约定处理。
+            MemoryGetAndroidHardwareBufferInfoANDROID getInfo = new()
+            {
+                SType = StructureType.MemoryGetAndroidHardwareBufferInfoAndroid,
+                Memory = _sharedMemory,
+            };
+            Result hR = VulkanNative.GetMemoryAndroidHardwareBufferANDROID(_device, &getInfo, out nint ahb);
+            if (hR != Result.Success)
+                throw new InvalidOperationException($"vkGetMemoryAndroidHardwareBufferANDROID 失败: {hR}");
+            _exportedMemoryHandle = ahb;
         }
 
         // ImageView（由本源持有并随图像释放；传给管线作离屏渲染目标）。

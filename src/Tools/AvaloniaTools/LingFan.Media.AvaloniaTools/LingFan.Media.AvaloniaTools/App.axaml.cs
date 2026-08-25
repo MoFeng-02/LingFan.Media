@@ -9,7 +9,6 @@ using LingFan.Media.AvaloniaTools.Views;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.MediaFoundation;
 using LingFan.Media.Backends.VLCNative;
-using LingFan.Media.Backends.MediaCodec;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
 using LingFan.Media.Outputs.OpenSLES;
@@ -70,18 +69,19 @@ public partial class App : Application
                 .AddCompositionRenderer()
                 .AddWasapiOutput();
         }
-        // 后端注册：Android 真机阶段暂只启用 D1（MediaCodec 平台原生后端）。
-        // FFmpeg / VLC 在 Android 上无原生运行时打包（DllNotFoundException: avformat / libvlc），
-        // 注册会白白消耗回退时间；桌面端如需再按需放开（与 MF 同模式注释）。
-        //builder.AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory)
-        //        .AddVLCNative();
-        // 启用 AImageReader Surface 输出（零拷贝甲路径）:MTK/高通等硬件 AVC 解码器在 ByteBuffer 模式下
-        // 输出缓冲池取帧停滞（映射到 c2.mtk.avc.decoder / c2.qti.avc.decoder 时 dequeueOutputBuffer 恒
-        // TRY_AGAIN_LATER、pipeline 积压），本机软件解码器（c2.android.avc.decoder）在 API<29 不可用，
-        // 故必须走 Surface/AImageReader 输出才稳。帧经 AImage_getHardwareBuffer 取 AHB → Vulkan 导入
-        // （无 samplerYcbcr 时自动回落 CPU 平面提取 → SoftwareFrameResource → Skia 渲染，可正确出画）。
-        builder.AddMediaCodec(o => o.EnableHardwareBufferZeroCopy = true);
-        // composer 工厂需要 ILoggerFactory；独立运行的 App 手动 AddLogging 提供。
+        // 平台后端注册钩子：仅平台可用（如 Android 的 MediaCodec）的后端由平台入口直接引用并在此注入，
+        // 共享层不引用这些后端，避免跨 TFM 传递解析落到桩实现。桌面/iOS/浏览器端未设置则为无操作。
+        // 平台入口（Android）经 MediaBuilderPlatformRegistrar.PlatformRegistrar 在此应用其平台后端。
+        builder.ApplyPlatformRegistrar();
+
+        // Android 无空域 GPU 合成上屏（CompositionVideoRenderer）：解码侧软帧经 Vulkan 离屏图像导出为
+        // AndroidHardwareBuffer 句柄，交 Avalonia 合成器直接导入、作为控件子视觉无空域零拷贝上屏（不走 Skia
+        // CPU 回读）。设备侧 VK_ANDROID_external_memory_android_hardware_buffer 已在 VulkanRendererFactory 启用；
+        // 源工厂按 HasAndroidHardwareBufferProperties 把关，能力不满足时 Attach 经导入自检失败干净回退 Skia。
+        // 注意：CompositionVideoRenderer.Attach 对 TryGetCompositionGpuInterop 的解析已改为线程池 + 硬超时，
+        // 避免了此前在 Android UI 线程死锁（卡 logo）的根因，故此注册在 Android 安全启用。
+        if (OperatingSystem.IsAndroid())
+            builder.AddCompositionRenderer();
 
         // Android 真机：注册原生 OpenSL ES 音频输出（O4）。非 Android 调用会抛 PlatformNotSupportedException，
         // 故用 OperatingSystem.IsAndroid 守卫（与上方 Windows 守卫同构）。不注册则回落 NoOp 静音。

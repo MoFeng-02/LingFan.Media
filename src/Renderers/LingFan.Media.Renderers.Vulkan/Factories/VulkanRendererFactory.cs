@@ -349,9 +349,19 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                         SType = StructureType.PhysicalDeviceFeatures2,
                         PNext = &probe,
                     };
-                    enableYcbcrFeatures =
-                        VulkanNative.GetPhysicalDeviceFeatures2(physicalDevice, &features2) == Result.Success
-                        && probe.SamplerYcbcrConversion;
+                    Result probeResult = VulkanNative.GetPhysicalDeviceFeatures2(physicalDevice, &features2);
+                    bool probeSupported = probeResult == Result.Success && probe.SamplerYcbcrConversion;
+
+                    // 规范兜底：samplerYcbcrConversion 自 Vulkan 1.1 起为核心<b>必选</b>特性——
+                    // apiVersion ≥ 1.1 的设备报告不支持属驱动/探测假阴性（iQOO10 Adreno730 Vulkan1.3 实测：
+                    // Features2 探测返回 false，与其 1.3 核心地位矛盾）。此时按规范直接启用：
+                    // 1.1+ 一致性驱动必接受；极端非一致性驱动拒建设备 → 工厂抛异常 → 渲染回退链落 Skia，
+                    // 与探测不支持时行为等价（不会更糟）。
+                    PhysicalDeviceProperties devProps;
+                    VulkanNative.GetPhysicalDeviceProperties(physicalDevice, &devProps);
+                    bool specGuaranteed = devProps.ApiVersion >= MakeVersion(1, 1, 0);
+
+                    enableYcbcrFeatures = probeSupported || specGuaranteed;
                     if (enableYcbcrFeatures)
                     {
                         ycbcrFeatures = new PhysicalDeviceSamplerYcbcrConversionFeatures
@@ -359,10 +369,19 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                             SType = StructureType.PhysicalDeviceSamplerYcbcrConversionFeatures,
                             SamplerYcbcrConversion = true,
                         };
+                        // 诊断：探测原始结果 + apiVersion + 设备名（定位 Features2 假阴性之谜）
+                        string ahbDevName = GetDeviceNameSafe(devProps.DeviceName);
+                        _logger.LogInformation(
+                            "Android AHB 零拷贝：samplerYcbcrConversion 已启用（探测={Probe}，probeResult={Result}，" +
+                            "probeValue={ProbeValue}，apiVersion=0x{Api:X}，规范兜底={Spec}，device={Device}）",
+                            probeSupported, probeResult, probe.SamplerYcbcrConversion, devProps.ApiVersion,
+                            specGuaranteed, ahbDevName);
                     }
                     else
                     {
-                        _logger.LogWarning("Android AHB 零拷贝：物理设备不支持 samplerYcbcrConversion 特性，AHB 导入将回落软解");
+                        _logger.LogWarning(
+                            "Android AHB 零拷贝：物理设备不支持 samplerYcbcrConversion 特性（探测 result={Result}，" +
+                            "apiVersion=0x{Api:X}），AHB 导入将回落软解", probeResult, devProps.ApiVersion);
                     }
                 }
 
@@ -426,7 +445,8 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     throw new InvalidOperationException($"vkCreateDevice 失败: {result}");
 
                 // 设备已创建（且已启用 VK_KHR_swapchain）→ 解析设备级函数 + KHR swapchain 扩展
-                VulkanNative.InitDevice(device);
+                // samplerYcbcrFeatureEnabled：生产者 HasSamplerYcbcrConversion 双判据之一（函数可解析 ≠ 特性已启用）。
+                VulkanNative.InitDevice(device, enableYcbcrFeatures);
 
                 VulkanNative.GetDeviceQueue(device, queueFamilyIndex, 0, out queue);
                 if (_videoQueueFamilyIndex != uint.MaxValue)

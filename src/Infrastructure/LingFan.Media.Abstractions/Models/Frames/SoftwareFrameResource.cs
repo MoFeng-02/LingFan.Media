@@ -25,12 +25,17 @@ public sealed class SoftwareFrameResource : IFrameResource
     // 原用 ArrayPool<byte>.Shared：4K 软解每帧租 12–33MB，归还后 Shared 会囤积数十个大 buffer 不还 GC，
     // 造成「队列只 ~6 帧、进程内存却卡在 500MB~1GB」的 ghost 内存（帧在队列里很少，多的是池里囤的）。
     // 私有有界池把每桶囤积数锁死：超出的 buffer 在 Return 时即丢弃、交由 GC 回收 —— 内存有界、可预测，
-    // 不再随 4K 软解爆发。in-flight 帧数由 FrameQueue 容量封顶，本池仅保留少量热 buffer 复用，代价是
-    // 稳态略多 LOH 分配（headless「内存尽量小」的取舍，可接受）。
-    // maxArrayLength 覆盖最大单帧（8K BGRA32≈132MB，留 256MB 余量）；maxArraysPerBucket 限制每桶囤积数。
+    // 不再随 4K 软解爆发。in-flight 帧数由 FrameQueue 容量封顶，本池仅保留少量热 buffer 复用。
+    // maxArrayLength 覆盖最大单帧（8K BGRA32≈132MB，留 256MB 余量）。
+    //
+    // 【2026-08-23 vivo/Qualcomm 实证修正】maxArraysPerBucket 必须覆盖 in-flight 峰值：
+    // 帧队列容量 8（8×3MB=24MB in-flight）+ 解码器内部缓冲 + 渲染侧持有 ≈10 块同尺寸并发需求。
+    // 旧值 4 时池形同虚设——每次池空必走 new byte[3MB]（LOH），1080x1920@30fps ≈180MB/s 的
+    // LOS 分配率触发 Mono GC 每 25~90ms 一次，呈现线程被反复抢占 → 画面 1fps（每 2s 只呈 2 帧）。
+    // 提到 16（覆盖峰值 + 余量）：内存上界 16×3MB=48MB/尺寸桶，可预测；GC 压力趋零。
     private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Create(
         maxArrayLength: 256 * 1024 * 1024,
-        maxArraysPerBucket: 4);
+        maxArraysPerBucket: 16);
 
     private byte[]? _rentedBuffer;
     private IDisposable? _dataOwner;

@@ -48,8 +48,8 @@
 		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
 		<!-- VLC 后端（自写 Apache-2.0 P/Invoke，零 LGPL）：解封装+解码经 SetVideoCallbacks 内存捕获 BGRA32 帧。 -->
 		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.VLCNative\LingFan.Media.Backends.VLCNative.csproj" />
-		<!-- Android 原生后端（MediaExtractor + MediaCodec）：net10.0，运行时经 IsSupportedAsync=IsAndroid 自守卫，不影响非 Android 构建/运行。 -->
-		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.MediaCodec\LingFan.Media.Backends.MediaCodec.csproj" />
+		<!-- Android 后端（MediaExtractor + MediaCodec）不在此引用：其为 100% Android 特化（net10.0-android），
+		     由 net10.0-android 入口工程直接引用并经 Extensions 平台注册钩子（MediaBuilderPlatformRegistrar）注入。 -->
 		<ProjectReference Include="..\..\..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
 		<ProjectReference Include="..\..\..\..\Presenters\LingFan.Media.GpuPresenter\LingFan.Media.GpuPresenter.csproj" />

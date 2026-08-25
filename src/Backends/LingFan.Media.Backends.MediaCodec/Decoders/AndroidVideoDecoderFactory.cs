@@ -7,8 +7,9 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// </summary>
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂，无状态。每次 Create/CreateAsync 返回新实例。</para>
-/// <para>依赖倒置：仅依赖 <see cref="AndroidBackend"/> 与 <see cref="ILoggerFactory"/>（Abstractions 传递），绝不引用 Renderers。
-/// GPU 零拷贝已暂缓（详见设计文档 §5.2），视频解码器当前不依赖 <see cref="IGpuDeviceContext"/> / <see cref="IGpuFrameProducer"/>。</para>
+/// <para>依赖倒置：仅依赖 <see cref="AndroidBackend"/> 与 <see cref="ILoggerFactory"/>（Abstractions 传递），
+/// 绝不引用 Renderers。视频解码器只产 CPU I420 帧（托管 Image.Plane 提取），不依赖 GPU 零拷贝。</para>
+/// <para><b>架构约束</b>：本后端仅用 net-android 托管绑定，禁止手写 P/Invoke（符合 2026-08-22 裁定）。</para>
 /// </remarks>
 internal sealed class AndroidVideoDecoderFactory : IVideoDecoderFactory
 {

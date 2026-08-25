@@ -17,8 +17,10 @@ namespace LingFan.Media.Outputs.OpenSLES;
 /// 全部为 NDK 同步原生调用，无 I/O 可 await，<b>非伪异步</b>（不加 <c>async</c> 关键字、方法体无 <c>await</c>）。</item>
 /// <item><see cref="Initialize"/>：同步（sync 分类），构建 PCM 格式/数据源/数据汇并创建播放器。</item>
 /// <item><see cref="Submit"/>：同步边界（native 分类），拷贝 PCM 到原生缓冲并 <c>Enqueue</c>；缓冲满时由缓冲队列计数做背压（阻塞等待）。</item>
-/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），SetPlayState/BufferQueue.Clear。</item>
-/// <item><see cref="GetPlaybackPosition"/>：同步，OpenSL ES 无直接时钟，返回 <see cref="TimeSpan.Zero"/>（占位，待 Surface/宿主时钟桥接）。</item>
+/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），SetPlayState(PAUSED/PLAYING)/BufferQueue.Clear。</item>
+/// <item><see cref="GetPlaybackPosition"/>：同步，主时钟消费记账（首帧 PTS 锚点 + 已完成缓冲采样数），
+/// 等价 AudioTrack.playbackHeadPosition 语义；<see cref="GetPlaybackPositionDirect"/> 默认转发至此。
+/// 不读 SLPlayItf::GetPosition（厂商设备半冻结值不可信）。</item>
 /// <item><see cref="Dispose"/>：同步快速释放（sync 分类），Destroy 所有 NDK 对象。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。</item>
 /// </list>
@@ -55,6 +57,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private const uint SL_SPEAKER_FRONT_RIGHT = 0x00000002;
     private const uint SL_BYTEORDER_LITTLEENDIAN = 0x00000002; // NDK OpenSLES.h:321（BIGENDIAN=1、LITTLEENDIAN=2；误写 1 报 "unsupported byte order 1"）
     private const uint SL_PLAYSTATE_STOPPED = 0x00000001; // NDK OpenSLES.h（STOPPED=1、PAUSED=2、PLAYING=3）
+    private const uint SL_PLAYSTATE_PAUSED = 0x00000002;
     private const uint SL_PLAYSTATE_PLAYING = 0x00000003;
 
     // vtable 槽位（对照本机 NDK OpenSLES.h 权威布局，勿凭记忆）
@@ -98,6 +101,16 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private readonly SemaphoreSlim _backpressure = new(MaxInFlightBuffers, MaxInFlightBuffers);
     private GCHandle _thisHandle;
     private BufferQueueCallback? _bqCallback; // 保持存活，防止 GC
+
+    // ── 主时钟记账（ExoPlayer AudioSink 范式：消费帧数 + 首帧媒体 PTS 锚点）──
+    // SLPlayItf::GetPosition 在部分厂商设备（vivo/Qualcomm 实测）返回半冻结值：间歇推进 ≥20ms 后
+    // 长时间停滞 → 主时钟推进速率 ≪ 墙钟 → 视频帧永远差"临门一脚"无法呈现；且停摆看门狗
+    // （推进<20ms 判停摆）被间歇推进欺骗 → 全链路冻结（画面停首帧、音频照常播完）。
+    // 改为自身记账（等价 AudioTrack.playbackHeadPosition + 锚点）：设备无关、确定单调 1× 实时，
+    // 暂停自然冻结、欠载自然停摆——这正是主时钟需要的全部性质。
+    private long _framesConsumed;                    // 已播完的采样数（Interlocked）
+    private long _anchorMediaTicks = long.MinValue;  // 首个提交帧的媒体 PTS（哨兵=尚未提交）
+    private readonly ConcurrentQueue<int> _inFlightSamples = new(); // 与 _inFlightBuffers 严格同序的每缓冲采样数
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int SLResult_IntPtrDelegate(IntPtr self, IntPtr iid, out IntPtr pInterface);
@@ -351,6 +364,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
             // 2. 清空缓冲池（旧格式缓冲大小不匹配，复用会越界）并重置背压信号
             while (_inFlightBuffers.TryDequeue(out IntPtr b)) Marshal.FreeHGlobal(b);
             while (_freeBuffers.TryDequeue(out IntPtr b)) Marshal.FreeHGlobal(b);
+            _inFlightSamples.Clear(); // 主时钟记账同步（重建丢弃的缓冲未播完，不计消费）
             int deficit = MaxInFlightBuffers - _backpressure.CurrentCount;
             if (deficit > 0) _backpressure.Release(deficit);
 
@@ -414,6 +428,11 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
             src.CopyTo(dst);
 
             _inFlightBuffers.Enqueue(buffer);
+            _inFlightSamples.Enqueue(frame.FrameCount);
+            // 首帧锚点（一次性）：主时钟 = 锚点 PTS + 已消费采样数/采样率 = 当前「可闻」媒体时间。
+            // 用首帧 PTS 而非 0 作锚：音频管线不等 PTS 直接提交（如本样例音频首包 pts=1.13s 提交于
+            // 起播瞬间），可闻媒体时间从首帧 PTS 起算才能与实际听到的内容对齐。
+            Interlocked.CompareExchange(ref _anchorMediaTicks, frame.Timestamp.Ticks, long.MinValue);
 
             var enqueue = GetVTable<SLResult_EnqueueDelegate>(_bqItf, SLOT_BQ_Enqueue);
             int ret = enqueue(_bqItf, buffer, (uint)byteLength);
@@ -443,6 +462,9 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
             {
                 _freeBuffers.Enqueue(buffer);
                 _backpressure.Release();
+                // 主时钟记账：该缓冲的采样已实际播完（可闻）
+                if (_inFlightSamples.TryDequeue(out int samples))
+                    Interlocked.Add(ref _framesConsumed, samples);
             }
         }
     }
@@ -453,7 +475,8 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _playItf == IntPtr.Zero) return;
         var setState = GetVTable<SLResult_UintDelegate>(_playItf, SLOT_Play_SetPlayState);
-        setState(_playItf, SL_PLAYSTATE_STOPPED);
+        // PAUSED 保留播放头（STOPPED 会把 GetPosition 归零 → 恢复后主时钟与媒体时间错位、画面冻结）。
+        setState(_playItf, SL_PLAYSTATE_PAUSED);
     }
 
     /// <inheritdoc/>
@@ -472,14 +495,43 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         if (!_initialized || _bqItf == IntPtr.Zero) return;
         var clear = GetVTable<SLResult_VoidDelegate>(_bqItf, SLOT_BQ_Clear);
         clear(_bqItf);
-        // 清空在途缓冲回到空闲池
+        // 清空在途缓冲回到空闲池（被清缓冲未播完，不计入主时钟消费）
         while (_inFlightBuffers.TryDequeue(out IntPtr buf))
             _freeBuffers.Enqueue(buf);
+        _inFlightSamples.Clear();
         _backpressure.Release(MaxInFlightBuffers - _backpressure.CurrentCount);
     }
 
     /// <inheritdoc/>
-    public TimeSpan GetPlaybackPosition() => TimeSpan.Zero; // OpenSL ES 无直接时钟；占位
+    /// <remarks>
+    /// 主时钟 = 首帧媒体 PTS 锚点 + 已消费采样数/采样率（消费记账，等价 AudioTrack.playbackHeadPosition）。
+    /// 不读 SLPlayItf::GetPosition——该 API 在部分厂商设备（vivo/Qualcomm 实测）返回半冻结值，
+    /// 曾致主时钟推进 ≪ 墙钟 → 视频帧永久 Wait、画面冻结而音频照常（详见字段区注释）。
+    /// 记账时钟的性质：消费严格 1× 实时（单调）、暂停自然冻结、欠载自然停摆——主时钟所需全部性质。
+    /// 线程安全：Interlocked 读写，视频管线线程高频轮询无锁。
+    /// </remarks>
+    public TimeSpan GetPlaybackPosition()
+    {
+        long anchor = Interlocked.Read(ref _anchorMediaTicks);
+        if (anchor == long.MinValue || _sampleRate <= 0)
+            return TimeSpan.Zero; // 尚无音频提交：主时钟保持 0（视频首帧门控期内）
+        long consumed = Interlocked.Read(ref _framesConsumed);
+        long consumedTicks = (long)(consumed * (double)TimeSpan.TicksPerSecond / _sampleRate);
+        return TimeSpan.FromTicks(anchor + consumedTicks);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 重播（Ended→Playing）主时钟归零：仅重置记账（不动设备状态——SetPlayState(STOPPED) 会重绕
+    /// BufferQueue 播放头导致残留缓冲重放爆音）。残留缓冲的完成回调因样本队列已清、不再计入新周期。
+    /// </remarks>
+    public void ResetPlaybackClock()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        Interlocked.Exchange(ref _anchorMediaTicks, long.MinValue);
+        Interlocked.Exchange(ref _framesConsumed, 0);
+        _inFlightSamples.Clear(); // 与在途缓冲同步清空（Flush/重建路径亦然）
+    }
 
     /// <inheritdoc/>
     public TimeSpan Latency

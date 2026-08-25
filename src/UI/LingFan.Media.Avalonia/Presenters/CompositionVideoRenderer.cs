@@ -48,6 +48,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     private CompositionDrawingSurface? _drawingSurface;
     private CompositionSurfaceVisual? _surfaceVisual;
     private Visual? _attachedVisual;
+    private Compositor? _compositor;
     private ISharedGpuSurfaceSource? _source;
     private ICompositionImportedGpuImage? _imported;
     private ICompositionImportedGpuSemaphore? _waitSem;
@@ -103,12 +104,80 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
         var compositor = ElementComposition.GetElementVisual(visual)?.Compositor
             ?? throw new NotSupportedException("无法从控件取得 Compositor（当前非组合渲染后端）。");
 
-        // 受 IVideoRenderer.Attach 同步 void 契约约束，必须同步解析 ValueTask。
-        // Avalonia 12 的 TryGetCompositionGpuInterop 实现为同步判定（仅查询当前渲染后端是否支持
-        // GPU 互操作，无真实 I/O/await），ValueTask 退化为即时完成，无死锁风险。此为契约强制的同步点。
-        ICompositionGpuInterop? interop = compositor.TryGetCompositionGpuInterop().GetAwaiter().GetResult();
+        _compositor = compositor;
+        _attachedVisual = visual;
+
+        // 轻量同步挂载：仅完成不依赖 GPU 互操作的子视觉创建与布局订阅。
+        // 真正的 ICompositionGpuInterop 解析（含共享表面源 Create + 导入自检）必须延迟到渲染循环
+        // 起来之后、于 UI 线程异步完成——TryGetCompositionGpuInterop 内部走 Dispatcher.VerifyAccess +
+        // PostServerJob：既要求 UI 线程、又不可在 UI 线程阻塞（否则 server job 永无机会执行 → 死锁，
+        // 表现为应用卡在启动 logo）。故同步 Attach 阶段只挂载空子视觉并返回成功；互操作就绪后由
+        // ResolveAsync 补齐，失败则经既有 IRendererHealth.Unhealthy 机制让 VideoView 回退 Skia，
+        // 任意阶段失败均有兜底、绝不静默空白或挂起。
+        _drawingSurface = compositor.CreateDrawingSurface();
+        _surfaceVisual = compositor.CreateSurfaceVisual();
+        _surfaceVisual.Surface = _drawingSurface;
+        ElementComposition.SetElementChildVisual(visual, _surfaceVisual);
+
+        _controlSize = new Vector(visual.Bounds.Width, visual.Bounds.Height);
+        _frameSize = new Vector(0, 0);
+        if (visual is Control control)
+        {
+            _stretch = control.GetValue(VideoView.StretchProperty);
+            control.SizeChanged += OnControlSizeChanged;
+            _stretchSubscription = control.GetObservable(VideoView.StretchProperty)
+                .Subscribe(new StretchObserver(this));
+        }
+        UpdateSurfaceLayout();
+
+        // 初次尺寸：OnAttachedToVisualTree 时布局可能尚未完成（Bounds 仍 0），
+        // 延迟到下一 UI 循环读取 post-layout 尺寸，避免子视觉尺寸为 0 不可见。
+        // 后续尺寸变化由 OnControlSizeChanged 持续同步。
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_surfaceVisual is not null && !_disposed && visual is not null)
+            {
+                _controlSize = new Vector(visual.Bounds.Width, visual.Bounds.Height);
+                UpdateSurfaceLayout();
+            }
+        });
+
+        _lastVersion = 0;
+
+        // 延迟解析 GPU 互操作（UI 线程、渲染循环已启动，无死锁 / VerifyAccess 风险）。
+        Dispatcher.UIThread.Post(() => _ = ResolveAsync());
+    }
+
+    /// <summary>
+    /// 延迟解析 GPU 互操作并选定共享表面源。在 UI 线程、渲染循环已启动后由
+    /// <see cref="Attach"/> 经 <see cref="Dispatcher"/> 调度执行；解析失败即触发
+    /// <see cref="Unhealthy"/> 让宿主回退 Skia。
+    /// </summary>
+    private async Task ResolveAsync()
+    {
+        if (_disposed || _compositor is null || _attachedVisual is not Visual visual)
+            return;
+
+        // UI 线程 + await（非阻塞）：渲染循环已启动，server job 可被调度执行，无死锁；
+        // continuation 经 ConfigureAwait(true) 回到 UI 线程，后续 ImportImage 等合成器操作满足 VerifyAccess。
+        ICompositionGpuInterop? interop;
+        try
+        {
+            interop = await _compositor.TryGetCompositionGpuInterop().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CompositionVideoRenderer 解析 GPU 互操作失败，回退 Skia。");
+            MarkUnhealthy();
+            return;
+        }
+
         if (interop is null)
-            throw new NotSupportedException("当前 Avalonia 渲染后端不支持 ICompositionGpuInterop（回退 Skia）。");
+        {
+            _logger.LogWarning("CompositionVideoRenderer 当前 Avalonia 渲染后端不支持 ICompositionGpuInterop，回退 Skia。");
+            MarkUnhealthy();
+            return;
+        }
 
         // 诊断：打印合成器实际支持的句柄类型集合，用于确认零拷贝路径是否被接受
         // （legacy 全局共享句柄不支持跨 GPU 适配器；若合成器在其他适配器上则导入会静默黑屏）。
@@ -150,7 +219,18 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                 continue;
             string? ht = MapHandleKind(f.HandleKind);
             if (ht is null || !interop.SupportedImageHandleTypes.Contains(ht))
-                continue;
+            {
+                // Gate0 自修复：Android AHB 候选常量未命中时，从合成器实际支持的句柄类型中认领
+                // 含 "HardwareBuffer"/"android" 的入口（运行时确认，不靠猜测）。认领成功即继续，
+                // 失败则跳过本工厂（回退下一个 / Skia）。
+                if (f.HandleKind == SharedGpuHandleKind.AndroidHardwareBuffer)
+                    ht = interop.SupportedImageHandleTypes.FirstOrDefault(t =>
+                        t.Contains("HardwareBuffer", StringComparison.OrdinalIgnoreCase) ||
+                        t.Contains("android", StringComparison.OrdinalIgnoreCase));
+                if (ht is null || !interop.SupportedImageHandleTypes.Contains(ht))
+                    continue;
+                _logger.LogInformation("CompositionVideoRenderer 已自动认领 Android AHB 句柄类型={HandleType}。", ht);
+            }
 
             ISharedGpuSurfaceSource? candidate = null;
             try
@@ -200,52 +280,40 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             _selector.Invalidate(selectionKey);
 
         if (selected is null || source is null)
-            throw new NotSupportedException("无可用且被合成器支持的共享表面源工厂（回退 Skia）。");
+        {
+            _logger.LogWarning("CompositionVideoRenderer 无可用且被合成器支持的共享表面源工厂，回退 Skia。");
+            MarkUnhealthy();
+            return;
+        }
 
         _logger.LogInformation(
             "CompositionVideoRenderer 选定共享表面源工厂={Factory}，句柄类型={HandleType}（缓存命中={Cached}）。",
             selected.GetType().Name, handleType, cached is not null && ReferenceEquals(selected, cached));
 
-        // —— 选定成功：创建绘制表面 + 子视觉（无空域，挂在控件 Visual 下）——
-        // CompositionSurfaceVisual 没有 Stretch 属性，目标尺寸/偏移由本类按 VideoView.Stretch 手动计算。
-        _drawingSurface = compositor.CreateDrawingSurface();
-        _surfaceVisual = compositor.CreateSurfaceVisual();
-        _surfaceVisual.Surface = _drawingSurface;
-        ElementComposition.SetElementChildVisual(visual, _surfaceVisual);
-
-        // 初始化布局状态并订阅 Stretch 变化。
-        _controlSize = new Vector(visual.Bounds.Width, visual.Bounds.Height);
-        _frameSize = new Vector(0, 0);
-        if (visual is Control control)
-        {
-            _stretch = control.GetValue(VideoView.StretchProperty);
-            control.SizeChanged += OnControlSizeChanged;
-            _stretchSubscription = control.GetObservable(VideoView.StretchProperty)
-                .Subscribe(new StretchObserver(this));
-        }
-        UpdateSurfaceLayout();
-
-        // 初次尺寸：OnAttachedToVisualTree 时布局可能尚未完成（Bounds 仍 0），
-        // 延迟到下一 UI 循环读取 post-layout 尺寸，避免子视觉尺寸为 0 不可见。
-        // 后续尺寸变化由 OnControlSizeChanged 持续同步。
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (_surfaceVisual is not null && !_disposed && visual is not null)
-            {
-                _controlSize = new Vector(visual.Bounds.Width, visual.Bounds.Height);
-                UpdateSurfaceLayout();
-            }
-        });
-
-        _attachedVisual = visual;
-        // _interop 已在选择前置（供 SelfTestImport）；_source / _handleType 已在成功分支落定。
+        // _source / _handleType 在成功分支落定，供后续 Present 导入上屏。
         _source = source;
         _handleType = handleType;
-        _lastVersion = 0;
 
         _logger.LogInformation(
             "CompositionVideoRenderer 导入自检通过，启用零拷贝上屏路径（句柄类型={HandleType}）。",
             _handleType);
+    }
+
+    /// <summary>拦截式触发 <see cref="Unhealthy"/>：原子单次触发，避免与运行期跳过计数并发重复触发。</summary>
+    private void MarkUnhealthy()
+    {
+        bool already;
+        lock (_healthLock)
+        {
+            already = _unhealthyFired;
+            _unhealthyFired = true;
+        }
+        if (already)
+            return;
+        _logger.LogError("CompositionVideoRenderer 解析/导入失败，触发渲染器回退（Skia）。");
+        if (_surfaceVisual is not null)
+            Dispatcher.UIThread.Post(() => { if (_surfaceVisual is not null) _surfaceVisual.Opacity = 0; });
+        Unhealthy?.Invoke();
     }
 
     private void OnControlSizeChanged(object? sender, SizeChangedEventArgs e)
@@ -691,6 +759,11 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     /// <summary>
     /// 中立 <see cref="SharedGpuHandleKind"/> → Avalonia <see cref="KnownPlatformGraphicsExternalImageHandleTypes"/> 的一次映射。
     /// </summary>
+    // Gate0（Android）：Avalonia 的 KnownPlatformGraphicsExternalImageHandleTypes 无 AndroidHardwareBuffer 成员，
+    // 故 Android AHB 句柄类型字符串需运行时确认。下方候选循环会在合成器实际支持列表中自动认领
+    // 含 "HardwareBuffer"/"android" 的入口（不靠硬编码猜测）；Attach 处的诊断日志会打印真实列表供核对。
+    private const string AndroidHardwareBufferHandleType = "androidHardwareBuffer";
+
     private static string? MapHandleKind(SharedGpuHandleKind kind) => kind switch
     {
         SharedGpuHandleKind.D3D11TextureGlobalSharedHandle => KnownPlatformGraphicsExternalImageHandleTypes.D3D11TextureGlobalSharedHandle,
@@ -698,6 +771,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
         SharedGpuHandleKind.VulkanOpaqueNtHandle => KnownPlatformGraphicsExternalImageHandleTypes.VulkanOpaqueNtHandle,
         SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor => KnownPlatformGraphicsExternalImageHandleTypes.VulkanOpaquePosixFileDescriptor,
         SharedGpuHandleKind.IOSurfaceRef => KnownPlatformGraphicsExternalImageHandleTypes.IOSurfaceRef,
+        SharedGpuHandleKind.AndroidHardwareBuffer => AndroidHardwareBufferHandleType,
         _ => null,
     };
 

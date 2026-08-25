@@ -108,4 +108,17 @@ public interface IGpuFrameProducer
     /// <param name="texture">成功时为本渲染器 GPU-API 纹理（<see cref="IGpuTextureResource"/>），调用方取得所有权；失败时 <see langword="null"/>。</param>
     /// <returns><see langword="true"/>=零拷贝导入成功；<see langword="false"/>=不可用，调用方回落软解。</returns>
     bool TryImport(GpuFrameImportSource source, out IGpuTextureResource? texture);
+
+    /// <summary>
+    /// 预检：本生产者是否支持导入指定类型的解码原生输出（解码器据此决定是否启用对应零拷贝路径）。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>与 <see cref="TryImport"/> 的分工</b>：本方法是「路径启用前」的能力预检（如 Android 解码器
+    /// 在 configure 到 ImageReader Surface 前判定 AHB 导入可行性），避免在注定失败的路径上消耗解码器
+    /// 重建成本；<see cref="TryImport"/> 仍是运行时导入的行为判据（能力自报 + 行为副作用双判据，不假绿）。</para>
+    /// <para>默认实现乐观返回 <see langword="true"/>（与既有消费方行为兼容：由 TryImport 运行时兜底）。</para>
+    /// </remarks>
+    /// <param name="kind">解码原生输出类型。</param>
+    /// <returns><see langword="true"/>=支持导入该类型（可启用对应零拷贝路径）。</returns>
+    bool IsImportSupported(GpuFrameImportKind kind) => true;
 }

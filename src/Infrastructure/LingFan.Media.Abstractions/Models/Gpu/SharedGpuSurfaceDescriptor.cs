@@ -26,6 +26,10 @@ public enum SharedGpuHandleKind
 
     /// <summary>Apple IOSurface 引用（macOS/iOS）。</summary>
     IOSurfaceRef = 4,
+
+    /// <summary>Android <c>AHardwareBuffer</c> 引用（经 <c>VK_ANDROID_external_memory_android_hardware_buffer</c> 从 Vulkan 离屏图像导出）。</summary>
+    /// <remarks>消费侧（Avalonia Android 合成器）经 <c>ICompositionGpuInterop</c> 直接导入采样，实现无空域零拷贝上屏。</remarks>
+    AndroidHardwareBuffer = 5,
 }
 
 /// <summary>

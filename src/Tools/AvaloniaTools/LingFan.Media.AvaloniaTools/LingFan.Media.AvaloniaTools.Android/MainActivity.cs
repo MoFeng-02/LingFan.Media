@@ -1,7 +1,10 @@
-﻿using Android.App;
+using Android.App;
 using Android.Content.PM;
+using Android.OS;
 using Avalonia;
 using Avalonia.Android;
+using LingFan.Media.Backends.MediaCodec;
+using LingFan.Media.Extensions;
 
 namespace LingFan.Media.AvaloniaTools.Android;
 
@@ -13,4 +16,9 @@ namespace LingFan.Media.AvaloniaTools.Android;
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.UiMode)]
 public class MainActivity : AvaloniaMainActivity
 {
+    protected override void OnCreate(Bundle? savedInstanceState)
+    {
+
+        base.OnCreate(savedInstanceState);
+    }
 }

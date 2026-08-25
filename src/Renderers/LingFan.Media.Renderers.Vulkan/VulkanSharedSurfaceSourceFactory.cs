@@ -1,3 +1,4 @@
+using LingFan.Media.GPUShare.Vulkan;
 using LingFan.Media.Renderers.Shared;
 
 namespace LingFan.Media.Renderers.Vulkan;
@@ -51,7 +52,9 @@ public sealed class VulkanSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
             ? SharedGpuHandleKind.VulkanOpaqueNtHandle
             : OperatingSystem.IsMacOS() || OperatingSystem.IsIOS()
                 ? SharedGpuHandleKind.IOSurfaceRef
-                : SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
+                : OperatingSystem.IsAndroid()
+                    ? SharedGpuHandleKind.AndroidHardwareBuffer
+                    : SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
 
     /// <inheritdoc/>
     /// <remarks>平台级判定（不触碰原生资源）：Windows / Linux / Android / macOS / iOS 均放行；
@@ -74,7 +77,9 @@ public sealed class VulkanSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
         // 不依赖 external_memory / external_semaphore 扩展；其余平台仍要求 VK_KHR_external_memory*。
         bool sharingOk = (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
             ? _rendererFactory.MetalObjectsSharingEnabled
-            : _rendererFactory.ExternalSharingEnabled;
+            : OperatingSystem.IsAndroid()
+                ? VulkanNative.HasAndroidHardwareBufferProperties
+                : _rendererFactory.ExternalSharingEnabled;
         if (!sharingOk)
             throw new NotSupportedException(
                 "Vulkan 共享表面源所需的导出扩展不可用，无法创建 no-airspace 共享表面源"

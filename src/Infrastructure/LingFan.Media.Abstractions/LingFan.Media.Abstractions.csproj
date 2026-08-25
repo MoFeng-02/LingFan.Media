@@ -6,8 +6,6 @@
 	</ItemGroup>
 
 	<PropertyGroup>
-		<!-- LibraryImport 源生成 P/Invoke 要求工程允许不安全代码（SYSLIB1062）。 -->
-		<!--<AllowUnsafeBlocks>true</AllowUnsafeBlocks>-->
 		<IsPackable>true</IsPackable>
 	</PropertyGroup>
 

@@ -176,12 +176,13 @@ public static unsafe partial class VulkanNative
     /// 经 <c>vkGetDeviceProcAddr(device, name)</c> 解析设备级函数与 KHR swapchain 设备扩展。
     /// 须在 <c>vkCreateDevice</c> 成功后、任何设备级调用前调用一次。
     /// </summary>
-    public static unsafe void InitDevice(Device device)
+    public static unsafe void InitDevice(Device device, bool samplerYcbcrFeatureEnabled = false)
     {
         if (_deviceReady) return;
         lock (_loadLock)
         {
             if (_deviceReady) return;
+            _samplerYcbcrFeatureEnabled = samplerYcbcrFeatureEnabled;
             nint h = device.Handle;
             _destroyDevice = (delegate* unmanaged[Stdcall]<Device, AllocationCallbacks*, void>)vkGetDeviceProcAddr(h, "vkDestroyDevice");
             _getDeviceQueue = (delegate* unmanaged[Stdcall]<Device, uint, uint, Queue*, void>)vkGetDeviceProcAddr(h, "vkGetDeviceQueue");
@@ -268,6 +269,7 @@ public static unsafe partial class VulkanNative
             // Android AHB 零拷贝导入（MediaCodec 硬解帧 → Vulkan）。非 Android / 未启用扩展时为 null，调用方自检（TryImport 返回 false 回落软解）。
             // vkCreateSamplerYcbcrConversion 为 Vulkan 1.1 core（无后缀）；仅带 KHR 扩展的 1.0 设备上为 KHR 后缀——两个名字都尝试。
             _getAndroidHardwareBufferPropertiesANDROID = (delegate* unmanaged[Stdcall]<Device, nint, AndroidHardwareBufferPropertiesANDROID*, Result>)vkGetDeviceProcAddr(h, "vkGetAndroidHardwareBufferPropertiesANDROID");
+            _getMemoryAndroidHardwareBufferANDROID = (delegate* unmanaged[Stdcall]<Device, MemoryGetAndroidHardwareBufferInfoANDROID*, nint*, Result>)vkGetDeviceProcAddr(h, "vkGetMemoryAndroidHardwareBufferANDROID");
             nint ycbcrCreate = vkGetDeviceProcAddr(h, "vkCreateSamplerYcbcrConversion");
             if (ycbcrCreate == nint.Zero)
                 ycbcrCreate = vkGetDeviceProcAddr(h, "vkCreateSamplerYcbcrConversionKHR");
@@ -450,6 +452,7 @@ public static unsafe partial class VulkanNative
     private static unsafe delegate* unmanaged[Stdcall]<Device, SemaphoreGetFdInfoKHR*, int*, Result> _getSemaphoreFdKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, ExportMetalObjectsInfoEXT*, void> _exportMetalObjectsEXT;
     private static unsafe delegate* unmanaged[Stdcall]<Device, nint, AndroidHardwareBufferPropertiesANDROID*, Result> _getAndroidHardwareBufferPropertiesANDROID;
+    private static unsafe delegate* unmanaged[Stdcall]<Device, MemoryGetAndroidHardwareBufferInfoANDROID*, nint*, Result> _getMemoryAndroidHardwareBufferANDROID;
     private static unsafe delegate* unmanaged[Stdcall]<Device, SamplerYcbcrConversionCreateInfo*, AllocationCallbacks*, SamplerYcbcrConversion*, Result> _createSamplerYcbcrConversion;
     private static unsafe delegate* unmanaged[Stdcall]<Device, SamplerYcbcrConversion, AllocationCallbacks*, void> _destroySamplerYcbcrConversion;
 
@@ -672,8 +675,13 @@ public static unsafe partial class VulkanNative
     /// <summary>是否已解析 <c>vkGetAndroidHardwareBufferPropertiesANDROID</c>（Android 且设备已启用 AHB 扩展时为真）。</summary>
     public static bool HasAndroidHardwareBufferProperties => _getAndroidHardwareBufferPropertiesANDROID != null;
 
-    /// <summary>是否已解析 <c>vkCreateSamplerYcbcrConversion</c>（Vulkan 1.1 core / KHR 扩展）。</summary>
-    public static bool HasSamplerYcbcrConversion => _createSamplerYcbcrConversion != null;
+    // samplerYcbcrConversion 特性是否在设备创建期启用（由渲染器工厂探测后经 InitDevice 传入）。
+    // 【关键】函数指针可解析 ≠ 特性已启用：vkCreateSamplerYcbcrConversion 恒可解析（1.1 core 无后缀），
+    // 但特性未启用时使用 YCbCr 采样器属规范违规 —— 驱动 UB 实测表现为 SIGBUS BUS_ADRALN（iQOO10/Adreno730）。
+    private static bool _samplerYcbcrFeatureEnabled;
+
+    /// <summary>samplerYcbcrConversion 是否可用：函数已解析<b>且</b>特性已在设备创建期启用（双判据）。</summary>
+    public static bool HasSamplerYcbcrConversion => _createSamplerYcbcrConversion != null && _samplerYcbcrFeatureEnabled;
 
     /// <summary>
     /// 查询 AHardwareBuffer 的内存属性（allocationSize / memoryTypeBits）与格式属性（externalFormat / 采样器建议值）。
@@ -684,6 +692,23 @@ public static unsafe partial class VulkanNative
         if (_getAndroidHardwareBufferPropertiesANDROID == null)
             throw new InvalidOperationException("vkGetAndroidHardwareBufferPropertiesANDROID 不可用（非 Android 或未启用 VK_ANDROID_external_memory_android_hardware_buffer）。");
         return _getAndroidHardwareBufferPropertiesANDROID(device, buffer, pProperties);
+    }
+
+    /// <summary>
+    /// 把已分配（且带 <c>VK_ANDROID_external_memory_android_hardware_buffer</c> 导出标志）的 Vulkan 设备内存
+    /// 导出为 <c>AHardwareBuffer</c> 指针（消费侧经 <c>ICompositionGpuInterop</c> 直接导入采样）。
+    /// </summary>
+    /// <param name="device">Vulkan 逻辑设备。</param>
+    /// <param name="pInfo">导出信息（含目标 <see cref="DeviceMemory"/>）。</param>
+    /// <param name="pBuffer">导出的 AHardwareBuffer 指针（由调用方拥有，须由 Android NDK <c>AHardwareBuffer_release</c> 释放）。</param>
+    public static unsafe Result GetMemoryAndroidHardwareBufferANDROID(Device device, MemoryGetAndroidHardwareBufferInfoANDROID* pInfo, out nint pBuffer)
+    {
+        if (_getMemoryAndroidHardwareBufferANDROID == null)
+            throw new InvalidOperationException("vkGetMemoryAndroidHardwareBufferANDROID 不可用（非 Android 或未启用 VK_ANDROID_external_memory_android_hardware_buffer）。");
+        nint local;
+        Result r = _getMemoryAndroidHardwareBufferANDROID(device, pInfo, &local);
+        pBuffer = local;
+        return r;
     }
 
     /// <summary>创建采样器 Y′CBCR 转换（须设备已启用 samplerYcbcrConversion 特性）。</summary>

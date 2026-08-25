@@ -60,7 +60,9 @@
     <Project Path="src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
   </Folder>
   <Folder Name="/Tools/AvaloniaTools/">
-    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Android/LingFan.Media.AvaloniaTools.Android.csproj" />
+    <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Android/LingFan.Media.AvaloniaTools.Android.csproj">
+      <Deploy Solution="Debug|*" />
+    </Project>
     <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Browser/LingFan.Media.AvaloniaTools.Browser.csproj" />
     <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Desktop/LingFan.Media.AvaloniaTools.Desktop.csproj" />
     <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.iOS/LingFan.Media.AvaloniaTools.iOS.csproj" />

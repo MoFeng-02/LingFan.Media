@@ -1,34 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<!-- 多目标：net10.0（可移植，运行时自守卫抛 PlatformNotSupported）+ net10.0-android（托管 Android.Media 实现）。
-        与其余后端（FFmpeg/VLC/MF）一致：共享层（如 AvaloniaTools 的 net10.0 工程）统一引用本后端，
-        非 Android 目标走 Stubs/，Android 目标走托管实现；平台由 OperatingSystem.IsAndroid() 运行时守卫。 -->
-		<TargetFrameworks>net10.0;net10.0-android</TargetFrameworks>
-		<!-- 帧 buffer 拷贝 + 原生互操作需要 unsafe（net10.0-android 目标） -->
+		<!-- 本后端是 100% Android 平台特化（依赖 net-android 的 Android.Media 托管 API），不再提供可移植桩。
+        共享层（如 AvaloniaTools net10.0 工程）不引用本后端；由 net10.0-android 入口工程经
+        Extensions 的平台注册钩子（MediaBuilderPlatformRegistrar）手动注入，避免跨 TFM 传递解析落到桩实现。 -->
+		<TargetFramework>net10.0-android</TargetFramework>
+		<!-- 帧 buffer 拷贝 + 原生互操作需要 unsafe -->
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<IsPackable>true</IsPackable>
-		<!-- 仅 Android 目标标注平台支持；net10.0 可移植目标不标注（平台安全由运行时守卫 + 平台文件条件编译保障）。 -->
-		<SupportedOSPlatform Condition="'$(TargetFramework)' == 'net10.0-android'">android</SupportedOSPlatform>
+		<SupportedOSPlatform>android</SupportedOSPlatform>
 	</PropertyGroup>
 
 	<ItemGroup>
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
-	</ItemGroup>
-
-	<!-- net10.0 可移植目标：排除 Android-only 实现文件（含 Android.Media 绑定），改由 Stubs/ 提供 PlatformNotSupported 桩。 -->
-	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
-		<Compile Remove="Decoders/AndroidVideoDecoder.cs" />
-		<Compile Remove="Decoders/AndroidAudioDecoder.cs" />
-		<Compile Remove="Demuxer/AndroidDemuxer.cs" />
-		<Compile Remove="Demuxer/AndroidManagedDataSource.cs" />
-		<Compile Remove="AndroidCodecMaps.Android.cs" />
-	</ItemGroup>
-
-	<!-- net10.0-android 目标：排除 net10.0 桩（避免与托管实现重名）。 -->
-	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
-		<Compile Remove="Stubs/**/*.cs" />
 	</ItemGroup>
 
 	<ItemGroup>

@@ -1,6 +1,7 @@
 using Android.Media;
 using Java.IO;
 using Java.Nio;
+using System.Buffers;
 // Android.Media 亦含 MediaMetadata，与 Abstractions 全局冲突 → 别名锁定契约层类型。
 using MediaMetadata = LingFan.Media.Abstractions.MediaMetadata;
 
@@ -295,17 +296,33 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
     private static long GetLong(MediaFormat fmt, string key)
         => fmt.ContainsKey(key) ? fmt.GetLong(key) : 0;
 
-    /// <summary>读取 csd-0 二进制（拷贝为托管 byte[]）；无则返回 null。键名 "csd-0"（AOSP <c>MediaFormat.KEY_CSD0</c>）。</summary>
+    /// <summary>读取 csd-0/csd-1/…（拷贝为托管 byte[] 并依序拼接）；无则返回 null。键名 "csd-N"（AOSP <c>MediaFormat.KEY_CSD0/1/2</c>）。</summary>
+    /// <remarks>
+    /// H264 的 csd-0=SPS、csd-1=PPS（各自带 Annex-B 起始码）——<b>PPS 缺失时解码器无法解任何 slice</b>
+    /// （表现为：queueInputBuffer 全成功、解码器持续释放输入缓冲，但 dequeue 恒 TRY_AGAIN、整流 0 帧产出），
+    /// 故必须拼接完整参数集（多 NAL 同一 csd 缓冲合法且常见）。HEVC 的 csd-0 通常已含 VPS+SPS+PPS，
+    /// 额外拼接无害。AAC 的 csd-0 单包完整，循环在 csd-1 处自然终止。
+    /// </remarks>
     private static byte[]? ReadCsd(MediaFormat fmt)
     {
-        if (!fmt.ContainsKey("csd-0")) return null;
-        var bb = fmt.GetByteBuffer("csd-0");
-        if (bb is null) return null;
-        int n = bb.Remaining();
-        if (n <= 0) return null;
-        var b = new byte[n];
-        bb.Get(b);
-        return b;
+        byte[]? result = null;
+        for (int i = 0; ; i++)
+        {
+            string key = $"csd-{i}";
+            if (!fmt.ContainsKey(key)) break;
+            var bb = fmt.GetByteBuffer(key);
+            if (bb is null) break;
+            int n = bb.Remaining();
+            if (n <= 0) break;
+            var chunk = new byte[n];
+            bb.Get(chunk);
+            if (result is null) { result = chunk; continue; }
+            var merged = new byte[result.Length + chunk.Length];
+            System.Buffer.BlockCopy(result, 0, merged, 0, result.Length);
+            System.Buffer.BlockCopy(chunk, 0, merged, result.Length, chunk.Length);
+            result = merged;
+        }
+        return result;
     }
 
     /// <inheritdoc/>
@@ -354,18 +371,34 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
 
             if (n == 0) continue; // 空采样（非 EOF）：跳过，不产出空包
 
-            byte[] data = new byte[n];
-            Array.Copy(_readScratch, 0, data, 0, n); // 拷贝出所属 packet
+            // 关键：ByteBuffer.Wrap(托管数组) 在 Java 侧是 marshal 副本——ReadSampleData 写入的是
+            // Java 侧副本数组，绝不回写 _readScratch！必须用 Get()（Java→C# 方向）把字节取回。
+            // （此前误用 Array.Copy(_readScratch,…) 拷出的是从未写入的托管数组 → 喂给解码器全零字节，
+            //  导致 video/audio dequeue 恒 TRY_AGAIN、0 产出。）
+            // 每包数据经 ArrayPool 租借（grow-only，消除每包 new 的 GC 压力）；packet Dispose 时由
+            // RentedBufferOwner 归还池，避免跨包复用导致数据串号（Data 持有数组引用）。
+            byte[] data = ArrayPool<byte>.Shared.Rent(n);
+            _readBuf.Rewind(); // position=0（Position 在此绑定为方法组，用 Rewind 等价）
+            _readBuf.Get(data, 0, n);
 
             bool key = (flags & SampleFlagSync) != 0;
             var ts = ptsUs >= 0 ? TimeSpan.FromTicks(ptsUs * 10) : TimeSpan.Zero;
-            var pkt = new MediaPacket(trackIdx, data, ts, TimeSpan.Zero, key);
+            var pkt = new MediaPacket(trackIdx, data.AsMemory(0, n), ts, TimeSpan.Zero, key,
+                dataOwner: new RentedBufferOwner(data));
 
-            // 诊断节流日志：读包节奏（track/size/pts/key）
+            // 诊断节流日志：读包节奏（track/size/pts/key）；首包附前 12 字节 hex（验证取回方向正确、非全零）
             if ((_packetCounter++ % PacketLogInterval) == 0)
-                _logger.LogInformation(
-                    "[ANDROID-DEMUX] 读包 track={Track} size={Size} pts={PtsUs}us key={Key} 累计={Total}",
-                    trackIdx, data.Length, ptsUs, key, _packetCounter);
+            {
+                if (_packetCounter == 1)
+                    _logger.LogInformation(
+                        "[ANDROID-DEMUX] 读包 track={Track} size={Size} pts={PtsUs}us key={Key} 累计={Total} hex={Hex}",
+                        trackIdx, n, ptsUs, key, _packetCounter,
+                        Convert.ToHexString(data.AsSpan(0, Math.Min(12, n))));
+                else
+                    _logger.LogInformation(
+                        "[ANDROID-DEMUX] 读包 track={Track} size={Size} pts={PtsUs}us key={Key} 累计={Total}",
+                        trackIdx, n, ptsUs, key, _packetCounter);
+            }
 
             // 不支持 DRM：跳过加密采样，不假装解码
             if ((flags & SampleFlagEncrypted) != 0)
@@ -440,5 +473,19 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
         if (_disposed) return;
         _disposed = true;
         CloseSync();
+    }
+
+    /// <summary>ArrayPool 租借缓冲的归还者：MediaPacket.Dispose 经 dataOwner 触发，把缓冲归还 Shared 池，
+    /// 消除每包 new 的 GC 压力，同时因 Data 持有数组引用而避免跨包复用导致的数据串号。</summary>
+    private sealed class RentedBufferOwner : IDisposable
+    {
+        private byte[]? _buffer;
+        public RentedBufferOwner(byte[] buffer) => _buffer = buffer;
+        public void Dispose()
+        {
+            var buf = _buffer;
+            _buffer = null;
+            if (buf is not null) ArrayPool<byte>.Shared.Return(buf);
+        }
     }
 }

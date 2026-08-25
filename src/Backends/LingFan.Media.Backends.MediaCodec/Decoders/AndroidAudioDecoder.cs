@@ -41,6 +41,13 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
     private const int InfoOutputFormatChanged = -2;
     private const int InfoOutputBuffersChanged = -3;
     private const int FlagEndOfStream = 4;
+    private const int LogInterval = 64;
+
+    // 诊断计数（周期性日志定位 dequeue 是否恒 TRY_AGAIN）
+    private long _drainCalls, _drainTryAgain, _drainProduced;
+    private int _packetsFed;
+    private bool _eosQueued;     // EOS 已入队（FlushAsync 重试语义，Reset 清零）
+    private bool _eosOutputSeen; // 解码器已回报输出 EOS（DRAIN 完成判据）
 
     public AndroidAudioDecoder(AndroidBackend backend, ILogger<AndroidAudioDecoder> logger)
     {
@@ -133,6 +140,11 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
 
         if (packet is null) return new ValueTask<AudioFrame?>(ReadOutput());
 
+        // 诊断节流：音频收包节奏（确认喂入是否到达解码器）
+        if ((_packetsFed % LogInterval) == 0)
+            _logger.LogInformation("[ANDROID-AUD] 收包 #{Count} size={Size} pts={Pts:g}", _packetsFed, packet.Data.Length, packet.Timestamp);
+        _packetsFed++;
+
         _pendingInput.Enqueue(packet);
         FeedInput();
         return new ValueTask<AudioFrame?>(ReadOutput());
@@ -144,12 +156,28 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
         ObjectDisposedException.ThrowIf(_disposed, this);
         EnsureInitialized();
 
+        // 先排空待喂入队列
         FeedInput();
-        int inIdx = _codec!.DequeueInputBuffer(1000);
-        if (inIdx >= 0)
-            _codec.QueueInputBuffer(inIdx, 0, 0, 0, (MediaCodecBufferFlags)FlagEndOfStream);
 
-        return new ValueTask<AudioFrame?>(DrainOutput(10_000));
+        // EOS 入队：输入槽满时先排空输出（释放输出→解码器消费输入→槽释放），带重试。
+        // 旧实现单次 1ms 尝试：槽满即放弃 EOS → 尾段帧滞留（与视频解码器同 bug）。
+        if (!_eosQueued)
+        {
+            for (int attempt = 0; attempt < 16 && !_eosQueued; attempt++)
+            {
+                FeedInput();
+                int inIdx = _codec!.DequeueInputBuffer(2_000);
+                if (inIdx >= 0)
+                {
+                    _codec.QueueInputBuffer(inIdx, 0, 0, 0, (MediaCodecBufferFlags)FlagEndOfStream);
+                    _eosQueued = true;
+                    break;
+                }
+                _ = DrainOutput(5_000); // 排空输出解锁解码器（产帧入 FIFO）
+            }
+        }
+
+        return new ValueTask<AudioFrame?>(DrainOutput(_eosQueued && !_eosOutputSeen ? 40_000 : 10_000));
     }
 
     /// <inheritdoc/>
@@ -157,6 +185,8 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
     {
         if (_codec is null) return;
         _codec.Flush();
+        _eosQueued = false;
+        _eosOutputSeen = false;
         while (_pendingInput.Count > 0) _pendingInput.Dequeue().Dispose();
         while (_pendingFrames.Count > 0) _pendingFrames.Dequeue().Dispose();
         _pendingInput.Clear();
@@ -206,11 +236,15 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
 
     private AudioFrame? DrainOutput(long timeoutUs)
     {
+        _drainCalls++;
+        // 规范：dequeue 用阻塞超时。非阻塞（0）会被解码器视为「当前无输出就绪」而恒返回 TRY_AGAIN，
+        // 打断帧/采样交付（AAC 软解亦受影响）。与视频 Surface 路径同构，给一个正阻塞预算。
+        if (timeoutUs <= 0) timeoutUs = 5_000;
         while (true)
         {
             var info = new AndroidMediaCodec.BufferInfo();
             int idx = _codec!.DequeueOutputBuffer(info, timeoutUs);
-            if (idx == InfoTryAgainLater) break;
+            if (idx == InfoTryAgainLater) { _drainTryAgain++; break; }
             if (idx == InfoOutputFormatChanged)
             {
                 // 音频采样率/声道可能随流变化；重新读取输出格式（无参重载为 OutputFormat 属性）
@@ -219,11 +253,12 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
                 continue;
             }
             if (idx == InfoOutputBuffersChanged) continue;
-            if (idx < 0) break;
+            if (idx < 0) { _drainTryAgain++; break; }
 
             if (((int)info.Flags & FlagEndOfStream) != 0)
             {
                 _codec.ReleaseOutputBuffer(idx, false);
+                _eosOutputSeen = true; // DRAIN 完成判据
                 break;
             }
 
@@ -236,8 +271,14 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
 
             var frame = ExtractFrame(idx, info);
             _codec.ReleaseOutputBuffer(idx, false);
+            _drainProduced++;
             _pendingFrames.Enqueue(frame);
         }
+
+        // 周期性诊断（定位 audio 是否同样 dequeue 恒 TRY_AGAIN）
+        if ((_drainCalls % LogInterval) == 0)
+            _logger.LogInformation("[ANDROID-AUD] 诊断: 排空={Calls} tryAgain={Try} 累计产帧={Frames}",
+                _drainCalls, _drainTryAgain, _drainProduced);
 
         return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
     }

@@ -6,7 +6,8 @@ global using Microsoft.Extensions.Logging;
 // DI 命名空间全局引入（AddSingleton / TryAddEnumerable 扩展方法）
 global using Microsoft.Extensions.DependencyInjection;
 global using Microsoft.Extensions.DependencyInjection.Extensions;
-// 原生互操作命名空间（LibraryImport / Marshal / StructLayout / GCHandle / UnmanagedCallersOnly）
+// 托管互操作命名空间（仅用 MemoryMarshal 等托管内存互操作辅助；本后端禁止手写 P/Invoke，
+// 不含 LibraryImport / Marshal / StructLayout / GCHandle / UnmanagedCallersOnly）
 global using System.Runtime.InteropServices;
 // 平台标注命名空间（OperatingSystem.IsAndroid / SupportedOSPlatform）
 global using System.Runtime.Versioning;

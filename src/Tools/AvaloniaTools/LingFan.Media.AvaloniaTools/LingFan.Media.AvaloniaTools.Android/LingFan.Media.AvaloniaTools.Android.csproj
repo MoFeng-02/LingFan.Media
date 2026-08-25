@@ -1,29 +1,36 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <RootNamespace>LingFan.Media.AvaloniaTools</RootNamespace>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0-android</TargetFramework>
-    <SupportedOSPlatformVersion>23</SupportedOSPlatformVersion>
-    <Nullable>enable</Nullable>
-    <ApplicationId>com.CompanyName.LingFan.Media.AvaloniaTools</ApplicationId>
-    <ApplicationVersion>1</ApplicationVersion>
-    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
-    <AndroidPackageFormat>apk</AndroidPackageFormat>
-    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
-  </PropertyGroup>
+	<PropertyGroup>
+		<RootNamespace>LingFan.Media.AvaloniaTools</RootNamespace>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0-android</TargetFramework>
+		<SupportedOSPlatformVersion>23</SupportedOSPlatformVersion>
+		<Nullable>enable</Nullable>
+		<ApplicationId>com.CompanyName.LingFan.Media.AvaloniaTools</ApplicationId>
+		<ApplicationVersion>1</ApplicationVersion>
+		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+		<AndroidPackageFormat>apk</AndroidPackageFormat>
+		<AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
 
-  <ItemGroup>
-    <AndroidResource Include="Icon.png">
-      <Link>Resources\drawable\Icon.png</Link>
-    </AndroidResource>
-  </ItemGroup>
+		<!--<JavaSdkDirectory>D:\Java JDK\jdk-17.0.5</JavaSdkDirectory>-->
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+	  <EnableLLVM>False</EnableLLVM>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Avalonia.Android" Version="12.1.1" />
-    <PackageReference Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />
-  </ItemGroup>
+	<ItemGroup>
+		<AndroidResource Include="Icon.png">
+			<Link>Resources\drawable\Icon.png</Link>
+		</AndroidResource>
+	</ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\LingFan.Media.AvaloniaTools\LingFan.Media.AvaloniaTools.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Avalonia.Android" Version="12.1.1" />
+		<PackageReference Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\..\..\Backends\LingFan.Media.Backends.MediaCodec\LingFan.Media.Backends.MediaCodec.csproj" />
+		<ProjectReference Include="..\LingFan.Media.AvaloniaTools\LingFan.Media.AvaloniaTools.csproj" />
+		<!-- Android 平台后端（MediaCodec，100% net10.0-android 特化）：经共享层平台注册钩子注入（见 MainActivity.OnCreate）。 -->
+	</ItemGroup>
 </Project>

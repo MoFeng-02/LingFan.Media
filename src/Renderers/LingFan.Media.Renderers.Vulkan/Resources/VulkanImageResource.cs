@@ -18,6 +18,9 @@ public sealed unsafe class VulkanImageResource : IFrameResource, IGpuTextureReso
     private readonly DeviceMemory _memory;
     private readonly ImageLayout _currentLayout;
     private readonly int _subresourceIndex;
+    // GPU→CPU 回读桥（由生产者注入；Android Tier2：Skia 合成路径经 staging buffer 回读上屏）。
+    // null = 生产者未提供（Windows/Linux 导入路径），ReadbackToCpu 按零拷贝路径约定抛 NotSupported。
+    private readonly Func<VulkanImageResource, GpuTextureReadback>? _readback;
     private bool _disposed;
 
     /// <inheritdoc/>
@@ -57,7 +60,8 @@ public sealed unsafe class VulkanImageResource : IFrameResource, IGpuTextureReso
     /// <param name="format">像素格式。</param>
     /// <param name="subresourceIndex">子资源 / 切片索引（D3D11 纹理数组时为数组索引）。</param>
     /// <param name="currentLayout">当前图像布局（交付时）。</param>
-    public VulkanImageResource(Device device, Image image, DeviceMemory memory, int width, int height, PixelFormat format, int subresourceIndex = 0, ImageLayout currentLayout = ImageLayout.TransferSrcOptimal)
+    /// <param name="readback">GPU→CPU 回读委托（由创建本资源的生产者注入，如 Android AHB 路径）；缺省 null。</param>
+    public VulkanImageResource(Device device, Image image, DeviceMemory memory, int width, int height, PixelFormat format, int subresourceIndex = 0, ImageLayout currentLayout = ImageLayout.TransferSrcOptimal, Func<VulkanImageResource, GpuTextureReadback>? readback = null)
     {
         _device = device;
         _image = image;
@@ -67,6 +71,7 @@ public sealed unsafe class VulkanImageResource : IFrameResource, IGpuTextureReso
         Format = format;
         _subresourceIndex = subresourceIndex;
         _currentLayout = currentLayout;
+        _readback = readback;
     }
 
     /// <inheritdoc/>
@@ -78,11 +83,13 @@ public sealed unsafe class VulkanImageResource : IFrameResource, IGpuTextureReso
     int IGpuTextureResource.SubresourceIndex => _subresourceIndex;
 
     /// <inheritdoc/>
-    /// <exception cref="NotSupportedException">Vulkan GPU 纹理 CPU 回读未实现（零拷贝 Present 为支持路径；
-    /// 经 staging buffer + 命令缓冲拷贝回读属未来范围，不影响零拷贝上屏）。</exception>
+    /// <remarks>生产者注入回读委托时（Android AHB 路径）经 staging buffer 回读为紧凑 BGRA32；
+    /// 未注入（Windows/Linux 导入路径）按零拷贝路径约定抛 <see cref="NotSupportedException"/>。</remarks>
     GpuTextureReadback IGpuTextureResource.ReadbackToCpu()
-        => throw new NotSupportedException(
-            "Vulkan GPU 纹理 CPU 回读未实现（零拷贝 Present 为支持路径；需经 staging buffer + 命令缓冲拷贝，属未来范围）。");
+        => _readback is not null
+            ? _readback(this)
+            : throw new NotSupportedException(
+                "Vulkan GPU 纹理 CPU 回读未接线（本资源由未提供回读上下文的生产者创建；零拷贝 Present 为支持路径）。");
 
     /// <summary>
     /// 释放 Vulkan 图像和设备内存（同步原生调用）。

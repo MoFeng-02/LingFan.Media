@@ -82,6 +82,16 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // 主时钟停摆降级标志（仅呈现线程读写，无需 volatile）：见 WaitUntilDue 的停摆看门狗。
     // 置位后同步等待改用 50ms 宽限期，避免每帧空等 500ms 把画面压到 2fps；主时钟恢复推进即复位。
     private bool _masterClockStalled;
+
+    // ── 主时钟可见性（快照日志）：同步类问题的第一现场。此前主时钟从未被观测，
+    // 排障只能靠间接推断（教训：vivo 上 SLPlayItf::GetPosition 半冻结导致全链路冻结，
+    // 连打三轮补丁才定位）。快照让「主时钟是否 1× 推进」一眼可见。
+    private long _pacingSnapshotQpc;
+    // 每帧 Present 耗时实测（快照上报均值）：定位呈现侧瓶颈（GC 抢占/渲染慢）的直接证据，
+    // 取代间接推断。正常应 <10ms；若 ≈1000ms 级则是呈现线程被抢占（GC 风暴/优先级）。
+    private double _lastPresentMs;
+    private double _presentMsAccum;
+    private int _presentedCount;
     private long _droppedFrames;
     // A/V 同步诊断节流字段（仅 LINGFAN_SYNC_DIAG=1 时读取，生产路径恒 0 不影响任何逻辑）。
     private long _lastSyncDiagTicks;
@@ -216,6 +226,12 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         // A/V 同步诊断：每轮开播重置计数，重新抓取起始帧偏移（重播/恢复也重置）。
         _presentCount = 0;
         _lastSyncDiagTicks = 0;
+        // 主时钟快照计数复位（[SYNC] 快照）
+        _presentedCount = 0;
+        _pacingSnapshotQpc = 0;
+        _presentMsAccum = 0;
+        _lastPresentMs = 0;
+        _masterClockStalled = false;
 
         // 重新创建 CTS（如果旧的已取消）
         if (_cts.IsCancellationRequested)
@@ -517,6 +533,19 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     continue;   // 重新走一轮，确保暂停/取消状态在放行后被重新评估
                 }
 
+                // 主时钟快照（每 2s）：master 应以 1× 实时推进、队列应小且流动、呈现耗时应 <10ms——同步问题第一现场。
+                long snapQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (System.Diagnostics.Stopwatch.GetElapsedTime(_pacingSnapshotQpc).TotalMilliseconds >= 2000)
+                {
+                    _pacingSnapshotQpc = snapQpc;
+                    double avgPresentMs = _presentedCount > 0 ? _presentMsAccum / _presentedCount : 0;
+                    _presentMsAccum = 0;
+                    _logger.LogInformation(
+                        "[SYNC] 快照 master={Master:g} 队列={Queue} 已呈={Presented} 累计丢={Dropped} 呈现均耗时={AvgMs:F1}ms 上帧={LastMs:F1}ms",
+                        _synchronizer.GetCurrentMasterTime(), _frameQueue.Count,
+                        _presentedCount, Interlocked.Read(ref _droppedFrames), avgPresentMs, _lastPresentMs);
+                }
+
                 // 队头帧不出队即判定（Peek 在 SingleReader 下安全）。
                 var head = _frameQueue.Peek();
                 if (head is null)
@@ -752,6 +781,22 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
     private void ProcessFrame(VideoFrame frame)
     {
+        // 每帧耗时实测（含 Present + 帧资源归池）：进快照均值
+        long presentStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            ProcessFrameCore(frame);
+        }
+        finally
+        {
+            _lastPresentMs = System.Diagnostics.Stopwatch.GetElapsedTime(presentStart).TotalMilliseconds;
+            _presentMsAccum += _lastPresentMs;
+            _presentedCount++; // 快照日志计数（[SYNC] 快照）
+        }
+    }
+
+    private void ProcessFrameCore(VideoFrame frame)
+    {
         // 仅处理「呈现」分支。同步决策（Wait / Drop）已上移到 PipelineLoop 的
         // Peek-then-Dequeue 逻辑：Wait 时帧留队头等待时钟追近，Drop 时取走并归还过期帧。此处被调用即表示队头帧已判定为 Present。
         if (PacingDiagnostics.Enabled)
@@ -835,12 +880,16 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         // 主时钟停摆看门狗：主时钟取自音频设备游标，一旦音频侧异常
         // （设备未启动、启动锚点未捕获、引擎停摆），GetCurrentMasterTime 会恒定不前进 →
         // 本循环永久自旋 → 画面永久冻结（现象：present=1 dropped=0，整片只上屏首帧）。
-        // 故记录进入时的主时钟与墙钟：墙钟已过 StallGraceMs 而主时钟前进不足 StallEpsilonMs，
-        // 即判定主时钟停摆，放弃等待直接呈现——降级为「按解码节奏出帧」，宁可轻微不同步也绝不冻结。
+        // 故记录进入时的主时钟与墙钟：墙钟已过 StallGraceMs 而主时钟推进不足，即判定停摆，
+        // 放弃等待直接呈现——降级为「按解码节奏出帧」，宁可轻微不同步也绝不冻结。
+        // 【速率判据】停摆 = 主时钟推进 < 墙钟推进 × 10%（advanced*10 < waited）。
+        //   旧判据（advanced < 20ms 绝对值）存在致命漏洞：半冻结时钟（间歇推进 ≥20ms 后长时间停滞，
+        //   vivo/Qualcomm 的 SLPlayItf::GetPosition 实测行为）每次检查都"恰好达标"→ 看门狗永不触发，
+        //   而 remaining 又始终为小的正值（帧"临门一脚"）→ 循环以微小睡眠空转到永远。速率判据
+        //   对冻结/半冻结/极慢（<10% 实时）一律触发，无死角。
         // 宽限期粘滞：首次判定用 500ms（足够长，绝不误伤正常抖动）；一旦确认停摆则降到 50ms，
         // 否则每帧空等 500ms 会把画面压到 2fps。主时钟恢复推进时自动复位回正常模式。
         double graceMs = _masterClockStalled ? 50.0 : 500.0;
-        const double StallEpsilonMs = 20.0;
         var entryMaster = _synchronizer.GetCurrentMasterTime();
         long entryQpc = System.Diagnostics.Stopwatch.GetTimestamp();
 
@@ -862,14 +911,16 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             double waitedMs = System.Diagnostics.Stopwatch.GetElapsedTime(entryQpc).TotalMilliseconds;
             double advancedMs = (master - entryMaster).TotalMilliseconds;
 
-            if (advancedMs >= StallEpsilonMs && _masterClockStalled)
+            // 恢复判定：主时钟已以接近实时的速率推进（≥墙钟 50%）
+            if (advancedMs * 2 >= waitedMs && _masterClockStalled)
             {
                 _masterClockStalled = false;
                 graceMs = 500.0;
                 _logger.LogInformation("[SYNC] 主时钟已恢复推进，同步等待回到正常模式。");
             }
 
-            if (waitedMs > graceMs && advancedMs < StallEpsilonMs)
+            // 停摆判定（速率）：主时钟推进 < 墙钟 × 10%
+            if (waitedMs > graceMs && advancedMs * 10 < waitedMs)
             {
                 if (!_masterClockStalled)
                 {

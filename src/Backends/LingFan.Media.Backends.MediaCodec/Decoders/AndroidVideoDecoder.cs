@@ -10,46 +10,62 @@ using PixelFormat = LingFan.Media.Abstractions.PixelFormat;
 namespace LingFan.Media.Backends.MediaCodec.Decoders;
 
 /// <summary>
-/// 基于托管 <see cref="AndroidMediaCodec"/> 的视频解码器（Surface + <see cref="ImageReader"/> 主路径，ByteBuffer 软件输出兜底）。
-/// net-android 内置绑定，非手写 P/Invoke。
+/// 基于托管 <see cref="AndroidMediaCodec"/> 的视频解码器：统一走 ByteBuffer + 灵活 YUV420 单一路径
+/// （经 <c>getOutputImage</c> 取标准化三平面 I420），net-android 内置绑定，非手写 P/Invoke。
 /// </summary>
 /// <remarks>
 /// <para><b>异步策略</b>：<see cref="DecodeAsync"/> / <see cref="FlushAsync"/> 为热路径，内部同步托管调用，
 /// 返回 <see cref="ValueTask.FromResult{TResult}"/>（与 FFmpegVideoDecoder 同构）。<see cref="Initialize"/> 为同步初始化。</para>
-/// <para><b>Surface 主路径</b>：硬件解码器.<c>AndroidMediaCodec.Configure</c> 到 <see cref="ImageReader"/>（
-/// <see cref="ImageFormatType.Yuv420888"/>，API 26+）的 Surface，帧经 <see cref="ImageReader.AcquireNextImage"/>
-/// 取 <see cref="Image"/>，由 <see cref="Image.Plane"/> 的 <see cref="ByteBuffer"/> 经 JNI memcpy 提获得标准
-/// 三平面 I420 —— 规避 ByteBuffer 模式部分厂商（天玑/高通）输出私有格式 UV 读不全，以及手写裸指针读取导致的
-/// <c>BUS_ADRALN</c> SIGBUS。输出仍为 CPU 帧（本重构默认；GPU 零拷贝暂缓，见设计文档 §5.2）。</para>
+/// <para><b>单一路径：ByteBuffer + 灵活 YUV420</b>：解码器以 <c>COLOR_FormatYUV420Flexible</c> 配置，输出经
+/// <see cref="AndroidMediaCodec.GetOutputImage"/> 取 <see cref="Image"/>（YUV_420_888），由托管
+/// <see cref="Image.Plane"/> 的 <see cref="ByteBuffer"/> 经 CPU 提取标准紧凑 I420。平台契约（MediaCodec「原始视频缓冲区」节，
+/// AOSP 原文经 MS Learn/Xamarin 转载）明文：灵活 YUV 缓冲既可用于 Surface，也可用于 ByteBuffer 经 getOutputImage 访问，
+/// 且自 LOLLIPOP_MR1 起所有视频编解码器均支持——故本路径对硬件与软件解码器同等有效，平面语义标准化
+/// （plane0=Y、plane1=U、plane2=V），无需按厂商私有 NV12/NV21 布局猜测。</para>
+/// <para><b>为何不走 ImageReader(Surface)+CPU 读</b>：Surface 原生输出是不透明 COLOR_FormatSurface，平台只承诺
+/// 可用于呈现/GL 采样，从不承诺能被 CPU 按 YUV_420_888 正确读出（色度是否落盘取决于 gralloc 用途位与厂商实现）。
+/// 真机实测即命中该缺口：V 平面恒≈0 → 画面泛绿。GPU 零拷贝的正确形态是 AHardwareBuffer→GL/Vulkan 采样，
+/// 另行推进（见设计文档 §5.2），不在本路径内。</para>
+/// <para><b>可见区</b>：帧由 <see cref="ExtractI420FromImage"/> 按 <see cref="Image.CropRect"/>（= 输出格式
+/// crop-* 矩形，.NET 侧已等价解析到 <c>_visibleWidth/_visibleHeight</c>）界定可见像素，跳过 16 对齐填充区；
+/// 按 plane 的 pixelStride/rowStride 提取，Y pixelStride 恒为 1，U/V 的 pixelStride 为 1(planar I420) 或
+/// 2(semiplanar NV12，U 偶 V 奇)。</para>
 /// <para><b>色彩随帧透传</b>：<see cref="ReadOutputFormat"/> 读 <c>KEY_COLOR_STANDARD/RANGE/TRANSFER</c> 填
 /// <see cref="VideoColorInfo"/>，随帧交给渲染端选正确的 YUV→RGB 矩阵（治骁龙偏绿）。</para>
-/// <para><b>ByteBuffer 兜底</b>：<see cref="ImageReader"/> 创建失败回落；输出按 AOSP <c>stride/slice-height/crop-*</c>
-/// 布局由托管 <see cref="ByteBuffer"/> 提取（逻辑复用既有 NV12/I420，去裸指针）。</para>
 /// <para><b>仅 Android 可用</b>：非 Android 运行时 <see cref="Initialize"/> 抛 <see cref="PlatformNotSupportedException"/>。</para>
 /// </remarks>
-internal sealed class AndroidVideoDecoder : IVideoDecoder
+internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 {
     private readonly AndroidBackend _backend;
     private readonly ILogger<AndroidVideoDecoder> _logger;
 
     private AndroidMediaCodec? _codec;
-    private ImageReader? _imageReader;         // Surface 主路径的取帧 reader
     private MediaFormat? _outputFormat;        // 当前输出格式（FORMAT_CHANGED 时更新）
-    private PixelFormat _outputPixelFormat = PixelFormat.YUV420P;
-    private bool _zeroCopyMode;                // true = 解码器输出到 ImageReader Surface
     private VideoColorInfo _colorInfo;         // 当前输出色彩空间（KEY_COLOR_*，透传渲染端）
+    private string _codecName = "unknown";     // 实际选中的解码器组件名（诊断/硬件判定）
+    private bool _hardwareDecoder;             // 选中的是否为厂商硬件解码器
+
+    // 输出可见区（由输出格式 crop-* 键给出；缺失时退回 width/height 全帧）。
+    // 平台契约：width = crop-right + 1 - crop-left，height = crop-bottom + 1 - crop-top。
+    private int _cropLeft, _cropTop, _visibleWidth, _visibleHeight;
+    private int _rotationDegrees; // 显示旋转（度，0/90/180/270），由输出格式 KEY_ROTATION 解析
+
+    // ByteBuffer + 灵活 YUV420 单一路径：经托管 Image.Plane CPU 提取产标准紧凑 I420；
+    // 无 GPU 零拷贝依赖，无手写 P/Invoke。
 
     private readonly Queue<MediaPacket> _pendingInput = new();
     private readonly Queue<VideoFrame> _pendingFrames = new();
 
-    // Surface 取帧诊断计数（Dispose 汇总，定位零产帧各分支分布）
-    private long _drainCalls, _drainDequeued, _drainTryAgain, _drainReleased, _drainAcquireNull;
-    private bool _surfaceAcquireTimeoutLogged;
-    private bool _surfacePlaneExtractFailedLogged;
+    // 取帧诊断计数（Dispose 汇总，定位零产帧各分支分布）
+    private long _drainCalls, _drainDequeued, _drainTryAgain;
+    private bool _eosQueued;    // EOS 已入队（FlushAsync 重试语义，Reset 清零）
+    private bool _eosOutputSeen;// 解码器已回报输出 EOS（DRAIN 真正完成的判据）
 
     // 诊断节流：收包/产帧计数
     private int _packetsFed;
     private int _framesProduced;
+    private int _inputQueued;              // 实际入队的输入缓冲数（vs 仅收包）
+    private long _inputDequeueBlocked;     // dequeueInputBuffer 返回 -1 的次数（输入槽满）
     private const int LogInterval = 64;
 
     private VideoCodec _codecType = VideoCodec.Unknown;
@@ -57,13 +73,13 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
     private bool _initialized;
     private bool _disposed;
 
-    // 行拷贝复用缓冲（Image.Plane 行复制）
-    private byte[] _rowScratch = Array.Empty<byte>();
+    // 平面读取复用缓冲（grow-only）：每帧把 Y/U/V plane 的 ByteBuffer 完整拷入此缓冲，
+    // 再按 rowStride/pixelStride 索引提取，消除按整帧尺寸反复 new 的 GC 风暴。
+    private byte[] _extractRaw = Array.Empty<byte>();
 
-    // ImageReader：容纳管线缓冲深度并留解码器渲染余量。
-    private const int ReaderMaxImages = 6;
-    // release(render=true) 后图像经 BufferQueue 异步到达 reader 的有界等待（毫秒）。
-    private const int AcquireWaitMs = 30;
+    // 提取阶段性能累计（样本/ ticks），用于定位卡顿瓶颈。
+    private int _extractSamples;
+    private long _extractTicks;
 
     // MediaCodec dequeue 返回码 / flags 位（公开 AOSP 值）。
     private const int InfoTryAgainLater = -1;
@@ -71,6 +87,10 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
     private const int InfoOutputBuffersChanged = -3;
     private const int FlagKeyFrame = 1;
     private const int FlagEndOfStream = 4;
+
+    // 本后端仅使用 net-android 托管的 Android.Media.* 绑定（ImageReader / MediaCodec / Image.Plane）。
+    // 显式禁止手写 P/Invoke：Android/iOS/macOS 走 net-* workload 内置绑定，AOT 安全、零反射
+    // （符合 2026-08-22 架构裁定）。GPU 零拷贝（AHB→GPU）已暂缓，见设计文档 §5.2。
 
     public AndroidVideoDecoder(AndroidBackend backend, ILogger<AndroidVideoDecoder> logger)
     {
@@ -82,8 +102,9 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
     public VideoCodec Codec => _codecType;
 
     /// <inheritdoc/>
-    /// <remarks>仅 Surface 模式为真（硬件解码直出 GPU 帧）；ByteBuffer 模式可能落在软件解码器，保守报假。</remarks>
-    public bool IsHardwareAccelerated => _zeroCopyMode;
+    /// <remarks>反映实际选中的解码器组件：厂商硬件解码器为真，AOSP 软件解码器（c2.android.* /
+    /// OMX.google.*）为假。输出经 CPU 平面提取不改变解码本身是否由硬件完成。</remarks>
+    public bool IsHardwareAccelerated => _hardwareDecoder;
 
     /// <inheritdoc/>
     public void Initialize(VideoCodec codec, VideoSettings settings)
@@ -102,86 +123,128 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
         _codecType = codec;
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
-        // ── Surface 输出主路径（权威 Android 视频流程）──
-        // 硬件解码器输出到 ImageReader（YUV_420_888），经托管 Image.Plane 提取得标准 YUV，
-        // 规避 ByteBuffer 模式部分厂商输出私有格式、取不全 UV 的兼容问题。
-        // reader 创建失败（API<26 / gralloc 拒绝）→ 回落 ByteBuffer + 软解。
-        ImageReader? reader = null;
-        if (settings.Width is > 0 && settings.Height is > 0)
-        {
-            try
-            {
-                reader = ImageReader.NewInstance(settings.Width!.Value, settings.Height!.Value,
-                    ImageFormatType.Yuv420888, ReaderMaxImages);
-            }
-            catch (Exception ex) when (ex is Java.Lang.IllegalArgumentException)
-            {
-                // 非法参数（含 gralloc 拒绝用途组合）→ 优雅回落 ByteBuffer 路径。
-                reader = null;
-                _logger.LogWarning("[ANDROID-VID] ImageReader 创建失败（{Reason}），回落 ByteBuffer 输出路径", ex.Message);
-            }
-        }
+        // 编码尺寸：软解路径不向 configure 强塞 width/height——由解码器从 csd(SPS) 自行推导真实尺寸
+        // （解码器内置解析器才是真值来源；c2 软解对本样例导出 1080x1920 与容器声明一致，
+        // 旧「容器失真报 1080x1920、SPS 实为 320x240」结论源于手写 SPS 解析器的 bug，已证伪）。
+        // 真值在其 OutputFormat：解码器回报的 width/height/crop 才是真实可见尺寸，帧经 ExtractI420FromImage
+        // 按 plane 的 pixelStride/rowStride 与 CropRect 提取（详见该方法）。
+        var csd = settings.CodecConfiguration;
+        _logger.LogInformation("[ANDROID-VID] csd({Len}B) hex={Hex}",
+            csd.Length, Convert.ToHexString(csd.Span));
+        int frameW = settings.Width ?? 0, frameH = settings.Height ?? 0;
+        // 【仅诊断】手写 SPS 位流解析不可信（实测把 1080x1920 的样例解析成 16x32）——
+        // 真值以解码器 OutputFormat 为准（c2 软解对本样例导出 width=1080 height=1920 crop(0,0,1079,1919)，
+        // 即容器声明正确）。绝不可参与 configure 决策（旧教训：错误尺寸喂高通硬解 → 0 帧产出）。
+        if (csd.Length > 0 && AndroidCodecMaps.TryParseH264WidthHeight(csd.ToArray(), out int pw, out int ph))
+            _logger.LogInformation("[ANDROID-VID] SPS 诊断解析 {W}x{H}（容器声明 {DW}x{DH}；仅供对照，不参与决策）",
+                pw, ph, frameW, frameH);
 
-        // ByteBuffer（软解兜底）路径优先软件解码器；Surface 路径恒硬件解码器。
-        var codecObj = CreateVideoCodec(mime, codec, preferSoftwareDecoder: reader is null);
+        // ── ByteBuffer + 灵活 YUV420 单一路径（平台契约保证的 CPU 输出）──
+        // 平台契约（MediaCodec「原始视频缓冲区」节）明文：灵活 YUV 缓冲（COLOR_FormatYUV420Flexible）
+        // 既可用于输入/输出 Surface，也可用于 ByteBuffer 模式经 getOutputImage 访问；且自
+        // LOLLIPOP_MR1 起「所有视频编解码器均支持灵活 YUV 4:2:0 缓冲」——即本路径对硬件与软件
+        // 解码器同等有效，平面语义标准化（plane0=Y、plane1=U、plane2=V），无需按厂商私有布局猜测。
+        //
+        // 不采用「输出到 ImageReader(YUV_420_888) 再 CPU 读」：Surface 输出的原生格式是不透明的
+        // COLOR_FormatSurface，平台只承诺其可用于呈现/GL 采样，从不承诺该缓冲能被 CPU 按
+        // YUV_420_888 语义正确读出（是否可读、色度是否落盘取决于 gralloc 用途位与厂商实现）。
+        // 真机实测即命中该缺口：Y/U 有效而 V 平面恒 ≈0，而色度平面为 0（非 128）正是画面整体
+        // 泛绿的成因。GPU 零拷贝的正确形态是 SurfaceTexture/AHardwareBuffer→GL/Vulkan 采样，
+        // 而非经 ImageReader 回读 CPU；该形态另行推进（见设计文档 §5.2），不在本路径内。
+        var codecObj = CreateVideoCodec(mime, codec, preferSoftwareDecoder: false);
         try
         {
-            using var fmt = new MediaFormat();
-            fmt.SetString(MediaFormat.KeyMime, mime);
-
-            // 部分解码器 configure 要求显式 width/height，仅 csd 推导不足会报错。
-            if (settings.Width is > 0)
-                fmt.SetInteger(MediaFormat.KeyWidth, settings.Width.Value);
-            if (settings.Height is > 0)
-                fmt.SetInteger(MediaFormat.KeyHeight, settings.Height.Value);
-
-            var csd = settings.CodecConfiguration;
-            if (csd.Length > 0)
-                fmt.SetByteBuffer("csd-0", ByteBuffer.Wrap(csd.ToArray())); // 键 "csd-0"（AOSP KEY_CSD0）
-
-            codecObj.Configure(fmt, reader?.Surface, null, 0); // surface=null → ByteBuffer 输出
+            ConfigureFlexibleYuv(ref codecObj, mime, codec, csd, frameW, frameH);
             codecObj.Start();
 
-            _imageReader = reader;
-            _zeroCopyMode = reader is not null;
-
-            // 读取输出格式：Surface 模式 color-format 键无意义（帧不经 ByteBuffer），仅读尺寸与色彩键。
             _outputFormat?.Dispose();
             _outputFormat = codecObj.OutputFormat; // getOutputFormat 无参重载 → OutputFormat 属性
             ReadOutputFormat(_outputFormat);
         }
         catch
         {
-            reader?.Dispose();
-            _imageReader = null;
-            _zeroCopyMode = false;
             codecObj.Release();
             throw;
         }
 
         _codec = codecObj;
         _initialized = true;
-        _logger.LogInformation("[ANDROID-VID] 初始化完成: {Codec} → {Mime}, 输出像素格式 {Fmt}, Surface={Surface}, csd长度={CsdLen}",
-            codec, mime, _outputPixelFormat, _zeroCopyMode, settings.CodecConfiguration.Length);
+        _logger.LogInformation("[ANDROID-VID] 初始化完成: {Codec} → {Mime}, 输出像素格式 {Fmt}, 解码器={Name}, 硬件={Hw}, csd长度={CsdLen}",
+            codec, mime, PixelFormat.YUV420P, _codecName, _hardwareDecoder,
+            settings.CodecConfiguration.Length);
     }
 
-    /// <summary>创建视频解码器。ByteBuffer 路径下 H264 优先软件解码器（c2.android.avc.decoder），失败回退硬件。
-    /// Surface 路径恒硬件解码器。</summary>
-    private static AndroidMediaCodec CreateVideoCodec(string mime, VideoCodec codec, bool preferSoftwareDecoder)
+    /// <summary>以「灵活 YUV420 + 显式尺寸」配置 ByteBuffer 输出；被拒时降级到软件解码器重试一次。</summary>
+    /// <remarks>显式 width/height 用容器声明值：硬件解码器普遍拒绝 csd-only 配置，而真实可见尺寸
+    /// 由输出格式的 crop 矩形给出（见 <see cref="ReadOutputFormat"/>），故此处无需也不应依赖
+    /// 手写 SPS 解析（该解析器已证伪，会把 1080x1920 解成 16x32）。</remarks>
+    private void ConfigureFlexibleYuv(ref AndroidMediaCodec codecObj, string mime, VideoCodec codec,
+        ReadOnlyMemory<byte> csd, int frameW, int frameH)
+    {
+        try
+        {
+            codecObj.Configure(BuildFormat(mime, csd, frameW, frameH), null, null, 0);
+            return;
+        }
+        catch (Exception ex) when (ex is Java.Lang.IllegalArgumentException or Java.Lang.IllegalStateException)
+        {
+            _logger.LogWarning("[ANDROID-VID] 解码器 {Name} 配置被拒（{Reason}），降级软件解码器重试",
+                _codecName, ex.Message);
+        }
+
+        // 硬件解码器拒绝该配置：换软件解码器（c2/OMX 阶梯）重试。
+        codecObj.Release();
+        codecObj = CreateVideoCodec(mime, codec, preferSoftwareDecoder: true);
+        codecObj.Configure(BuildFormat(mime, csd, frameW, frameH), null, null, 0);
+    }
+
+    /// <summary>构造 ByteBuffer 输出的输入格式（每次 configure 需新实例：MediaFormat 被 configure 消费后不应复用）。</summary>
+    private static MediaFormat BuildFormat(string mime, ReadOnlyMemory<byte> csd, int frameW, int frameH)
+    {
+        var fmt = new MediaFormat();
+        fmt.SetString(MediaFormat.KeyMime, mime);
+        if (frameW > 0) fmt.SetInteger(MediaFormat.KeyWidth, frameW);
+        if (frameH > 0) fmt.SetInteger(MediaFormat.KeyHeight, frameH);
+        // 灵活 YUV420：令 getOutputImage 返回标准化三平面，屏蔽厂商私有 NV12/NV21 布局差异。
+        fmt.SetInteger(MediaFormat.KeyColorFormat, (int)MediaCodecCapabilities.Formatyuv420flexible);
+        if (csd.Length > 0)
+            fmt.SetByteBuffer("csd-0", ByteBuffer.Wrap(csd.ToArray())); // 键 "csd-0"（AOSP KEY_CSD0）
+        // 显式输入缓冲上限：解码器按 SPS 推出的 max-input-size 可能过小，大关键帧会被截断喂入 → 码流损坏。
+        fmt.SetInteger(MediaFormat.KeyMaxInputSize, 2 << 20);
+        return fmt;
+    }
+
+    /// <summary>创建视频解码器。默认按 MIME 取系统首选（通常为硬件解码器，实时性最佳）；
+    /// <paramref name="preferSoftwareDecoder"/> 为真时走软件阶梯
+    /// c2.android.avc.decoder（API 29+）→ OMX.google.h264.decoder（旧机型）→ 按类型任选。</summary>
+    /// <remarks>ByteBuffer 输出对硬件解码器同样安全：灵活 YUV420 由平台契约保证全解码器支持，
+    /// 且等价于灵活格式的厂商私有格式仍可经 getOutputImage 取到标准化平面。</remarks>
+    private AndroidMediaCodec CreateVideoCodec(string mime, VideoCodec codec, bool preferSoftwareDecoder)
     {
         if (preferSoftwareDecoder && codec == VideoCodec.H264)
         {
-            try
+            foreach (string name in new[] { "c2.android.avc.decoder", "OMX.google.h264.decoder" })
             {
-                return AndroidMediaCodec.CreateByCodecName("c2.android.avc.decoder");
-            }
-            catch (Exception ex) when (ex is Java.Lang.IllegalArgumentException or Java.Lang.IllegalStateException)
-            {
-                // 低版本/名字不存在：回退硬件解码器。
-                return AndroidMediaCodec.CreateDecoderByType(mime);
+                try
+                {
+                    var sw = AndroidMediaCodec.CreateByCodecName(name);
+                    _codecName = name;
+                    _hardwareDecoder = false;
+                    return sw;
+                }
+                catch (Exception ex) when (ex is Java.Lang.IllegalArgumentException or Java.Lang.IllegalStateException)
+                {
+                    // 该软解在本机不存在（旧/裁剪机型）：试下一个，最后按类型任选。
+                }
             }
         }
-        return AndroidMediaCodec.CreateDecoderByType(mime);
+
+        var obj = AndroidMediaCodec.CreateDecoderByType(mime);
+        _codecName = obj.Name ?? "unknown";
+        // 名称约定判定软/硬（CodecInfo.IsSoftwareOnly 为 API 29+；名称前缀是全版本可用的稳定判据）。
+        _hardwareDecoder = !(_codecName.StartsWith("c2.android.", StringComparison.Ordinal)
+            || _codecName.StartsWith("OMX.google.", StringComparison.Ordinal));
+        return obj;
     }
 
     /// <inheritdoc/>
@@ -194,33 +257,62 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
 
     private void ReadOutputFormat(MediaFormat fmt)
     {
-        // Surface 模式：帧不经 ByteBuffer（color-format 键无意义），语义像素格式恒 NV12。
-        if (_zeroCopyMode)
+        // 帧由 ExtractI420FromImage 按 plane 的 pixelStride/rowStride 统一产出标准紧凑 I420，
+        // 与底层是 NV12/semiplanar 还是 I420/planar 无关（灵活 YUV420 二者皆可能）。
+
+        // ── 可见区（crop 矩形）──
+        // 平台契约：输出格式的 width/height 是「视频帧」尺寸（常按 16 对齐做了填充），真正的可见图像
+        // 只占其中一部分，由 crop 矩形界定，且右/下坐标是「减 1」语义：
+        //   width  = crop-right  + 1 - crop-left
+        //   height = crop-bottom + 1 - crop-top
+        // 键不存在时视频占满整帧。常量 KEY_CROP_* 直到 API 33 才公开，但字符串键自 Lollipop 起即有效，
+        // 故统一用字符串键读取以覆盖全版本。
+        int fw = fmt.ContainsKey(MediaFormat.KeyWidth) ? fmt.GetInteger(MediaFormat.KeyWidth) : 0;
+        int fh = fmt.ContainsKey(MediaFormat.KeyHeight) ? fmt.GetInteger(MediaFormat.KeyHeight) : 0;
+        int cl = 0, ctop = 0, vw = fw, vh = fh;
+        if (fmt.ContainsKey("crop-left") && fmt.ContainsKey("crop-right"))
         {
-            _outputPixelFormat = PixelFormat.NV12;
+            cl = fmt.GetInteger("crop-left");
+            vw = fmt.GetInteger("crop-right") + 1 - cl;
         }
-        else
+        if (fmt.ContainsKey("crop-top") && fmt.ContainsKey("crop-bottom"))
         {
-            int cf = fmt.ContainsKey(MediaFormat.KeyColorFormat) ? fmt.GetInteger(MediaFormat.KeyColorFormat) : 0;
-            var pf = AndroidCodecMaps.ColorFormatToPixelFormat(cf);
-            if (pf is null)
-                throw new NotSupportedException(
-                    $"Android 视频解码器不支持的输出颜色格式 0x{cf:X}（当前仅支持 NV12 / I420 两类 YUV420）。");
-            _outputPixelFormat = pf.Value;
+            ctop = fmt.GetInteger("crop-top");
+            vh = fmt.GetInteger("crop-bottom") + 1 - ctop;
+        }
+        if (vw > 0 && vh > 0)
+        {
+            _cropLeft = cl;
+            _cropTop = ctop;
+            _visibleWidth = vw;
+            _visibleHeight = vh;
         }
 
+        // 显示旋转（KEY_ROTATION = "rotation-degrees"，由 MediaExtractor 从容器 tkhd 旋转矩阵填入输出格式）。
+        // 平台契约：MediaCodec 输出 buffer 的 width/height 永远是「旋转前（编码）」尺寸，真实显示尺寸
+        // 在 90/270° 时需交换宽高。当前 VideoFrame 不携带 rotation，渲染端按编码尺寸呈现——
+        // 若视频带 90/270° 旋转（竖屏拍摄的横屏内容），将出现方向错乱/溢出观感。此处先读取诊断，
+        // 供真机确认旋转角度，再决定是否在解码端交换显示宽高 + 透传 rotation 给渲染端旋转。
+        // 注：KEY_ROTATION 常量 MS Learn 标注仅 API 23+ 受支持（CA1416），故统一用字符串键读取以覆盖全版本。
+        int rotationDeg = fmt.ContainsKey("rotation-degrees") ? fmt.GetInteger("rotation-degrees") : 0;
+        _rotationDegrees = rotationDeg;
+
         // 色彩空间（可选键，API 24+）：渲染端据以选择 YUV→RGB 矩阵。低版本/缺失时回退 Unspecified。
-        int cs = -1, cr = -1, ct = -1;
+        int cs = -1, cr = -1, ctr = -1;
         if (OperatingSystem.IsAndroidVersionAtLeast(24))
         {
             if (fmt.ContainsKey(MediaFormat.KeyColorStandard)) cs = fmt.GetInteger(MediaFormat.KeyColorStandard);
             if (fmt.ContainsKey(MediaFormat.KeyColorRange)) cr = fmt.GetInteger(MediaFormat.KeyColorRange);
-            if (fmt.ContainsKey(MediaFormat.KeyColorTransfer)) ct = fmt.GetInteger(MediaFormat.KeyColorTransfer);
+            if (fmt.ContainsKey(MediaFormat.KeyColorTransfer)) ctr = fmt.GetInteger(MediaFormat.KeyColorTransfer);
         }
         _colorInfo = new VideoColorInfo(
             AndroidCodecMaps.ColorStandardFromNdk(cs),
             AndroidCodecMaps.ColorRangeFromNdk(cr),
-            AndroidCodecMaps.ColorTransferFromNdk(ct));
+            AndroidCodecMaps.ColorTransferFromNdk(ctr));
+
+        _logger.LogInformation(
+            "[ANDROID-VID] 输出格式: 帧={FW}x{FH} 可见={VW}x{VH} crop=({CL},{CT}) 旋转={Rot}° 色彩={Color}",
+            fw, fh, _visibleWidth, _visibleHeight, _cropLeft, _cropTop, _rotationDegrees, _colorInfo);
     }
 
     /// <inheritdoc/>
@@ -251,12 +343,29 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
         // 先排空待喂入队列
         FeedInput();
 
-        // 发送 EOS 以迫使解码器吐出剩余帧；若暂无输入槽则跳过（直接排空输出）
-        int inIdx = _codec!.DequeueInputBuffer(1000);
-        if (inIdx >= 0)
-            _codec.QueueInputBuffer(inIdx, 0, 0, 0, (MediaCodecBufferFlags)FlagEndOfStream);
+        // EOS 入队：输入槽满时必须先排空输出（释放输出→解码器继续消费输入→槽释放），带重试。
+        // 旧实现单次 DequeueInputBuffer(1ms)：槽满即放弃 EOS → 解码器尾段重排缓冲永不排空
+        // → 上层 DecodeLoop 的 EOS DRAIN 过早拿到 null 退出 → 剩余帧全部滞留（真机实测 770 帧卡死）。
+        if (!_eosQueued)
+        {
+            for (int attempt = 0; attempt < 16 && !_eosQueued; attempt++)
+            {
+                FeedInput();
+                int inIdx = _codec!.DequeueInputBuffer(2_000);
+                if (inIdx >= 0)
+                {
+                    _codec.QueueInputBuffer(inIdx, 0, 0, 0, (MediaCodecBufferFlags)FlagEndOfStream);
+                    _eosQueued = true;
+                    break;
+                }
+                // 槽仍满：排空输出解锁解码器（产帧入 FIFO，不影响返回值语义）
+                _ = DrainOutput(5_000);
+            }
+        }
 
-        return new ValueTask<VideoFrame?>(DrainOutput(10_000));
+        // 排空输出取帧：EOS 已入队后解码仍需 ~20-40ms/帧，10ms 会间歇性 TRY_AGAIN
+        // 提前返回 null 让上层误判 DRAIN 完成。给足等待；见到输出 EOS 后 FIFO 排尽即真正完成。
+        return new ValueTask<VideoFrame?>(DrainOutput(_eosQueued && !_eosOutputSeen ? 40_000 : 10_000));
     }
 
     /// <inheritdoc/>
@@ -264,6 +373,8 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
     {
         if (_codec is null) return;
         _codec.Flush();
+        _eosQueued = false;
+        _eosOutputSeen = false;
         DrainAndDispose(_pendingInput);
         DrainAndDispose(_pendingFrames);
     }
@@ -274,7 +385,15 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
         while (_pendingInput.Count > 0)
         {
             int idx = _codec!.DequeueInputBuffer(0);
-            if (idx < 0) break; // 暂无输入槽，保留包待下次
+            if (idx < 0)
+            {
+                // 输入槽暂满：保留包待下次。诊断判定「未入队」而非常见的「入队不出帧」。
+                _inputDequeueBlocked++;
+                if (_inputDequeueBlocked == 1 || (_inputDequeueBlocked % 256) == 0)
+                    _logger.LogWarning("[ANDROID-VID] 输入槽满，喂入被阻（pending={Pending}, 累计阻 {Blk}）, dequeueOut={Out}",
+                        _pendingInput.Count, _inputDequeueBlocked, _drainDequeued);
+                break;
+            }
 
             var pkt = _pendingInput.Dequeue();
             try
@@ -295,6 +414,7 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
 
                 long ptsUs = pkt.Timestamp.Ticks > 0 ? pkt.Timestamp.Ticks / 10 : 0;
                 _codec.QueueInputBuffer(idx, 0, len, ptsUs, (MediaCodecBufferFlags)0);
+                _inputQueued++;
             }
             finally
             {
@@ -310,68 +430,15 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
         return DrainOutput(0);
     }
 
-    /// <summary>排空解码器输出，将可用帧入 FIFO，返回队首（超时内无帧返回 null）。</summary>
+    /// <summary>排空解码器输出，将可用帧入 FIFO，返回队首（超时内无帧返回 null）。
+    /// 单一 ByteBuffer 路径：dequeueOutputBuffer → getOutputImage → 按 stride/crop 提取 → release。</summary>
     private VideoFrame? DrainOutput(long timeoutUs)
     {
-        // Surface 模式：帧渲染到 ImageReader 后从图像取帧。
-        if (_zeroCopyMode && _imageReader is not null)
-            return DrainOutputSurface(timeoutUs);
-
-        return DrainOutputByteBuffer(timeoutUs);
-    }
-
-    /// <summary>ByteBuffer 兜底路径：dequeueOutputBuffer → 获 ByteBuffer → 按 stride/crop 提取 → release。</summary>
-    private VideoFrame? DrainOutputByteBuffer(long timeoutUs)
-    {
+        _drainCalls++;
         while (true)
         {
             var info = new AndroidMediaCodec.BufferInfo();
             int idx = _codec!.DequeueOutputBuffer(info, timeoutUs);
-            if (idx == InfoTryAgainLater) break;
-            if (idx == InfoOutputFormatChanged)
-            {
-                _outputFormat?.Dispose();
-                _outputFormat = _codec.OutputFormat;
-                ReadOutputFormat(_outputFormat);
-                continue;
-            }
-            if (idx == InfoOutputBuffersChanged) continue;
-            if (idx < 0) break;
-
-            if (((int)info.Flags & FlagEndOfStream) != 0)
-            {
-                _codec.ReleaseOutputBuffer(idx, false);
-                break;
-            }
-            if (info.Size <= 0)
-            {
-                _codec.ReleaseOutputBuffer(idx, false);
-                continue;
-            }
-
-            var frame = ExtractFrame(idx, info);
-            _codec.ReleaseOutputBuffer(idx, false);
-
-            if ((_framesProduced % LogInterval) == 0)
-                _logger.LogInformation("[ANDROID-VID] 产帧 #{Count} {W}x{H} {Fmt} pts={Pts:g}",
-                    _framesProduced, frame.Width, frame.Height, frame.Format, frame.Timestamp);
-            _framesProduced++;
-            _pendingFrames.Enqueue(frame);
-        }
-
-        return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
-    }
-
-    /// <summary>Surface 主路径排空：release(render=true) 渲染进 reader → 申领图像 → CPU 提取得 I420 帧。</summary>
-    private VideoFrame? DrainOutputSurface(long timeoutUs)
-    {
-        _drainCalls++;
-        const int DrainBatch = 8;
-        for (int i = 0; i < DrainBatch; i++)
-        {
-            long waitUs = timeoutUs > 0 ? timeoutUs : 10_000;
-            var info = new AndroidMediaCodec.BufferInfo();
-            int idx = _codec!.DequeueOutputBuffer(info, waitUs);
             if (idx == InfoTryAgainLater) { _drainTryAgain++; break; }
             if (idx == InfoOutputFormatChanged)
             {
@@ -386,338 +453,295 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
             if (((int)info.Flags & FlagEndOfStream) != 0)
             {
                 _codec.ReleaseOutputBuffer(idx, false);
+                _eosOutputSeen = true; // DRAIN 完成判据：此后 FIFO 排尽即无更多帧
                 break;
             }
-
-            // 关键：render=true 把该帧渲染进 reader 的 Surface（帧内容进入 BufferQueue）；随后 acquire 取图。
-            _codec.ReleaseOutputBuffer(idx, true);
-            _drainReleased++;
-
-            bool keyFrame = ((int)info.Flags & FlagKeyFrame) != 0;
-            var frame = TryCreateFrameFromReader(info.PresentationTimeUs, keyFrame);
-            if (frame is null)
+            if (info.Size <= 0)
             {
-                _drainAcquireNull++;
-                break; // 图像未在界内到达：停止本轮，下轮再取（FIFO 保序）
+                _codec.ReleaseOutputBuffer(idx, false);
+                continue;
             }
+
+            // getOutputImage 取标准化平面（已设 Formatyuv420flexible，平台契约保证可用），
+            // 统一经 ExtractI420FromImage 提紧凑 I420——不按 stride 猜测厂商私有布局。
+            var image = _codec.GetOutputImage(idx);
+            if (image is null)
+            {
+                _codec.ReleaseOutputBuffer(idx, false);
+                continue;
+            }
+            VideoFrame? frame;
+            try
+            {
+                frame = ExtractI420FromImage(image, info.PresentationTimeUs,
+                    ((int)info.Flags & FlagKeyFrame) != 0);
+            }
+            finally
+            {
+                // Image 与输出缓冲同生命周期：先关 Image 再释放缓冲，避免解码器复用缓冲时
+                // 仍有存活的 Image 视图（数据此刻已拷入托管内存，关闭无损）。
+                image.Close();
+                _codec.ReleaseOutputBuffer(idx, false);
+            }
+            if (frame is null) continue;
 
             if ((_framesProduced % LogInterval) == 0)
                 _logger.LogInformation("[ANDROID-VID] 产帧 #{Count} {W}x{H} {Fmt} pts={Pts:g}",
                     _framesProduced, frame.Width, frame.Height, frame.Format, frame.Timestamp);
             _framesProduced++;
-            _pendingFrames.Enqueue(frame);
             _drainDequeued++;
+            _pendingFrames.Enqueue(frame);
         }
+
+        // 周期性诊断（定位 dequeue 是否恒 TRY_AGAIN）
+        if ((_drainCalls % LogInterval) == 0)
+            _logger.LogInformation("[ANDROID-VID] 诊断: 排空={Calls} dequeue成功={Deq} tryAgain={Try} 喂入={Fed} 累计产帧={Frames}",
+                _drainCalls, _drainDequeued, _drainTryAgain, _inputQueued, _framesProduced);
 
         return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
     }
 
-    /// <summary>从 ImageReader 申领一帧图像并构造 <see cref="VideoFrame"/>（托管 CPU 平面提取）。
-    /// 申领到的 <see cref="Image"/> 必须在 <c>finally</c> 内 <see cref="Image.Close"/> 归还缓冲（防 reader 耗尽）。</summary>
-    private VideoFrame? TryCreateFrameFromReader(long infoPtsUs, bool keyFrame)
+    /// <summary>从 <see cref="Image"/>（YUV_420_888，灵活 YUV420 经 getOutputImage 取得）用托管 CPU 平面提取
+    /// 产出标准紧凑帧。全设备通用：plane 顺序（#0=Y、#1=U、#2=V）；Y pixelStride 恒为 1；U/V 的
+    /// pixelStride 为 1（planar I420）或 2（semiplanar NV12，U 在偶字节、V 在奇字节，MediaCodec 输出通常如此）。
+    /// 可见区由 <see cref="Image.CropRect"/>（= 输出格式 crop-* 矩形）界定，跳过 16 对齐填充；缺失时退回
+    /// <c>_visibleWidth/_visibleHeight</c> 字段（由 ReadOutputFormat 解析）。调用方负责关闭 Image 与释放输出缓冲。</summary>
+    /// <remarks>官方 AOSP CTS getDataFromImage 范式：frame 尺寸取 crop 宽高（非 image.Width/Height，后者含对齐填充），
+    /// 按 (cropTop+row)*rowStride + cropLeft*pixelStride 索引逐行提取；半平面 U 偶 V 奇。
+    /// <para><b>性能优化</b>：半平面输入直接产出 <see cref="PixelFormat.NV12"/>，避免先拆成 I420 再被 SkiaVideoPresenter
+    /// 重新按 NV12 语义读取的二次拆分/合并；planar 输入仍产出 <see cref="PixelFormat.YUV420P"/>。</para>
+    /// 色彩顺序若个别设备为 NV21（U 奇 V 偶）将偏色，此时交换 U/V 即可（本实现默认 NV12）。</remarks>
+    private VideoFrame? ExtractI420FromImage(Image image, long infoPtsUs, bool keyFrame)
     {
-        Image? image = AcquireImageWithTimeout();
-        if (image is null) return null;
+        var planes = image.GetPlanes();
+        if (planes is null || planes.Length < 3) return null;
 
-        try
+        // 可见区：优先 image.CropRect（官方权威 per-frame），回退到输出格式解析的 _visible* 字段。
+        // 关键：image.Width/Height 是含 16 对齐填充的缓冲尺寸，可见像素只占 crop 矩形内一部分。
+        int cl, ct, vw, vh;
+        var crop = image.CropRect;
+        if (crop is not null && crop.Width() > 0 && crop.Height() > 0)
         {
-            // PTS：优先 Image 时间戳（纳秒，随帧走、与申领时机解耦）；无则回退 dequeue 的 info PTS。
-            TimeSpan pts = image.Timestamp > 0
-                ? TimeSpan.FromTicks(image.Timestamp / 100) // ns → ticks
-                : infoPtsUs >= 0 ? TimeSpan.FromTicks(infoPtsUs * 10) : TimeSpan.Zero;
-
-            int w = image.Width, h = image.Height;
-            if (w <= 0 || h <= 0)
-            {
-                if (!_surfacePlaneExtractFailedLogged) { _surfacePlaneExtractFailedLogged = true; _logger.LogWarning("[ANDROID-VID] Image 尺寸非法（{W}x{H}），帧产出跳过", w, h); }
-                return null;
-            }
-
-            var crop = image.CropRect;
-            int vw = crop is not null && crop.Right > crop.Left && crop.Bottom > crop.Top
-                ? crop.Right - crop.Left : w;
-            int vh = crop is not null && crop.Right > crop.Left && crop.Bottom > crop.Top
-                ? crop.Bottom - crop.Top : h;
-            if (vw <= 0 || vh <= 0) { vw = w; vh = h; }
-
-            var planes = image.GetPlanes();
-            if (planes is null || planes.Length < 3)
-            {
-                if (!_surfacePlaneExtractFailedLogged) { _surfacePlaneExtractFailedLogged = true; _logger.LogWarning("[ANDROID-VID] Image 平面数不足（{N}），帧产出跳过", planes?.Length ?? 0); }
-                return null;
-            }
-
-            int cw = (vw + 1) / 2, ch = (vh + 1) / 2;
-            var resource = new SoftwareFrameResource(vw, vh, PixelFormat.YUV420P, checked(vw * vh + 2 * cw * ch));
-            if (!ExtractI420(planes, crop, vw, vh, resource.Data.Span))
-            {
-                if (!_surfacePlaneExtractFailedLogged) { _surfacePlaneExtractFailedLogged = true; _logger.LogWarning("[ANDROID-VID] Image 平面提取失败，帧产出跳过"); }
-                return null;
-            }
-
-            resource.ColorInfo = _colorInfo;
-            return new VideoFrame(vw, vh, PixelFormat.YUV420P, resource, pts, TimeSpan.Zero, keyFrame, _colorInfo);
+            cl = crop.Left; ct = crop.Top; vw = crop.Width(); vh = crop.Height();
         }
-        finally
+        else if (_visibleWidth > 0 && _visibleHeight > 0)
         {
-            image.Close(); // 归还缓冲（等价 AImage_delete）
-        }
-    }
-
-    /// <summary>有界等待申领一张图像；超时返回 null（一次性日志节流）。</summary>
-    private Image? AcquireImageWithTimeout()
-    {
-        long deadline = System.Diagnostics.Stopwatch.GetTimestamp()
-            + AcquireWaitMs * System.Diagnostics.Stopwatch.Frequency / 1000;
-        while (true)
-        {
-            Image? image = _imageReader?.AcquireNextImage();
-            if (image is not null) return image;
-            if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
-            {
-                if (!_surfaceAcquireTimeoutLogged)
-                {
-                    _surfaceAcquireTimeoutLogged = true;
-                    _logger.LogWarning("[ANDROID-VID] AcquireNextImage 在 {Ms}ms 内未取到图像（render=true 后帧未发布到 reader），本次无帧",
-                        AcquireWaitMs);
-                }
-                return null;
-            }
-            Thread.Sleep(1);
-        }
-    }
-
-    /// <summary>按 YUV_420_888 三平面 + crop/stride/pixelStride 提取为紧密 I420（Y+U+V）。
-    /// 走托管 <see cref="ByteBuffer"/>（JNI memcpy / 绝对读），无原生裸指针。</summary>
-    private bool ExtractI420(Image.Plane[] planes, Rect? crop, int w, int h, Span<byte> dst)
-    {
-        var pY = planes[0];
-        var pU = planes[1];
-        var pV = planes[2];
-
-        int cropL = crop is not null ? Math.Max(crop.Left, 0) : 0;
-        int cropT = crop is not null ? Math.Max(crop.Top, 0) : 0;
-        int cw = (w + 1) / 2, ch = (h + 1) / 2;
-
-        if (_rowScratch.Length < Math.Max(w, cw)) _rowScratch = new byte[Math.Max(w, cw)];
-
-        // ── Y（pixelStride 恒 1，行拷）──
-        if (!CopyPlaneRows(pY, cropL, cropT, w, h, dst, 0, w, 1))
-            return false;
-
-        int ySize = w * h;
-        int uStrideOff = ySize;
-        int vStrideOff = ySize + cw * ch;
-
-        // ── U / V（支持 planar[pixelStride=1] 行拷 与 semi-planar[pixelStride=2] 绝对读）──
-        if (pU.PixelStride == 1 && pV.PixelStride == 1)
-        {
-            if (!CopyPlaneRows(pU, cropL / 2, cropT / 2, cw, ch, dst, uStrideOff, cw, 1)
-                || !CopyPlaneRows(pV, cropL / 2, cropT / 2, cw, ch, dst, vStrideOff, cw, 1))
-                return false;
+            cl = _cropLeft; ct = _cropTop; vw = _visibleWidth; vh = _visibleHeight;
         }
         else
         {
-            // interleaved：平面自身经绝对读定位（plane1=U、plane2=V），索引格式一致。
-            for (int r = 0; r < ch; r++)
-            {
-                int uRow = (cropT / 2 + r) * pU.RowStride;
-                    int vRow = (cropT / 2 + r) * pV.RowStride;
-                    for (int c = 0; c < cw; c++)
-                    {
-                        int uIdx = uRow + (cropL / 2 + c) * pU.PixelStride;
-                        int vIdx = vRow + (cropL / 2 + c) * pV.PixelStride;
-                        dst[uStrideOff + r * cw + c] = (byte)pU.Buffer!.Get(uIdx); // Get(int) 返回 sbyte，显式转 byte
-                        dst[vStrideOff + r * cw + c] = (byte)pV.Buffer!.Get(vIdx);
-                    }
-            }
+            cl = 0; ct = 0; vw = image.Width; vh = image.Height;
         }
-        return true;
-    }
+        if (vw <= 0 || vh <= 0) return null;
 
-    /// <summary>按行步长+crop 把单个平面逐行拷入目标（pixelStride=1 的紧凑采样）。</summary>
-    private bool CopyPlaneRows(Image.Plane plane, int srcCol, int srcRow, int count, int rows,
-        Span<byte> dst, int dstOffset, int dstRowBytes, int _ /*unused pixelStride, 恒1*/)
-    {
-        var buf = plane.Buffer;
-        if (buf is null) return false;
-        int rowStride = Math.Max(plane.RowStride, 0);
-        if (rowStride == 0) rowStride = count;
-        try
-        {
-            for (int r = 0; r < rows; r++)
-            {
-                int pos = (srcRow + r) * rowStride + srcCol;
-                if (pos + count > buf.Remaining()) return false;
-                buf.Position(pos);
-                buf.Get(_rowScratch, 0, count);
-                _rowScratch.AsSpan(0, count).CopyTo(dst.Slice(dstOffset + r * dstRowBytes, count));
-            }
-        }
-        catch (Java.Lang.IndexOutOfBoundsException)
-        {
-            return false; // 越界读（缓冲不足/非法 stride）：跳过该帧，不崩溃
-        }
-        return true;
-    }
+        var yPlane = planes[0];
+        var uPlane = planes[1];
+        var vPlane = planes[2];
+        var yBuf = yPlane.Buffer;
+        var uBuf = uPlane.Buffer;
+        var vBuf = vPlane.Buffer;
+        if (yBuf is null || uBuf is null || vBuf is null) return null;
 
-    /// <summary>从输出 buffer 按 stride/slice-height/crop 布局提取 YUV 帧（ByteBuffer 兜底路径）。</summary>
-    private unsafe VideoFrame ExtractFrame(int idx, AndroidMediaCodec.BufferInfo info)
-    {
-        var buf = _codec!.GetOutputBuffer(idx);
-        if (buf is null)
-            throw new InvalidOperationException("[ANDROID-VID] getOutputBuffer 返回 null");
+        int yRowStride = yPlane.RowStride;
+        int yPixelStride = yPlane.PixelStride; // 恒为 1
+        int uvRowStride = uPlane.RowStride;
+        int uvPixelStride = uPlane.PixelStride; // 1=planar(I420) / 2=semiplanar(NV12)
+        int cw = (vw + 1) / 2;
+        int ch = (vh + 1) / 2;
+        int ySize = vw * vh;
 
-        // 读取整个输出缓冲到托管数组（含 stride 对齐填充），再按布局索引。
-        int cap = buf.Capacity();
-        var raw = new byte[cap];
-        buf.Rewind();
-        buf.Get(raw);
-        int baseOff = Math.Max(info.Offset, 0);
-
-        int fullW = 0, fullH = 0, stride = 0, sliceH = 0;
-        int cropL = 0, cropT = 0, cropR = 0, cropB = 0;
-        bool hasCrop = false;
-        if (_outputFormat is not null)
-        {
-            if (_outputFormat.ContainsKey(MediaFormat.KeyWidth)) fullW = _outputFormat.GetInteger(MediaFormat.KeyWidth);
-            if (_outputFormat.ContainsKey(MediaFormat.KeyHeight)) fullH = _outputFormat.GetInteger(MediaFormat.KeyHeight);
-            // KeyStride/KeySliceHeight 为 API 23+、KeyCrop* 为 API 33+；低版本无这些键，按默认处理。
-            if (OperatingSystem.IsAndroidVersionAtLeast(23))
-            {
-                if (_outputFormat.ContainsKey(MediaFormat.KeyStride)) stride = _outputFormat.GetInteger(MediaFormat.KeyStride);
-                if (_outputFormat.ContainsKey(MediaFormat.KeySliceHeight)) sliceH = _outputFormat.GetInteger(MediaFormat.KeySliceHeight);
-            }
-            if (OperatingSystem.IsAndroidVersionAtLeast(33)
-                && _outputFormat.ContainsKey(MediaFormat.KeyCropRight) && _outputFormat.ContainsKey(MediaFormat.KeyCropBottom)
-                && _outputFormat.ContainsKey(MediaFormat.KeyCropLeft) && _outputFormat.ContainsKey(MediaFormat.KeyCropTop))
-            {
-                cropR = _outputFormat.GetInteger(MediaFormat.KeyCropRight);
-                cropB = _outputFormat.GetInteger(MediaFormat.KeyCropBottom);
-                cropL = _outputFormat.GetInteger(MediaFormat.KeyCropLeft);
-                cropT = _outputFormat.GetInteger(MediaFormat.KeyCropTop);
-                hasCrop = true;
-            }
-        }
-
-        if (stride <= 0) stride = fullW;
-        if (sliceH <= 0) sliceH = fullH;
-        if (fullW <= 0 || fullH <= 0)
-            throw new InvalidOperationException("[ANDROID-VID] 输出格式缺少 width/height");
-
-        // MediaCodec 的 crop 右/下为开区间；可见 = right-left / bottom-top。无 crop 时回退源几何。
-        int displayW = hasCrop ? (cropR - cropL) : (_settings.Width is > 0 ? _settings.Width.Value : fullW);
-        int displayH = hasCrop ? (cropB - cropT) : (_settings.Height is > 0 ? _settings.Height.Value : fullH);
-        int w = Math.Max(displayW, 1), h = Math.Max(displayH, 1);
-        if (!hasCrop) { cropL = 0; cropT = 0; }
-
-        int cW420 = (w + 1) / 2, cH420 = (h + 1) / 2;
-        int ySize = w * h;
-        int uvSize = _outputPixelFormat == PixelFormat.NV12
-            ? w * ((h + 1) / 2)
-            : 2 * cW420 * cH420;
-
-        var resource = new SoftwareFrameResource(w, h, _outputPixelFormat, checked(ySize + uvSize));
+        // 半平面（NV12）且 crop-left/width 均为偶数：直接输出紧凑 NV12（Y + UV 交错），避免拆成 I420 再被 presenter 重拼。
+        // crop-left 为奇数或宽度为奇数时，UV 对无法字节对齐，回退到逐像素 I420 拆分（保证正确性）。
+        bool fastNv12 = uvPixelStride == 2 && (cl & 1) == 0 && (vw & 1) == 0;
+        PixelFormat outFmt = fastNv12 ? PixelFormat.NV12 : PixelFormat.YUV420P;
+        int uvRowBytes = fastNv12 ? (vw + 1) & ~1 : cw; // NV12 紧凑行须为偶字节（UV 对），I420 行 = cw
+        int uvPlaneBytes = uvRowBytes * ch;
+        int totalBytes = fastNv12 ? ySize + uvPlaneBytes : ySize + 2 * cw * ch;
+        var resource = new SoftwareFrameResource(vw, vh, outFmt, checked(totalBytes));
         Span<byte> dst = resource.Data.Span;
 
-        bool key = ((int)info.Flags & FlagKeyFrame) != 0;
-        var pts = info.PresentationTimeUs >= 0
-            ? TimeSpan.FromTicks(info.PresentationTimeUs * 10)
-            : TimeSpan.Zero;
+        // ── 一锤定音诊断（仅首帧）：统计可见区 Y/U/V 平面均值/范围/非零占比 ──
+        bool diag = _framesProduced == 0;
+        long extractStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
-        if (_outputPixelFormat == PixelFormat.NV12)
-            ExtractNV12(raw, baseOff, stride, sliceH, cropL, cropT, w, h, dst);
+        // Y 平面：整平面拷入 _extractRaw，再逐行按可见区拷贝（Y 与 UV 布局无关，共用）。
+        int yCap = yBuf.Capacity();
+        if (_extractRaw.Length < yCap) _extractRaw = new byte[yCap];
+        yBuf.Rewind();
+        yBuf.Get(_extractRaw, 0, yCap);
+        long ySum = 0; byte yMin = 255, yMax = 0; int yNonZero = 0;
+        int yDst = 0;
+        for (int row = 0; row < vh; row++)
+        {
+            int srcOff = (ct + row) * yRowStride + cl * yPixelStride;
+            CopyRow(_extractRaw, srcOff, vw, dst, yDst);
+            if (diag)
+                for (int x = 0; x < vw; x++)
+                {
+                    byte b = dst[yDst + x];
+                    ySum += b; if (b < yMin) yMin = b; if (b > yMax) yMax = b; if (b != 0) yNonZero++;
+                }
+            yDst += vw;
+        }
+
+        int chromaRow0 = ct / 2;
+        int chromaCol0 = cl / 2;
+
+        long uSum = 0; byte uMin = 255, uMax = 0; int uNonZero = 0;
+        long vSum = 0; byte vMin = 255, vMax = 0; int vNonZero = 0;
+
+        if (fastNv12)
+        {
+            // 半平面 NV12：plane[1] 已含 UV 交错（U 偶 V 奇），直接按行拷入 destination UV 区。
+            // 源行可能有行尾填充（uvRowStride），目标紧凑行 uvRowBytes；copy 后不足处填 128。
+            int uCap = uBuf.Capacity();
+            if (_extractRaw.Length < uCap) _extractRaw = new byte[uCap];
+            uBuf.Rewind();
+            uBuf.Get(_extractRaw, 0, uCap);
+
+            int uvDst = ySize;
+            for (int cy = 0; cy < ch; cy++)
+            {
+                int srcOff = (chromaRow0 + cy) * uvRowStride + chromaCol0 * 2;
+                int dstOff = uvDst + cy * uvRowBytes;
+                int avail = _extractRaw.Length - srcOff;
+                int copy = avail >= uvRowBytes ? uvRowBytes : avail > 0 ? avail : 0;
+                if (copy > 0)
+                    _extractRaw.AsSpan(srcOff, copy).CopyTo(dst.Slice(dstOff, copy));
+                if (copy < uvRowBytes)
+                    dst.Slice(dstOff + copy, uvRowBytes - copy).Fill(128);
+
+                if (diag && copy > 0)
+                {
+                    // 统计：U 在偶字节、V 在奇字节（标准 NV12）。
+                    int statLen = copy & ~1;
+                    for (int i = 0; i < statLen; i += 2)
+                    {
+                        byte u = _extractRaw[srcOff + i];
+                        byte v = _extractRaw[srcOff + i + 1];
+                        uSum += u; if (u < uMin) uMin = u; if (u > uMax) uMax = u; if (u != 0) uNonZero++;
+                        vSum += v; if (v < vMin) vMin = v; if (v > vMax) vMax = v; if (v != 0) vNonZero++;
+                    }
+                }
+            }
+        }
+        else if (uvPixelStride == 1)
+        {
+            // planar：U/V 各自独立平面，逐行拷贝 cw 字节（须按 uvRowStride 步进，含行填充）。
+            int uCap = uBuf.Capacity();
+            if (_extractRaw.Length < uCap) _extractRaw = new byte[uCap];
+            uBuf.Rewind();
+            uBuf.Get(_extractRaw, 0, uCap);
+
+            int uDst = ySize;
+            int vDst = ySize + cw * ch;
+            for (int cy = 0; cy < ch; cy++)
+            {
+                int srcRow = (chromaRow0 + cy) * uvRowStride + chromaCol0;
+                CopyRow(_extractRaw, srcRow, cw, dst, uDst + cy * cw);
+                if (diag) AccumPlaneStats(dst, uDst + cy * cw, cw, ref uSum, ref uMin, ref uMax, ref uNonZero);
+            }
+            int vCap = vBuf.Capacity();
+            if (_extractRaw.Length < vCap) _extractRaw = new byte[vCap];
+            vBuf.Rewind();
+            vBuf.Get(_extractRaw, 0, vCap);
+            for (int cy = 0; cy < ch; cy++)
+            {
+                int srcRow = (chromaRow0 + cy) * uvRowStride + chromaCol0;
+                CopyRow(_extractRaw, srcRow, cw, dst, vDst + cy * cw);
+                if (diag) AccumPlaneStats(dst, vDst + cy * cw, cw, ref vSum, ref vMin, ref vMax, ref vNonZero);
+            }
+        }
         else
-            ExtractI420Packed(raw, baseOff, stride, sliceH, cropL, cropT, w, h, dst);
+        {
+            // semiplanar 但 crop-left 为奇数：无法字节对齐直接 copy，回退逐像素拆成 I420。
+            int uCap = uBuf.Capacity();
+            if (_extractRaw.Length < uCap) _extractRaw = new byte[uCap];
+            uBuf.Rewind();
+            uBuf.Get(_extractRaw, 0, uCap);
+
+            int uDst = ySize;
+            int vDst = ySize + cw * ch;
+            int elemCap = _extractRaw.Length;
+            for (int cy = 0; cy < ch; cy++)
+            {
+                int srcRow = (chromaRow0 + cy) * uvRowStride + chromaCol0 * 2;
+                for (int cx = 0; cx < cw; cx++)
+                {
+                    int s = srcRow + cx * 2;
+                    byte u, v;
+                    if (s + 1 < elemCap && s >= 0) { u = _extractRaw[s]; v = _extractRaw[s + 1]; }
+                    else { u = 128; v = 128; }
+                    dst[uDst + cy * cw + cx] = u;
+                    dst[vDst + cy * cw + cx] = v;
+                    if (diag)
+                    {
+                        uSum += u; if (u < uMin) uMin = u; if (u > uMax) uMax = u; if (u != 0) uNonZero++;
+                        vSum += v; if (v < vMin) vMin = v; if (v > vMax) vMax = v; if (v != 0) vNonZero++;
+                    }
+                }
+            }
+        }
+
+        if (diag)
+        {
+            int yTot = vw * vh, cTot = cw * ch;
+            _logger.LogInformation(
+                "[ANDROID-VID] 首帧平面统计 可见={VW}x{VH} fmt={Fmt} crop=({CL},{CT}) | " +
+                "Y 均值={YM:g} 范围[{Ymin},{Ymax}] 非零{Ynz}% | " +
+                "U 均值={UM:g} 范围[{Umin},{Umax}] 非零{Unz}% | " +
+                "V 均值={VM:g} 范围[{Vmin},{Vmax}] 非零{Vnz}%",
+                vw, vh, fastNv12 ? "NV12(semiplanar,U-even,V-odd)" : uvPixelStride == 1 ? "I420(planar)" : "I420(fallback,semiplanar)",
+                cl, ct,
+                (double)ySum / yTot, yMin, yMax, yNonZero * 100 / yTot,
+                (double)uSum / cTot, uMin, uMax, uNonZero * 100 / cTot,
+                (double)vSum / cTot, vMin, vMax, vNonZero * 100 / cTot);
+            _logger.LogInformation(
+                "[ANDROID-VID] 诊断判读: V均值≈128→色度已填充(绿屏应消除); V≈0→解码端未填V(需换软件解码器)。解码器={Name} 硬件={Hw}",
+                _codecName, _hardwareDecoder);
+        }
+
+        // 周期性性能诊断：每 60 帧报告一次平均提取耗时，用于定位卡顿瓶颈。
+        _extractSamples++;
+        _extractTicks += System.Diagnostics.Stopwatch.GetTimestamp() - extractStart;
+        if (_framesProduced > 0 && (_framesProduced % LogInterval) == 0)
+        {
+            double avgMs = System.Diagnostics.Stopwatch.GetElapsedTime(0, _extractTicks).TotalMilliseconds / _extractSamples;
+            _logger.LogInformation("[ANDROID-VID] 提取性能: 样本={Samples} 平均={AvgMs:F2}ms/帧 解码器={Name}",
+                _extractSamples, avgMs, _codecName);
+            _extractSamples = 0;
+            _extractTicks = 0;
+        }
+
+        // PTS：优先 image.Timestamp（ns）→ ticks；缺失则退回 dequeue 的 presentationTimeUs（us）→ ticks。
+        TimeSpan pts = image.Timestamp > 0
+            ? TimeSpan.FromTicks(image.Timestamp / 100)
+            : infoPtsUs >= 0 ? TimeSpan.FromTicks(infoPtsUs * 10) : TimeSpan.Zero;
 
         resource.ColorInfo = _colorInfo;
-        return new VideoFrame(w, h, _outputPixelFormat, resource, pts, TimeSpan.Zero, key, _colorInfo);
+        return new VideoFrame(vw, vh, outFmt, resource, pts, TimeSpan.Zero, keyFrame, _colorInfo);
     }
 
-    /// <summary>从 NV12 半平面布局提取（Y + 交织 UV），src 为整个输出缓冲，base 为数据起始偏移。</summary>
-    private static void ExtractNV12(byte[] src, int baseOff, int stride, int sliceH, int cropL, int cropT, int w, int h, Span<byte> dst)
+    /// <summary>累计一行的平面统计（均值/范围/非零占比），供首帧诊断使用。</summary>
+    private static void AccumPlaneStats(Span<byte> data, int off, int count,
+        ref long sum, ref byte min, ref byte max, ref int nonZero)
     {
-        int yPlaneSize = stride * sliceH;
-        for (int row = 0; row < h; row++)
+        for (int i = 0; i < count; i++)
         {
-            int srcOff = baseOff + (cropT + row) * stride + cropL;
-            int dstOff = row * w;
-            CopyRow(src, srcOff, w, dst, dstOff);
-        }
-        int chromaH = (h + 1) / 2;
-        int chromaSrcRow0 = cropT / 2;
-        int uvCropByte = cropL & ~1;
-        for (int cRow = 0; cRow < chromaH; cRow++)
-        {
-            int srcOff = baseOff + yPlaneSize + (chromaSrcRow0 + cRow) * stride + uvCropByte;
-            int dstOff = w * h + cRow * w;
-            int need = Math.Min(w, Math.Max(stride - uvCropByte, 0));
-            if (need > 0)
-            {
-                int cnt = Math.Min(need, w);
-                CopyRow(src, srcOff, cnt, dst, dstOff);
-                if (cnt < w) dst.Slice(dstOff + cnt, w - cnt).Fill(dst[dstOff + cnt - 1]); // 余量填充
-            }
-            else
-            {
-                dst.Slice(dstOff, w).Fill(128); // 无有效源：中性灰
-            }
+            byte b = data[off + i];
+            sum += b; if (b < min) min = b; if (b > max) max = b; if (b != 0) nonZero++;
         }
     }
 
-    /// <summary>从 I420 三平面布局提取（Y + U + V）。</summary>
-    private static void ExtractI420Packed(byte[] src, int baseOff, int stride, int sliceH, int cropL, int cropT, int w, int h, Span<byte> dst)
-    {
-        int yPlaneSize = stride * sliceH;
-        int chromaStride = stride / 2;
-        if (chromaStride <= 0) chromaStride = (w + 1) / 2;
-        int chromaPlaneSize = chromaStride * (sliceH / 2);
-        int cw = (w + 1) / 2, ch = (h + 1) / 2;
-        int cCropL = cropL / 2, cCropT = cropT / 2;
-        int copyCols = Math.Min(cw, Math.Max(((w + 1) - (cropL & 1) + 1) / 2, 0));
-        if (copyCols <= 0) copyCols = cw;
-
-        // Y
-        for (int row = 0; row < h; row++)
-        {
-            int srcOff = baseOff + (cropT + row) * stride + cropL;
-            int dstOff = row * w;
-            if (srcOff >= 0 && srcOff + w <= src.Length)
-                new ReadOnlySpan<byte>(src, srcOff, w).CopyTo(dst.Slice(dstOff, w));
-        }
-
-        // U / V（源为三平面；V 平面紧随 U，偏置 chromaPlaneSize）
-        int uDst = w * h;
-        int vDst = uDst + cw * ch;
-        int uBase = baseOff + yPlaneSize + cCropL;
-        int vBase = baseOff + yPlaneSize + chromaPlaneSize + cCropL;
-        int cnt = Math.Min(copyCols, cw);
-        for (int row = 0; row < ch; row++)
-        {
-            int uSrc = uBase + (cCropT + row) * chromaStride;
-            int uOff = uDst + row * cw;
-            if (cnt > 0 && uSrc + cnt <= src.Length)
-            {
-                new ReadOnlySpan<byte>(src, uSrc, cnt).CopyTo(dst.Slice(uOff, cnt));
-                if (cnt < cw) dst.Slice(uOff + cnt, cw - cnt).Fill(dst[uOff + cnt - 1]);
-            }
-            else dst.Slice(uOff, cw).Fill(128);
-
-            int vSrc = vBase + (cCropT + row) * chromaStride;
-            int vOff = vDst + row * cw;
-            if (cnt > 0 && vSrc + cnt <= src.Length)
-            {
-                new ReadOnlySpan<byte>(src, vSrc, cnt).CopyTo(dst.Slice(vOff, cnt));
-                if (cnt < cw) dst.Slice(vOff + cnt, cw - cnt).Fill(dst[vOff + cnt - 1]);
-            }
-            else dst.Slice(vOff, cw).Fill(128);
-        }
-    }
+    // 平面提取统一由 ExtractI420FromImage（Image.Plane，按 pixelStride/rowStride + CropRect 可见区）承担，见上方。
 
     private static void CopyRow(byte[] src, int srcOff, int count, Span<byte> dst, int dstOff)
     {
-        if (srcOff < 0 || srcOff + count > src.Length) return; // 越界：跳过该行（不抛不尾）
-        new ReadOnlySpan<byte>(src, srcOff, count).CopyTo(dst.Slice(dstOff, count));
+        if (srcOff < 0 || count <= 0) return;
+        // 越界时只拷贝可用部分（不整行丢弃），避免对齐填充误差导致整行变 0（黑/绿线）。
+        int n = Math.Min(count, src.Length - srcOff);
+        if (n <= 0) return;
+        new ReadOnlySpan<byte>(src, srcOff, n).CopyTo(dst.Slice(dstOff, n));
     }
 
     private void EnsureInitialized()
@@ -762,16 +786,13 @@ internal sealed class AndroidVideoDecoder : IVideoDecoder
         _codec = null;
         _outputFormat?.Dispose();
         _outputFormat = null;
-        _imageReader?.Dispose();
-        _imageReader = null;
-        _zeroCopyMode = false;
 
-        // Surface 取帧分支汇总（无条件：确证 drain 是否被调用、各分支分布）
+        // ByteBuffer 单一路径汇总（确证 DrainOutput 是否被调用、各分支分布）
         if (_drainCalls > 0)
         {
             _logger.LogWarning(
-                "[ANDROID-VID] Surface 取帧汇总：drainCalls={Calls} dequeued={Dq} release(render)=={Rel} tryAgain={Ta} acquireNull={An}",
-                _drainCalls, _drainDequeued, _drainReleased, _drainTryAgain, _drainAcquireNull);
+                "[ANDROID-VID] 取帧汇总：drainCalls={Calls} dequeue成功={Dq} tryAgain={Ta} 喂入={Fed} 累计产帧={Frames} 解码器={Name} 硬件={Hw}",
+                _drainCalls, _drainDequeued, _drainTryAgain, _inputQueued, _framesProduced, _codecName, _hardwareDecoder);
         }
     }
 }
