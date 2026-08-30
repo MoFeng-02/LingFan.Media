@@ -23,20 +23,19 @@ namespace LingFan.Media.AvaloniaTools.Android
             MediaBuilderPlatformRegistrar.PlatformRegistrar =
                 b => b.AddMediaCodec();
 
-            // 启用 Vulkan 渲染后端（AndroidRenderingMode 首选项）：Android 默认仅 [Egl, Software]，
-            // 而 EGL 后端不暴露 VK_ANDROID_external_memory_android_hardware_buffer 的 AHB 合成互操作，
-            // 导致 ICompositionGpuInterop 拿不到 AHB 句柄、零拷贝无法激活。Vulkan 后端使合成器经
-            // AHB 暴露 ICompositionGpuInterop，VideoView 的 CompositionVideoRenderer 方可走 AndroidHardwareBuffer
-            // 零拷贝上屏。EGL / Software 保留为降级兜底（API 24+ 设备 Vulkan 为推荐路径）。
+            // 渲染后端：Android 默认 [Egl, Software]。此前为「无空域零拷贝」opt-in 了 Vulkan
+            // （EGL 后端不暴露 ICompositionGpuInterop 的 Vulkan 外部内存互操作），但 Vulkan AHB 采样
+            // 在 Adreno 上触发驱动 SIGSEGV（vkFormat=R8G8B8A8Unorm 规范正确仍崩，纯驱动 bug，已联网核实
+            // Chromium/Flutter 同列为 Adreno workaround 重灾区）。故默认回落 EGL + 软件（能播档），
+            // 零拷贝经 GL 纹理路线（Phase 2，Flutter/TextureView 同款）重做，不再硬走 Vulkan AHB。
             return base.CustomizeAppBuilder(builder)
                 .With(new AndroidPlatformOptions
                 {
-                    RenderingMode = new[]
-                    {
-                        AndroidRenderingMode.Vulkan,
+                    RenderingMode = 
+                    [
                         AndroidRenderingMode.Egl,
                         AndroidRenderingMode.Software,
-                    },
+                    ],
                 })
                 .WithInterFont();
         }

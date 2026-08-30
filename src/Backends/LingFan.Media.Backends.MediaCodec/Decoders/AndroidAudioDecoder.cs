@@ -112,6 +112,17 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
             // getOutputFormat 无参重载在 .NET 绑定映射为 OutputFormat 属性（GetOutputFormat(int) 为按输出缓冲索引的重载）
             using var outFmt = codecObj.OutputFormat;
             ReadOutputParams(outFmt);
+
+            // HE-AAC（SBR/PS）真实输出格式提前纠正：容器/初始 OutputFormat 只暴露核心 LC 参数
+            // （如 22050Hz/1ch），SBR 翻倍采样率、PS 上混立体声，首帧 FORMAT_CHANGED 才上报真实值。
+            // 此处从 AudioSpecificConfig（csd-0）提前推断，供音频输出以正确格式一次性初始化，
+            // 避免首帧重建播放器 + 主时钟重开（起播死区）。推断失败保持原值，帧级重协商兜底（零回归）。
+            if (codec == AudioCodec.AAC
+                && TryParseAacOutputFormat(settings.CodecConfiguration, out int sbrRate, out int sbrChannels))
+            {
+                _outputSampleRate = sbrRate;
+                _outputChannels = sbrChannels;
+            }
         }
         catch
         {
@@ -295,6 +306,45 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
             var sf = AndroidCodecMaps.PcmEncodingToSampleFormat(outFmt.GetInteger(MediaFormat.KeyPcmEncoding));
             if (sf is not null) _sampleFormat = sf.Value;
         }
+    }
+
+    /// <summary>
+    /// 从 AAC AudioSpecificConfig（csd-0）前 13 位推断 HE-AAC（SBR/PS）的真实输出采样率/声道数。
+    /// 仅处理 audioObjectType=5（SBR，采样率×2）与 29（SBR+PS，采样率×2 且上混立体声）；
+    /// 逃逸对象类型（31）、显式/逃逸采样率、PCE 声道配置（0）等罕见情况保守返回 false（不纠正）。
+    /// </summary>
+    private static bool TryParseAacOutputFormat(ReadOnlyMemory<byte> csd, out int sampleRate, out int channels)
+    {
+        sampleRate = 0;
+        channels = 0;
+        var s = csd.Span;
+        if (s.Length < 2) return false;
+
+        // AudioSpecificConfig 位布局（MSB 优先）：
+        //   audioObjectType(5) | samplingFrequencyIndex(4) | channelConfiguration(4) | …
+        int audioObjectType = s[0] >> 3;
+        if (audioObjectType == 31) return false; // 逃逸对象类型：罕见，保守放弃
+        int freqIndex = ((s[0] & 0x07) << 1) | (s[1] >> 7);
+        int channelConfig = (s[1] >> 3) & 0x0F;
+
+        int coreRate = freqIndex switch
+        {
+            0 => 96000, 1 => 88200, 2 => 64000, 3 => 48000, 4 => 44100, 5 => 32000,
+            6 => 24000, 7 => 22050, 8 => 16000, 9 => 12000, 10 => 11025, 11 => 8000,
+            12 => 7350, _ => 0, // 13/14 显式频率、15 逃逸：保守放弃
+        };
+        if (coreRate <= 0) return false;
+
+        bool sbr = audioObjectType is 5 or 29;
+        if (!sbr) return false; // 非 HE-AAC：无需纠正
+
+        sampleRate = coreRate * 2;
+        // SBR+PS(29) 上混为立体声；纯 SBR(5) 保持核心声道数（0=PCE 在带内，保守放弃）。
+        channels = audioObjectType == 29
+            ? 2
+            : channelConfig switch { 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 8, _ => 0 };
+        if (channels <= 0) return false;
+        return true;
     }
 
     private AudioFrame ExtractFrame(int idx, AndroidMediaCodec.BufferInfo info)

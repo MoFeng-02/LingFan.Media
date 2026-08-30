@@ -55,6 +55,12 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     private ICompositionImportedGpuSemaphore? _signalSem;
     private string? _handleType;
     private ulong _lastVersion;
+    /// <summary>合成器 GPU 上下文重建标记。Android 初始化期合成器会重建 RenderInterface，使旧 interop
+    /// 在创建时捕获的 Context 快照与当前 compositor.Server.RenderInterface.Value 不再是同一实例，
+    /// 其导入图像 IsUsable 永久 false、UpdateAsync 抛 PlatformGraphicsContextLostException。置位后，
+    /// 下一帧经 <see cref="EnsureInteropAndImportAsync"/> 重新 TryGetCompositionGpuInterop() 以刷新
+    /// Context 快照并重导。跨程序集无法直接读取 Avalonia 内部 IsUsable，故以本标记驱动重拉。</summary>
+    private volatile bool _interopStale;
     private Task? _lastPresent;
     private bool _disposed;
 
@@ -406,14 +412,14 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
         //    （之前在管线线程直接调用即暴露为「连续 30 帧无法呈现 → 回退 Skia」）。
         //    desc 为值类型，拷贝后跨线程安全传递到 UI 线程。
         var d = desc;
-        Dispatcher.UIThread.Post(() => PresentUi(d));
+        Dispatcher.UIThread.Post(() => { _ = PresentUi(d); });
     }
 
     /// <summary>在 UI（Compositor 拥有者）线程执行共享纹理导入与上屏。</summary>
-    private void PresentUi(SharedGpuSurfaceDescriptor desc)
+    private async Task PresentUi(SharedGpuSurfaceDescriptor desc)
     {
         // Detach 后可能有挂起的封送调用：字段已被 DetachCore 置空，直接退出避免触碰已释放对象。
-        if (_disposed || _source is null || _interop is null || _drawingSurface is null || _handleType is null)
+        if (_disposed || _source is null || _interop is null || _compositor is null || _drawingSurface is null || _handleType is null)
         {
             PostNoteSkip();
             return;
@@ -421,28 +427,32 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
 
         try
         {
-            // 纹理重建（Version 变化）→ 丢弃旧导入图像，按新句柄/尺寸重新导入。
-            if (_imported is null || _lastVersion != desc.Version)
+            // Android（SyncMode.None）路径：合成器 RenderInterface.Value 跨帧不稳定，而 Avalonia 的
+            // CompositionImportedGpuImage.IsUsable 要求「导入时捕获的 Context」与「呈现时
+            // Compositor.Server.RenderInterface.Value」为同一实例（Avalonia 12.1.1 源码证实：
+            // Context 在 CompositionInterop 构造时一次性冻结）。跨帧缓存导入会因上下文重建而永久失配
+            // （PlatformGraphicsContextLostException）。故每帧重新解析 interop（捕获当前 Value）+ 重新
+            // 导入，并在呈现前 await ImportCompleted 确保服务端导入完成、Context 与 Value 一致。
+            // 非 None 路径（Windows KeyedMutex / Linux Semaphores）上下文稳定，沿用缓存导入。
+            ICompositionImportedGpuImage imported;
+            if (_source.SyncMode == SharedGpuSyncMode.None)
             {
-                _imported?.DisposeAsync();
-                _imported = null;
-
-                var props = new PlatformGraphicsExternalImageProperties
+                var fresh = await ImportFreshAsync(desc).ConfigureAwait(true);
+                if (fresh is null)
                 {
-                    Width = desc.Width,
-                    Height = desc.Height,
-                    Format = PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm,
-                };
-                _imported = _interop.ImportImage(new PlatformHandle(desc.Handle, _handleType), props);
-                if (_imported is null)
-                {
-                    _logger.LogWarning(
-                        "CompositionVideoRenderer 导入共享纹理失败（句柄类型={HandleType}），跳过本帧。",
-                        _handleType);
                     PostNoteSkip();
                     return;
                 }
-                _lastVersion = desc.Version;
+                var old = _imported;
+                _imported = fresh;
+                old?.DisposeAsync();
+                imported = fresh;
+            }
+            else
+            {
+                if (!await EnsureInteropAndImportAsync(desc).ConfigureAwait(true))
+                    return;
+                imported = _imported!;
             }
 
             // 信号量（仅 Semaphores 模型）：与源同生命周期，导入一次（非每帧），供 UpdateWithSemaphoresAsync 使用。
@@ -490,18 +500,38 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             _surfaceVisual!.Opacity = 1;
 
             // 按源的同步模型选择提交方式：各后端只用自己 API 的原生机制，互不跨界、不伪造句柄。
-            if (_source.SyncMode == SharedGpuSyncMode.Semaphores && _waitSem is not null && _signalSem is not null)
-            {
-                _lastPresent = _drawingSurface.UpdateWithSemaphoresAsync(_imported, _waitSem, _signalSem);
-            }
-            else
-            {
-                // 消费者（Avalonia 合成线程）以 ConsumerAcquireKey 取锁采样、以 ConsumerReleaseKey 归还。
-                _lastPresent = _drawingSurface.UpdateWithKeyedMutexAsync(
-                    _imported, (uint)_source.ConsumerAcquireKey, (uint)_source.ConsumerReleaseKey);
-            }
+            Task present = _source.SyncMode == SharedGpuSyncMode.Semaphores && _waitSem is not null && _signalSem is not null
+                ? _drawingSurface.UpdateWithSemaphoresAsync(imported, _waitSem, _signalSem)
+                : _source.SyncMode == SharedGpuSyncMode.None
+                    // 无显式同步（Android）：由 Avalonia 合成器平台层（UpdateAsync）自管跨端同步，
+                    // 走 UpdateWithAutomaticSync 路径（sync=None）。
+                    ? _drawingSurface.UpdateAsync(imported)
+                    // 消费者（Avalonia 合成线程）以 ConsumerAcquireKey 取锁采样、以 ConsumerReleaseKey 归还。
+                    : _drawingSurface.UpdateWithKeyedMutexAsync(
+                        imported, (uint)_source.ConsumerAcquireKey, (uint)_source.ConsumerReleaseKey);
 
-            NoteSuccess();
+            // 治根（Android 真机教训）：上屏任务必须被健康监控观测。原实现把 _lastPresent 存入即弃、
+            // 无条件 NoteSuccess()，导致「写入共享纹理成功但合成器从未采样 / 导入失效」被误判为成功，
+            // 连续成功计数永不归零 → Unhealthy 永不触发 → 永不回退 Skia → 永久空白且无任何日志。
+            // 现改为：任务成功完成才记成功；任务失败/取消记一次跳过，连续达阈值即触发回退。
+            _lastPresent = present;
+            _ = present.ContinueWith(t =>
+            {
+                if (t.IsFaulted || t.IsCanceled)
+                {
+                    // 数据先行：上屏任务真实异常此前被静默吞掉（仅计一次跳过 → 30 次触发回退），
+                    // 导致「UpdateAsync 为何失败」完全不可见。此处把 AggregateException 展开记录，
+                    // 真机 run 的 3.txt 即可看到 Android 合成器对导入 AHB/OPAQUE_FD 图像的真实拒绝原因。
+                    if (t.Exception is { } ex)
+                        _logger.LogError(ex, "CompositionVideoRenderer UpdateAsync 上屏失败（帧跳过，累计将触发回退）。HandleType={HandleType} Version={Version}",
+                            _handleType, _lastVersion);
+                    // Android 路径每帧重新解析 interop+重导（ImportFreshAsync），故此处无需置 _interopStale；
+                    // 下一帧会自动以当前 RenderInterface.Value 重新导入。仅记一次跳过，连续达阈值即触发回退。
+                    PostNoteSkip();
+                }
+                else
+                    NoteSuccess();
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
         catch (Exception ex)
         {
@@ -510,6 +540,137 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             _logger.LogWarning(ex, "CompositionVideoRenderer 提交帧失败（跳过本帧）。");
             PostNoteSkip();
         }
+    }
+
+    /// <summary>
+    /// Android（SyncMode.None）专用：每帧重新解析 interop 并导入当前帧外部图像。
+    /// 依据（Avalonia 12.1.1 源码）：CompositionImportedGpuImage 在导入时把
+    /// <c>Context = compositor.Server.RenderInterface.Value</c> 一次性冻结；<see cref="IsUsable"/>
+    /// 要求呈现时 <c>RenderInterface.Value</c> 与该 Context 为同一实例。Android 合成器 RenderInterface
+    /// 跨帧重建，跨帧缓存导入必失配（PlatformGraphicsContextLostException）。每帧重解析+重导+await
+    /// <see cref="ICompositionGpuImportedObject.ImportCompleted"/>，保证呈现瞬间 Context 与 Value 一致。
+    /// </summary>
+    /// <returns>本帧导入图像；任一环节失败返回 <see langword="null"/>（调用方应跳过本帧）。</returns>
+    // 把生产者描述符携带的 SharedGpuSurfaceFormat 映射到合成器导入所需的 PlatformGraphicsExternalImageFormat。
+    // Android 零拷贝路径生产者用 R8G8B8A8（AHB 唯一等价格式，B8G8R8A8 无 AHB 等价），须对应 R8G8B8A8UNorm，
+    // 否则合成器以 BGRA 采样会致通道互换；Windows/Linux 仍走 B8G8R8A8UNorm（与 D3D/Vulkan 约定一致）。
+    private static PlatformGraphicsExternalImageFormat ToExternalFormat(SharedGpuSurfaceFormat fmt) =>
+        fmt == SharedGpuSurfaceFormat.R8G8B8A8UNorm
+            ? PlatformGraphicsExternalImageFormat.R8G8B8A8UNorm
+            : PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm;
+
+    private async Task<ICompositionImportedGpuImage?> ImportFreshAsync(SharedGpuSurfaceDescriptor desc)
+    {
+        var interop = await _compositor!.TryGetCompositionGpuInterop().ConfigureAwait(true);
+        if (interop is null)
+        {
+            _logger.LogWarning("CompositionVideoRenderer 获取 GPU 互操作失败（合成器未就绪），跳过本帧。");
+            return null;
+        }
+        var handleType = ResolveHandleType(interop);
+        if (handleType is null)
+        {
+            _logger.LogWarning("CompositionVideoRenderer 合成器不支持任何 Vulkan/AHardwareBuffer 句柄类型，跳过本帧。");
+            return null;
+        }
+        _handleType = handleType;
+        var props = new PlatformGraphicsExternalImageProperties
+        {
+            Width = desc.Width,
+            Height = desc.Height,
+            Format = ToExternalFormat(desc.Format),
+        };
+        var imported = interop.ImportImage(new PlatformHandle(desc.Handle, handleType), props);
+        // 关键：await 服务端导入完成。若 Context 与当前 RenderInterface.Value 失配，导入阶段即抛
+        // PlatformGraphicsContextLostException（ImportCompleted 变 Faulted），此处 await 直接抛出，
+        // 由 PresentUi 的 try/catch 捕获并跳过本帧——比呈现时才发现失配更早、更明确。
+        await imported.ImportCompleted.ConfigureAwait(true);
+        return imported;
+    }
+
+    /// <summary>从合成器支持的句柄类型中选出本机可用者：优先 OpaqueFd（Vulkan 导出跨 GL/VK 通用），
+    /// 其次 AHardwareBuffer / android 相关类型，最后兜底取第一个。</summary>
+    private static string? ResolveHandleType(ICompositionGpuInterop interop)
+    {
+        var types = interop.SupportedImageHandleTypes;
+        return types.FirstOrDefault(t => t.Contains("OpaqueFd", StringComparison.OrdinalIgnoreCase))
+            ?? types.FirstOrDefault(t => t.Contains("HardwareBuffer", StringComparison.OrdinalIgnoreCase)
+                                         || t.Contains("android", StringComparison.OrdinalIgnoreCase))
+            ?? types.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// 确保导入图像可用，处理两类重建场景：
+    /// ① 共享纹理重建（生产者 <see cref="SharedGpuSurfaceDescriptor.Version"/> 变化）→ 丢弃旧导入，按新句柄/尺寸重导；
+    /// ② 合成器 GPU 上下文重建（Android 初始化期 RenderInterface 被重建）→ 旧 interop 在创建时捕获的 Context 快照
+    ///    与当前 <c>compositor.Server.RenderInterface.Value</c> 不再是同一实例，其导入图像
+    ///    <c>IsUsable</c> 永久 false、<c>UpdateAsync</c> 抛 <see cref="PlatformGraphicsContextLostException"/>。
+    ///    此时须重新 <c>TryGetCompositionGpuInterop()</c>（其构造函数会重新捕获当前 RenderInterface.Value 作为新 Context），
+    ///    并丢弃旧导入重导。一次重拉即收敛（上下文已稳定）。
+    /// 跨程序集无法直接读取 Avalonia 内部 <c>CompositionImportedGpuImage.IsUsable</c>，故由 <see cref="_interopStale"/>
+    /// 标记驱动重拉（上屏续体在捕获 context-lost 异常时置位）。
+    /// </summary>
+    /// <returns>导入图像就绪可用返回 <see langword="true"/>；不可用（应跳过本帧或回退）返回 <see langword="false"/>。</returns>
+    private async Task<bool> EnsureInteropAndImportAsync(SharedGpuSurfaceDescriptor desc)
+    {
+        // ② 合成器上下文重建：重拉 interop 以刷新 Context 快照，并强制下方重导旧导入。
+        if (_interopStale || _interop is null)
+        {
+            _interopStale = false;
+            var interop = await _compositor!.TryGetCompositionGpuInterop().ConfigureAwait(true);
+            if (interop is null)
+            {
+                _logger.LogWarning("CompositionVideoRenderer 重新解析 GPU 互操作失败，回退 Skia。");
+                MarkUnhealthy();
+                return false;
+            }
+            _interop = interop;
+
+            // 句柄类型在新 interop 下仍应受支持（设备/驱动不变）；逐个认领逻辑同 Setup 选择循环。
+            if (_handleType is null || !_interop.SupportedImageHandleTypes.Contains(_handleType))
+            {
+                _handleType = _interop.SupportedImageHandleTypes.FirstOrDefault(t =>
+                    t.Contains("HardwareBuffer", StringComparison.OrdinalIgnoreCase) ||
+                    t.Contains("android", StringComparison.OrdinalIgnoreCase));
+            }
+            if (_handleType is null || !_interop.SupportedImageHandleTypes.Contains(_handleType))
+            {
+                _logger.LogWarning("CompositionVideoRenderer 重解析后句柄类型不被合成器支持，回退 Skia。");
+                MarkUnhealthy();
+                return false;
+            }
+
+            // 旧导入基于失效 Context，必须丢弃，强制重导。
+            _imported?.DisposeAsync();
+            _imported = null;
+            _lastVersion = 0;
+            _waitSem?.DisposeAsync();
+            _waitSem = null;
+            _signalSem?.DisposeAsync();
+            _signalSem = null;
+        }
+
+        // ① 共享纹理重建或强制重导：按当前句柄/尺寸导入。
+        if (_imported is null || _lastVersion != desc.Version)
+        {
+            _imported?.DisposeAsync();
+            var props = new PlatformGraphicsExternalImageProperties
+            {
+                Width = desc.Width,
+                Height = desc.Height,
+                Format = ToExternalFormat(desc.Format),
+            };
+            _imported = _interop.ImportImage(new PlatformHandle(desc.Handle, _handleType!), props);
+            if (_imported is null)
+            {
+                _logger.LogWarning(
+                    "CompositionVideoRenderer 导入共享纹理失败（句柄类型={HandleType}），跳过本帧。",
+                    _handleType);
+                return false;
+            }
+            _lastVersion = desc.Version;
+        }
+        return true;
     }
 
     /// <summary>
@@ -539,7 +700,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             {
                 Width = desc.Width,
                 Height = desc.Height,
-                Format = PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm,
+                Format = ToExternalFormat(desc.Format),
             };
             imported = _interop!.ImportImage(new PlatformHandle(desc.Handle, _handleType!), props);
             if (imported is null)

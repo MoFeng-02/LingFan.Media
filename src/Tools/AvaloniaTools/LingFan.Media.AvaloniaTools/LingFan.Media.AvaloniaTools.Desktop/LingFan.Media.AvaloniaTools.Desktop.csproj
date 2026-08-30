@@ -1,86 +1,93 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <RootNamespace>LingFan.Media.AvaloniaTools</RootNamespace>
-    <OutputType>WinExe</OutputType>
-    <!--If you are willing to use platform-specific APIs, use conditional compilation.
+	<PropertyGroup>
+		<RootNamespace>LingFan.Media.AvaloniaTools</RootNamespace>
+		<OutputType>WinExe</OutputType>
+		<!--If you are willing to use platform-specific APIs, use conditional compilation.
     See https://docs.avaloniaui.net/docs/guides/platforms/platform-specific-code/dotnet for more details.-->
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
 
-  <PropertyGroup>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-  </PropertyGroup>
+	<PropertyGroup>
+		<ApplicationManifest>app.manifest</ApplicationManifest>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\LingFan.Media.AvaloniaTools\LingFan.Media.AvaloniaTools.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\LingFan.Media.AvaloniaTools\LingFan.Media.AvaloniaTools.csproj" />
+	</ItemGroup>
 
-  <!-- 原生 ffmpeg 共享库随 dotnet run / publish 一并复制进输出目录：
+	<!-- 原生 ffmpeg 共享库随 dotnet run / publish 一并复制进输出目录：
        自写 FF 加载器按简单名（avutil/avcodec/...）映射到带版本 handle（avutil-60.dll 等），
        但 BtbN lgpl-shared 仅提供带版本文件，须同时复制同名无版本别名作兜底，
        否则运行目录为空 → 首个 ffmpeg.* 调用静默崩（退出码 127）。
        源：仓库根 ThirdParty/ffmpeg/<解压目录>/bin/*.dll（本工程比 PlaybackProbe 深两级，故 5 个 ..）。
        AOT 发布关键：dotnet publish 不会自动携带构建期复制的原生 DLL，须显式复制到 $(PublishDir)。 -->
-  <ItemGroup>
-    <None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
+	<ItemGroup>
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
 
-  <Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
-    <ItemGroup>
-      <FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
-      <!-- 无版本号别名：avutil-60 → avutil（自写 FF 加载器按简单名加载，BtbN 只给带版本文件） -->
-      <FFmpegDll>
-        <Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
-      </FFmpegDll>
-    </ItemGroup>
-    <!-- 构建输出（dotnet run / Debug） -->
-    <Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
-    <Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
-    <!-- 发布输出（dotnet publish / AOT） -->
-    <Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
-    <Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
-    <Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll-&gt;Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
-    <Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
-  </Target>
+	<Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
+		<ItemGroup>
+			<FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
+			<!-- 无版本号别名：avutil-60 → avutil（自写 FF 加载器按简单名加载，BtbN 只给带版本文件） -->
+			<FFmpegDll>
+				<Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
+			</FFmpegDll>
+		</ItemGroup>
+		<!-- 构建输出（dotnet run / Debug） -->
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+		<!-- 发布输出（dotnet publish / AOT） -->
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll-&gt;Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
+	</Target>
 
-  <!-- 原生 MoltenVK 库随 dotnet run / publish 一并复制进输出目录（仅 macOS/iOS / MoltenVK 平台）：
+	<!-- 原生 MoltenVK 库随 dotnet run / publish 一并复制进输出目录（仅 macOS/iOS / MoltenVK 平台）：
        VulkanNative 在 Apple 上经 NativeLibrary.SetDllImportResolver 把顶层 vulkan-1 重定向到
        libvulkan.1.dylib / libMoltenVK.dylib；这些库由 MoltenVK SDK 提供、不在系统 loader 路径，
        须由宿主打包到应用目录，否则运行期 DllNotFoundException。
        源：仓库根 ThirdParty/moltenvk/<版本>/lib/*.dylib（放 libMoltenVK.dylib；可选另装 Vulkan Loader 的 libvulkan.1.dylib）。
        NativeAOT 下 dotnet publish 不会自动携带构建期复制的原生 dylib，须显式复制到 $(PublishDir)。
        仅 Apple 构建触发；Windows/Linux 跳过（Vulkan loader 由系统/驱动提供，无需此库）。 -->
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-    <None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib"
-          Link="%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
+	<ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib"
+			  Link="%(Filename)%(Extension)"
+			  CopyToOutputDirectory="PreserveNewest"
+			  CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
 
-  <Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish"
-          Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-    <ItemGroup>
-      <MoltenVKDylib Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" />
-    </ItemGroup>
-    <!-- 构建输出（dotnet run / Debug） -->
-    <Copy SourceFiles="@(MoltenVKDylib)"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="'@(MoltenVKDylib)' != ''" />
-    <!-- 发布输出（dotnet publish / AOT） -->
-    <Copy SourceFiles="@(MoltenVKDylib)"
-          DestinationFolder="$(PublishDir)"
-          SkipUnchangedFiles="true"
-          Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
-    <Message Condition="'@(MoltenVKDylib)' != ''"
-             Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
-    <Message Condition="'@(MoltenVKDylib)' == ''"
-             Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
-  </Target>
+	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish"
+			Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<ItemGroup>
+			<MoltenVKDylib Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" />
+		</ItemGroup>
+		<!-- 构建输出（dotnet run / Debug） -->
+		<Copy SourceFiles="@(MoltenVKDylib)"
+			  DestinationFolder="$(OutDir)"
+			  SkipUnchangedFiles="true"
+			  Condition="'@(MoltenVKDylib)' != ''" />
+		<!-- 发布输出（dotnet publish / AOT） -->
+		<Copy SourceFiles="@(MoltenVKDylib)"
+			  DestinationFolder="$(PublishDir)"
+			  SkipUnchangedFiles="true"
+			  Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(MoltenVKDylib)' != ''"
+				 Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(MoltenVKDylib)' == ''"
+				 Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+	</Target>
+	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<Copy SourceFiles="@(MoltenVKDylib)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(MoltenVKDylib)' != ''" />
+		<Copy SourceFiles="@(MoltenVKDylib)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(MoltenVKDylib)' != ''" Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(MoltenVKDylib)' == ''" Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
+	</Target>
 </Project>

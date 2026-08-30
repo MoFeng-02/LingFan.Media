@@ -448,6 +448,20 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 // samplerYcbcrFeatureEnabled：生产者 HasSamplerYcbcrConversion 双判据之一（函数可解析 ≠ 特性已启用）。
                 VulkanNative.InitDevice(device, enableYcbcrFeatures);
 
+                // 诊断：确认 OPAQUE_FD 零拷贝导出链路所需扩展状态。
+                // Android Adreno 若实例级 external_memory_capabilities 缺失、或设备级 external_memory_fd
+                // 未启用，vkBindImageMemory(OPAQUE_FD) 会报 ErrorInvalidExternalHandle，整条导出塌掉回退 Skia。
+                // 下次真机运行据此判定根因（Fd=false→设备级扩展未进列表；Caps=false→实例级未启用）。
+                _logger.LogInformation(
+                    "Vulkan 共享设备扩展核对 [OPAQUE_FD 链路]：实例 external_memory_capabilities={Caps}，" +
+                    "external_semaphore_capabilities={SemCaps}；设备 external_memory_fd={Fd}，" +
+                    "external_semaphore_fd={SemFd}，android_hardware_buffer={Ahb}",
+                    extensions.Contains("VK_KHR_external_memory_capabilities"),
+                    extensions.Contains("VK_KHR_external_semaphore_capabilities"),
+                    devExts.Contains("VK_KHR_external_memory_fd"),
+                    devExts.Contains("VK_KHR_external_semaphore_fd"),
+                    devExts.Contains("VK_ANDROID_external_memory_android_hardware_buffer"));
+
                 VulkanNative.GetDeviceQueue(device, queueFamilyIndex, 0, out queue);
                 if (_videoQueueFamilyIndex != uint.MaxValue)
                 {
@@ -743,6 +757,17 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
             // InstanceCreateFlags.EnumeratePortabilityBitKhr 配对。
             AddIfAvailable("VK_EXT_metal_surface");
             AddIfAvailable("VK_KHR_portability_enumeration");
+        }
+        // 外部内存/信号量能力查询扩展（VK_KHR_external_memory_capabilities /
+        // external_semaphore_capabilities）：VK_KHR_external_memory_fd（OPAQUE_FD）设备扩展
+        // 正确运作的前置依赖——Avalonia 合成器在实例级强制启用了它们。缺失时部分驱动
+        // （如 Android Adreno）会在绑定外部图像时返回 ErrorInvalidExternalHandle，导致 OPAQUE_FD
+        // 导出链路整条塌掉、回退 Skia。Linux/Android 经 AddIfAvailable 启用（Vulkan 1.1+ 多为 core，
+        // 枚举不到则静默跳过，零影响）。
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsAndroid())
+        {
+            AddIfAvailable("VK_KHR_external_memory_capabilities");
+            AddIfAvailable("VK_KHR_external_semaphore_capabilities");
         }
         // B4 Vulkan Video 硬解：实例级启用 VK_KHR_video_queue。
         // 该扩展虽分类为 device extension，但 vkGetPhysicalDeviceVideoCapabilitiesKHR /

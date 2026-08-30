@@ -52,9 +52,7 @@ public sealed class VulkanSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
             ? SharedGpuHandleKind.VulkanOpaqueNtHandle
             : OperatingSystem.IsMacOS() || OperatingSystem.IsIOS()
                 ? SharedGpuHandleKind.IOSurfaceRef
-                : OperatingSystem.IsAndroid()
-                    ? SharedGpuHandleKind.AndroidHardwareBuffer
-                    : SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
+                : SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
 
     /// <inheritdoc/>
     /// <remarks>平台级判定（不触碰原生资源）：Windows / Linux / Android / macOS / iOS 均放行；
@@ -77,13 +75,11 @@ public sealed class VulkanSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
         // 不依赖 external_memory / external_semaphore 扩展；其余平台仍要求 VK_KHR_external_memory*。
         bool sharingOk = (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
             ? _rendererFactory.MetalObjectsSharingEnabled
-            : OperatingSystem.IsAndroid()
-                ? VulkanNative.HasAndroidHardwareBufferProperties
-                : _rendererFactory.ExternalSharingEnabled;
+            : _rendererFactory.ExternalSharingEnabled;
         if (!sharingOk)
             throw new NotSupportedException(
                 "Vulkan 共享表面源所需的导出扩展不可用，无法创建 no-airspace 共享表面源"
-                + "（Apple 需 VK_EXT_metal_objects；Windows/Linux 需 VK_KHR_external_memory*/external_semaphore* 已启用）。");
+                + "（Apple 需 VK_EXT_metal_objects；Windows/Linux/Android 需 VK_KHR_external_memory*/external_semaphore* 已启用）。");
 
         // 同设备对齐：消费方透传的适配器身份必须与本工厂所选 Vulkan 物理设备一致，
         // 否则跨设备导入外部内存/信号量会失败或静默黑屏——干净回退下一个工厂。

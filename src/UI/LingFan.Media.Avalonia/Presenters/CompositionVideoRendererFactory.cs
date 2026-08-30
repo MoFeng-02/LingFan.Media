@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using LingFan.Media.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -38,6 +39,15 @@ public sealed class CompositionVideoRendererFactory : IVideoRendererFactory
     }
 
     /// <inheritdoc/>
-    public IVideoRenderer Create() =>
-        new CompositionVideoRenderer(_surfaceFactories, _selector, _loggerFactory.CreateLogger<CompositionVideoRenderer>());
+    public IVideoRenderer Create()
+    {
+        // 零拷贝硬解硬渲染路径（Android 同其他平台）：优先无空域 GPU 合成
+        // （CompositionVideoRenderer → VulkanSharedSurfaceSource 消费 AndroidHardwareBufferFrameResource），
+        // 解码侧零 CPU 拷贝、渲染侧 GPU 内 YCbCr 转换上屏。
+        // VideoView.EnsurePresenter 在 Attach 失败或运行期 unhealthy（健康监控自愈，见 CompositionVideoRenderer）
+        // 时自动回退 Skia 软渲染；此处无需抛异常或特殊分支——零拷贝为首选，回退由框架兜底。
+        // 注意：MediaPlayer.OpenAsync 经单值 DI 解析本工厂创建的「管线渲染器」仅作 A/V 同步时延参考，
+        // 不参与显示（管线绝不对其 Present），故此处返回何种渲染器不影响打开成败。
+        return new CompositionVideoRenderer(_surfaceFactories, _selector, _loggerFactory.CreateLogger<CompositionVideoRenderer>());
+    }
 }

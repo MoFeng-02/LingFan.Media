@@ -24,18 +24,16 @@
 		<PackageReference Include="Avalonia" Version="12.1.1" />
 		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
 		<PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
-		<PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
+		<!--<PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
 			<IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
 			<PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
-		</PackageReference>
+		</PackageReference>-->
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 		<!-- DI 容器 + 日志（AddLingFanMedia 的 composer 工厂需要 ILoggerFactory / IServiceProvider）；
 		     版本与仓库其它工程一致（10.0.10） -->
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
-		<!-- 原生 libvlc 运行时分发包（LGPL）。随应用输出自带，供 VLCNative 后端运行时加载（库本体不含原生运行时）。 -->
-		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
 	</ItemGroup>
 
 	<ItemGroup>

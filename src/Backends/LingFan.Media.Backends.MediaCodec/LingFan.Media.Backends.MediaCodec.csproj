@@ -14,6 +14,9 @@
 	<ItemGroup>
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+		<!-- 产出 AndroidHardwareBufferFrameResource（中性 GPU 互操作层，net10.0 资产；android 是 net10.0 超集，TFM 兼容）。
+		     消费方单向引用，GPUShare 不反向引用本后端，DIP 合规。 -->
+		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Vulkan\LingFan.Media.GPUShare.Vulkan.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

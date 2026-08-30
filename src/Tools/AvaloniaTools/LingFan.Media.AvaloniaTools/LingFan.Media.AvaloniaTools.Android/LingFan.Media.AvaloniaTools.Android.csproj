@@ -14,7 +14,43 @@
 		<!--<JavaSdkDirectory>D:\Java JDK\jdk-17.0.5</JavaSdkDirectory>-->
 	</PropertyGroup>
 	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-	  <EnableLLVM>False</EnableLLVM>
+		<!-- ============================================================
+	       Release 启用完整 AOT（2026-08-29）
+	       （注意：XML 注释内禁止出现连续双连字符，分隔线一律用 = 号）
+	       背景：此前 Release 未启用任何 AOT，运行期仍走 **Mono JIT**，
+	       起播后需逐方法编译热代码（YUV→BGRA 转换、Image 平面提取），
+	       实测出现 7 秒帧率爬坡（18.5→22→26→30fps）；
+	       爬坡期解码产出跟不上视频帧率，帧 PTS 相对主音频时钟每秒落后约 370ms，
+	       越过 MediaClock.DropThreshold(200ms) 后持续丢帧
+	       ——表现为「起播十余秒画面花/跳，之后才正常」。
+
+	       启用 AOT 后代码在构建期即编译为原生，运行期无 JIT 预热，
+	       起播即达稳态帧率，从根上消除该爬坡。
+
+	       注意：
+	       · AndroidEnableProfiledAot 保持 false —— 完整 AOT 与 profiled AOT 是两种模式，
+	         此处需要的是前者（无需先跑 profile 采集）。
+	       · EnableLLVM 暂不开：LLVM 后端依赖 Android NDK，未安装会直接导致构建失败。
+	         AOT 已足以消除 JIT 预热；若本机具备 NDK，可再置 True 换取更优的原生代码质量
+	         （代价是构建更慢）。
+	       · AOT 新增的 IL3050/IL3053（RequiresDynamicCode）等警告已由下方 NoWarn 覆盖，
+	         不会因 TreatWarningsAsErrors 中断构建。
+	       ============================================================ -->
+		<RunAOTCompilation>true</RunAOTCompilation>
+		<EnableLLVM>False</EnableLLVM>
+		<!-- Release 下 .NET for Android 会做程序集裁剪（"优化程序集大小"），其 trim 分析器扫描整张
+	       依赖图。Avalonia.DesignerSupport / Avalonia.Remote.Protocol（经 Avalonia.Android →
+	       Avalonia 传递引入）是 **XAML 预览器的设计时程序集**，重度依赖反射（Assembly.LoadFrom、
+	       Type.GetProperties、Bson 序列化等），trim 分析下必然报 IL2026 / IL2067 / IL2070 / IL2075；
+	       而仓库根 Directory.Build.props 全局开启 TreatWarningsAsErrors=true，这些警告升级为错误，
+	       最终卡死在"优化程序集大小失败"。
+
+	       该反射发生在**第三方 Avalonia 包内部**，本工程无法从源头消除；且 DesignerSupport 在 Release
+	       运行时路径上根本不会被调用（仅 IDE 预览器使用），裁剪它也不影响运行。故在此定向抑制。
+
+	       作用域仅限本入口工程（演示/验证工具，IsPackable=false）。库工程 LingFan.Media.* 仍受
+	       Directory.Build.props 约束，保持 100% trim/AOT 干净，不受此豁免影响。 -->
+		<NoWarn>$(NoWarn);IL2026;IL2067;IL2070;IL2072;IL2075;IL2080;IL2087;IL2091;IL3050;IL3053</NoWarn>
 	</PropertyGroup>
 
 	<ItemGroup>

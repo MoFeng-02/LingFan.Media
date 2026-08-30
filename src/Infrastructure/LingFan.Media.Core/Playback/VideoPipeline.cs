@@ -73,8 +73,18 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private volatile bool _firstFramePresented;  // 首帧已真正上屏（ProcessFrame 首次 Present 后置位，供 A/V 启动对齐）
     private TaskCompletionSource<bool>? _firstFramePresentedTcs;  // 音频编排等待点（Start 重建）
     // 预滚动帧数下限：等帧队列预热到该深度再启动音频设备（吸收重播的重定位+解码开销）。
-    // 取 2 而非 TargetDepth(6)：够消除首帧空窗即可，等太久会让「点播放到出声」的体感延迟变长。
-    private const int VideoPrerollFrames = 2;
+    //
+    // 【2026-08-29 真机实证修正】旧值固定 2 帧**过浅**：起播瞬间队列仅 2 帧，而前向缓冲目标
+    // TargetDepth=6；呈现一开跑立刻吃光这 2 帧，解码产出（1080x1920 约 30ms/帧，启动期更慢）
+    // 来不及补，队列迅速见底 → 呈现线程空等（Thread.Sleep(1)）+ 帧 PTS 落后被判 Drop。
+    // 真机表现：起播后十余秒内「队列」在 0/1/2 之间反复横跳、丢帧集中爆发（前 11 秒丢 39 帧），
+    // 画面呈现「花/跳/不连贯」；待解码器与 JIT 预热完成、队列稳定在 6~8 后才恢复正常
+    // ——与用户「放到十几秒后画面才恢复正常」完全一致。
+    //
+    // 修正：预滚动深度与前向缓冲目标对齐（= TargetDepth），让起播瞬间队列就是满的，
+    // 具备抵抗启动期产出波动的余量。代价仅约 (TargetDepth−2)×帧间隔 ≈ 130ms 起播延迟，
+    // 换来启动期不再掉帧——远优于「前十几秒画面异常」。
+    private static readonly int VideoPrerollFrames = TargetDepth;
     // 预滚动等待上限：超时即放行启动音频，宁可轻微不同步也绝不卡住播放（解码异常/无视频帧时兜底）。
     private const int VideoPrerollTimeoutMs = 2000;
     // 门控等待上限：SignalAudioReady 因音频启动异常未被调用时的兜底，绝不让呈现线程永久阻塞。
@@ -92,6 +102,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private double _lastPresentMs;
     private double _presentMsAccum;
     private int _presentedCount;
+    // 快照窗口内的呈现帧数。**必须**独立于 _presentedCount（后者是播放以来累计值）：
+    // [SYNC] 快照 的「呈现均耗时」= 窗口内耗时总和 / **窗口内帧数**。此前误把累计帧数当分母，
+    // 平均值被系统性低估（真机实证：真实 ~52ms/帧 显示成 4.8ms），直接导致瓶颈被误判到别处。
+    private int _presentedInWindow;
     private long _droppedFrames;
     // A/V 同步诊断节流字段（仅 LINGFAN_SYNC_DIAG=1 时读取，生产路径恒 0 不影响任何逻辑）。
     private long _lastSyncDiagTicks;
@@ -228,6 +242,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _lastSyncDiagTicks = 0;
         // 主时钟快照计数复位（[SYNC] 快照）
         _presentedCount = 0;
+        _presentedInWindow = 0;
         _pacingSnapshotQpc = 0;
         _presentMsAccum = 0;
         _lastPresentMs = 0;
@@ -538,12 +553,17 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 if (System.Diagnostics.Stopwatch.GetElapsedTime(_pacingSnapshotQpc).TotalMilliseconds >= 2000)
                 {
                     _pacingSnapshotQpc = snapQpc;
-                    double avgPresentMs = _presentedCount > 0 ? _presentMsAccum / _presentedCount : 0;
+                    // 均值必须用**窗口内**帧数做分母（_presentedInWindow），不能用累计 _presentedCount。
+                    double avgPresentMs = _presentedInWindow > 0 ? _presentMsAccum / _presentedInWindow : 0;
+                    int windowFrames = _presentedInWindow;
                     _presentMsAccum = 0;
+                    _presentedInWindow = 0;
                     _logger.LogInformation(
-                        "[SYNC] 快照 master={Master:g} 队列={Queue} 已呈={Presented} 累计丢={Dropped} 呈现均耗时={AvgMs:F1}ms 上帧={LastMs:F1}ms",
+                        "[SYNC] 快照 master={Master:g} 队列={Queue} 已呈={Presented} 累计丢={Dropped} " +
+                        "窗口帧数={Window} 呈现均耗时={AvgMs:F1}ms 上帧={LastMs:F1}ms",
                         _synchronizer.GetCurrentMasterTime(), _frameQueue.Count,
-                        _presentedCount, Interlocked.Read(ref _droppedFrames), avgPresentMs, _lastPresentMs);
+                        _presentedCount, Interlocked.Read(ref _droppedFrames),
+                        windowFrames, avgPresentMs, _lastPresentMs);
                 }
 
                 // 队头帧不出队即判定（Peek 在 SingleReader 下安全）。
@@ -791,7 +811,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         {
             _lastPresentMs = System.Diagnostics.Stopwatch.GetElapsedTime(presentStart).TotalMilliseconds;
             _presentMsAccum += _lastPresentMs;
-            _presentedCount++; // 快照日志计数（[SYNC] 快照）
+            _presentedCount++;     // 播放以来累计（快照中「已呈」展示用）
+            _presentedInWindow++;  // 本快照窗口内计数（「呈现均耗时」的分母）
         }
     }
 

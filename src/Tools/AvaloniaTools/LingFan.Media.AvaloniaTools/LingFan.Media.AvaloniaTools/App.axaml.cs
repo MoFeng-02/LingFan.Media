@@ -28,7 +28,12 @@ public partial class App : Application
     {
         AvaloniaXamlLoader.Load(this);
 #if DEBUG
-        this.AttachDeveloperTools();
+        // DevTools 仅桌面可达：移动端真机（Android/iOS）USB 调试无 DevTools 服务器，
+        // AttachDeveloperTools 启动的核心 RPC 轮询会抛 DevToolsUnreachableException，跨 JNI 边界
+        // 升级为 JavaProxyThrowable 直接杀进程（见 2.txt FATAL EXCEPTION: main）。
+        // 移动端不挂载即可消除该崩溃；包仍保留，桌面行为不变。
+        //if (!OperatingSystem.IsAndroid() && !OperatingSystem.IsIOS())
+        //    this.AttachDeveloperTools();
 #endif
     }
 
@@ -52,21 +57,24 @@ public partial class App : Application
             .AddAvaloniaControls()
             .AddSkiaPresenter();
 
+        // 无空域 GPU 合成上屏（CompositionVideoRenderer）：跨平台零拷贝首选路径，Skia 末级兜底。
+        // 须先存在 ISharedGpuSurfaceSourceFactory——Windows=AddD3D11Renderer 注册 D3D11 源；
+        // Android/iOS=AddVulkanRenderer 已注册 VulkanSharedSurfaceSourceFactory（承载 AHB→GPU 导入）。
+        // 此前此注册被误锁在 IsWindows() 内，导致 Android 的零拷贝渲染器工厂根本未进入 DI 集合，
+        // EnsurePresenter 仅尝试 Vulkan 直连（控件内无 Pointer 句柄必抛）→ 直接落到 Skia（治根F）。
+        // 合成器不支持或导入自检失败时，VideoView 经异常驱动回退链干净落到 Skia——本注册不依赖任何平台专属 API。
+        //if (OperatingSystem.IsWindows() || OperatingSystem.IsAndroid())
+        //{
+        builder.AddCompositionRenderer();
+        //}
+
         if (OperatingSystem.IsWindows())
         {
             // MF（同步 MFT）+ D3D11 共享设备（FFmpeg D3D11VA 零拷贝 / MF DXVA）+ D3D11 渲染器 + WASAPI 音频。
             // AddD3D11Renderer 同时注册共享表面源工厂（ISharedGpuSurfaceSourceFactory，供无空域合成上屏使用）。
-            // AddCompositionRenderer 注册 CompositionVideoRendererFactory：解码侧 GPU 纹理经共享 D3D11 纹理
-            // 交 Avalonia 合成器直接导入、作为控件子视觉无空域上屏（不走 Skia CPU 回读），Skia 仍作末级兜底。
             builder
                 //.AddMediaFoundation()
                 .AddD3D11Renderer()
-                // 无空域 GPU 合成上屏（CompositionVideoRenderer）：解码侧 GPU 纹理经共享 D3D11 纹理交 Avalonia
-                // 合成器直接导入、作为控件子视觉无空域零拷贝上屏（不走 Skia CPU 回读）。
-                // 已加固：① 挂载期导入自检（合成器无法跨设备导入即抛异常 → 回退 Skia）；② 运行期连续失败健康计数
-                // （Unhealthy → VideoView 拉黑本工厂并重建回退链 → Skia 末级兜底）；③ 子视觉 Size=0 兜底。
-                // 三项保障确保 Composition 永不静默空白：任何失败都干净落到 Skia。
-                .AddCompositionRenderer()
                 .AddWasapiOutput();
         }
         // 平台后端注册钩子：仅平台可用（如 Android 的 MediaCodec）的后端由平台入口直接引用并在此注入，
@@ -74,12 +82,15 @@ public partial class App : Application
         // 平台入口（Android）经 MediaBuilderPlatformRegistrar.PlatformRegistrar 在此应用其平台后端。
         builder.ApplyPlatformRegistrar();
 
-        // Android 无空域 GPU 合成上屏（CompositionVideoRenderer）：解码侧软帧经 Vulkan 离屏图像导出为
-        // AndroidHardwareBuffer 句柄，交 Avalonia 合成器直接导入、作为控件子视觉无空域零拷贝上屏（不走 Skia
-        // CPU 回读）。设备侧 VK_ANDROID_external_memory_android_hardware_buffer 已在 VulkanRendererFactory 启用；
-        // 源工厂按 HasAndroidHardwareBufferProperties 把关，能力不满足时 Attach 经导入自检失败干净回退 Skia。
-        // 注意：CompositionVideoRenderer.Attach 对 TryGetCompositionGpuInterop 的解析已改为线程池 + 硬超时，
-        // 避免了此前在 Android UI 线程死锁（卡 logo）的根因，故此注册在 Android 安全启用。
+        // Android 无空域 GPU 合成上屏（CompositionVideoRenderer）：Vulkan 离屏图像按合成器要求导出为
+        // opaque fd（VulkanOpaquePosixFileDescriptor = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT，即 dma_buf），
+        // 交 Avalonia 合成器直接导入、作为控件子视觉无空域零拷贝上屏（不走 Skia CPU 回读）。
+        // 该句柄类型与 Linux 完全一致（2.txt 实测 Android Vulkan 合成器支持 [VulkanOpaquePosixFileDescriptor]）；
+        // 解码侧 MediaCodec 帧经 AHB 导入本设备（VulkanGpuFrameProducer）与此正交。源工厂按 ExternalSharingEnabled
+        // （VK_KHR_external_memory_fd）把关，能力不满足时 Attach 经导入自检失败干净回退 Skia。
+        // 注意：CompositionVideoRenderer.Attach 仅做轻量挂载并 Post 一个 UI 线程 ResolveAsync 异步解析
+        // TryGetCompositionGpuInterop（不阻塞 UI 线程），避免了此前在 Android UI 线程死锁（卡 logo）的根因，
+        // 故此注册在 Android 安全启用。
         if (OperatingSystem.IsAndroid())
             builder.AddCompositionRenderer();
 

@@ -2,42 +2,33 @@ using System;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Silk.NET.Vulkan;
-using LingFan.Media.Abstractions;
 
 namespace LingFan.Media.GPUShare.Vulkan;
 
 /// <summary>
-/// 中性「外部格式 YCbCr → RGBA」转换器（GPUShare.Vulkan，零反射 AOT 友好）。
-/// 把 Android AHardwareBuffer 经 <c>VK_ANDROID_external_memory_android_hardware_buffer</c> 导入的
-/// 外部格式（UNDEFINED + externalFormat）VkImage，用带 <c>VkSamplerYcbcrConversion</c> 的采样器
-/// 在片元着色器内单次采样完成 YUV→RGB（转换由采样器在采样时执行，零 CPU 回读），
-/// 输出 RGBA 目标图像供任意渲染器零拷贝 blit 上屏。
+/// 中性「普通 RGBA → RGBA」转换器（GPUShare.Vulkan，零反射 AOT 友好）。
+/// 把经 <c>VK_ANDROID_external_memory_android_hardware_buffer</c> 导入的
+/// <b>非外部格式</b> RGBA AHardwareBuffer（如 ImageReader 以 HardwareBufferFormat.Rgba8888 产出的 AHB）
+/// 用普通（无 <c>VkSamplerYcbcrConversion</c>）采样器采样，片元着色器一次 <c>texture()</c> 直出 RGBA。
 /// </summary>
 /// <remarks>
-/// <para><b>零拷贝语义</b>：AHB 图像仅能以 SAMPLED 用法创建（外部格式规范限制，无 TRANSFER 用法），
-/// 故本转换器走「采样渲染」路径而非 blit：片元着色器经绑定 YCbCr 转换的采样器一次 <c>texture()</c>
-/// 取回已转换 RGB（「1 GPU hop」，无 CPU 拷贝），写入调用方提供的 RGBA 目标（同 NV12 转换器交付约定：
-/// 目标置于 <see cref="ImageLayout.TransferSrcOptimal"/>）。</para>
-/// <para><b>规范要求</b>：同一 <c>VkSamplerYcbcrConversion</c> 须同时挂到采样器
-/// （<c>SamplerCreateInfo.pNext=SamplerYcbcrConversionInfo</c>）与图像视图
-/// （<c>ImageViewCreateInfo.pNext=SamplerYcbcrConversionInfo</c>）；描述符布局绑定为
-/// <b>immutable sampler</b>（Y′CBCR 转换须在管线创建期固定）；转换参数（model/range/offset/components）
-/// 逐字段取自 <c>vkGetAndroidHardwareBufferPropertiesANDROID</c> 返回的建议值，不自行猜测。</para>
-/// <para><b>生命周期</b>：转换对象/采样器/描述符布局/管线按 externalFormat 缓存（同一视频流恒定）；
-/// 视图为瞬态（每帧经 <see cref="CreateImageView"/> 创建、命令提交完成后 <see cref="DestroyImageView"/> 销毁）。</para>
+/// <para><b>存在意义</b>：Adreno 驱动对「外部格式（YUV）AHB + YCbCr 转换采样」的原生绘制会空指针解引用
+/// （SIGSEGV fault addr 0x0），而 Mali 上能过——与 OPAQUE_FD 导出的厂商分歧同一性质。绕开之法是不让
+/// 解码侧产出 YUV AHB，而是令其产出 <b>RGBA AHB</b>，本转换器按普通 RGBA 纹理采样上屏，彻底避开崩溃。</para>
+/// <para><b>与 VulkanYcbcrToRgbaConverter 的区别</b>：无 externalFormat、无 <c>VkSamplerYcbcrConversion</c>、
+/// 描述符用<b>可变</b>采样器（写入 <c>DescriptorImageInfo.Sampler</c>），规避部分驱动对 immutable sampler
+/// 仍读空 Sampler 字段的缺陷。输出 RGBA 目标图像供调用方零拷贝 blit 上屏。</para>
 /// <para><b>异步策略</b>：全部同步原生调用（无 I/O await），与 Present 的 sync-only 分类一致。</para>
 /// <para><b>AOT</b>：仅依赖 Silk.NET 纯数据定义与已编译 SPIR-V（Shaders.g.cs，运行期零反射）；无 [DllImport]/反射。</para>
 /// </remarks>
-public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
+public sealed unsafe class VulkanRgbaToRgbaConverter : IDisposable
 {
     private readonly Device _device;
     private readonly PhysicalDevice _physicalDevice;
     private readonly ILogger? _logger;
 
-    // 着色器模块 / 描述符 / 管线（按 externalFormat 缓存）
     private ShaderModule _vertModule;
     private ShaderModule _fragModule;
-    private SamplerYcbcrConversion _ycbcrConversion;
     private Sampler _sampler;
     private DescriptorSetLayout _descriptorSetLayout;
     private DescriptorPool _descriptorPool;
@@ -46,38 +37,26 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
     private Pipeline _pipeline;
     private RenderPass _renderPass;
     private Format _pipelineTargetFormat = (Format)0;
-    private ulong _pipelineExternalFormat;      // 当前管线对应的 externalFormat（0=未建）
 
     private bool _disposed;
 
-    public VulkanYcbcrToRgbaConverter(Device device, PhysicalDevice physicalDevice, ILogger? logger = null)
+    public VulkanRgbaToRgbaConverter(Device device, PhysicalDevice physicalDevice, ILogger? logger = null)
     {
         _device = device;
         _physicalDevice = physicalDevice;
         _logger = logger;
     }
 
-    /// <summary>
-    /// 确保对给定 externalFormat 的转换管线就绪（幂等）。externalFormat / 建议转换参数变化时重建管线与采样器。
-    /// </summary>
-    /// <param name="targetFormat">RGBA 目标格式（须与下游 SwapChain 一致）。</param>
-    /// <param name="externalFormat">AHB 外部格式标识（来自 VkAndroidHardwareBufferFormatPropertiesANDROID）。</param>
-    /// <param name="formatProps">AHB 格式属性（转换参数建议值 + 采样能力位）。</param>
-    public void EnsurePipeline(Format targetFormat, ulong externalFormat, in AndroidHardwareBufferFormatPropertiesANDROID formatProps)
+    /// <summary>确保对给定目标格式的转换管线就绪（幂等）。</summary>
+    public void EnsurePipeline(Format targetFormat)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-
-        // externalFormat 变化（罕见：流格式切换）：转换对象/采样器/描述符布局/管线整体重建——
-        // immutable sampler 固定在描述符布局里、pipeline layout 引用布局，均不可跨 externalFormat 复用。
-        if (_pipelineExternalFormat != externalFormat && _ycbcrConversion.Handle != 0)
-            ReleaseAll();
 
         if (_vertModule.Handle == 0 || _fragModule.Handle == 0)
         {
             _vertModule = CreateShaderModule(EmbeddedShaders.yuv_vert);
-            _fragModule = CreateShaderModule(EmbeddedShaders.ycbcr_frag);
+            _fragModule = CreateShaderModule(EmbeddedShaders.rgba_passthrough_frag);
         }
-        if (_ycbcrConversion.Handle == 0) CreateYcbcrConversion(externalFormat, formatProps);
         if (_sampler.Handle == 0) EnsureSampler();
         if (_descriptorSetLayout.Handle == 0) EnsureDescriptorSetLayout();
         if (_descriptorPool.Handle == 0) EnsureDescriptorPoolAndSet();
@@ -88,31 +67,18 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         ReleasePipelineAndRenderPass();
         CreateRenderPassAndPipeline(targetFormat);
         _pipelineTargetFormat = targetFormat;
-        _pipelineExternalFormat = externalFormat;
     }
 
-    /// <summary>
-    /// 为 AHB 外部格式图像创建采样视图（format=UNDEFINED + YCbCr 转换 pNext，aspect=Color）。
-    /// 调用方在命令提交完成后须经 <see cref="DestroyImageView"/> 销毁（视图为瞬态，不缓存）。
-    /// </summary>
-    public ImageView CreateImageView(Image ahbImage)
+    /// <summary>为 RGBA 源图像创建普通采样视图（format=目标格式，无 YCbCr 转换 pNext）。</summary>
+    public ImageView CreateImageView(Image rgbaImage)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_ycbcrConversion.Handle == 0)
-            throw new InvalidOperationException("YCbCr 转换尚未创建（须先调用 EnsurePipeline）。");
-
-        // 规范：外部格式图像的视图 format 须为 UNDEFINED，且挂与采样器相同的 YCbCr 转换。
-        var ycbcrInfo = new SamplerYcbcrConversionInfo
-        {
-            SType = StructureType.SamplerYcbcrConversionInfo,
-            Conversion = _ycbcrConversion,
-        };
         ImageViewCreateInfo vi = new()
         {
             SType = StructureType.ImageViewCreateInfo,
-            Image = ahbImage,
+            Image = rgbaImage,
             ViewType = ImageViewType.Type2D,
-            Format = Format.Undefined,
+            Format = _pipelineTargetFormat,
             SubresourceRange = new ImageSubresourceRange
             {
                 AspectMask = ImageAspectFlags.ColorBit,
@@ -121,11 +87,10 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
                 BaseArrayLayer = 0,
                 LayerCount = 1,
             },
-            PNext = &ycbcrInfo,
         };
         ImageView view;
         if (VulkanNative.CreateImageView(_device, &vi, null, out view) != Result.Success)
-            throw new InvalidOperationException("vkCreateImageView（AHB 外部格式采样视图）失败。");
+            throw new InvalidOperationException("vkCreateImageView（RGBA 源·普通视图）失败。");
         return view;
     }
 
@@ -136,27 +101,14 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         VulkanNative.DestroyImageView(_device, view, null);
     }
 
-    /// <summary>
-    /// 把 AHB 外部格式源图像经 YCbCr 采样转换到<b>调用方提供的</b> RGBA 目标图像
-    /// （同命令缓冲内记录；目标置于 <see cref="ImageLayout.TransferSrcOptimal"/>）。
-    /// 供 <c>VulkanGpuFrameProducer</c> 导入 AHB 场景：RGBA 目标由调用方创建并拥有
-    /// （交付 <c>VulkanImageResource</c>），本转换器不缓存、不持有该目标。
-    /// </summary>
-    /// <param name="cmd">正在记录的命令缓冲（调用方持有锁）。</param>
-    /// <param name="ahbSource">AHB 导入的 VkImage（format=UNDEFINED + externalFormat）。</param>
-    /// <param name="ahbView">经 <see cref="CreateImageView"/> 创建的采样视图。</param>
-    /// <param name="width">宽度（像素）。</param>
-    /// <param name="height">高度（像素）。</param>
-    /// <param name="targetFormat">目标 RGBA 格式（须与下游 SwapChain 一致）。</param>
-    /// <param name="rgbaTarget">调用方提供的 RGBA VkImage（转后处于 TransferSrcOptimal）。</param>
-    /// <param name="rgbaView">调用方提供的 RGBA 图像视图（绑定临时帧缓冲）。</param>
-    public void Convert(CommandBuffer cmd, Image ahbSource, ImageView ahbView, uint width, uint height, Format targetFormat, Image rgbaTarget, ImageView rgbaView)
+    /// <summary>把 RGBA 源图像经普通采样转换到<b>调用方提供的</b> RGBA 目标图像（同命令缓冲内记录）。</summary>
+    public void Convert(CommandBuffer cmd, Image source, ImageView sourceView, uint width, uint height, Image target, ImageView targetView)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_pipeline.Handle == 0)
             throw new InvalidOperationException("管线尚未创建（须先调用 EnsurePipeline）。");
 
-        var attachView = rgbaView;
+        var attachView = targetView;
         FramebufferCreateInfo fbInfo = new()
         {
             SType = StructureType.FramebufferCreateInfo,
@@ -169,10 +121,10 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         };
         Framebuffer fb;
         if (VulkanNative.CreateFramebuffer(_device, &fbInfo, null, out fb) != Result.Success)
-            throw new InvalidOperationException("vkCreateFramebuffer（YCbCr 转换·外部 RGBA 目标）失败。");
+            throw new InvalidOperationException("vkCreateFramebuffer（RGBA 转换）失败。");
         try
         {
-            RenderInto(cmd, ahbSource, ahbView, width, height, rgbaTarget, fb);
+            RenderInto(cmd, source, sourceView, width, height, target, fb);
         }
         finally
         {
@@ -180,23 +132,19 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         }
     }
 
-    /// <summary>核心绘制：AHB 源 → ShaderReadOnlyOptimal（采样），渲染进 RGBA 目标并置于 TransferSrcOptimal。</summary>
-    private void RenderInto(CommandBuffer cmd, Image ahbSource, ImageView ahbView, uint width, uint height, Image rgbaImage, Framebuffer framebuffer)
+    private void RenderInto(CommandBuffer cmd, Image source, ImageView sourceView, uint width, uint height, Image targetImage, Framebuffer framebuffer)
     {
-        // AHB 源 → ShaderReadOnlyOptimal：导入内存由解码器（Vulkan 之外）写入，
-        // 用「全屏障」等价覆盖外部写入（src=AllCommands+MemoryWrite），与硬解 DPB 路径同源手法。
-        TransitionImageLayout(cmd, ahbSource, ImageLayout.Undefined, ImageLayout.ShaderReadOnlyOptimal,
+        TransitionImageLayout(cmd, source, ImageLayout.Undefined, ImageLayout.ShaderReadOnlyOptimal,
             AccessFlags.MemoryWriteBit, AccessFlags.ShaderReadBit,
             PipelineStageFlags.AllCommandsBit, PipelineStageFlags.FragmentShaderBit,
             ImageAspectFlags.ColorBit);
 
-        // RGBA 目标 → ColorAttachmentOptimal（render pass loadOp=Clear）
-        TransitionImageLayout(cmd, rgbaImage, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
+        TransitionImageLayout(cmd, targetImage, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
             AccessFlags.None, AccessFlags.ColorAttachmentWriteBit,
             PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.ColorAttachmentOutputBit,
             ImageAspectFlags.ColorBit);
 
-        UpdateDescriptorSet(ahbView);
+        UpdateDescriptorSet(sourceView);
 
         var clear = new ClearColorValue { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 0 };
         var clearValue = new ClearValue { Color = clear };
@@ -223,8 +171,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         VulkanNative.CmdDraw(cmd, 3, 1, 0, 0);
         VulkanNative.CmdEndRenderPass(cmd);
 
-        // RGBA 目标 → TransferSrcOptimal（供调用方 blit 到 SwapChain）
-        TransitionImageLayout(cmd, rgbaImage, ImageLayout.ColorAttachmentOptimal, ImageLayout.TransferSrcOptimal,
+        TransitionImageLayout(cmd, targetImage, ImageLayout.ColorAttachmentOptimal, ImageLayout.TransferSrcOptimal,
             AccessFlags.ColorAttachmentWriteBit, AccessFlags.TransferReadBit,
             PipelineStageFlags.ColorAttachmentOutputBit, PipelineStageFlags.TransferBit,
             ImageAspectFlags.ColorBit);
@@ -241,45 +188,9 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         if (_fragModule.Handle != 0) { VulkanNative.DestroyShaderModule(_device, _fragModule, null); _fragModule = default; }
     }
 
-    // ── 转换对象 / 采样器 / 描述符构建 ──
-
-    private void CreateYcbcrConversion(ulong externalFormat, in AndroidHardwareBufferFormatPropertiesANDROID formatProps)
-    {
-        // 规范：使用 externalFormat 时 format 须为 UNDEFINED，且 VkExternalFormatANDROID 挂 pNext。
-        // 转换参数逐字段取 AHB 属性的建议值（model/range/offset/components），不自行猜测；
-        // 色度过滤按能力位选择：支持 YcbcrConversionLinearFilter 用 Linear，否则 Nearest（规范 VUID）。
-        var externalFormatInfo = new ExternalFormatANDROID
-        {
-            SType = StructureType.ExternalFormatAndroid,
-            ExternalFormat = externalFormat,
-        };
-        bool linearChroma = (formatProps.FormatFeatures & FormatFeatureFlags.SampledImageYcbcrConversionLinearFilterBit) != 0;
-        var ci = new SamplerYcbcrConversionCreateInfo
-        {
-            SType = StructureType.SamplerYcbcrConversionCreateInfo,
-            Format = Format.Undefined,
-            YcbcrModel = formatProps.SuggestedYcbcrModel,
-            YcbcrRange = formatProps.SuggestedYcbcrRange,
-            Components = formatProps.SamplerYcbcrConversionComponents,
-            XChromaOffset = formatProps.SuggestedXChromaOffset,
-            YChromaOffset = formatProps.SuggestedYChromaOffset,
-            ChromaFilter = linearChroma ? Filter.Linear : Filter.Nearest,
-            ForceExplicitReconstruction = false,
-            PNext = &externalFormatInfo,
-        };
-        if (VulkanNative.CreateSamplerYcbcrConversion(_device, &ci, null, out _ycbcrConversion) != Result.Success)
-            throw new InvalidOperationException("vkCreateSamplerYcbcrConversion（AHB 外部格式）失败。");
-    }
-
     private void EnsureSampler()
     {
         if (_sampler.Handle != 0) return;
-        // 规范：与视图相同的 YCbCr 转换须挂到采样器（SamplerYcbcrConversionInfo pNext）。
-        var ycbcrInfo = new SamplerYcbcrConversionInfo
-        {
-            SType = StructureType.SamplerYcbcrConversionInfo,
-            Conversion = _ycbcrConversion,
-        };
         SamplerCreateInfo samplerInfo = new()
         {
             SType = StructureType.SamplerCreateInfo,
@@ -295,18 +206,15 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
             MipmapMode = SamplerMipmapMode.Nearest,
             MinLod = 0f,
             MaxLod = 0f,
-            PNext = &ycbcrInfo,
         };
         if (VulkanNative.CreateSampler(_device, &samplerInfo, null, out _sampler) != Result.Success)
-            throw new InvalidOperationException("vkCreateSampler（YCbCr 转换采样器）失败。");
+            throw new InvalidOperationException("vkCreateSampler（RGBA 普通采样器）失败。");
     }
 
     private void EnsureDescriptorSetLayout()
     {
         if (_descriptorSetLayout.Handle != 0) return;
-        // 可变采样器：DescriptorImageInfo.Sampler 由 UpdateDescriptorSet 显式写入（规避 Adreno 读空 immutable 字段）。
-        // YCbCr 转换所需的 VkSamplerYcbcrConversion 经由 _sampler 创建时的 PNext 链携带，运行时在描述符里绑定，
-        // 不依赖 immutable 布局固定——Android/Adreno 上 immutable YCbCr sampler 布局存在驱动兼容性空指针风险。
+        // 可变采样器：DescriptorImageInfo.Sampler 由 UpdateDescriptorSet 写入（规避 Adreno 读空 immutable 字段）。
         var bindings = stackalloc DescriptorSetLayoutBinding[1];
         bindings[0] = new DescriptorSetLayoutBinding
         {
@@ -323,7 +231,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
             PBindings = bindings,
         };
         if (VulkanNative.CreateDescriptorSetLayout(_device, &layoutInfo, null, out _descriptorSetLayout) != Result.Success)
-            throw new InvalidOperationException("vkCreateDescriptorSetLayout（YCbCr 转换）失败。");
+            throw new InvalidOperationException("vkCreateDescriptorSetLayout（RGBA 转换）失败。");
     }
 
     private void EnsureDescriptorPoolAndSet()
@@ -338,7 +246,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
             PPoolSizes = &poolSize,
         };
         if (VulkanNative.CreateDescriptorPool(_device, &poolInfo, null, out _descriptorPool) != Result.Success)
-            throw new InvalidOperationException("vkCreateDescriptorPool（YCbCr 转换）失败。");
+            throw new InvalidOperationException("vkCreateDescriptorPool（RGBA 转换）失败。");
         var dsl = _descriptorSetLayout;
         DescriptorSetAllocateInfo allocInfo = new()
         {
@@ -348,16 +256,15 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
             PSetLayouts = &dsl,
         };
         if (VulkanNative.AllocateDescriptorSets(_device, &allocInfo, out _descriptorSet) != Result.Success)
-            throw new InvalidOperationException("vkAllocateDescriptorSets（YCbCr 转换）失败。");
+            throw new InvalidOperationException("vkAllocateDescriptorSets（RGBA 转换）失败。");
     }
 
-    private void UpdateDescriptorSet(ImageView ahbView)
+    private void UpdateDescriptorSet(ImageView sourceView)
     {
-        // 可变采样器：显式写入带 YCbCr 转换（创建时经 PNext 链携带）的 _sampler；Adreno 不能依赖 immutable 布局固定。
         var info = new DescriptorImageInfo
         {
             Sampler = _sampler,
-            ImageView = ahbView,
+            ImageView = sourceView,
             ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
         };
         var write = new WriteDescriptorSet
@@ -373,8 +280,6 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         VulkanNative.UpdateDescriptorSets(_device, 1, &write, 0, null);
     }
 
-    // ── 管线构建（与 VulkanNv12ToRgbaConverter 同构，仅无推送常量——翻转烘焙进着色器）──
-
     private void EnsurePipelineLayout()
     {
         if (_pipelineLayout.Handle != 0) return;
@@ -386,7 +291,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
             PSetLayouts = &dsl,
         };
         if (VulkanNative.CreatePipelineLayout(_device, &layoutInfo, null, out _pipelineLayout) != Result.Success)
-            throw new InvalidOperationException("vkCreatePipelineLayout（YCbCr 转换）失败。");
+            throw new InvalidOperationException("vkCreatePipelineLayout（RGBA 转换）失败。");
     }
 
     private void CreateRenderPassAndPipeline(Format format)
@@ -429,7 +334,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
             PDependencies = &dependency,
         };
         if (VulkanNative.CreateRenderPass(_device, &rpInfo, null, out _renderPass) != Result.Success)
-            throw new InvalidOperationException("vkCreateRenderPass（YCbCr 转换）失败。");
+            throw new InvalidOperationException("vkCreateRenderPass（RGBA 转换）失败。");
 
         CreateGraphicsPipeline(format, _renderPass, out _pipeline);
     }
@@ -523,7 +428,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         VulkanNative.FreeStringPtr(vertStage.PName);
         VulkanNative.FreeStringPtr(fragStage.PName);
         if (result != Result.Success)
-            throw new InvalidOperationException($"vkCreateGraphicsPipelines（YCbCr 转换）失败: {result}");
+            throw new InvalidOperationException($"vkCreateGraphicsPipelines（RGBA 转换）失败: {result}");
         pipeline = localPipe;
     }
 
@@ -539,7 +444,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
             result = VulkanNative.CreateShaderModule(_device, &info, null, out module);
         }
         if (result != Result.Success)
-            throw new InvalidOperationException($"vkCreateShaderModule（YCbCr 转换）失败: {result}");
+            throw new InvalidOperationException($"vkCreateShaderModule（RGBA 转换）失败: {result}");
         return module;
     }
 
@@ -576,7 +481,6 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         if (_renderPass.Handle != 0) { VulkanNative.DestroyRenderPass(_device, _renderPass, null); _renderPass = default; }
     }
 
-    /// <summary>externalFormat 变化时的全量重建：按「管线 → 布局 → 描述符 → 采样器/转换」依赖逆序释放。</summary>
     private void ReleaseAll()
     {
         if (_device.Handle == 0) return;
@@ -584,14 +488,6 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         if (_pipelineLayout.Handle != 0) { VulkanNative.DestroyPipelineLayout(_device, _pipelineLayout, null); _pipelineLayout = default; }
         if (_descriptorPool.Handle != 0) { VulkanNative.DestroyDescriptorPool(_device, _descriptorPool, null); _descriptorPool = default; }
         if (_descriptorSetLayout.Handle != 0) { VulkanNative.DestroyDescriptorSetLayout(_device, _descriptorSetLayout, null); _descriptorSetLayout = default; }
-        ReleaseConversionAndSampler();
-        _pipelineTargetFormat = (Format)0;
-    }
-
-    private void ReleaseConversionAndSampler()
-    {
-        if (_device.Handle == 0) return;
         if (_sampler.Handle != 0) { VulkanNative.DestroySampler(_device, _sampler, null); _sampler = default; }
-        if (_ycbcrConversion.Handle != 0) { VulkanNative.DestroySamplerYcbcrConversion(_device, _ycbcrConversion, null); _ycbcrConversion = default; }
     }
 }
