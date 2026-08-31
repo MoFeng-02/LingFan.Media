@@ -698,6 +698,15 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// <summary>交付序列检测到的 pts 空洞数（解码器吞帧的直接证据）。</summary>
     private int _releaseGaps;
 
+    // ── 帧间差分探测器（坏帧探针）──
+    // 正常相邻帧的亮度采样平均绝对差（MAD）平稳；参考帧损坏产生的宏块 garbage 会让 MAD 出现尖峰。
+    // 用途：区分「帧丢了」（MAD 平稳，只是 pts 跳变）与「解码器输出了坏帧」（MAD 尖峰且持续若干帧）。
+    private const int DeltaSampleLen = 512; // 8 行 × 64 字节
+    private readonly byte[] _prevYSample = new byte[DeltaSampleLen];
+    private bool _hasPrevSample;
+    private double _madBase;
+    private int _spikeFrames;
+
     /// <summary>把新帧按 pts 升序插入重排缓冲，并释放已可确定的前缀。</summary>
     private void PushFrameOrdered(VideoFrame frame)
     {
@@ -1256,7 +1265,48 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
                 _framesProduced, pts, outFmt, vw, vh, sb.ToString());
         }
 
+        UpdateFrameDelta(resource.Data.Span, vw, vh, _framesProduced, pts);
+
         return new VideoFrame(vw, vh, outFmt, resource, pts, TimeSpan.Zero, keyFrame, _colorInfo);
+    }
+
+    /// <summary>计算本帧与上一帧的亮度采样平均绝对差（MAD），识别参考帧损坏导致的坏帧。</summary>
+    private void UpdateFrameDelta(ReadOnlySpan<byte> data, int w, int h, int seq, TimeSpan pts)
+    {
+        Span<byte> cur = stackalloc byte[DeltaSampleLen];
+        for (int r = 0; r < 8; r++)
+        {
+            int row = (h * (r * 2 + 1)) / 16;      // 纵向均匀取 8 行
+            int src = row * w + (w / 4);           // 横向从 1/4 处起取 64 字节
+            int dst = r * 64;
+            for (int i = 0; i < 64; i++)
+            {
+                int p = src + i;
+                cur[dst + i] = (p >= 0 && p < data.Length) ? data[p] : (byte)0;
+            }
+        }
+
+        if (_hasPrevSample)
+        {
+            long sum = 0;
+            for (int i = 0; i < DeltaSampleLen; i++)
+                sum += Math.Abs(cur[i] - _prevYSample[i]);
+            double mad = sum / (double)DeltaSampleLen;
+
+            bool spike = _madBase > 1.0 && mad > _madBase * 3.0;
+            if (spike)
+                _spikeFrames++;
+            // 基线用 EMA 跟随（首帧直接采纳），避免把缓慢的场景切换算成尖峰。
+            _madBase = _madBase > 0 ? (_madBase * 0.9 + mad * 0.1) : mad;
+
+            if (spike || seq < 240 || (seq % 60) == 0)
+                _logger.LogInformation(
+                    "[FRAME-DELTA] seq={Seq} pts={Pts} mad={Mad:F1} 基线={Base:F1}{Spike} 累计突变={Spikes}",
+                    seq, pts, mad, _madBase, spike ? " ← 突变（疑似坏帧）" : string.Empty, _spikeFrames);
+        }
+
+        cur.CopyTo(_prevYSample);
+        _hasPrevSample = true;
     }
 
     /// <summary>按源有效长度拷贝一行（越界时只拷可用部分，不整行丢弃，避免对齐填充误差导致整行变 0）。</summary>

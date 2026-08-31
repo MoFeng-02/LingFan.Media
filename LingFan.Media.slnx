@@ -2,6 +2,7 @@
   <Folder Name="/Infrastructure/">
     <Project Path="src/Infrastructure/LingFan.Media.Abstractions/LingFan.Media.Abstractions.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Audio/LingFan.Media.Audio.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Consumers/LingFan.Media.Consumers.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Core/LingFan.Media.Core.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Extensions/LingFan.Media.Extensions.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Formats/LingFan.Media.Formats.csproj" />
@@ -18,6 +19,9 @@
     <Project Path="src/Backends/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.VulkanVideo/LingFan.Media.Backends.VulkanVideo.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.WebRTC/LingFan.Media.Backends.WebRTC.csproj" />
+  </Folder>
+  <Folder Name="/Presenters/">
+    <Project Path="src/Presenters/LingFan.Media.GpuPresenter/LingFan.Media.GpuPresenter.csproj" />
   </Folder>
   <Folder Name="/Renderers/">
     <Project Path="src/Renderers/LingFan.Media.Renderers.D3D11/LingFan.Media.Renderers.D3D11.csproj" />

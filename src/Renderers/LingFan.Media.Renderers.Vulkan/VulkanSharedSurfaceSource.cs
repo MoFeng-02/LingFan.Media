@@ -188,7 +188,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             // VK_ERROR_OUT_OF_HOST_MEMORY），故用 SharedGpuSyncMode.None，由合成器（UpdateAsync）自管同步。
             _handleKind = SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
             _semaphoreKind = SharedGpuSemaphoreKind.VulkanOpaquePosixFileDescriptor;
-            _memHandleType = ExternalMemoryHandleTypeFlags.AndroidHardwareBufferBitAndroid;
+            // 纯 OPAQUE_FD 直导（与 Linux 完全同路径）。绝不能用 AndroidHardwareBufferBitAndroid：
+            // AHB 兼容约束下驱动的 vkGetImageMemoryRequirements 与普通 OPAQUE_FD 图不同（Adreno 650 真机实证，
+            // 1080x1920 差异足以让宿主合成器严格相等校验必失败，仅 1x1 小图恰好相同）；
+            // 且宿主只认 OPAQUE_FD 语义的 fd，AHB 承载再抽 fd 属于跨语义混用。
+            _memHandleType = ExternalMemoryHandleTypeFlags.OpaqueFDBit;
             _semHandleType = ExternalSemaphoreHandleTypeFlags.OpaqueFDBit;
             _syncMode = SharedGpuSyncMode.None;
         }
@@ -1172,31 +1176,27 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         if (result != Result.Success)
             throw new InvalidOperationException($"vkCreateImage（共享表面离屏）失败: {result}");
 
-        // 内存分配：Windows 经 ExportMemoryAllocateInfo(OpaqueWin32)；Linux 经 ExportMemoryAllocateInfo
-        // (OpaqueFd)；Android 经 ExportMemoryAllocateInfo(AndroidHardwareBufferBitAndroid)——AHB 导出强制
-        // dedicated（与解码侧 AHB 导入对称：AHB 内存与图像 1:1）。Adreno 拒绝普通 Vulkan 图像的 OPAQUE_FD
-        // 导出（vkBindImageMemory 报 ErrorInvalidExternalHandle），故 Android 改走 AHB 承载。
+        // 内存分配：ExportMemoryAllocateInfo(OpaqueWin32/OpaqueFd) 导出 + dedicated 分配。
+        // dedicated **必须挂**（Adreno 650 真机实证，勿删）：不挂时普通 Vulkan 图像 + OPAQUE_FD
+        // 导出内存连 vkBindImageMemory 都过不去，报 vkBindImageMemory 失败: ErrorInvalidExternalHandle
+        // （Attach 自检阶段即整链回退 Skia）。宿主合成器（Avalonia ImportedImage.CreateMemory）也以
+        // dedicated 语义导入，规范上两侧必须匹配。
         MemoryRequirements memReq;
         VulkanNative.GetImageMemoryRequirements(_device, _sharedImage, &memReq);
         uint memType = FindMemoryType(memReq.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit);
 
-        MemoryDedicatedAllocateInfo dedicated = default;
-        if (_isAndroid)
+        MemoryDedicatedAllocateInfo dedicated = new MemoryDedicatedAllocateInfo
         {
-            // AHB 导出：内存须 dedicated 绑定到本图像（VK_ANDROID_external_memory_android_hardware_buffer）。
-            dedicated = new MemoryDedicatedAllocateInfo
-            {
-                SType = StructureType.MemoryDedicatedAllocateInfo,
-                Image = _sharedImage,
-            };
-        }
+            SType = StructureType.MemoryDedicatedAllocateInfo,
+            Image = _sharedImage,
+        };
 
         ExternalMemoryHandleTypeFlags memHandle = _memHandleType;
         ExportMemoryAllocateInfo extMemInfo = new()
         {
             SType = StructureType.ExportMemoryAllocateInfo,
             HandleTypes = memHandle,
-            PNext = _isAndroid ? (void*)&dedicated : null,
+            PNext = &dedicated,
         };
         MemoryAllocateInfo allocInfo = new()
         {
@@ -1220,9 +1220,10 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
 
         // 导出内存句柄（交合成器）：
         //  - Windows：HANDLE（OpaqueWin32）。
-        //  - Android：AHB 承载 → vkGetMemoryAndroidHardwareBufferANDROID 取回 AHardwareBuffer →
-        //    AndroidAhbFdExport 抽 dma_buf fd（OPAQUE_FD）交合成器（Avalonia Android 仅接受 OPAQUE_FD）。
-        //  - Linux：OpaqueFd dma_buf（vkGetMemoryFdKHR）。
+        //  - Android/Linux：vkGetMemoryFdKHR 导出 opaque fd（dma_buf）——两条路径完全同代码。
+        //    （旧 Android 曾经 AHB 承载：vkGetMemoryAndroidHardwareBufferANDROID 取回 AHardwareBuffer
+        //    再抽 dma_buf fd。已废弃：AHB 兼容约束的 requirements 与宿主按普通 OPAQUE_FD 建图算出的
+        //    不一致，严格相等校验必失败，真机实证 1080x1920 全部 Invalid memory size。）
         if (_isWindows)
         {
             MemoryGetWin32HandleInfoKHR getInfo = new()
@@ -1238,27 +1239,31 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         }
         else if (_isAndroid)
         {
-            // AHB 承载导出：取回 AHardwareBuffer 并抽取底层 dma_buf fd（dup 后独立所有）。
-            MemoryGetAndroidHardwareBufferInfoANDROID getAhb = new()
+            // 与 Linux 同路径：vkGetMemoryFdKHR 直导 opaque fd（_memHandleType 已是 OpaqueFDBit）。
+            MemoryGetFdInfoKHR getInfo = new()
             {
-                SType = StructureType.MemoryGetAndroidHardwareBufferInfoAndroid,
+                SType = StructureType.MemoryGetFDInfoKhr,
                 Memory = _sharedMemory,
-                PNext = null,
+                HandleType = memHandle,
             };
-            Result ahbR = VulkanNative.GetMemoryAndroidHardwareBufferANDROID(_device, &getAhb, out nint ahb);
-            if (ahbR != Result.Success)
-                throw new InvalidOperationException($"vkGetMemoryAndroidHardwareBufferANDROID 失败: {ahbR}");
-            try
-            {
-                if (!AndroidAhbFdExport.TryGetDmaBufFd(ahb, out int dmaFd))
-                    throw new InvalidOperationException("AHB→dma_buf fd 提取失败（libnativewindow 符号缺失或 fd 无效）");
-                _exportedMemoryHandle = (nint)dmaFd;
-            }
-            finally
-            {
-                // 释放我们导出的 AHB 引用；Vulkan 内存仍持有 dma_buf，fd 独立存活。
-                AndroidAhbFdExport.Release(ahb);
-            }
+            Result hR = VulkanNative.GetMemoryFdKHR(_device, &getInfo, out int fd);
+            if (hR != Result.Success)
+                throw new InvalidOperationException($"vkGetMemoryFdKHR（Android 共享表面导出）失败: {hR}");
+            _exportedMemoryHandle = (nint)fd;
+
+            // 决定性诊断：查导入 fd 在本设备的有效 memoryTypeBits，与宿主侧 image requirements
+            // 的 memoryTypeBits（Avalonia 以其 DEVICE_LOCAL 位选 memoryTypeIndex）对表。
+            // 若 fd 的有效位不含宿主会选中的类型，即坐实「宿主 memoryTypeIndex 选择失败」路径。
+            MemoryFdPropertiesKHR fdProps = default;
+            // Silk.NET 2.23 的 StructureType 枚举漏了 VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR
+            // （结构体有、常量没有）。按 Vulkan 头补齐：IMPORT_MEMORY_FD_INFO_KHR=1000074000、
+            // MEMORY_FD_PROPERTIES_KHR=1000074001、MEMORY_GET_FD_INFO_KHR=1000074002（后两者经本地
+            // Silk.NET 程序集常量表核对，前后端点闭合，中值唯一）。
+            fdProps.SType = (StructureType)1000074001;
+            Result fpR = VulkanNative.GetMemoryFdPropertiesKHR(_device, memHandle, fd, &fdProps);
+            _logger.LogInformation(
+                "[VULKAN-SHARED] fd 诊断: imageReqTypeBits=0x{Req:X} memTypeIndex={Idx} fdMemoryTypeBits=0x{Fd:X} 查询结果={Result}",
+                memReq.MemoryTypeBits, memType, fdProps.MemoryTypeBits, fpR);
         }
         else
         {

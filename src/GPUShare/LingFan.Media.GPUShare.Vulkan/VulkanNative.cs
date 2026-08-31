@@ -261,6 +261,7 @@ public static unsafe partial class VulkanNative
             // ── 外部内存/信号量导出（仅 no-airspace 共享表面源使用；未启用对应扩展时为 null，调用方自检）──
             _getMemoryWin32HandleKHR = (delegate* unmanaged[Stdcall]<Device, MemoryGetWin32HandleInfoKHR*, void*, Result>)vkGetDeviceProcAddr(h, "vkGetMemoryWin32HandleKHR");
             _getMemoryFdKHR = (delegate* unmanaged[Stdcall]<Device, MemoryGetFdInfoKHR*, int*, Result>)vkGetDeviceProcAddr(h, "vkGetMemoryFdKHR");
+            _getMemoryFdPropertiesKHR = (delegate* unmanaged[Stdcall]<Device, ExternalMemoryHandleTypeFlags, int, MemoryFdPropertiesKHR*, Result>)vkGetDeviceProcAddr(h, "vkGetMemoryFdPropertiesKHR");
             _getSemaphoreWin32HandleKHR = (delegate* unmanaged[Stdcall]<Device, SemaphoreGetWin32HandleInfoKHR*, void*, Result>)vkGetDeviceProcAddr(h, "vkGetSemaphoreWin32HandleKHR");
             _getSemaphoreFdKHR = (delegate* unmanaged[Stdcall]<Device, SemaphoreGetFdInfoKHR*, int*, Result>)vkGetDeviceProcAddr(h, "vkGetSemaphoreFdKHR");
             // ── VK_EXT_metal_objects（仅 Apple / MoltenVK；非 Apple 平台为 null，调用方自检）──
@@ -448,6 +449,7 @@ public static unsafe partial class VulkanNative
     private static unsafe delegate* unmanaged[Stdcall]<Queue, PresentInfoKHR*, Result> _queuePresentKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, MemoryGetWin32HandleInfoKHR*, void*, Result> _getMemoryWin32HandleKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, MemoryGetFdInfoKHR*, int*, Result> _getMemoryFdKHR;
+    private static unsafe delegate* unmanaged[Stdcall]<Device, ExternalMemoryHandleTypeFlags, int, MemoryFdPropertiesKHR*, Result> _getMemoryFdPropertiesKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, SemaphoreGetWin32HandleInfoKHR*, void*, Result> _getSemaphoreWin32HandleKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, SemaphoreGetFdInfoKHR*, int*, Result> _getSemaphoreFdKHR;
     private static unsafe delegate* unmanaged[Stdcall]<Device, ExportMetalObjectsInfoEXT*, void> _exportMetalObjectsEXT;
@@ -1066,6 +1068,15 @@ public static unsafe partial class VulkanNative
         Result r = _getMemoryFdKHR(device, pInfo, &f);
         fd = f;
         return r;
+    }
+
+    /// <summary>查询导入 fd 在本设备上的内存属性（有效 memoryTypeBits）。
+    /// 诊断用途：与宿主合成器侧 image requirements 的 memoryTypeBits 对表。</summary>
+    public static unsafe Result GetMemoryFdPropertiesKHR(Device device, ExternalMemoryHandleTypeFlags handleType, int fd, MemoryFdPropertiesKHR* pProperties)
+    {
+        if (_getMemoryFdPropertiesKHR == null)
+            throw new InvalidOperationException("VulkanNative 未解析 vkGetMemoryFdPropertiesKHR（请确认已启用 VK_KHR_external_memory_fd）。");
+        return _getMemoryFdPropertiesKHR(device, handleType, fd, pProperties);
     }
 
     /// <summary>把 VkSemaphore 导出为 Windows HANDLE（外部信号量 NT 句柄）。</summary>
