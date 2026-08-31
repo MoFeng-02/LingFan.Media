@@ -75,6 +75,16 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private int _texW, _texH;
     private nint _exportedMemoryHandle;   // 导出的外部内存句柄：Windows=HANDLE，Linux/Android=fd（int 经 nint 传递）
     private ulong _version;
+    /// <summary>共享离屏外部内存的真实分配字节数（= 生产者侧 vkGetImageMemoryRequirements().size）。
+    /// 随 <see cref="SharedGpuSurfaceDescriptor"/> 交合成器：Avalonia 导入 OPAQUE_FD 时以此与自身
+    /// 计算的内存需求做严格相等校验，不符即抛 "Invalid memory size"（真机实证：留 0 必不出画）。
+    /// 注意不是 w*h*4 —— 驱动按 tile/对齐会扩到更大值，只能以 vkGetImageMemoryRequirements 为准。</summary>
+    private ulong _sharedMemorySize;
+
+    // 当前共享图像的创建参数快照（仅诊断用）：requirements 是 usage/flags 的函数，
+    // 转移口日志打印它们可与宿主合成器侧的建图参数逐位对表。
+    private ImageUsageFlags _sharedUsage;
+    private ImageCreateFlags _sharedFlags;
 
     // Android 零拷贝稳健层：解码侧 AHB 仅作 SOURCE——经 YCbCr 转换渲进 plain 内部 RGBA 图像
     // （_convertImage，用法与 VulkanGpuFrameProducer.TryCreateRgbaTarget 完全同款），再 vkCmdCopyImage
@@ -338,10 +348,23 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         // ── 0拷贝帧出参 / 转移口：将本帧共享离屏表面的外部内存句柄 + 版本 + 同步模型打包交合成器 ──
         // 此处即「帧转移不拷贝」的交付点：调用方（合成器）仅持 SharedGpuSurfaceDescriptor，不感知源像素布局。
         // 零拷贝 = 本描述符携带外部内存句柄（fd / HANDLE / IOSurface），而非像素副本；软帧同样经此口交付。
+        // 【兜底】绝不允许带着 MemorySize=0 交付 —— Avalonia 导入 OPAQUE_FD 时以此做严格相等校验，
+        // 0 必然抛 "Invalid memory size"（真机实证：连续 27 帧导入失败 → 30 帧后整链回退 Skia）。
+        // 正常路径已在分配点记录；此处现查只是防御，代价一次 vkGetImageMemoryRequirements（纳秒级）。
+        if (_sharedMemorySize == 0)
+        {
+            MemoryRequirements fallbackReq;
+            VulkanNative.GetImageMemoryRequirements(_device, _sharedImage, &fallbackReq);
+            _sharedMemorySize = fallbackReq.Size;
+            _logger.LogWarning(
+                "[VULKAN-SHARED] MemorySize 在分配点未记录，交付前现查兜底={Size}（应排查分配点为何漏记）。",
+                fallbackReq.Size);
+        }
         if ((_writtenFrames % FrameLogInterval) == 0)
             _logger.LogInformation(
-                "[VULKAN-SHARED] 转移口 帧#{N} 路径={Path} 出参Kind={Kind} version={Ver} sync={Sync} {W}x{H}",
-                _writtenFrames, path, _handleKind, _version, _syncMode, w, h);
+                "[VULKAN-SHARED] 转移口 帧#{N} 路径={Path} 出参Kind={Kind} version={Ver} sync={Sync} {W}x{H} mem={Mem} usage=0x{Usage:X} flags=0x{Flags:X}",
+                _writtenFrames, path, _handleKind, _version, _syncMode, w, h, _sharedMemorySize,
+                (uint)_sharedUsage, (uint)_sharedFlags);
         _writtenFrames++;
 
         descriptor = new SharedGpuSurfaceDescriptor(
@@ -350,7 +373,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             w, h,
             _surfaceFormatEnum,
             _version,
-            _syncMode);
+            _syncMode,
+            _sharedMemorySize,
+            0);
         return true;
     }
 
@@ -1126,13 +1151,22 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             Samples = SampleCountFlags.Count1Bit,
             Tiling = ImageTiling.Optimal,
             // _sharedImage 现为普通 Vulkan 外部图像（Android 同 Linux）：生产者把转换后的 RGBA 经
-            // vkCmdCopyImage 拷入（TRANSFER_DST_BIT），合成器经 OPAQUE_FD 导入后作为采样纹理上屏
-            // （要求图像可作采样/颜色附件访问，故保留 ColorAttachmentBit 与 Linux 完全一致）。
-            Usage = ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferDstBit,
+            // vkCmdCopyImage 拷入（TRANSFER_DST_BIT），合成器经 OPAQUE_FD 导入后作为采样纹理上屏。
+            // Usage 与 Flags 必须与宿主合成器（Avalonia VulkanImageBase）逐位一致：
+            // vkGetImageMemoryRequirements 是 image 创建参数的函数，Usage/Flags 不同会让
+            // 驱动（实测 Adreno 650）给出不同 size，而 Avalonia 导入时按其自身 requirements
+            // 对 MemorySize 做严格相等校验，不符即抛"Invalid memory size"→ 每帧导入失败。
+            // 对齐值取自 Avalonia 12.1.1 反汇编：UsageFlags=0x17(TransferSrc|TransferDst|Sampled|
+            // ColorAttachment)、Flags=MUTABLE_FORMAT。
+            Usage = ImageUsageFlags.TransferSrcBit | ImageUsageFlags.TransferDstBit
+                    | ImageUsageFlags.SampledBit | ImageUsageFlags.ColorAttachmentBit,
+            Flags = ImageCreateFlags.CreateMutableFormatBit,
             SharingMode = SharingMode.Exclusive,
             InitialLayout = ImageLayout.Undefined,
             PNext = (void*)&extImageInfo,
         };
+        _sharedUsage = imageInfo.Usage;
+        _sharedFlags = imageInfo.Flags;
 
         Result result = VulkanNative.CreateImage(_device, &imageInfo, null, out _sharedImage);
         if (result != Result.Success)
@@ -1177,6 +1211,12 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         result = VulkanNative.BindImageMemory(_device, _sharedImage, _sharedMemory, 0);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkBindImageMemory（共享表面离屏）失败: {result}");
+        // 记录本次分配的真实字节数（= vkGetImageMemoryRequirements().size），随描述符交给合成器。
+        // 【为什么必须填】Avalonia 的 VulkanExternalObjectsFeature.ImportedImage.CreateMemory 会拿
+        // properties.MemorySize 与它自己 vkGetImageMemoryRequirements(导入图像).size 做**严格相等**校验，
+        // 不等即抛 "Invalid memory size"（真机实证：留 0 → 每帧导入失败 → 不出画）。OPAQUE_FD 不携带
+        // 内存元数据，此值只能由生产者如实上报。注意：不是 w*h*4 —— 驱动会按 tile/对齐扩到更大。
+        _sharedMemorySize = memReq.Size;
 
         // 导出内存句柄（交合成器）：
         //  - Windows：HANDLE（OpaqueWin32）。
@@ -1360,6 +1400,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         result = VulkanNative.BindImageMemory(_device, _sharedImage, _sharedMemory, 0);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkBindImageMemory（Apple 共享表面离屏）失败: {result}");
+        // 与 OPAQUE_FD 路径同理：记录真实分配字节数（IOSurface 路径合成器侧同样做严格相等校验）。
+        _sharedMemorySize = memReq.Size;
 
         // 导出 IOSurface（持久，随图像生命周期；消费方 Avalonia 经 IOSurfaceRef 直接导入采样）。
         _exportedMemoryHandle = ExportIOSurface(_sharedImage);

@@ -61,14 +61,18 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     /// 下一帧经 <see cref="EnsureInteropAndImportAsync"/> 重新 TryGetCompositionGpuInterop() 以刷新
     /// Context 快照并重导。跨程序集无法直接读取 Avalonia 内部 IsUsable，故以本标记驱动重拉。</summary>
     private volatile bool _interopStale;
+    /// <summary>首次导入参数是否已打点（仅打一次，避免每帧刷屏）。</summary>
+    private bool _importPropsLogged;
     private Task? _lastPresent;
     private bool _disposed;
 
     // 运行期健康：连续无法呈现达到阈值即触发 Unhealthy → 宿主（VideoView）拉黑本工厂并回退 Skia，
     // 确保 Composition 永不静默空白（Attach 成功但运行期持续出不了画时有兜底）。
+    // 阈值取 10（30fps 下约 0.33s）：主时钟是音频驱动，回退越晚音画起点错位越大——真机曾因
+    // 导入失败连吃 30 帧（约 1s）后画面才出现，被感知为「音频比画面先出约 1 秒」。
     private int _consecutiveSkips;
     private bool _unhealthyFired;
-    private const int SkipThreshold = 30;
+    private const int SkipThreshold = 10;
     private readonly object _healthLock = new();
 
     // 布局状态：CompositionSurfaceVisual 无 Stretch 属性，须手动根据 VideoView.Stretch 计算目标尺寸与偏移。
@@ -234,7 +238,19 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                         t.Contains("HardwareBuffer", StringComparison.OrdinalIgnoreCase) ||
                         t.Contains("android", StringComparison.OrdinalIgnoreCase));
                 if (ht is null || !interop.SupportedImageHandleTypes.Contains(ht))
+                {
+                    // 静默跳过是零拷贝排查最大的盲区：合成器句柄类型为空集时（典型：Android 跑在
+                    // EGL 后端 —— Avalonia 的 GL 后端不实现外部图像导入，SupportedImageHandleTypes 为 []），
+                    // 每个工厂都会走到这里而不留任何痕迹，最终只看到一句笼统的「无可用工厂」。
+                    // 必须逐工厂打点：句柄类型 + 映射结果 + 合成器实际支持列表，一眼看出是后端选错还是映射缺项。
+                    _logger.LogWarning(
+                        "CompositionVideoRenderer 跳过工厂 {Factory}：句柄类型 {HandleKind}（映射={Mapped}）" +
+                        "不在合成器支持列表内。合成器后端支持=[{Supported}]。" +
+                        "若列表为空，多半是 Avalonia 渲染后端选错（Android 需 AndroidRenderingMode.Vulkan）。",
+                        f.GetType().Name, f.HandleKind, ht ?? "<无法映射>",
+                        string.Join(", ", interop.SupportedImageHandleTypes));
                     continue;
+                }
                 _logger.LogInformation("CompositionVideoRenderer 已自动认领 Android AHB 句柄类型={HandleType}。", ht);
             }
 
@@ -579,7 +595,23 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             Width = desc.Width,
             Height = desc.Height,
             Format = ToExternalFormat(desc.Format),
+            // 【必须透传】OPAQUE_FD 不携带内存元数据，Avalonia 的
+            // VulkanExternalObjectsFeature.ImportedImage.CreateMemory 会拿这两个值与它自己
+            // vkGetImageMemoryRequirements(导入图像) 的结果做严格相等校验，不符即抛
+            // "Invalid memory size"（真机实证：漏传 → 每帧导入失败 → 整段播放不出画）。
+            // MemorySize 必须是生产者侧 vkGetImageMemoryRequirements().size（含驱动 tile/对齐扩容），
+            // 不是 w*h*4；MemoryOffset 恒为 0。
+            MemorySize = desc.MemorySize,
+            MemoryOffset = desc.MemoryOffset,
         };
+        if (!_importPropsLogged)
+        {
+            _importPropsLogged = true;
+            _logger.LogInformation(
+                "CompositionVideoRenderer 首次导入参数: 句柄类型={HandleType} {W}x{H} 格式={Fmt} " +
+                "MemorySize={MemSize} MemoryOffset={MemOff}（MemorySize=0 说明生产者未上报，导入必失败）",
+                handleType, desc.Width, desc.Height, desc.Format, desc.MemorySize, desc.MemoryOffset);
+        }
         var imported = interop.ImportImage(new PlatformHandle(desc.Handle, handleType), props);
         // 关键：await 服务端导入完成。若 Context 与当前 RenderInterface.Value 失配，导入阶段即抛
         // PlatformGraphicsContextLostException（ImportCompleted 变 Faulted），此处 await 直接抛出，

@@ -572,6 +572,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         _lastReleasedPts = TimeSpan.MinValue;
         _geoInit = false;      // 几何基线重新采集（Flush 后解码器可能重配输出格式）
         _geoChanges = 0;
+        _releaseGaps = 0;      // Flush 后解码器重建参考链，空洞计数重新开始
         DrainAndDispose(_reorder);
         _reorder.Clear();
         DrainAndDispose(_pendingInput);
@@ -692,6 +693,10 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// <summary>重排缓冲深度上限（防失控；超过即强制按序释放）。</summary>
     private const int MaxReorderHold = 8;
     private int _reorderCorrections;
+    /// <summary>交付序列的 pts 空洞判定阈值：60ms ≈ 2 个 30fps 帧距。正常连续帧 33ms 不会触发。</summary>
+    private static readonly TimeSpan ReleaseGapThreshold = TimeSpan.FromMilliseconds(60);
+    /// <summary>交付序列检测到的 pts 空洞数（解码器吞帧的直接证据）。</summary>
+    private int _releaseGaps;
 
     /// <summary>把新帧按 pts 升序插入重排缓冲，并释放已可确定的前缀。</summary>
     private void PushFrameOrdered(VideoFrame frame)
@@ -721,6 +726,26 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
                 break;
 
             _reorder.RemoveAt(0);
+            // 【PTS 空洞探测器】在「重排后、交付前」的序列上检测 pts 跳变。
+            // 正常 30fps 帧距 ≈33ms；跳变 > 60ms（≈2 帧距）即说明中间有帧没从解码器出来。
+            // 【为什么这是花屏的决定性判据】本流整段只有 1 个 IDR（真机实证：收包 key=True 仅 #0 一处），
+            // H.264 P/B 帧错误会传播到下一个 IDR —— 解码器只要吞掉一帧，其后的整个 GOP 全是
+            // 宏块马赛克（真机截图 seq=0050 全碎、seq=0259 完全干净，正是「第一个 GOP 碎、中途自愈」）。
+            // 此前所有排查都证明传输链路逐字节无损，故损坏只可能源自解码器吞帧。
+            if (_lastReleasedPts != TimeSpan.MinValue)
+            {
+                TimeSpan gap = head.Timestamp - _lastReleasedPts;
+                if (gap > ReleaseGapThreshold)
+                {
+                    _releaseGaps++;
+                    if (_releaseGaps <= 8 || (_releaseGaps % 20) == 0)
+                        _logger.LogWarning(
+                            "[ANDROID-VID] 帧空洞 #{N}: 交付序 pts 从 {Prev:g} 跳到 {Cur:g}，缺 {Miss:F1} 帧 " +
+                            "（解码器吞帧 ⇒ 其后参考链全碎 = 花屏真因）",
+                            _releaseGaps, _lastReleasedPts, head.Timestamp,
+                            gap.TotalMilliseconds / 33.333 - 1);
+                }
+            }
             _pendingFrames.Enqueue(head);
             if (_lastReleasedPts != TimeSpan.MinValue && head.Timestamp < _lastReleasedPts)
                 _reorderCorrections++;
@@ -836,10 +861,10 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
         // 周期性诊断（定位 dequeue 是否恒 TRY_AGAIN）
         if ((_drainCalls % LogInterval) == 0)
-            _logger.LogInformation("[ANDROID-VID] 诊断: 排空={Calls} dequeue成功={Deq} tryAgain={Try} 喂入={Fed} 累计产帧={Frames} pts回退={Reg} 重排缓冲={Hold} 校正={Fix} 待喂={Pend} 补喂={PostFed}/{PostCalls} 阻塞={Blk}",
+            _logger.LogInformation("[ANDROID-VID] 诊断: 排空={Calls} dequeue成功={Deq} tryAgain={Try} 喂入={Fed} 累计产帧={Frames} pts回退={Reg} 重排缓冲={Hold} 校正={Fix} 待喂={Pend} 补喂={PostFed}/{PostCalls} 阻塞={Blk} 空洞={Gap}",
                 _drainCalls, _drainDequeued, _drainTryAgain, _inputQueued, _framesProduced, _ptsRegressions,
                 _reorder.Count, _reorderCorrections, _pendingInput.Count,
-                _postDrainFed, _postDrainCalls, _inputDequeueBlocked);
+                _postDrainFed, _postDrainCalls, _inputDequeueBlocked, _releaseGaps);
 
         return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
     }

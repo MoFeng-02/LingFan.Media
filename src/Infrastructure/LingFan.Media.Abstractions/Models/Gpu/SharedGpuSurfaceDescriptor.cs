@@ -62,6 +62,19 @@ public enum SharedGpuSurfaceFormat
 /// 本表面使用的跨设备同步模型（与产出它的 <see cref="ISharedGpuSurfaceSource.SyncMode"/> 一致）。
 /// 消费方据此选择对应的提交方式（keyed mutex / 信号量），各后端互不跨界。
 /// </param>
+/// <param name="MemorySize">
+/// 承载本表面的外部内存<b>分配字节数</b>（生产者侧 <c>vkGetImageMemoryRequirements().size</c>）。
+/// <para><b>宿主合成器会拿它做严格相等校验</b>：Avalonia 的
+/// <c>VulkanExternalObjectsFeature.ImportedImage.CreateMemory</c> 要求
+/// <c>MemoryOffset == 0 &amp;&amp; MemorySize == 它自身算出的 size</c>，否则直接抛
+/// <c>Invalid memory size</c>。故凡经 POSIX fd（OPAQUE_FD）导入的后端<b>必须</b>如实填写，
+/// 留 0 必然导入失败。</para>
+/// <para>该校验对 D3D11 纹理句柄分支不适用（Avalonia 走 D3D11 专用导入路径、不比对此值），
+/// 这些后端可保持 0。</para>
+/// </param>
+/// <param name="MemoryOffset">
+/// 本表面在外部内存中的字节偏移。宿主合成器要求恒为 0（与 <paramref name="MemorySize"/> 同处一次校验）。
+/// </param>
 /// <remarks>
 /// <para><b>纯数据</b>：不持有所有权，不可释放——底层纹理生命周期归产出它的
 /// <see cref="ISharedGpuSurfaceSource"/> 管理。</para>
@@ -74,7 +87,9 @@ public readonly record struct SharedGpuSurfaceDescriptor(
     int Height,
     SharedGpuSurfaceFormat Format,
     ulong Version,
-    SharedGpuSyncMode SyncMode)
+    SharedGpuSyncMode SyncMode,
+    ulong MemorySize = 0,
+    ulong MemoryOffset = 0)
 {
     /// <summary>句柄是否有效（非空且尺寸为正）。</summary>
     public bool IsValid => Handle != IntPtr.Zero && Width > 0 && Height > 0;
