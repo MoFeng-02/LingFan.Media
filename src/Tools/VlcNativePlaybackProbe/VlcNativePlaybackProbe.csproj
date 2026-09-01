@@ -13,11 +13,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
     <!-- 控制台日志 provider：探针是诊断型 exe，需把库内 ILogger 诊断（含 codec 原始值）打到控制台。 -->
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
     <!-- ServiceCollection / BuildServiceProvider（DI 容器，用于构造 VLCNativeDemuxer 验证端到端） -->
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
     <!-- 原生 libvlc 运行时分发包（LGPL）。仅探针携带，用于验证；库本体不含原生运行时。 -->
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
   </ItemGroup>

@@ -133,7 +133,11 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     // 一次性灌进 _pendingFrames，使 in-flight 帧数远超帧池每桶容量（16）；超额帧每帧都要
     // 新分配大数组、归还即弃 ⇒ 开播期垃圾风暴 ⇒ GC 停顿渲染线程，进而放大呈现侧抖动。
     // 加上限把 in-flight 峰值压回池容量内（未取完的帧留待下一轮，不丢帧）。
-    private const int MaxFramesPerDrain = 4;
+    /// <summary>单次排空最多提取的帧数上限（治根AU 由 4 放宽到 12）。
+    /// 原值 4 是为压制开播期 LOH GC 风暴（无上限排空会让 in-flight 帧数远超帧池每桶容量）。
+    /// 但它同时把帧堵在解码器输出队列里、延缓缓冲归还，在 DPB 压力下会让解码器静默丢弃参考帧
+    /// ⇒ 宏块 garbage。取 12：仍远低于帧池每桶 16 的上限（GC 风险可控），但排空吞吐翻三倍。</summary>
+    private const int MaxFramesPerDrain = 12;
 
     // 本后端媒体 API 仅使用 net-android 托管的 Android.Media.* 绑定（MediaCodec / Image.Plane）；
     // 显式禁止手写 P/Invoke：Android/iOS/macOS 走 net-* workload 内置绑定，AOT 安全、零反射
@@ -210,7 +214,10 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         bool zeroCopy = AndroidVideoDecodePolicy.EnableHardwareZeroCopy;
         _useAhbFrames = zeroCopy && TryCreateAhbOutputSurface(frameW, frameH);
         // 零拷贝档软解（c2）优先；能播档硬解（OMX）优先（避开 c2 僵死）。
-        var codecObj = CreateVideoCodec(mime, codec, preferSoftwareDecoder: _useAhbFrames);
+        // 单变量对照实验：ForceSoftwareDecoder 只换解码器（AOSP 软解），帧提取/重排/同步/上屏完全不变，
+        // 用于判定坏帧来自硬解侧还是我们自己的帧处理段（见 AndroidVideoDecodePolicy.ForceSoftwareDecoder）。
+        var codecObj = CreateVideoCodec(mime, codec,
+            preferSoftwareDecoder: _useAhbFrames || AndroidVideoDecodePolicy.ForceSoftwareDecoder);
         try
         {
             ConfigureFlexibleYuv(ref codecObj, mime, codec, csd, frameW, frameH, _outputSurface, _useAhbFrames);
@@ -326,6 +333,15 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// 且等价于灵活格式的厂商私有格式仍可经 getOutputImage 取到标准化平面。</remarks>
     private AndroidMediaCodec CreateVideoCodec(string mime, VideoCodec codec, bool preferSoftwareDecoder)
     {
+        // 开关状态必须可见：环境变量注入（adb shell setprop debug.mono.env）可能因构建配置失效，
+        // 若不打印就无法区分「开关没生效」与「软解也坏帧」——两者结论完全相反。
+        _logger.LogInformation(
+            "[ANDROID-VID] 解码策略: 强制软解={Sw} 优先Codec2={C2} 桥接零拷贝={Zc}（本次请求={ReqSoft}）",
+            AndroidVideoDecodePolicy.ForceSoftwareDecoder,
+            AndroidVideoDecodePolicy.PreferCodec2HardwareDecoder,
+            AndroidVideoDecodePolicy.EnableHardwareZeroCopy,
+            preferSoftwareDecoder);
+
         if (preferSoftwareDecoder)
         {
             foreach (string name in SoftwareCodecCandidates(codec))
@@ -344,6 +360,14 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             }
         }
 
+        // 治根AV：优先挑 Codec2 栈的厂商硬解（如 c2.qti.avc.decoder），而不是系统按类型默认给出的
+        // 旧 OMX 实现（OMX.qcom.video.decoder.avc）。后者在 ByteBuffer + 灵活 YUV 输出下存在开播期
+        // 输出坏帧的真机现象（宏块 garbage、参考帧损坏），且不报任何错误。Codec2 实现是同一硬件的
+        // 另一套框架封装，可作为低风险对照。任何一步失败都回落到原来的 CreateDecoderByType。
+        var hw = TryCreatePreferredHardwareCodec(mime);
+        if (hw is not null)
+            return hw;
+
         var obj = AndroidMediaCodec.CreateDecoderByType(mime);
         _codecName = obj.Name ?? "unknown";
         // 名称约定判定软/硬（CodecInfo.IsSoftwareOnly 为 API 29+；名称前缀是全版本可用的稳定判据）。
@@ -352,12 +376,80 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         return obj;
     }
 
-    /// <summary>AOSP 软件解码器候选（Codec2 新栈优先，OMX.google 旧栈兜底；均不存在时按类型任选）。
-    /// 软件解码器随系统内置，输出灵活 YUV420 到 ByteBuffer，无额外原生依赖。</summary>
+    /// <summary>
+    /// 枚举本机支持该 mime 的解码器，按「Codec2 厂商硬解 → OMX 厂商硬解」顺序创建（跳过软件实现）。
+    /// 同时打印全部候选名，便于真机对照。失败返回 <c>null</c>，调用方回落到按类型创建。
+    /// </summary>
+    private AndroidMediaCodec? TryCreatePreferredHardwareCodec(string mime)
+    {
+        if (!AndroidVideoDecodePolicy.PreferCodec2HardwareDecoder)
+            return null;
+        if (!OperatingSystem.IsAndroidVersionAtLeast(26))
+            return null; // MediaCodecList(MediaCodecListKind) 为 API 26+
+
+        List<string> c2 = new(), omx = new();
+        try
+        {
+            var list = new Android.Media.MediaCodecList(Android.Media.MediaCodecListKind.AllCodecs);
+            var infos = list.GetCodecInfos();
+            if (infos is null)
+                return null;
+            foreach (var info in infos)
+            {
+                if (info is null || info.IsEncoder)
+                    continue;
+                string? name = info.Name;
+                if (string.IsNullOrEmpty(name))
+                    continue;
+                if (!info.GetSupportedTypes().Contains(mime))
+                    continue;
+                // 软解实现（AOSP 自带）不作为硬解候选。
+                if (name.StartsWith("c2.android.", StringComparison.Ordinal)
+                    || name.StartsWith("OMX.google.", StringComparison.Ordinal))
+                    continue;
+                if (name.StartsWith("c2.", StringComparison.Ordinal))
+                    c2.Add(name);
+                else if (name.StartsWith("OMX.", StringComparison.Ordinal))
+                    omx.Add(name);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[ANDROID-VID] 解码器清单枚举失败，回落按类型创建。");
+            return null;
+        }
+
+        _logger.LogInformation("[ANDROID-VID] 解码器候选: c2硬解=[{C2}] omx硬解=[{Omx}]",
+            c2.Count == 0 ? "无" : string.Join(",", c2),
+            omx.Count == 0 ? "无" : string.Join(",", omx));
+
+        foreach (string name in c2.Concat(omx))
+        {
+            try
+            {
+                var c = AndroidMediaCodec.CreateByCodecName(name);
+                _codecName = name;
+                _hardwareDecoder = true;
+                return c;
+            }
+            catch (Exception ex) when (ex is Java.Lang.IllegalArgumentException
+                                          or Java.Lang.IllegalStateException
+                                          or Java.IO.IOException)
+            {
+                _logger.LogWarning("[ANDROID-VID] 解码器 {Name} 创建失败，试下一个：{Msg}", name, ex.Message);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>AOSP 软件解码器候选。
+    /// <b>OMX.google 排在 c2.android 之前</b>：真机实测 c2 软解 + ByteBuffer 会命中
+    /// numClientBuffers 僵死（解码器不再归还输出缓冲），而 OMX.google 软解 + ByteBuffer 正常。
+    /// 两者输出都是标准灵活 YUV 到 ByteBuffer，语义等价。</summary>
     private static string[] SoftwareCodecCandidates(VideoCodec codec) => codec switch
     {
-        VideoCodec.H264 => new[] { "c2.android.avc.decoder", "OMX.google.h264.decoder" },
-        VideoCodec.H265 => new[] { "c2.android.hevc.decoder", "OMX.google.hevc.decoder" },
+        VideoCodec.H264 => new[] { "OMX.google.h264.decoder", "c2.android.avc.decoder" },
+        VideoCodec.H265 => new[] { "OMX.google.hevc.decoder", "c2.android.hevc.decoder" },
         VideoCodec.AV1 => new[] { "c2.android.av1.decoder" },
         VideoCodec.VP9 => new[] { "c2.android.vp9.decoder", "OMX.google.vp9.decoder" },
         VideoCodec.MPEG2 => new[] { "c2.android.mpeg2.decoder", "OMX.google.mpeg2.decoder" },
@@ -595,11 +687,6 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
                 break;
             }
 
-            // 先 Peek 不 Dequeue：只有确认能安全喂入才出队，避免任何分支静默丢包
-            // （旧实现 `if (buf is null) continue;` 会把已出队的包在 finally 里 Dispose 掉，
-            //  包就此消失且无任何日志 —— 末段丢帧的隐藏来源之一）。
-            var pkt = _pendingInput.Peek();
-
             ByteBuffer? buf = _codec.GetInputBuffer(idx);
             if (buf is null)
             {
@@ -610,6 +697,11 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
                         idx, _inputBufferNull);
                 break;
             }
+
+            // 先 Peek 不 Dequeue：只有确认能安全喂入才出队，避免任何分支静默丢包
+            // （旧实现 `if (buf is null) continue;` 会把已出队的包在 finally 里 Dispose 掉，
+            //  包就此消失且无任何日志 —— 末段丢帧的隐藏来源之一）。
+            var pkt = _pendingInput.Peek();
 
             // 装不下就必须整包跳过、绝不能截断喂入：截断的 H.264 NAL 会让解码器产出
             // 半帧/错帧，正是「花屏」的直接来源。宁可丢这一帧，也不能污染后续帧的参考。
@@ -672,7 +764,15 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// <summary>读出一个已解出帧（先返回 FIFO 余帧，再尝试从解码器申领）。</summary>
     private VideoFrame? ReadOutput()
     {
-        if (_pendingFrames.Count > 0) return _pendingFrames.Dequeue();
+        // 队列非空时也要排空一次（治根AU）：解码器输出缓冲只有经 ReleaseOutputBuffer 归还后
+        // 才会回到解码器的缓冲池；若因为我们手上有积压就一直不 dequeue，解码器可用输出缓冲
+        // 会持续减少（DPB 压力），最终静默丢弃参考帧 —— 后续帧以缺失/错误的参考做运动补偿，
+        // 画面即宏块 garbage，且不报任何错误。排空的帧并入队列后再取队首，顺序不变。
+        if (_pendingFrames.Count > 0)
+        {
+            DrainOutput(0);
+            return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
+        }
         return DrainOutput(0);
     }
 
@@ -701,7 +801,15 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     // ── 帧间差分探测器（坏帧探针）──
     // 正常相邻帧的亮度采样平均绝对差（MAD）平稳；参考帧损坏产生的宏块 garbage 会让 MAD 出现尖峰。
     // 用途：区分「帧丢了」（MAD 平稳，只是 pts 跳变）与「解码器输出了坏帧」（MAD 尖峰且持续若干帧）。
-    private const int DeltaSampleLen = 512; // 8 行 × 64 字节
+    // 分块覆盖全画面：12 行 × 8 段 × 8 字节 = 768 字节，共 96 个块位。
+    // 早期版本只采 8 行 × 64 字节（占 Y 平面 0.025%），宏块 garbage 绝大多数落在采样点之外，
+    // 产生「假阴性」（真机实证：画面肉眼花屏但探针报告零突变）。必须按块覆盖整幅画面。
+    private const int DeltaRows = 12;
+    private const int DeltaCols = 8;
+    private const int DeltaBytesPerBlock = 8;
+    private const int DeltaSampleLen = DeltaRows * DeltaCols * DeltaBytesPerBlock;
+    /// <summary>单块平均绝对差超过该值即计入「坏块」。</summary>
+    private const double DeltaBlockBadThreshold = 25.0;
     private readonly byte[] _prevYSample = new byte[DeltaSampleLen];
     private bool _hasPrevSample;
     private double _madBase;
@@ -1274,35 +1382,49 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     private void UpdateFrameDelta(ReadOnlySpan<byte> data, int w, int h, int seq, TimeSpan pts)
     {
         Span<byte> cur = stackalloc byte[DeltaSampleLen];
-        for (int r = 0; r < 8; r++)
+        for (int r = 0; r < DeltaRows; r++)
         {
-            int row = (h * (r * 2 + 1)) / 16;      // 纵向均匀取 8 行
-            int src = row * w + (w / 4);           // 横向从 1/4 处起取 64 字节
-            int dst = r * 64;
-            for (int i = 0; i < 64; i++)
+            int row = (h * (r * 2 + 1)) / (DeltaRows * 2);   // 纵向均匀
+            for (int c = 0; c < DeltaCols; c++)
             {
-                int p = src + i;
-                cur[dst + i] = (p >= 0 && p < data.Length) ? data[p] : (byte)0;
+                int src = row * w + (w * c) / DeltaCols;      // 横向均匀
+                int dst = (r * DeltaCols + c) * DeltaBytesPerBlock;
+                for (int i = 0; i < DeltaBytesPerBlock; i++)
+                {
+                    int pos = src + i;
+                    cur[dst + i] = (pos >= 0 && pos < data.Length) ? data[pos] : (byte)0;
+                }
             }
         }
 
         if (_hasPrevSample)
         {
             long sum = 0;
-            for (int i = 0; i < DeltaSampleLen; i++)
-                sum += Math.Abs(cur[i] - _prevYSample[i]);
+            int badBlocks = 0;
+            for (int b = 0; b < DeltaRows * DeltaCols; b++)
+            {
+                int off = b * DeltaBytesPerBlock;
+                int diff = 0;
+                for (int i = 0; i < DeltaBytesPerBlock; i++)
+                    diff += Math.Abs(cur[off + i] - _prevYSample[off + i]);
+                sum += diff;
+                if (diff / (double)DeltaBytesPerBlock >= DeltaBlockBadThreshold)
+                    badBlocks++;
+            }
             double mad = sum / (double)DeltaSampleLen;
 
-            bool spike = _madBase > 1.0 && mad > _madBase * 3.0;
+            // 判据：整体突变 OR 局部坏块占比 > 5% —— 后者专抓「只有部分宏块损坏」的坏帧。
+            bool spike = (_madBase > 1.0 && mad > _madBase * 3.0)
+                         || badBlocks * 20 >= DeltaRows * DeltaCols;
             if (spike)
                 _spikeFrames++;
-            // 基线用 EMA 跟随（首帧直接采纳），避免把缓慢的场景切换算成尖峰。
             _madBase = _madBase > 0 ? (_madBase * 0.9 + mad * 0.1) : mad;
 
             if (spike || seq < 240 || (seq % 60) == 0)
                 _logger.LogInformation(
-                    "[FRAME-DELTA] seq={Seq} pts={Pts} mad={Mad:F1} 基线={Base:F1}{Spike} 累计突变={Spikes}",
-                    seq, pts, mad, _madBase, spike ? " ← 突变（疑似坏帧）" : string.Empty, _spikeFrames);
+                    "[FRAME-DELTA] seq={Seq} pts={Pts} mad={Mad:F1} 基线={Base:F1} 坏块={Bad}/{Total}{Spike} 累计突变={Spikes}",
+                    seq, pts, mad, _madBase, badBlocks, DeltaRows * DeltaCols,
+                    spike ? " ← 突变（疑似坏帧）" : string.Empty, _spikeFrames);
         }
 
         cur.CopyTo(_prevYSample);

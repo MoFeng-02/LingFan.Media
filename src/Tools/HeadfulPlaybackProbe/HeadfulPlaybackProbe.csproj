@@ -28,9 +28,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
 		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
 		<!-- probe-gpus 用：枚举 DXGI 适配器查各 GPU 的 VideoProcessor NV12 支持（诊断用途） -->
 		<PackageReference Include="Vortice.DXGI" Version="3.8.3" />

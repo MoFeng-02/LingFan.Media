@@ -31,9 +31,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
 		<!-- 原生 libvlc 运行时分发包（LGPL）。仅探针携带，用于独立分发；库本体不含原生运行时。 -->
 		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
 	</ItemGroup>

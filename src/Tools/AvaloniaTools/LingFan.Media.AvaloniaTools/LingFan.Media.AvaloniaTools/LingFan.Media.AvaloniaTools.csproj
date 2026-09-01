@@ -31,9 +31,9 @@
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 		<!-- DI 容器 + 日志（AddLingFanMedia 的 composer 工厂需要 ILoggerFactory / IServiceProvider）；
 		     版本与仓库其它工程一致（10.0.10） -->
-		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
 	</ItemGroup>
 
 	<ItemGroup>

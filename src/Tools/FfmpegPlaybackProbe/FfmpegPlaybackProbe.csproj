@@ -13,9 +13,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,10 +37,7 @@
     <!-- 原生 ffmpeg 共享库随 dotnet publish（含 AOT）一并发布：AOT 不会自动携带构建期复制的原生 DLL，
          否则运行目录为空 → 自写 FF 加载器（NativeLibrary.TryLoad 按简单名映射到带版本 handle）找不到原生 DLL，
          首个 ffmpeg 调用崩溃。无版本别名由 CopyFFmpegNative 在构建/发布期复制兜底。 -->
-    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll"
-          Link="%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!--
@@ -64,24 +61,12 @@
       </FFmpegDll>
     </ItemGroup>
     <!-- 构建输出（dotnet run / Debug） -->
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != ''" />
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
     <!-- 发布输出（dotnet publish / AOT）：显式补复制到 $(PublishDir) -->
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFolder="$(PublishDir)"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
-    <Copy SourceFiles="@(FFmpegDll)"
-          DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')"
-          SkipUnchangedFiles="true"
-          Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
-    <Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll->Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+    <Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll-&gt;Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
     <Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
   </Target>
 

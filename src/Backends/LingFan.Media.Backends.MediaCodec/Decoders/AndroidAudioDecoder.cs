@@ -46,6 +46,8 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
     // 诊断计数（周期性日志定位 dequeue 是否恒 TRY_AGAIN）
     private long _drainCalls, _drainTryAgain, _drainProduced;
     private int _packetsFed;
+    // 喂入侧可见性：输入槽阻塞与已喂入计数（诊断「解码器吃包不吐帧」还是「根本喂不进」）。
+    private long _inputQueued, _inputBlocked;
     private bool _eosQueued;     // EOS 已入队（FlushAsync 重试语义，Reset 清零）
     private bool _eosOutputSeen; // 解码器已回报输出 EOS（DRAIN 完成判据）
 
@@ -210,7 +212,16 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
         while (_pendingInput.Count > 0)
         {
             int idx = _codec!.DequeueInputBuffer(0);
-            if (idx < 0) break; // 暂无输入槽，保留包待下次
+            if (idx < 0)
+            {
+                // 暂无输入槽，保留包待下次。计数并限频告警：若此处长期阻塞，就会表现为
+                // 「解码器收了包却不产帧 → 主时钟停摆 → 静音」，必须有可见性。
+                _inputBlocked++;
+                if (_inputBlocked == 1 || (_inputBlocked % 512) == 0)
+                    _logger.LogWarning("[ANDROID-AUD] 输入槽满，喂入被阻（待喂={Pending}, 累计阻={Blk}, 已喂={Fed}）",
+                        _pendingInput.Count, _inputBlocked, _inputQueued);
+                break;
+            }
 
             var pkt = _pendingInput.Dequeue();
             try
@@ -231,6 +242,7 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
 
                 long ptsUs = pkt.Timestamp.Ticks > 0 ? pkt.Timestamp.Ticks / 10 : 0;
                 _codec.QueueInputBuffer(idx, 0, len, ptsUs, (MediaCodecBufferFlags)0);
+                _inputQueued++;
             }
             finally
             {
@@ -288,8 +300,9 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
 
         // 周期性诊断（定位 audio 是否同样 dequeue 恒 TRY_AGAIN）
         if ((_drainCalls % LogInterval) == 0)
-            _logger.LogInformation("[ANDROID-AUD] 诊断: 排空={Calls} tryAgain={Try} 累计产帧={Frames}",
-                _drainCalls, _drainTryAgain, _drainProduced);
+            _logger.LogInformation(
+                "[ANDROID-AUD] 诊断: 排空={Calls} tryAgain={Try} 累计产帧={Frames} 喂入={Fed} 阻塞={Blk} 待喂={Pending}",
+                _drainCalls, _drainTryAgain, _drainProduced, _inputQueued, _inputBlocked, _pendingInput.Count);
 
         return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
     }

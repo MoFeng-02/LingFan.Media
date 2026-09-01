@@ -43,9 +43,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
 		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
 		<!-- 零拷贝跨 GPU 对齐：取默认 D3D11 适配器 LUID（与 ffmpeg 零拷贝分支同构的 D3D11CreateDevice）。 -->
 		<PackageReference Include="Vortice.DXGI" Version="3.8.3" />

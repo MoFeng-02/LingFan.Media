@@ -9,7 +9,7 @@
   <ItemGroup>
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="SharpMetal" Version="1.1.0" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup>
