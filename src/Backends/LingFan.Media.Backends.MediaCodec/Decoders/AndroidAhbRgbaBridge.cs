@@ -192,9 +192,19 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     /// <summary>GL 线程主循环：等待请求，串行消费（产帧或停止）。</summary>
     private void RunLoop()
     {
+        long lastWorkQpc = System.Diagnostics.Stopwatch.GetTimestamp();
         while (true)
         {
-            _workSignal.WaitOne();
+            // 空闲等待带 2s 超时心跳：区分「GL 线程空闲等请求」与「GL 线程卡死」
+            // （无产帧请求时仍能周期性报平安，配合解码侧 ConvertLatest 前后打点定位跨线程等待）。
+            if (!_workSignal.WaitOne(2000))
+            {
+                double idleSec = System.Diagnostics.Stopwatch.GetElapsedTime(lastWorkQpc).TotalSeconds;
+                _logger?.LogInformation(
+                    "[ANDROID-AHB] GL 线程空闲等待产帧请求（最近完成={Idle:F2}s前，队列积压={Pending}）",
+                    idleSec, _requestQueue.Count);
+                continue;
+            }
             _workSignal.Reset();
             while (_requestQueue.TryDequeue(out var req))
             {
@@ -213,6 +223,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                     req.Result = nint.Zero;
                 }
                 req.Tcs.TrySetResult(req.Result);
+                lastWorkQpc = System.Diagnostics.Stopwatch.GetTimestamp();
             }
         }
     }
@@ -328,6 +339,8 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         bool ok = false;
         try
         {
+            // ①b 前置打卡：若冻结日志停在 ①b 而 ④ 缺失，即 AHardwareBufferAllocate（gralloc）阻塞铁证。
+            _logger?.LogInformation("[ANDROID-AHB-TRACE] ①b进入 AHardwareBufferAllocate（托管线程={Tid}）", Environment.CurrentManagedThreadId);
             if (AHardwareBufferAllocate(&desc, &ahb) != 0 || ahb == nint.Zero)
             {
                 _logger?.LogWarning("[ANDROID-AHB] AHardwareBuffer_allocate(RGBA8) 失败。");

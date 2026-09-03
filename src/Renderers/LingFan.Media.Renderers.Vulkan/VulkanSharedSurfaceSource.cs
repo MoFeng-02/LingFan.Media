@@ -174,26 +174,20 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         }
         else if (_isAndroid)
         {
-            // Android 共享离屏：Adreno 等移动 GPU 拒绝把「普通 Vulkan 外部图像」经 OPAQUE_FD 导出
-            // （vkBindImageMemory 报 ErrorInvalidExternalHandle），但 AHB 外部内存（VK_ANDROID_external_
-            // memory_android_hardware_buffer）是原生支持的。故共享面改用 AHB 承载（图像/分配均标 AHB 句柄
-            // 类型），再用 vkGetMemoryAndroidHardwareBufferANDROID 取回 AHardwareBuffer，经 AndroidAhbFdExport
-            // 抽其底层 dma_buf fd（native_handle_t.data[0] + dup）作为 OPAQUE_FD 交合成器——Avalonia Android
-            // ImportImage 仅接受 OPAQUE_FD。_handleKind 仍是 VulkanOpaquePosixFileDescriptor（交付给合成器的就是 fd）。
-            // 此前数轮误以为「Android 拿不到 dma_buf fd 必须自分配 AHardwareBuffer 再反向解析
-            // GraphicBuffer/native_handle_t 的 C++ 内存布局抠 fd」——该前提错误（硬编码偏移读到错误 magic，
-            // 2.txt:473 `读得 0xFCDF8028，期望 0x6E4AA411` → 回退 Skia、不出画）。现改为「AHB 承载 + 标准
-            // dlsym(libnativewindow.so, AHardwareBuffer_getNativeHandle) 取 fd」，版本/厂商无关、AOT 安全。
-            // 同步：移动端驱动不支持二进制外部信号量导出（较早轮次 vkCreateSemaphore →
-            // VK_ERROR_OUT_OF_HOST_MEMORY），故用 SharedGpuSyncMode.None，由合成器（UpdateAsync）自管同步。
-            _handleKind = SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
+            // Android（同 device Skia 直绘，R2/M2 2026-09-02）：宿主（Avalonia Android 入口）已把自建
+            // VkDevice 注入本工厂（UseExternalDevice），UI 层的 Skia GPU 上下文与本源共用<b>同一 device、
+            // 同一图形队列</b>（device 仅启用单一队列族）。故共享表面改为交付原生 VkImage
+            // （VulkanNativeImage），消费方直接包装采样绘制——零外部内存导出/导入、零 fd、零 dedicated。
+            // 旧 OPAQUE_FD 路径（fd 导出交 Avalonia 合成器 ImportImage）在 Adreno 上存在 dedicated
+            // 导入死结（不挂 dedicated ⇒ 生产侧 BindImageMemory ErrorInvalidExternalHandle；挂 ⇒ 消费侧
+            // vkAllocateMemory INITIALIZATION_FAILED），已判死不再回头。
+            // 同步：无需 keyed mutex / 信号量——生产与消费共用同一 VkQueue，同队列提交天然按提交序串行；
+            // 交付前生产者以 fence 等待拷贝完成，且末屏障使写入对后续采样可见（详见 CopyToSharedImage）。
+            _handleKind = SharedGpuHandleKind.VulkanNativeImage;
             _semaphoreKind = SharedGpuSemaphoreKind.VulkanOpaquePosixFileDescriptor;
-            // 纯 OPAQUE_FD 直导（与 Linux 完全同路径）。绝不能用 AndroidHardwareBufferBitAndroid：
-            // AHB 兼容约束下驱动的 vkGetImageMemoryRequirements 与普通 OPAQUE_FD 图不同（Adreno 650 真机实证，
-            // 1080x1920 差异足以让宿主合成器严格相等校验必失败，仅 1x1 小图恰好相同）；
-            // 且宿主只认 OPAQUE_FD 语义的 fd，AHB 承载再抽 fd 属于跨语义混用。
-            _memHandleType = ExternalMemoryHandleTypeFlags.OpaqueFDBit;
-            _semHandleType = ExternalSemaphoreHandleTypeFlags.OpaqueFDBit;
+            // 平面图像（无外部导出），外部内存句柄类型不再使用。
+            _memHandleType = 0;
+            _semHandleType = 0;
             _syncMode = SharedGpuSyncMode.None;
         }
         else
@@ -370,6 +364,31 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 _writtenFrames, path, _handleKind, _version, _syncMode, w, h, _sharedMemorySize,
                 (uint)_sharedUsage, (uint)_sharedFlags);
         _writtenFrames++;
+
+        if (_handleKind == SharedGpuHandleKind.VulkanNativeImage)
+        {
+            // 同 device 直采样交付：句柄即原生 VkImage，配套 Native* 字段描述内存绑定与采样前置状态
+            //（布局=ShaderReadOnlyOptimal、格式/用法/队列族如实上报）。MemorySize/MemoryOffset 兼作
+            // 消费方包装所需的分配尺寸/偏移。图像生命周期归本源；尺寸变化时 _version 递增，
+            // 消费方据此重建包装。
+            descriptor = new SharedGpuSurfaceDescriptor(
+                (nint)_sharedImage.Handle,
+                _handleKind,
+                w, h,
+                _surfaceFormatEnum,
+                _version,
+                _syncMode,
+                _sharedMemorySize,
+                0,
+                NativeImage: (nint)_sharedImage.Handle,
+                NativeDeviceMemory: (nint)_sharedMemory.Handle,
+                NativeImageLayout: (uint)ImageLayout.ShaderReadOnlyOptimal,
+                NativeVkFormat: (uint)_surfaceVkFormat,
+                NativeQueueFamilyIndex: _queueFamilyIndex,
+                NativeImageUsage: (uint)_sharedUsage,
+                NativeImageTiling: (uint)ImageTiling.Optimal);
+            return true;
+        }
 
         descriptor = new SharedGpuSurfaceDescriptor(
             _exportedMemoryHandle,
@@ -849,10 +868,15 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
 
         // 2) _sharedImage → TransferDstOptimal（首帧 Undefined，后续帧已是 TransferDstOptimal）。
         //    首帧无前序写入可等（TopOfPipe + 0 访问）；后续帧须等上一帧 TRANSFER 写入完成再覆盖。
+        //    Android（VulkanNativeImage→Skia 直采样）：上一帧图像已按 ShaderReadOnlyOptimal 交付给
+        //    消费方采样（采样不改布局），本帧覆盖屏障的旧布局统一用 Undefined——规范允许的
+        //    「不保留旧内容」语义（与图像实际状态无关恒合法），整幅重写故无内容损失；
+        //    执行序由同队列（生产/消费共用同一 VkQueue）隐式按提交序串行保证。
         bool firstCopy = !_sharedImageCopyReady;
-        ImageLayout dstOld = firstCopy ? ImageLayout.Undefined : ImageLayout.TransferDstOptimal;
-        PipelineStageFlags dstSrcStage = firstCopy ? PipelineStageFlags.TopOfPipeBit : PipelineStageFlags.TransferBit;
-        AccessFlags dstSrcAccess = firstCopy ? 0 : AccessFlags.TransferWriteBit;
+        bool dstFromUndefined = firstCopy || _isAndroid;
+        ImageLayout dstOld = dstFromUndefined ? ImageLayout.Undefined : ImageLayout.TransferDstOptimal;
+        PipelineStageFlags dstSrcStage = dstFromUndefined ? PipelineStageFlags.TopOfPipeBit : PipelineStageFlags.TransferBit;
+        AccessFlags dstSrcAccess = dstFromUndefined ? 0 : AccessFlags.TransferWriteBit;
         ImageMemoryBarrier dstBarrier = new()
         {
             SType = StructureType.ImageMemoryBarrier,
@@ -899,7 +923,38 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         VulkanNative.CmdCopyImage(cmd, _convertImage, ImageLayout.TransferSrcOptimal,
             _sharedImage, ImageLayout.TransferDstOptimal, 1, &region);
 
-        // 标记 _sharedImage 已处于 TransferDstOptimal（供后续帧复用，避免重复 Undefined 重排）。
+        // 4) Android（VulkanNativeImage→Skia 直采样）：交付前把 _sharedImage 转入
+        //    ShaderReadOnlyOptimal 并使拷贝写入对后续采样可见（dstStage 覆盖片元/计算着色器读取）。
+        //    消费方按 GRVkImageInfo.ImageLayout 认定布局——采样 ShaderReadOnlyOptimal 无需再转换；
+        //    同一 VkQueue 上晚于此提交的采样命令（Skia 帧绘制）自动落入本屏障的可视性作用域。
+        if (_isAndroid)
+        {
+            ImageMemoryBarrier readyBarrier = new()
+            {
+                SType = StructureType.ImageMemoryBarrier,
+                SrcAccessMask = AccessFlags.TransferWriteBit,
+                DstAccessMask = AccessFlags.ShaderReadBit,
+                OldLayout = ImageLayout.TransferDstOptimal,
+                NewLayout = ImageLayout.ShaderReadOnlyOptimal,
+                SrcQueueFamilyIndex = ~0u,
+                DstQueueFamilyIndex = ~0u,
+                Image = _sharedImage,
+                SubresourceRange = new ImageSubresourceRange
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = 0,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1,
+                },
+            };
+            VulkanNative.CmdPipelineBarrier(cmd, PipelineStageFlags.TransferBit,
+                PipelineStageFlags.FragmentShaderBit | PipelineStageFlags.ComputeShaderBit,
+                0, 0, null, 0, null, 1, &readyBarrier);
+        }
+
+        // 标记 _sharedImage 已进入交付布局（Android=ShaderReadOnlyOptimal / 其余=TransferDstOptimal，
+        // 供后续帧复用，避免重复 Undefined 重排）。
         _sharedImageCopyReady = true;
     }
 
@@ -1139,6 +1194,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         }
 
         // 图像创建：启用外部内存导出（pNext=ExternalMemoryImageCreateInfo）。
+        // Android（VulkanNativeImage 同 device 直采样）为<b>平面图像</b>：无外部导出、无 dedicated、
+        // 无 fd——彻底绕开 Adreno external-memory 分配的厂商坑；Usage 含 Sampled（Skia 采样必需）。
         ExternalMemoryImageCreateInfo extImageInfo = new()
         {
             SType = StructureType.ExternalMemoryImageCreateInfo,
@@ -1167,7 +1224,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             Flags = ImageCreateFlags.CreateMutableFormatBit,
             SharingMode = SharingMode.Exclusive,
             InitialLayout = ImageLayout.Undefined,
-            PNext = (void*)&extImageInfo,
+            PNext = _isAndroid ? (void*)null : (void*)&extImageInfo,
         };
         _sharedUsage = imageInfo.Usage;
         _sharedFlags = imageInfo.Flags;
@@ -1181,6 +1238,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         // 导出内存连 vkBindImageMemory 都过不去，报 vkBindImageMemory 失败: ErrorInvalidExternalHandle
         // （Attach 自检阶段即整链回退 Skia）。宿主合成器（Avalonia ImportedImage.CreateMemory）也以
         // dedicated 语义导入，规范上两侧必须匹配。
+        // Android（VulkanNativeImage）：平面内存即可，无导出/dedicated 约束。
         MemoryRequirements memReq;
         VulkanNative.GetImageMemoryRequirements(_device, _sharedImage, &memReq);
         uint memType = FindMemoryType(memReq.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit);
@@ -1203,7 +1261,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             SType = StructureType.MemoryAllocateInfo,
             AllocationSize = memReq.Size,
             MemoryTypeIndex = memType,
-            PNext = (void*)&extMemInfo,
+            PNext = _isAndroid ? (void*)null : (void*)&extMemInfo,
         };
         result = VulkanNative.AllocateMemory(_device, &allocInfo, null, out _sharedMemory);
         if (result != Result.Success)
@@ -1239,31 +1297,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         }
         else if (_isAndroid)
         {
-            // 与 Linux 同路径：vkGetMemoryFdKHR 直导 opaque fd（_memHandleType 已是 OpaqueFDBit）。
-            MemoryGetFdInfoKHR getInfo = new()
-            {
-                SType = StructureType.MemoryGetFDInfoKhr,
-                Memory = _sharedMemory,
-                HandleType = memHandle,
-            };
-            Result hR = VulkanNative.GetMemoryFdKHR(_device, &getInfo, out int fd);
-            if (hR != Result.Success)
-                throw new InvalidOperationException($"vkGetMemoryFdKHR（Android 共享表面导出）失败: {hR}");
-            _exportedMemoryHandle = (nint)fd;
-
-            // 决定性诊断：查导入 fd 在本设备的有效 memoryTypeBits，与宿主侧 image requirements
-            // 的 memoryTypeBits（Avalonia 以其 DEVICE_LOCAL 位选 memoryTypeIndex）对表。
-            // 若 fd 的有效位不含宿主会选中的类型，即坐实「宿主 memoryTypeIndex 选择失败」路径。
-            MemoryFdPropertiesKHR fdProps = default;
-            // Silk.NET 2.23 的 StructureType 枚举漏了 VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR
-            // （结构体有、常量没有）。按 Vulkan 头补齐：IMPORT_MEMORY_FD_INFO_KHR=1000074000、
-            // MEMORY_FD_PROPERTIES_KHR=1000074001、MEMORY_GET_FD_INFO_KHR=1000074002（后两者经本地
-            // Silk.NET 程序集常量表核对，前后端点闭合，中值唯一）。
-            fdProps.SType = (StructureType)1000074001;
-            Result fpR = VulkanNative.GetMemoryFdPropertiesKHR(_device, memHandle, fd, &fdProps);
+            // VulkanNativeImage（同 device 直采样）：无需导出任何外部句柄——
+            // 消费方（UI 层 Skia）直接按描述符的 Native* 字段包装本图像采样绘制。
+            _exportedMemoryHandle = IntPtr.Zero;
             _logger.LogInformation(
-                "[VULKAN-SHARED] fd 诊断: imageReqTypeBits=0x{Req:X} memTypeIndex={Idx} fdMemoryTypeBits=0x{Fd:X} 查询结果={Result}",
-                memReq.MemoryTypeBits, memType, fdProps.MemoryTypeBits, fpR);
+                "[VULKAN-SHARED] Android VulkanNativeImage：平面图像+平面内存（无 fd/无 dedicated），同 device 直接采样。");
         }
         else
         {

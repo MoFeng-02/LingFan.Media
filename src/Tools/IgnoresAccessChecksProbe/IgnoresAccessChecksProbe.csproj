@@ -19,6 +19,14 @@
     <Reference Include="Avalonia.Vulkan">
       <HintPath>E:/Nuget/nuget/.nuget/packages/avalonia/12.1.1/lib/net8.0\Avalonia.Vulkan.dll</HintPath>
     </Reference>
+    <Reference Include="Avalonia.Skia">
+      <HintPath>E:/Nuget/nuget/.nuget/packages/avalonia.skia/12.1.1/lib/net8.0\Avalonia.Skia.dll</HintPath>
+    </Reference>
+    <!-- 必须与 Avalonia.Skia 12.1.1 的依赖精确一致（nuspec: SkiaSharp 3.119.4），否则 MSB3277 统一错版本。
+         注意 3.119.4 包内无 lib/net8.0（与 3.116.1 不同），net10.0 工程用 lib/net10.0。 -->
+    <Reference Include="SkiaSharp">
+      <HintPath>E:/Nuget/nuget/.nuget/packages/skiasharp/3.119.4/lib/net10.0\SkiaSharp.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

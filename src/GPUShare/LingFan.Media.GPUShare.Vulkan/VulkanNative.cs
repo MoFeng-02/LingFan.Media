@@ -96,6 +96,12 @@ public static unsafe partial class VulkanNative
     [LibraryImport("vulkan-1", EntryPoint = "vkGetDeviceProcAddr", StringMarshalling = StringMarshalling.Utf8)]
     private static partial nint vkGetDeviceProcAddr(nint device, string name);
 
+    /// <summary>公开 proc-addr 解析（R2 直连：<c>IVulkanInstance</c> 适配器转发用）。</summary>
+    public static unsafe nint GetInstanceProcAddress(nint instance, string name) => vkGetInstanceProcAddr(instance, name);
+
+    /// <summary>公开 proc-addr 解析（R2 直连：<c>IVulkanInstance</c> 适配器转发用）。</summary>
+    public static unsafe nint GetDeviceProcAddress(nint device, string name) => vkGetDeviceProcAddr(device, name);
+
     private static bool _bootstrapped;
     private static bool _instanceReady;
     private static bool _deviceReady;

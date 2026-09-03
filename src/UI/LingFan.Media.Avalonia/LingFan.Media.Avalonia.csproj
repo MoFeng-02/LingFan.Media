@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -7,6 +7,10 @@
 
 	<ItemGroup>
 		<PackageReference Include="Avalonia" Version="12.1.1" />
+		<!-- GPU 直绘路径需要 ISkiaSharpApiLeaseFeature（public, [Unstable]）。
+		     SkiaSharp 经此包传递引用（3.119.4，与 Avalonia.Skia nuspec 依赖精确一致），
+		     本工程绝不单独 PackageReference SkiaSharp，避免版本分叉。 -->
+		<PackageReference Include="Avalonia.Skia" Version="12.1.1" />
 	</ItemGroup>
 
 	<ItemGroup>

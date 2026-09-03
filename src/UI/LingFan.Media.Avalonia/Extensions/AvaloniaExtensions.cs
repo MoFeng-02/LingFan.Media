@@ -83,6 +83,12 @@ public static class AvaloniaExtensions
         builder.Services.AddSingleton<SharedGpuSurfaceSourceSelector>();
         // 类名须含 CompositionVideoRenderer 以支持 RendererType 前置匹配。
         builder.Services.AddSingleton<IVideoRendererFactory, CompositionVideoRendererFactory>();
+        // 同 device Skia GPU 直绘（VulkanNativeImage）：注册于 Composition 之后、CPU Skia 之前。
+        // Android：Composition 因合成器不支持 VulkanNativeImage 句柄而让位，本渲染器接手
+        // 「同 device 直接采样」直绘（零拷贝、无 ByteBuffer）；Windows/Linux/Apple：无
+        // VulkanNativeImage 源，Attach 即抛 NotSupportedException，VideoView 自动跳过，
+        // 既有 Composition 路径不受影响。
+        builder.Services.AddSingleton<IVideoRendererFactory, SkiaGpuVideoRendererFactory>();
         return builder;
     }
 }

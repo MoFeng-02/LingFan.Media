@@ -111,6 +111,33 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private long _lastSyncDiagTicks;
     private int _presentCount;
 
+    // ── 冻结看门狗（独立诊断线程，2026-09-03 AHB 零拷贝冻结排查）──
+    // 呈现循环的全部等待点（首帧门控/WaitUntilDue/空队列自旋）均有打卡或自带看门狗；
+    // 若整条管线静默（无 [SYNC] 快照、无停摆日志），即卡死在某个不打日志的调用里。
+    // 本看门狗在管线线程之外每 2s 输出：循环心跳年龄 / 主时钟 / 队列 / sink 在途深度——
+    // 冻结时一眼定位「循环死 vs 时钟死 vs sink 链死」。诊断期常开，代价一条日志/2s。
+    private Task? _freezeWatchdogTask;
+    private long _loopHeartbeatQpc;
+    private long _sinkEnterQpc;
+    private long _sinkExitQpc;
+    private int _sinkInFlight;
+
+    // ── 双线程阶段码（冻结看门狗配套）──
+    // 心跳只证明「线程不在循环入口」，阶段码进一步证明「卡在循环内哪一步」：
+    // 两个循环各自的阻塞调用（native 解码 / sink 链 / 帧归还）在心跳停更后由阶段码定位。
+    private long _decodeHeartbeatQpc;
+    private volatile int _decodePhase;
+    private volatile int _pipelinePhase;
+    // 解码循环阶段：见 DecodeLoop 各赋值点（1=读包等待 2=解码锁 3=DecodeAsync 4=入队）。
+    private const int DecodePhaseReadPacket = 1;
+    private const int DecodePhaseLock = 2;
+    private const int DecodePhaseDecode = 3;
+    private const int DecodePhaseEnqueue = 4;
+    // 呈现循环阶段：见 PipelineLoop/ProcessFrameCore/ReturnFrame 各赋值点（1=时钟等待 2=sink 链 3=帧归还）。
+    private const int PipelinePhaseWait = 1;
+    private const int PipelinePhaseSink = 2;
+    private const int PipelinePhaseReturn = 3;
+
     /// <summary>
     /// 解码锁：确保 DecodeAsync 与 Reset 不会并发执行。
     /// PipelineLoop 在解码+入队期间持有锁，Flush/FlushAsync 在 Clear+Reset 前获取锁。
@@ -260,6 +287,45 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _pipelineTask = Task.Factory.StartNew(PipelineLoop, CancellationToken.None,
             TaskCreationOptions.LongRunning, TaskScheduler.Default);
         _decodeTask = Task.Run(DecodeLoop);
+        StartFreezeWatchdog();
+    }
+
+    /// <summary>启动冻结看门狗（独立诊断线程）：每 2s 打一条管线心跳快照，管线卡死时仍持续输出。</summary>
+    private void StartFreezeWatchdog()
+    {
+        if (_freezeWatchdogTask is not null)
+            return;
+        _loopHeartbeatQpc = _sinkEnterQpc = _sinkExitQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        _decodeHeartbeatQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        _decodePhase = 0;
+        _pipelinePhase = 0;
+        CancellationToken ct = _cts.Token;
+        _freezeWatchdogTask = Task.Factory.StartNew(async () =>
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    await Task.Delay(2000, ct).ConfigureAwait(false);
+                    double loopIdleSec = System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _loopHeartbeatQpc)).TotalSeconds;
+                    double sinkIdleSec = System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _sinkExitQpc)).TotalSeconds;
+                    double decodeIdleSec = System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _decodeHeartbeatQpc)).TotalSeconds;
+                    // 呈/解线程存活状态：心跳停更既可能是卡死也可能是线程已自然退出（EOS 收尾），
+                    // 不加此列会把「已退出」误诊为「死锁」（真机实证教训）。
+                    string alive = $"呈线程={(IsRunning ? "运行" : "已退出")} 解线程={(_decodeTask?.IsCompleted == true ? "已退出" : "运行")}";
+                    _logger.LogInformation(
+                        "[FREEZE] 循环心跳={LoopIdle:F2}s前 解码心跳={DecodeIdle:F2}s前 master={Master:g} 队列={Q} 已呈={P} " +
+                        "sinkInFlight={D} sink末次返回={SinkIdle:F2}s前 阶段(呈/解)={PP}/{DP} {Alive}",
+                        loopIdleSec, decodeIdleSec, _synchronizer.GetCurrentMasterTime(), _frameQueue.Count,
+                        _presentedCount, Volatile.Read(ref _sinkInFlight), sinkIdleSec,
+                        _pipelinePhase, _decodePhase, alive);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 停止/释放时正常退出。
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
     /// <summary>
@@ -507,6 +573,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 #endif
             while (!_cts.IsCancellationRequested)
             {
+                // 冻结看门狗心跳：每轮循环体入口打卡（含空队列自旋/等待分支返回）。
+                Interlocked.Exchange(ref _loopHeartbeatQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+
                 if (_isPaused)
                 {
                     _pauseAcknowledged = true;
@@ -607,6 +676,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 if (action == SyncAction.Wait)
                 {
                     // 帧留队头等待，绝不轮转。下一轮重新 Peek 同一帧再判定。
+                    _pipelinePhase = PipelinePhaseWait;
                     if (PacingDiagnostics.Enabled)
                     {
                         PacingDiagnostics.Present.OnWait();
@@ -675,6 +745,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 #endif
             while (!_cts.IsCancellationRequested)
             {
+                // 解码循环心跳（冻结看门狗配套）：证明解码线程是否仍在循环。
+                Interlocked.Exchange(ref _decodeHeartbeatQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+                _decodePhase = 0;
+
                 if (_isPaused)
                 {
                     await Task.Delay(10, _cts.Token);
@@ -691,6 +765,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 MediaPacket? packet;
                 try
                 {
+                    _decodePhase = DecodePhaseReadPacket;
                     packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
                 }
                     catch (ChannelClosedException)
@@ -720,6 +795,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 }
 
                 // 解码 + 后处理（加锁防止与 Flush/Reset 竞态）
+                _decodePhase = DecodePhaseLock;
                 await _decodeLock.WaitAsync(_cts.Token);
                 VideoFrame? decodedFrame = null;
                 try
@@ -747,6 +823,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
                     try
                     {
+                        _decodePhase = DecodePhaseDecode;
                         decodedFrame = await _decoder.DecodeAsync(packet);
                     }
                     finally
@@ -776,6 +853,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 {
                     try
                     {
+                        _decodePhase = DecodePhaseEnqueue;
                         await _frameQueue.EnqueueAsync(decodedFrame, _cts.Token);
                     }
                     catch (OperationCanceledException)
@@ -867,7 +945,20 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             // 若 _videoFrameSink 为 null（仅测试/无 UI 且未接 Sink 的调用方），帧在此静默归池、不呈现。
             // 注意：路由决策在 Sink lambda 内完成，不可在此判 _videoFrameSink == null 来决定 D3D11——
             // 那样会让 D3D11 模式（无订阅方，但 lambda 非空）永不调用渲染器，导致视频不显示。
-            _videoFrameSink?.Invoke(frame);
+            // 冻结看门狗：sink 链（Emit→OnFrame→PresentFrame→renderer.Present→TryWriteFrame）为同步调用，
+            // 在途深度 + 进入时刻暴露该链是否卡死。
+            _pipelinePhase = PipelinePhaseSink;
+            Interlocked.Exchange(ref _sinkEnterQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+            Interlocked.Increment(ref _sinkInFlight);
+            try
+            {
+                _videoFrameSink?.Invoke(frame);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _sinkInFlight);
+                Interlocked.Exchange(ref _sinkExitQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+            }
             // 首帧已真正提交上屏：通知 A/V 启动编排等待点，
             // 使音频 WASAPI 启动不早于视频首帧上屏 → 解决「声音比视频先出」。
             if (!_firstFramePresented)
@@ -876,7 +967,12 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 _firstFramePresentedTcs?.TrySetResult(true);
             }
         }
-        finally { ReturnFrame(frame); } // Present 后归还到池
+        finally
+        {
+            _pipelinePhase = PipelinePhaseReturn;
+            ReturnFrame(frame); // Present 后归还到池
+            _pipelinePhase = 0;
+        }
     }
 
     /// <summary>

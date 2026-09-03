@@ -139,6 +139,12 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// ⇒ 宏块 garbage。取 12：仍远低于帧池每桶 16 的上限（GC 风险可控），但排空吞吐翻三倍。</summary>
     private const int MaxFramesPerDrain = 12;
 
+    /// <summary>Surface 桥接（AHB/GL 路径）常规排空的 dequeue 阻塞超时（μs）。
+    /// Surface 输出模式下 MediaCodec 的帧渲染与 dequeue 等待强耦合：非阻塞（timeout=0）轮询会令
+    /// 解码器持续吞入输入却不渲染输出（实测 957 包仅产出 7 帧，画面冻结在首帧后；ImageReader
+    /// 时代同病灶同修法）。10ms 与 FlushAsync 常规排空超时一致：30fps 帧距 33ms，等得起。</summary>
+    private const long SurfaceDrainWaitUs = 10_000;
+
     // 本后端媒体 API 仅使用 net-android 托管的 Android.Media.* 绑定（MediaCodec / Image.Plane）；
     // 显式禁止手写 P/Invoke：Android/iOS/macOS 走 net-* workload 内置绑定，AOT 安全、零反射
     // （符合 2026-08-22 架构裁定）。GPU 零拷贝的图形原语（EGL/GLES/AHardwareBuffer）属 carve-out，
@@ -252,6 +258,12 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     private void ConfigureFlexibleYuv(ref AndroidMediaCodec codecObj, string mime, VideoCodec codec,
         ReadOnlyMemory<byte> csd, int frameW, int frameH, Surface? outputSurface, bool useAhbFrames)
     {
+        // csd 拆分诊断（真机核对 SPS/PPS 切分是否正确；拆不出 PPS 会回退单 csd-0 旧形态）。
+        byte[] spsB = Array.Empty<byte>(), ppsB = Array.Empty<byte>();
+        bool splitOk = mime == "video/avc" && TrySplitAvcCsd(csd, out spsB, out ppsB) && ppsB.Length > 0;
+        _logger.LogInformation("[ANDROID-VID] csd 拆分: 成功={Ok} SPS={SpsLen}B PPS={PpsLen}B（总 {Total}B）",
+            splitOk, splitOk ? spsB.Length : csd.Length, splitOk ? ppsB.Length : 0, csd.Length);
+
         try
         {
             codecObj.Configure(BuildFormat(mime, csd, frameW, frameH, useAhbFrames),
@@ -287,11 +299,86 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         // Surface 输出路径（AHB 零拷贝）颜色格式由 Surface 决定，无需也不能设 KeyColorFormat。
         if (!useAhbFrames)
             fmt.SetInteger(MediaFormat.KeyColorFormat, (int)MediaCodecCapabilities.Formatyuv420flexible);
+        // H.264/5 参数集必须按 NAL 类型拆分为 csd-0(SPS)/csd-1(PPS)（AOSP MediaCodec 契约）。
+        // 全部塞进单个 csd-0 时 Surface 输出模式的解码器会吞输入不吐输出（真机实证：957 包仅
+        // 产 7 帧、画面冻结；ByteBuffer 模式部分解码器自行重解析故未暴露）。解析失败时保守回退单 csd-0。
         if (csd.Length > 0)
-            fmt.SetByteBuffer("csd-0", ByteBuffer.Wrap(csd.ToArray())); // 键 "csd-0"（AOSP KEY_CSD0）
+        {
+            if (mime == "video/avc" && TrySplitAvcCsd(csd, out var sps, out var pps) && pps.Length > 0)
+            {
+                fmt.SetByteBuffer("csd-0", ByteBuffer.Wrap(sps));
+                fmt.SetByteBuffer("csd-1", ByteBuffer.Wrap(pps));
+            }
+            else
+            {
+                fmt.SetByteBuffer("csd-0", ByteBuffer.Wrap(csd.ToArray()));
+            }
+        }
         // 显式输入缓冲上限：解码器按 SPS 推出的 max-input-size 可能过小，大关键帧会被截断喂入 → 码流损坏。
         fmt.SetInteger(MediaFormat.KeyMaxInputSize, 2 << 20);
         return fmt;
+    }
+
+    /// <summary>把 Annex-B 起始码格式的 AVC 参数集拆为 SPS（csd-0）与 PPS（csd-1）两部分。</summary>
+    /// <remarks>按 0x000001/0x0000000001 起始码切出 NAL，SPS(nalType 7) 与前置 SEI(6) 归 csd-0，
+    /// PPS(nalType 8) 归 csd-1；各段保留自身起始码（解码器需要）。无法切出 PPS 时返回 false。</remarks>
+    private static bool TrySplitAvcCsd(ReadOnlyMemory<byte> csd, out byte[] sps, out byte[] pps)
+    {
+        sps = Array.Empty<byte>();
+        pps = Array.Empty<byte>();
+        var data = csd.Span;
+        var spsRanges = new List<(int Start, int Length)>();
+        var ppsRanges = new List<(int Start, int Length)>();
+        int i = 0;
+        while (i + 4 <= data.Length)
+        {
+            // 找起始码（3 或 4 字节）
+            int sc;
+            if (i + 3 <= data.Length && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) sc = 3;
+            else if (i + 4 <= data.Length && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1) sc = 4;
+            else { i++; continue; }
+
+            int nalStart = i + sc;
+            if (nalStart >= data.Length) break;
+            byte nalType = (byte)(data[nalStart] & 0x1F);
+
+            // 找下一个起始码（或结尾）
+            int j = nalStart + 1;
+            int nalEnd = data.Length;
+            while (j + 3 <= data.Length)
+            {
+                if (data[j] == 0 && data[j + 1] == 0 && data[j + 2] == 1) { nalEnd = j; break; }
+                if (j + 4 <= data.Length && data[j] == 0 && data[j + 1] == 0 && data[j + 2] == 0 && data[j + 3] == 1) { nalEnd = j; break; }
+                j++;
+            }
+
+            if (nalType == 7) spsRanges.Add((i, nalEnd - i));
+            else if (nalType == 8) ppsRanges.Add((i, nalEnd - i));
+
+            i = nalEnd;
+        }
+
+        if (spsRanges.Count == 0 || ppsRanges.Count == 0)
+            return false;
+
+        sps = JoinRanges(data, spsRanges);
+        pps = JoinRanges(data, ppsRanges);
+        return true;
+    }
+
+    /// <summary>把 (偏移,长度) 列表对应的段拼接为一个数组（各段含起始码）。</summary>
+    private static byte[] JoinRanges(ReadOnlySpan<byte> data, List<(int Start, int Length)> ranges)
+    {
+        int total = 0;
+        foreach (var (_, len) in ranges) total += len;
+        var result = new byte[total];
+        int pos = 0;
+        foreach (var (start, len) in ranges)
+        {
+            data.Slice(start, len).CopyTo(result.AsSpan(pos));
+            pos += len;
+        }
+        return result;
     }
 
     /// <summary>尝试建立 GLES/EGL 桥接的 AHB 输出 Surface（GPU 零拷贝前置）：构造
@@ -344,7 +431,16 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
         if (preferSoftwareDecoder)
         {
-            foreach (string name in SoftwareCodecCandidates(codec))
+            // 软解候选顺序按输出模式区分（真机实证，两模式病灶相反）：
+            // · Surface 输出（AHB 零拷贝桥接）：c2.android 优先。OMX.google 旧组件在
+            //   SurfaceTexture/GL 消费者模式下吞输入不吐输出（957 包仅产 7 帧后永久停摆，
+            //   画面冻结在首帧附近、音频正常播完）。
+            // · ByteBuffer 输出（CPU 路径）：OMX.google 优先。c2 软解 + ByteBuffer 命中
+            //   numClientBuffers 僵死（解码器不归还输出缓冲）。
+            var candidates = _useAhbFrames
+                ? SoftwareCodecCandidatesSurfaceFirst(codec)
+                : SoftwareCodecCandidates(codec);
+            foreach (string name in candidates)
             {
                 try
                 {
@@ -453,8 +549,21 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         VideoCodec.AV1 => new[] { "c2.android.av1.decoder" },
         VideoCodec.VP9 => new[] { "c2.android.vp9.decoder", "OMX.google.vp9.decoder" },
         VideoCodec.MPEG2 => new[] { "c2.android.mpeg2.decoder", "OMX.google.mpeg2.decoder" },
-        VideoCodec.MPEG4 => new[] { "c2.android.mpeg4.decoder", "OMX.google.mpeg4.decoder" },
-        _ => Array.Empty<string>(),
+        _ => new[] { "OMX.google.h264.decoder", "c2.android.avc.decoder" }
+    };
+
+    /// <summary>Surface 输出（AHB 零拷贝桥接）的 AOSP 软件解码器候选：<b>c2 新栈优先</b>。
+    /// OMX.google 旧组件在 SurfaceTexture/GL 消费者模式下会吞输入不吐输出
+    /// （真机实证：957 输入包仅渲染 7 帧后永久停摆）；c2.android 是 ExoPlayer 等
+    /// 主流播放器 Surface 模式的标准软解路径。</summary>
+    private static string[] SoftwareCodecCandidatesSurfaceFirst(VideoCodec codec) => codec switch
+    {
+        VideoCodec.H264 => new[] { "c2.android.avc.decoder", "OMX.google.h264.decoder" },
+        VideoCodec.H265 => new[] { "c2.android.hevc.decoder", "OMX.google.hevc.decoder" },
+        VideoCodec.AV1 => new[] { "c2.android.av1.decoder" },
+        VideoCodec.VP9 => new[] { "c2.android.vp9.decoder", "OMX.google.vp9.decoder" },
+        VideoCodec.MPEG2 => new[] { "c2.android.mpeg2.decoder", "OMX.google.mpeg2.decoder" },
+        _ => new[] { "c2.android.avc.decoder", "OMX.google.h264.decoder" }
     };
 
     /// <inheritdoc/>
@@ -773,7 +882,10 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             DrainOutput(0);
             return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
         }
-        return DrainOutput(0);
+        // Surface 桥接路径必须阻塞等待输出（SurfaceDrainWaitUs）；ByteBuffer/CPU 路径保持 0 非阻塞。
+        // ponytail: 统一 10ms——Grafika 官方范式（TIMEOUT_USEC=10000）：非阻塞轮询在「输入槽满+输出未就绪」
+        // 时从不给解码器墙钟时间完成手头工作 → 喂入饥饿（真机实证：排空 192 次仅喂入 4 包）→ 坏帧/时序空洞。
+        return DrainOutput(SurfaceDrainWaitUs);
     }
 
     // ── 自适应重排缓冲 ─────────────────────────────────────────────────────────
@@ -1027,7 +1139,9 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             // 把帧渲进桥接 SurfaceTexture（render:true → 驱动等解码 fence，完成 GPU 内 YUV→RGB），
             // 后续 ConvertLatest 经 SurfaceTexture.updateTexImage 闩取。
             _lastPresentationTimeUs = info.PresentationTimeUs;
+            _logger.LogInformation("[ANDROID-AHB-DEC] ▶ ReleaseOutputBuffer(render) idx={Idx} pts={Pts}us", idx, info.PresentationTimeUs);
             _codec.ReleaseOutputBuffer(idx, true);
+            _logger.LogInformation("[ANDROID-AHB-DEC] ✓ ReleaseOutputBuffer(render) 返回");
             _pendingSurfaceTextureFrame = true;
             break; // 一帧已入 SurfaceTexture，跳出交给 ConvertLatest
         }
@@ -1042,7 +1156,9 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         if (!_pendingSurfaceTextureFrame)
             return null;
 
+        _logger.LogInformation("[ANDROID-AHB-DEC] ▶ ConvertLatest（等待 GL 线程闩帧）");
         nint ahb = _bridge!.ConvertLatest();
+        _logger.LogInformation("[ANDROID-AHB-DEC] ✓ ConvertLatest 返回 ahb={Ahb}", ahb);
         if (ahb == nint.Zero)
         {
             _logger.LogWarning("[ANDROID-AHB-DEC] ConvertLatest 返回 0（GL 异常态），丢弃该帧待下帧重试。");

@@ -11,6 +11,7 @@ using Avalonia.Vulkan;
 
 // 消费方声明：允许访问目标程序集的 internal 成员（.NET 9+ Roslyn 原生语义）。
 [assembly: System.Runtime.CompilerServices.IgnoresAccessChecksTo("Avalonia.Vulkan")]
+[assembly: System.Runtime.CompilerServices.IgnoresAccessChecksTo("Avalonia.Skia")]
 
 namespace IgnoresAccessChecksProbe;
 
@@ -30,6 +31,10 @@ public static class Program
         // ③ internal 接口类型引用（IVulkanDevice 由 VulkanDevice 实现，此处仅验证可见性）
         IVulkanDevice? dev = null;
         Console.WriteLine($"[OK3] IVulkanDevice 可见（当前为 null: {dev is null}）");
+
+        // ④ Avalonia.Skia internal 是否可穿透（上一轮 Android 工程 CS0122，此处用纯 dll 引用复核）
+        var skiaFeatureType = typeof(global::Avalonia.Skia.ISkiaSharpApiLeaseFeature);
+        Console.WriteLine($"[OK4] typeof(ISkiaSharpApiLeaseFeature) = {skiaFeatureType.FullName}");
 
         Console.WriteLine("探针全部通过：IgnoresAccessChecksTo 编译期可见性成立。");
         return 0;

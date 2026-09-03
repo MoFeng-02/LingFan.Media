@@ -11,8 +11,11 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <c>IEnumerable&lt;ISharedGpuSurfaceSourceFactory&gt;</c>，选中首个 <see cref="IsAvailable"/>
 /// 且句柄类型被宿主合成器支持的工厂，从而 UI 层不含任何「优先 D3D11 / 其次 Vulkan」硬编码分支。</para>
 /// <para>产出句柄类型：Windows=<see cref="SharedGpuHandleKind.VulkanOpaqueNtHandle"/>，
-/// Linux/Android=<see cref="SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor"/>——
-/// 与「Vulkan 渲染 Vulkan 的」架构原则一致：本源产出<b>自身</b>的 Vulkan 外部句柄，不跨界伪造 D3D11 句柄。</para>
+/// Linux=<see cref="SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor"/>，
+/// Android=<see cref="SharedGpuHandleKind.VulkanNativeImage"/>（同 device Skia 直采样；
+/// 宿主须经外部 device 注入与本工厂共用 VkDevice/VkQueue，见 IVulkanSharedDeviceProvider），
+/// Apple=<see cref="SharedGpuHandleKind.IOSurfaceRef"/>——
+/// 与「Vulkan 渲染 Vulkan 的」架构原则一致：本源产出<b>自身</b>的 Vulkan 句柄，不跨界伪造 D3D11 句柄。</para>
 /// <para><see cref="IsAvailable"/> 为轻量平台判定（Windows / Linux / Android），不触碰原生资源；
 /// 真正的设备/纹理创建延迟到 <see cref="Create"/>（若共享 Vulkan 设备尚未就绪则在此创建）。</para>
 /// <para>平台范围说明：Vulkan 后端经 MoltenVK 已在 macOS/iOS 启用有头路径（SwapChain 初始化与 Surface 创建）。
@@ -52,7 +55,9 @@ public sealed class VulkanSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
             ? SharedGpuHandleKind.VulkanOpaqueNtHandle
             : OperatingSystem.IsMacOS() || OperatingSystem.IsIOS()
                 ? SharedGpuHandleKind.IOSurfaceRef
-                : SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
+                : OperatingSystem.IsAndroid()
+                    ? SharedGpuHandleKind.VulkanNativeImage
+                    : SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
 
     /// <inheritdoc/>
     /// <remarks>平台级判定（不触碰原生资源）：Windows / Linux / Android / macOS / iOS 均放行；

@@ -113,6 +113,28 @@ public partial class App : Application
 
         Services = builder.Services.BuildServiceProvider();
 
+        // ── R2 治根BA（2026-09-02）：把 LingFanVulkanBootstrap 自建的 device 注入 VulkanRendererFactory ──
+        // 共享表面源（VulkanSharedSurfaceSource）经 factory.SharedDevice 使用同一 device，
+        // 其 dma_buf fd 导入从「跨实例」变为「同 device」，根治 Adreno 跨实例导入缺陷（INITIALIZATION_FAILED）。
+        // 注入须在渲染器首次使用（EnsureDeviceCreated 触发）之前，此处 DI 刚构建完成、尚未触碰渲染器，时机正确。
+// 治根BA（2026-09-02）：共享工程是单目标 net10.0，#if ANDROID 永不成立（上一版注入因此被编译期排除）。
+        // 改用运行时接口探测：IVulkanSharedDeviceProvider（Abstractions 定义，Android 入口工程实现并注册 DI），
+        // 共享工程零平台依赖、AOT 零反射。
+        {
+            var provider = Services.GetService<LingFan.Media.GPUShare.Vulkan.IVulkanSharedDeviceProvider>();
+            var vulkanFactory = Services.GetService<LingFan.Media.Renderers.Vulkan.VulkanRendererFactory>();
+            if (provider is not null && vulkanFactory is not null)
+            {
+                var d = provider.GetSharedDevice();
+                vulkanFactory.UseExternalDevice(d.InstanceHandle, d.PhysicalDeviceHandle, d.DeviceHandle, d.GraphicsQueueFamilyIndex);
+                Console.WriteLine("[R2PROBE] [6] 已向 VulkanRendererFactory 注入外部 device（治根BA）。");
+            }
+            else
+            {
+                Console.WriteLine($"[R2PROBE] [6] 注入跳过：provider={provider is not null} factory={vulkanFactory is not null}");
+            }
+        }
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new MainWindow

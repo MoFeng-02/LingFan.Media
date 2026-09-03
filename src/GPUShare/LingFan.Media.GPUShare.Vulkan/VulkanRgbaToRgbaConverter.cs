@@ -38,6 +38,14 @@ public sealed unsafe class VulkanRgbaToRgbaConverter : IDisposable
     private RenderPass _renderPass;
     private Format _pipelineTargetFormat = (Format)0;
 
+    // 帧缓冲缓存：须<b>存活至引用它的命令缓冲执行完毕</b>。记录后立即销毁会让命令缓冲悬挂引用
+    // 已释放对象，Adreno 在 vkEndCommandBuffer 收拢时解引用它 → SIGSEGV fault addr 0x0
+    // （tombstone #01 qglinternal::vkEndCommandBuffer，真机实证 2026-09-03）。
+    // 按（目标视图, 尺寸）惰性复用；管线/RenderPass 重建或 Dispose 时释放。
+    private Framebuffer _framebuffer;
+    private ImageView _framebufferView;
+    private uint _framebufferW, _framebufferH;
+
     private bool _disposed;
 
     public VulkanRgbaToRgbaConverter(Device device, PhysicalDevice physicalDevice, ILogger? logger = null)
@@ -108,28 +116,32 @@ public sealed unsafe class VulkanRgbaToRgbaConverter : IDisposable
         if (_pipeline.Handle == 0)
             throw new InvalidOperationException("管线尚未创建（须先调用 EnsurePipeline）。");
 
-        var attachView = targetView;
-        FramebufferCreateInfo fbInfo = new()
+        // 帧缓冲须与命令缓冲同生命周期：缓存复用（目标视图/尺寸变化时重建），
+        // 绝不在记录后立即销毁（见字段注释的悬挂引用实证）。
+        if (_framebuffer.Handle == 0 || _framebufferView.Handle != targetView.Handle
+            || _framebufferW != width || _framebufferH != height)
         {
-            SType = StructureType.FramebufferCreateInfo,
-            RenderPass = _renderPass,
-            AttachmentCount = 1,
-            PAttachments = &attachView,
-            Width = width,
-            Height = height,
-            Layers = 1,
-        };
-        Framebuffer fb;
-        if (VulkanNative.CreateFramebuffer(_device, &fbInfo, null, out fb) != Result.Success)
-            throw new InvalidOperationException("vkCreateFramebuffer（RGBA 转换）失败。");
-        try
-        {
-            RenderInto(cmd, source, sourceView, width, height, target, fb);
+            if (_framebuffer.Handle != 0)
+                VulkanNative.DestroyFramebuffer(_device, _framebuffer, null);
+            var attachView = targetView;
+            FramebufferCreateInfo fbInfo = new()
+            {
+                SType = StructureType.FramebufferCreateInfo,
+                RenderPass = _renderPass,
+                AttachmentCount = 1,
+                PAttachments = &attachView,
+                Width = width,
+                Height = height,
+                Layers = 1,
+            };
+            if (VulkanNative.CreateFramebuffer(_device, &fbInfo, null, out _framebuffer) != Result.Success)
+                throw new InvalidOperationException("vkCreateFramebuffer（RGBA 转换）失败。");
+            _framebufferView = targetView;
+            _framebufferW = width;
+            _framebufferH = height;
         }
-        finally
-        {
-            VulkanNative.DestroyFramebuffer(_device, fb, null);
-        }
+
+        RenderInto(cmd, source, sourceView, width, height, target, _framebuffer);
     }
 
     private void RenderInto(CommandBuffer cmd, Image source, ImageView sourceView, uint width, uint height, Image targetImage, Framebuffer framebuffer)
@@ -477,6 +489,15 @@ public sealed unsafe class VulkanRgbaToRgbaConverter : IDisposable
     private void ReleasePipelineAndRenderPass()
     {
         if (_device.Handle == 0) return;
+        // RenderPass 重建即令缓存帧缓冲失效（其创建时绑定了旧 RenderPass），一并释放。
+        if (_framebuffer.Handle != 0)
+        {
+            VulkanNative.DestroyFramebuffer(_device, _framebuffer, null);
+            _framebuffer = default;
+            _framebufferView = default;
+            _framebufferW = 0;
+            _framebufferH = 0;
+        }
         if (_pipeline.Handle != 0) { VulkanNative.DestroyPipeline(_device, _pipeline, null); _pipeline = default; }
         if (_renderPass.Handle != 0) { VulkanNative.DestroyRenderPass(_device, _renderPass, null); _renderPass = default; }
     }

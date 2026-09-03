@@ -34,6 +34,12 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     private PhysicalDevice _physicalDevice;
     private Device _device;
     private Queue _queue;
+
+    // ── 外部共享 device（治根BA）：宿主注入后 EnsureDeviceCreated 直接采用，不自建 ──
+    private Instance _externalInstance;
+    private PhysicalDevice _externalPhysicalDevice;
+    private Device _externalDevice;
+    private uint _externalQueueFamilyIndex;
     private uint _queueFamilyIndex;
     private Queue _videoQueue;
     private uint _videoQueueFamilyIndex = uint.MaxValue;
@@ -115,6 +121,22 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     internal Instance SharedInstance => _instance;
     internal PhysicalDevice SharedPhysicalDevice => _physicalDevice;
     internal Device SharedDevice => _device;
+
+    /// <summary>
+    /// 注入宿主共享的 Vulkan device（治根BA）。注入后 <see cref="EnsureDeviceCreated"/> 不再自建
+    /// instance/device，直接复用外部句柄（仅重新解析函数表），从而与宿主处于同一 device ——
+    /// 共享表面源的 dma_buf fd 导入从「跨实例」变为「同 device」，根治 Adreno 跨实例导入缺陷。
+    /// 必须在首次使用渲染器（EnsureDeviceCreated 触发）之前调用。
+    /// </summary>
+    public void UseExternalDevice(nint instance, nint physicalDevice, nint device, uint graphicsQueueFamilyIndex)
+    {
+        if (_deviceReady)
+            throw new InvalidOperationException("Vulkan 设备已创建，不能再注入外部 device（须在使用前注入）。");
+        _externalInstance = new Instance(instance);
+        _externalPhysicalDevice = new PhysicalDevice(physicalDevice);
+        _externalDevice = new Device(device);
+        _externalQueueFamilyIndex = graphicsQueueFamilyIndex;
+    }
     internal Queue SharedQueue => _queue;
     internal uint SharedQueueFamilyIndex => _queueFamilyIndex;
     internal ReadOnlyMemory<byte> PhysicalDeviceUuid => _physicalDeviceUuid;
@@ -165,6 +187,71 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         lock (_deviceLock)
         {
             if (_deviceReady) return;
+
+            // ── 外部 device 分支（治根BA，2026-09-02）：宿主注入共享 device 时直接采用 ──
+            // 背景：Android 上宿主（Avalonia）与我们曾各建一套 VkInstance/VkDevice，共享表面源的
+            // dma_buf fd 从 Device B 导入到 Avalonia 的 Device A = **跨实例导入**，Adreno 对此实现
+            // 有缺陷（vkAllocateMemory 报 INITIALIZATION_FAILED，参数全对齐仍失败）。
+            // 统一为同一 device 后 fd 导入变成同 device（驱动内部路径），根治跨实例缺陷。
+            // 方式：仅拿外部句柄重新解析函数表（InitInstance/InitDevice），不自建、不销毁外部资源。
+            if (_externalDevice.Handle != 0 && _externalInstance.Handle != 0)
+            {
+                VulkanNative.InitBootstrap();
+                VulkanNative.InitInstance(_externalInstance);
+                VulkanNative.InitDevice(_externalDevice, samplerYcbcrFeatureEnabled: true);
+                VulkanNative.GetDeviceQueue(_externalDevice, _externalQueueFamilyIndex, 0, out Queue extQueue);
+
+                _instance = _externalInstance;
+                _physicalDevice = _externalPhysicalDevice;
+                _device = _externalDevice;
+                _queue = extQueue;
+                _queueFamilyIndex = _externalQueueFamilyIndex;
+                // 外部 device 由我们自建（LingFanVulkanDeviceFactory），设备级已启用
+                // VK_KHR_external_memory_fd / external_semaphore_fd —— 与自建分支同判据置位，
+                // 否则 VulkanSharedSurfaceSourceFactory.Create 会因 ExternalSharingEnabled=false 直接抛
+                // NotSupportedException（外部分支跳过自建流程时最初漏了这一步）。
+                _externalSharingEnabled = !OperatingSystem.IsWindows();
+                _metalObjectsSharingEnabled = OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
+                // 填充物理设备身份（deviceUUID/deviceLUID），否则 VulkanSharedSurfaceSourceFactory.Create 的
+                // 「同 GPU 对齐」校验会因 PhysicalDeviceUuid 为空而抛「UUID 不匹配」（合成器上报了 UUID、
+                // 我们是空数组 ⇒ 判不匹配）。与自建分支同段代码，用外部 physicalDevice 查询。
+                PhysicalDeviceIDProperties extIdProps = new()
+                {
+                    SType = StructureType.PhysicalDeviceIDProperties,
+                };
+                PhysicalDeviceProperties2 extProps2 = new()
+                {
+                    SType = StructureType.PhysicalDeviceProperties2,
+                    PNext = &extIdProps,
+                };
+                VulkanNative.GetPhysicalDeviceProperties2(_externalPhysicalDevice, &extProps2);
+                _physicalDeviceUuid = new byte[16];
+                _physicalDeviceLuid = new byte[8];
+                unsafe
+                {
+                    fixed (byte* pUuid = _physicalDeviceUuid, pLuid = _physicalDeviceLuid)
+                    {
+                        byte* sUuid = extIdProps.DeviceUuid;
+                        byte* sLuid = extIdProps.DeviceLuid;
+                        for (int i = 0; i < 16; i++) pUuid[i] = sUuid[i];
+                        for (int i = 0; i < 8; i++) pLuid[i] = sLuid[i];
+                    }
+                }
+                _renderContext = new RenderContext(
+                    GPUApiType.Vulkan,
+                    new GpuDeviceCapabilities("External(宿主共享 Vulkan device)", 0, 0, 0, true, true, -1),
+                    IntPtr.Zero,
+                    _externalDevice,
+                    IntPtr.Zero,
+                    _externalPhysicalDevice,
+                    _externalQueueFamilyIndex,
+                    graphicsQueueFamilyIndex: _externalQueueFamilyIndex);
+                _deviceReady = true; // 发布哨兵最后写
+                _logger.LogInformation(
+                    "Vulkan 采用宿主注入的共享 device（同 device 零拷贝）：VkDevice=0x{Device:X} VkInstance=0x{Instance:X} 队列族={Family}",
+                    _externalDevice.Handle, _externalInstance.Handle, _externalQueueFamilyIndex);
+                return;
+            }
 
             VulkanNative.InitBootstrap();
 

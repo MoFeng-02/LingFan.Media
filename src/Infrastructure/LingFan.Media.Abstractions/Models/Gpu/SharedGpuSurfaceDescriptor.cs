@@ -30,6 +30,19 @@ public enum SharedGpuHandleKind
     /// <summary>Android <c>AHardwareBuffer</c> 引用（经 <c>VK_ANDROID_external_memory_android_hardware_buffer</c> 从 Vulkan 离屏图像导出）。</summary>
     /// <remarks>消费侧（Avalonia Android 合成器）经 <c>ICompositionGpuInterop</c> 直接导入采样，实现无空域零拷贝上屏。</remarks>
     AndroidHardwareBuffer = 5,
+
+    /// <summary>Vulkan 原生 <c>VkImage</c> 句柄（<b>同 device 直接采样</b>，不跨设备导出/导入）。</summary>
+    /// <remarks>
+    /// <para>适用于宿主 UI 框架与共享表面源<b>共用同一 VkDevice</b> 的场景（如宿主注入自建 device）：
+    /// 消费方（UI 层 Skia GPU 上下文）直接把该 VkImage 包装为采样纹理绘制上屏，全程零外部内存
+    /// 导出/导入、零 fd、零 dedicated 分配。</para>
+    /// <para>前置条件由生产者保证：交付时图像已处于 <c>ShaderReadOnlyOptimal</c> 布局且写入已对
+    /// 后续采样可见；生产与消费<b>共用同一 VkQueue</b>（同队列隐式按提交序串行）或另有同步约定。
+    /// 图像/内存生命周期归生产者（<see cref="ISharedGpuSurfaceSource"/>），消费方只借用不释放。</para>
+    /// <para>对应的原生参数（内存句柄/布局/格式/队列族等）经
+    /// <see cref="SharedGpuSurfaceDescriptor"/> 的 Native* 可选字段传递。</para>
+    /// </remarks>
+    VulkanNativeImage = 6,
 }
 
 /// <summary>
@@ -74,7 +87,15 @@ public enum SharedGpuSurfaceFormat
 /// </param>
 /// <param name="MemoryOffset">
 /// 本表面在外部内存中的字节偏移。宿主合成器要求恒为 0（与 <paramref name="MemorySize"/> 同处一次校验）。
+/// <para><see cref="SharedGpuHandleKind.VulkanNativeImage"/> 下作为原生内存偏移交消费方包装（本源恒 0）。</para>
 /// </param>
+/// <param name="NativeImage">原生 <c>VkImage</c> 句柄（仅 <see cref="SharedGpuHandleKind.VulkanNativeImage"/> 有效，其余为 0）。</param>
+/// <param name="NativeDeviceMemory">原生 <c>VkDeviceMemory</c> 句柄（同上；配合 <paramref name="MemorySize"/>/<paramref name="MemoryOffset"/> 描述绑定）。</param>
+/// <param name="NativeImageLayout">图像当前布局（<c>VkImageLayout</c> 数值；交付约定 <c>ShaderReadOnlyOptimal</c>）。</param>
+/// <param name="NativeVkFormat">图像 <c>VkFormat</c> 数值。</param>
+/// <param name="NativeQueueFamilyIndex">图像当前所属队列族索引（Exclusive 模式；须与消费采样队列同族）。</param>
+/// <param name="NativeImageUsage">图像 <c>VkImageUsageFlags</c> 数值（须含 Sampled 位）。</param>
+/// <param name="NativeImageTiling">图像 <c>VkImageTiling</c> 数值（Optimal）。</param>
 /// <remarks>
 /// <para><b>纯数据</b>：不持有所有权，不可释放——底层纹理生命周期归产出它的
 /// <see cref="ISharedGpuSurfaceSource"/> 管理。</para>
@@ -89,8 +110,22 @@ public readonly record struct SharedGpuSurfaceDescriptor(
     ulong Version,
     SharedGpuSyncMode SyncMode,
     ulong MemorySize = 0,
-    ulong MemoryOffset = 0)
+    ulong MemoryOffset = 0,
+    IntPtr NativeImage = default,
+    IntPtr NativeDeviceMemory = default,
+    uint NativeImageLayout = 0,
+    uint NativeVkFormat = 0,
+    uint NativeQueueFamilyIndex = 0,
+    uint NativeImageUsage = 0,
+    uint NativeImageTiling = 0)
 {
     /// <summary>句柄是否有效（非空且尺寸为正）。</summary>
     public bool IsValid => Handle != IntPtr.Zero && Width > 0 && Height > 0;
+
+    /// <summary>是否携带同 device 直采样所需的全套原生参数（VkImage + VkDeviceMemory + 格式 + 布局 + 队列族）。</summary>
+    public bool HasNativeImage =>
+        NativeImage != IntPtr.Zero
+        && NativeDeviceMemory != IntPtr.Zero
+        && NativeVkFormat != 0
+        && NativeImageLayout != 0;
 }

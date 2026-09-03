@@ -2,6 +2,7 @@ using Android.Runtime;
 using Avalonia;
 using Avalonia.Android;
 using LingFan.Media.Backends.MediaCodec;
+using Microsoft.Extensions.DependencyInjection;
 using LingFan.Media.Extensions;
 
 namespace LingFan.Media.AvaloniaTools.Android
@@ -9,19 +10,36 @@ namespace LingFan.Media.AvaloniaTools.Android
     [Application]
     public class Application : AvaloniaAndroidApplication<App>
     {
-        protected Application(nint javaReference, JniHandleOwnership transfer) : base(javaReference, transfer)
-        {
-        }
+    protected Application(nint javaReference, JniHandleOwnership transfer) : base(javaReference, transfer)
+    {
+    }
 
         protected override AppBuilder CustomizeAppBuilder(AppBuilder builder)
         {
+            // ── R2 里程碑 1（2026-09-02）：自建 Vulkan device 并注入 Avalonia（CustomSharedDevice）──
+            // 让 Avalonia 与视频管线共用同一 VkDevice —— 同 device 建视频纹理 + 渲染流程内直绘的前提
+            // （无空域、零拷贝、无 ByteBuffer 提取，坏帧根除）。注入路径已经 TryCreate 的 IL 反汇编确认：
+            //   get_CustomSharedDevice 判空 → 非 null 直接用 → null 才走 Avalonia 自己的 Instance/Device.Create。
+            LingFanVulkanBootstrap.Initialize();
+            var vulkanOptions = new global::Avalonia.Vulkan.VulkanOptions();
+            vulkanOptions.CustomSharedDevice = LingFanVulkanBootstrap.DeviceAdapter;
+
+            // ── M4 验证（2026-09-02）：解码侧切换 AHB 零拷贝出帧 ──
+            // 打开 GLES 桥接零拷贝：解码器渲入桥接 SurfaceTexture，GPU 内 YUV→RGBA 落 AHardwareBuffer，
+            // 帧以 AndroidHardwareBufferFrameResource 交付（无 ByteBuffer CPU 提取 = 坏帧根因根除）；
+            // 显示侧由 VulkanSharedSurfaceSource（VulkanNativeImage）→ Skia GPU 直绘全链路承接。
+            // 失败自动回退 ByteBuffer CPU 档（能播档），不影响播放。
+            global::LingFan.Media.Backends.MediaCodec.Decoders.AndroidVideoDecodePolicy.EnableHardwareZeroCopy = true;
+
             // Android 平台后端（MediaCodec）经共享层的平台注册钩子注入，与本工程的共享层互不冲突。
-            // 输出模式：MediaCodec 配置到 ImageReader Surface（硬解直出），帧经 Image.Plane 在 CPU 侧
-            // 提取标准 I420；ImageReader 创建失败自动回落 ByteBuffer 软解兜底。两种模式均输出 CPU 帧，
-            // 无 GPU 零拷贝依赖、无手写 P/Invoke（符合 2026-08-22 架构裁定；解码器侧 AHB→GPU 仍走
-            // 现有 SoftwareFrameResource 输出，显示侧零拷贝由下方 Vulkan 合成路由承载）。
             MediaBuilderPlatformRegistrar.PlatformRegistrar =
-                b => b.AddMediaCodec();
+                b =>
+                {
+                    b.AddMediaCodec();
+                    // 治根BA：Bootstrap 在本方法开头已 Initialize ⇒ provider 可注册进 DI
+                    b.Services.AddSingleton<global::LingFan.Media.GPUShare.Vulkan.IVulkanSharedDeviceProvider>(
+                        LingFanVulkanBootstrap.Instance);
+                };
 
             // 渲染后端：Android 默认 [Egl, Software]，必须显式把 Vulkan 提到首位。
             //
@@ -41,6 +59,7 @@ namespace LingFan.Media.AvaloniaTools.Android
             // 与 Linux 同路径，全程不做 AHB 采样 —— 当年崩的那条路已经不存在了。
             // Vulkan 放在首位、EGL/软件紧随其后：设备不支持 Vulkan 时自动回落，不影响能播档。
             return base.CustomizeAppBuilder(builder)
+                .With(vulkanOptions)
                 .With(new AndroidPlatformOptions
                 {
                     RenderingMode =
