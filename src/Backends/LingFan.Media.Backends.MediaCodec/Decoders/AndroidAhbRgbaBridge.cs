@@ -323,7 +323,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     /// </summary>
     private nint ProduceFrameOnThisThread()
     {
-        _logger?.LogInformation("[ANDROID-AHB-TRACE] ①GL线程产帧（托管线程={Tid}）", Environment.CurrentManagedThreadId);
+        _logger?.LogTrace("[ANDROID-AHB-TRACE] ①GL线程产帧（托管线程={Tid}）", Environment.CurrentManagedThreadId);
 
         // 1) 分配 RGBA AHB（GPU 采样 + 帧缓冲写）。
         AHardwareBufferDesc desc = new()
@@ -340,13 +340,13 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         try
         {
             // ①b 前置打卡：若冻结日志停在 ①b 而 ④ 缺失，即 AHardwareBufferAllocate（gralloc）阻塞铁证。
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ①b进入 AHardwareBufferAllocate（托管线程={Tid}）", Environment.CurrentManagedThreadId);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ①b进入 AHardwareBufferAllocate（托管线程={Tid}）", Environment.CurrentManagedThreadId);
             if (AHardwareBufferAllocate(&desc, &ahb) != 0 || ahb == nint.Zero)
             {
                 _logger?.LogWarning("[ANDROID-AHB] AHardwareBuffer_allocate(RGBA8) 失败。");
                 return nint.Zero;
             }
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ④AHB 分配成功 ahb=0x{Ahb} 托管线程={Tid}", (ulong)ahb, Environment.CurrentManagedThreadId);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ④AHB 分配成功 ahb=0x{Ahb} 托管线程={Tid}", (ulong)ahb, Environment.CurrentManagedThreadId);
 
             // 2) AHB → EGLClientBuffer → EGLImage。
             nint clientBuf = _eglGetNativeClientBufferAndroid(ahb);
@@ -355,7 +355,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                 _logger?.LogWarning("[ANDROID-AHB] eglGetNativeClientBufferANDROID 失败。");
                 return nint.Zero;
             }
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ⑤eglGetNativeClientBuffer 成功 clientBuf=0x{Cb}", (ulong)clientBuf);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑤eglGetNativeClientBuffer 成功 clientBuf=0x{Cb}", (ulong)clientBuf);
             int[] imgAttrs = { EglImagePreservedKhr, 1, EglNone };
             fixed (int* ia = imgAttrs)
                 eglImage = _eglCreateImageKhr(_eglDisplay, EglNoContext, (uint)EglNativeBufferAndroid, clientBuf, (nint)ia);
@@ -364,7 +364,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                 _logger?.LogWarning("[ANDROID-AHB] eglCreateImageKHR(AHB) 失败 0x{EglErr:X8}。", (ulong)EglGetError());
                 return nint.Zero;
             }
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ⑥eglCreateImageKHR 成功 eglImage=0x{Img}", (ulong)eglImage);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑥eglCreateImageKHR 成功 eglImage=0x{Img}", (ulong)eglImage);
 
             // 3) 把 EGLImage 绑到复用纹理，再附到 FBO。
             GlBindTexture(GlTexture2D, _scratchTex);
@@ -376,13 +376,13 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
             GlBindFramebuffer(GlFramebuffer, _fbo);
             GlFramebufferTexture2D(GlFramebuffer, GlColorAttachment0, GlTexture2D, _scratchTex, 0);
             uint glErrTex = GlGetError();
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ⑦纹理/FBO 绑定完成 glErr=0x{GlErr:X8}", glErrTex);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑦纹理/FBO 绑定完成 glErr=0x{GlErr:X8}", glErrTex);
             if (GlCheckFramebufferStatus(GlFramebuffer) != GlFramebufferComplete)
             {
                 _logger?.LogWarning("[ANDROID-AHB] FBO 不完整（AHB→GL 纹理绑定失败），GL 错误=0x{GlErr:X8}。", (uint)GlGetError());
                 return nint.Zero;
             }
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ⑧FBO 完整");
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑧FBO 完整");
 
             // 4) 闩帧：updateTexImage 阻塞等解码 fence，把最新帧写入 _oesTex（OES 外部纹理，驱动已完成 YUV→RGB）。
             // 契约：拥有该纹理的 EGL 上下文（本 GL 线程）必须 current —— 治根T 保证恒满足，无跨线程问题。
@@ -395,7 +395,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                 _logger?.LogWarning(ex, "[ANDROID-AHB] SurfaceTexture.updateTexImage 失败。");
                 return nint.Zero;
             }
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ⑨updateTexImage 成功");
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑨updateTexImage 成功");
             float[] mtx = new float[16];
             _surfaceTexture.GetTransformMatrix(mtx);
 
@@ -416,17 +416,17 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
             GlVertexAttribPointer((uint)_aUvLoc, 2, GlFloat, 0, 16, (nint)8);
             GlDrawArrays(GlTriangleStrip, 0, 4);
             uint glErrDraw = GlGetError();
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ⑩GlDrawArrays 完成 glErr=0x{GlErr:X8}", glErrDraw);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑩GlDrawArrays 完成 glErr=0x{GlErr:X8}", glErrDraw);
             GlBindBuffer(GlArrayBuffer, 0);
             GlFinish(); // 保证 AHB 写入对后续 Vulkan 导入可见（跨 API 同步）。
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ⑪glFinish 完成");
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑪glFinish 完成");
 
             // 6) EGLImage 仅渲染期需要，销毁（AHB 内容已落盘，引用仍由帧资源持有）。
             _eglDestroyImageKhr(_eglDisplay, eglImage);
             eglImage = nint.Zero;
-            _logger?.LogInformation("[ANDROID-AHB-TRACE] ⑫eglDestroyImageKHR 完成，准备返回 ahb=0x{Ahb}", (ulong)ahb);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑫eglDestroyImageKHR 完成，准备返回 ahb=0x{Ahb}", (ulong)ahb);
 
-            _logger?.LogInformation("[ANDROID-AHB] 帧渲染进 RGBA AHB 完成 {W}x{H}", _width, _height);
+            _logger?.LogTrace("[ANDROID-AHB] 帧渲染进 RGBA AHB 完成 {W}x{H}", _width, _height);
             ok = true;
             return ahb; // 引用所有权移交调用方
         }
@@ -464,13 +464,15 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         _uTex = GlGetUniformLocation(prog, "uTex");
 
         // 全屏 quad VBO（pos.xy + uv.xy 交错，TRIANGLE_STRIP 4 顶点）。
-        // -1,-1 / 1,-1 / -1,1 / 1,1（裁剪空间全覆盖），uv 0..1 经 uTexTransform 映射。
+        // pos.y 相对常规 GL 全屏 quad 翻转：GL 帧缓冲内存行序底左（y 向上），而 AHB 的后续
+        // 消费方（Vulkan 导入/Skia 采样）按顶左（y 向下）读内存行——不翻转则画面上下镜像
+        // （权威：GL 与 Vulkan 帧缓冲附件的 Y 轴约定相反，Veldrid "API-specific rendering differences"）。
         float[] quad =
         {
-            -1f, -1f, 0f, 0f,
-             1f, -1f, 1f, 0f,
-            -1f,  1f, 0f, 1f,
-             1f,  1f, 1f, 1f,
+            -1f,  1f, 0f, 0f,
+             1f,  1f, 1f, 0f,
+            -1f, -1f, 0f, 1f,
+             1f, -1f, 1f, 1f,
         };
         uint vbo = 0;
         GlGenBuffers(1, &vbo);
@@ -532,7 +534,9 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
       + "varying vec2 vUV;\n"
       + "void main() {\n"
       + "    vUV = (uTexTransform * vec4(aUV, 0.0, 1.0)).xy;\n"
-      + "    gl_Position = vec4(aPos * 2.0 - 1.0, 0.0, 1.0);\n"
+      // aPos 已是 NDC [-1,1]（VBO 注释同款），直传 gl_Position。
+      // 误写 aPos*2.0-1.0 会把 quad 放大 3 倍 → 可见区只剩中央 1/3 裁切放大（真机截图实证）。
+      + "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
       + "}\n";
 
     private const string FragmentSource =

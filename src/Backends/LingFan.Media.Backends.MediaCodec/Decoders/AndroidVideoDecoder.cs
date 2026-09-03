@@ -391,7 +391,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     {
         if (!OperatingSystem.IsAndroidVersionAtLeast(29))
         {
-            _logger.LogInformation("[ANDROID-AHB-DEC] API<29，GLES 桥接不可用，回退 ByteBuffer CPU 路径。");
+            _logger.LogTrace("[ANDROID-AHB-DEC] API<29，GLES 桥接不可用，回退 ByteBuffer CPU 路径。");
             return false;
         }
         try
@@ -1140,16 +1140,16 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             // 把帧渲进桥接 SurfaceTexture（render:true → 驱动等解码 fence，完成 GPU 内 YUV→RGB），
             // 后续 ConvertLatest 经 SurfaceTexture.updateTexImage 闩取。
             _lastPresentationTimeUs = info.PresentationTimeUs;
-            _logger.LogInformation("[ANDROID-AHB-DEC] ▶ ReleaseOutputBuffer(render) idx={Idx} pts={Pts}us", idx, info.PresentationTimeUs);
+            _logger.LogTrace("[ANDROID-AHB-DEC] ▶ ReleaseOutputBuffer(render) idx={Idx} pts={Pts}us", idx, info.PresentationTimeUs);
             _codec.ReleaseOutputBuffer(idx, true);
-            _logger.LogInformation("[ANDROID-AHB-DEC] ✓ ReleaseOutputBuffer(render) 返回");
+            _logger.LogTrace("[ANDROID-AHB-DEC] ✓ ReleaseOutputBuffer(render) 返回");
             _pendingSurfaceTextureFrame = true;
             break; // 一帧已入 SurfaceTexture，跳出交给 ConvertLatest
         }
 
         // 周期性诊断
         if ((_drainCalls % LogInterval) == 0)
-            _logger.LogInformation("[ANDROID-AHB-DEC] 诊断: 排空={Calls} tryAgain={Try} 喂入={Fed} 累计产帧={Frames}",
+            _logger.LogTrace("[ANDROID-AHB-DEC] 诊断: 排空={Calls} tryAgain={Try} 喂入={Fed} 累计产帧={Frames}",
                 _drainCalls, _drainTryAgain, _inputQueued, _framesProduced);
 
         // 仅当 SurfaceTexture 有待闩帧时才触发 GL 转换（避免空跑）。ConvertLatest 失败则清空标志、
@@ -1157,9 +1157,9 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         if (!_pendingSurfaceTextureFrame)
             return null;
 
-        _logger.LogInformation("[ANDROID-AHB-DEC] ▶ ConvertLatest（等待 GL 线程闩帧）");
+        _logger.LogTrace("[ANDROID-AHB-DEC] ▶ ConvertLatest（等待 GL 线程闩帧）");
         nint ahb = _bridge!.ConvertLatest();
-        _logger.LogInformation("[ANDROID-AHB-DEC] ✓ ConvertLatest 返回 ahb={Ahb}", ahb);
+        _logger.LogTrace("[ANDROID-AHB-DEC] ✓ ConvertLatest 返回 ahb={Ahb}", ahb);
         if (ahb == nint.Zero)
         {
             _logger.LogWarning("[ANDROID-AHB-DEC] ConvertLatest 返回 0（GL 异常态），丢弃该帧待下帧重试。");
@@ -1178,7 +1178,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         // 渲染侧 Vulkan 导入持有独立引用，无悬挂/双释放。
         var resource = new AndroidHardwareBufferFrameResource(ahb, w, h, PixelFormat.RGBA32);
         if ((_framesProduced % LogInterval) == 0)
-            _logger.LogInformation("[ANDROID-AHB-DEC] 产帧 #{Count} {W}x{H} {Fmt} pts={Pts:g}",
+            _logger.LogTrace("[ANDROID-AHB-DEC] 产帧 #{Count} {W}x{H} {Fmt} pts={Pts:g}",
                 _framesProduced, w, h, PixelFormat.RGBA32, pts);
         _framesProduced++;
         _drainDequeued++;

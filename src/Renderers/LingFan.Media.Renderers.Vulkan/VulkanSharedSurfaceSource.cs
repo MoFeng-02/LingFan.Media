@@ -69,17 +69,25 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private Fence _frameFence;
 
     // 可外部导出离屏图像（尺寸变化时重建；_version 随之递增）。
-    private Image _sharedImage;
-    private DeviceMemory _sharedMemory;
-    private ImageView _sharedImageView;
+    // Android 双缓冲（2 槽轮换写入/交付）：Skia Ganesh 对【同一 VkImage 句柄】的包装会命中纹理缓存、
+    // 内容永不更新（真机实证：管线 985 帧全部呈现、渲染回调 30fps 活跃，屏幕永远定格第一次采样内容）；
+    // 每帧换一个 VkImage 交付即绕开缓存。非 Android 走合成器 OPAQUE_FD 导入 + version 重建机制，单槽即可。
+    private readonly Image[] _sharedImages = new Image[2];
+    private readonly DeviceMemory[] _sharedMemories = new DeviceMemory[2];
+    private readonly ImageView[] _sharedImageViews = new ImageView[2];
+    private readonly bool[] _sharedCopyReady = new bool[2];
+    private readonly ulong[] _sharedMemorySizes = new ulong[2];
+    /// <summary>本帧写入并交付的槽位（Android 每帧翻转；非 Android 恒 0）。</summary>
+    private int _sharedActive;
+    private int _slotCount => _isAndroid ? 2 : 1;
     private int _texW, _texH;
     private nint _exportedMemoryHandle;   // 导出的外部内存句柄：Windows=HANDLE，Linux/Android=fd（int 经 nint 传递）
     private ulong _version;
-    /// <summary>共享离屏外部内存的真实分配字节数（= 生产者侧 vkGetImageMemoryRequirements().size）。
+    /// <summary>当前交付槽位的共享离屏外部内存真实分配字节数（= vkGetImageMemoryRequirements().size）。
     /// 随 <see cref="SharedGpuSurfaceDescriptor"/> 交合成器：Avalonia 导入 OPAQUE_FD 时以此与自身
     /// 计算的内存需求做严格相等校验，不符即抛 "Invalid memory size"（真机实证：留 0 必不出画）。
     /// 注意不是 w*h*4 —— 驱动按 tile/对齐会扩到更大值，只能以 vkGetImageMemoryRequirements 为准。</summary>
-    private ulong _sharedMemorySize;
+    private ulong _sharedMemorySize => _sharedMemorySizes[_sharedActive];
 
     // 当前共享图像的创建参数快照（仅诊断用）：requirements 是 usage/flags 的函数，
     // 转移口日志打印它们可与宿主合成器侧的建图参数逐位对表。
@@ -95,8 +103,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private DeviceMemory _convertMemory;
     private ImageView _convertView;
 
-    // _sharedImage（导出离屏）当前是否已进入 TransferDstOptimal（跨命令缓冲持久；尺寸变化时重建归零）。
-    private bool _sharedImageCopyReady;
+    // _sharedImage 当前交付槽位是否已进入 TransferDstOptimal（跨命令缓冲持久；尺寸变化时重建归零）。
 
     // Android AHB 诊断/自提交标志：AHB 路径改为「转换」「拷贝」两步分提交以隔离 Mali DEVICE_LOST 真因
     // （① AHB YCbCr 采样 还是 ② 写入导入的 AHB 离屏）。置位后 TryWriteFrame 跳过公共提交段（已在内部完成）。
@@ -241,6 +248,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
 
         // 每帧重置 AHB 自提交标志（仅 Android AHB 零拷贝路径在 TryRecordAhbConversion 内部分步自提交后置位）。
         _ahbSelfSubmitted = false;
+        // Android 双缓冲：本帧翻转到另一槽写入并交付（绕开 Skia Ganesh 对同 VkImage 的内容缓存）。
+        if (_isAndroid)
+            _sharedActive ^= 1;
 
         int w, h;
         bool recorded;
@@ -259,7 +269,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             w = ahb.Width;
             h = ahb.Height;
             EnsureSharedSurface(w, h);
-            _pipeline!.EnsureOffscreenResources(_surfaceVkFormat, new Extent2D((uint)w, (uint)h), _isAndroid ? _convertView : _sharedImageView);
+            _pipeline!.EnsureOffscreenResources(_surfaceVkFormat, new Extent2D((uint)w, (uint)h), _isAndroid ? _convertView : _sharedImageViews[0]);
             recorded = TryRecordAhbConversion(ahb, w, h);
         }
         else if (frame.Resource is SoftwareFrameResource sw)
@@ -275,7 +285,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             w = sw.Width;
             h = sw.Height;
             EnsureSharedSurface(w, h);
-            _pipeline!.EnsureOffscreenResources(_surfaceVkFormat, new Extent2D((uint)w, (uint)h), _isAndroid ? _convertView : _sharedImageView);
+            _pipeline!.EnsureOffscreenResources(_surfaceVkFormat, new Extent2D((uint)w, (uint)h), _isAndroid ? _convertView : _sharedImageViews[0]);
             recorded = TryRecordSoftwareUpload(sw, w, h);
         }
         else
@@ -352,8 +362,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         if (_sharedMemorySize == 0)
         {
             MemoryRequirements fallbackReq;
-            VulkanNative.GetImageMemoryRequirements(_device, _sharedImage, &fallbackReq);
-            _sharedMemorySize = fallbackReq.Size;
+            VulkanNative.GetImageMemoryRequirements(_device, _sharedImages[_sharedActive], &fallbackReq);
+            _sharedMemorySizes[_sharedActive] = fallbackReq.Size;
             _logger.LogWarning(
                 "[VULKAN-SHARED] MemorySize 在分配点未记录，交付前现查兜底={Size}（应排查分配点为何漏记）。",
                 fallbackReq.Size);
@@ -372,7 +382,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             // 消费方包装所需的分配尺寸/偏移。图像生命周期归本源；尺寸变化时 _version 递增，
             // 消费方据此重建包装。
             descriptor = new SharedGpuSurfaceDescriptor(
-                (nint)_sharedImage.Handle,
+                (nint)_sharedImages[_sharedActive].Handle,
                 _handleKind,
                 w, h,
                 _surfaceFormatEnum,
@@ -380,8 +390,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 _syncMode,
                 _sharedMemorySize,
                 0,
-                NativeImage: (nint)_sharedImage.Handle,
-                NativeDeviceMemory: (nint)_sharedMemory.Handle,
+                NativeImage: (nint)_sharedImages[_sharedActive].Handle,
+                NativeDeviceMemory: (nint)_sharedMemories[_sharedActive].Handle,
                 NativeImageLayout: (uint)ImageLayout.ShaderReadOnlyOptimal,
                 NativeVkFormat: (uint)_surfaceVkFormat,
                 NativeQueueFamilyIndex: _queueFamilyIndex,
@@ -597,12 +607,12 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             // 5) AHB 源 → 渲染进【plain 内部 RGBA 目标】_convertImage（Android）/ _sharedImage（Win/Linux）。
             //    Android 走「分步提交」以隔离 Mali DEVICE_LOST 真因：先单独提交 ① 转换（AHB YCbCr 采样），
             //    再单独提交 ② 拷贝（写入导入的 AHB 离屏 _sharedImage）。任一步 DEVICE_LOST 即在日志定位。
-            Image convertTarget = _isAndroid ? _convertImage : _sharedImage;
-            ImageView convertView = _isAndroid ? _convertView : _sharedImageView;
-            _logger.LogInformation("[AHB-DIAG] ▶ 进入 Convert（AHB→_convertImage GPU 绘制）{W}x{H}", w, h);
+            Image convertTarget = _isAndroid ? _convertImage : _sharedImages[0];
+            ImageView convertView = _isAndroid ? _convertView : _sharedImageViews[0];
+            _logger.LogTrace("[AHB-DIAG] ▶ 进入 Convert（AHB→_convertImage GPU 绘制）{W}x{H}", w, h);
             _ycbcrConverter.Convert(_commandBuffer, ahbImage, ahbView, (uint)w, (uint)h,
                 _surfaceVkFormat, convertTarget, convertView);
-            _logger.LogInformation("[AHB-DIAG] ✓ Convert 记录完成，准备分步提交①");
+            _logger.LogTrace("[AHB-DIAG] ✓ Convert 记录完成，准备分步提交①");
 
             // 6) Android：分步提交。先提交并等待 ① 转换（AHB→_convertImage），隔离 AHB 采样是否触发 fault。
             if (_isAndroid)
@@ -772,12 +782,12 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                     formatProps.Format, formatProps.ExternalFormat, formatProps.SuggestedYcbcrModel);
             }
 
-            // 5) AHB 源（普通 RGBA）→ 渲染进内部 _convertImage（Android）/ _sharedImage（非 Android）。
-            Image convertTarget = _isAndroid ? _convertImage : _sharedImage;
-            ImageView convertView = _isAndroid ? _convertView : _sharedImageView;
-            _logger.LogInformation("[AHB-DIAG] ▶ 进入 Convert（RGBA AHB→_convertImage 普通采样）{W}x{H}", w, h);
+            // 5) AHB 源（普通 RGBA）→ 渲染进内部 _convertImage（Android）/ _sharedImages[0]（非 Android）。
+            Image convertTarget = _isAndroid ? _convertImage : _sharedImages[0];
+            ImageView convertView = _isAndroid ? _convertView : _sharedImageViews[0];
+            _logger.LogTrace("[AHB-DIAG] ▶ 进入 Convert（RGBA AHB→_convertImage 普通采样）{W}x{H}", w, h);
             _rgbaConverter.Convert(_commandBuffer, ahbImage, ahbView, (uint)w, (uint)h, convertTarget, convertView);
-            _logger.LogInformation("[AHB-DIAG] ✓ Convert 记录完成，准备分步提交①");
+            _logger.LogTrace("[AHB-DIAG] ✓ Convert 记录完成，准备分步提交①");
 
             // 6) Android：分步提交。先提交并等待 ① 转换（RGBA AHB 采样），隔离采样是否触发 fault。
             if (_isAndroid)
@@ -838,7 +848,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     /// 直接作 color attachment 在 Mali 上触发 GROUP_ERROR_FATAL / DEVICE_LOST，故一律经内部图中转。
     /// 软帧路径 srcLayout=ColorAttachmentOptimal（离屏 RenderPass FinalLayout）；AHB 路径 srcLayout=TransferSrcOptimal
     /// （转换器 Convert 末态）。<see cref="_sharedImage"/> 首帧由 Undefined 转入 TransferDstOptimal，后续帧保持
-    /// TransferDstOptimal（由 <see cref="_sharedImageCopyReady"/> 追踪，跨命令缓冲持久）。
+    /// TransferDstOptimal（由 <see cref="_sharedCopyReady"/> 追踪，跨命令缓冲持久）。
     /// </summary>
     private void CopyToSharedImage(CommandBuffer cmd, ImageLayout srcLayout, int w, int h)
     {
@@ -874,7 +884,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         //    消费方采样（采样不改布局），本帧覆盖屏障的旧布局统一用 Undefined——规范允许的
         //    「不保留旧内容」语义（与图像实际状态无关恒合法），整幅重写故无内容损失；
         //    执行序由同队列（生产/消费共用同一 VkQueue）隐式按提交序串行保证。
-        bool firstCopy = !_sharedImageCopyReady;
+        bool firstCopy = !_sharedCopyReady[_sharedActive];
         bool dstFromUndefined = firstCopy || _isAndroid;
         ImageLayout dstOld = dstFromUndefined ? ImageLayout.Undefined : ImageLayout.TransferDstOptimal;
         PipelineStageFlags dstSrcStage = dstFromUndefined ? PipelineStageFlags.TopOfPipeBit : PipelineStageFlags.TransferBit;
@@ -888,7 +898,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             NewLayout = ImageLayout.TransferDstOptimal,
             SrcQueueFamilyIndex = ~0u,
             DstQueueFamilyIndex = ~0u,
-            Image = _sharedImage,
+            Image = _sharedImages[_sharedActive],
             SubresourceRange = new ImageSubresourceRange
             {
                 AspectMask = ImageAspectFlags.ColorBit,
@@ -923,7 +933,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             Extent = new Extent3D((uint)w, (uint)h, 1),
         };
         VulkanNative.CmdCopyImage(cmd, _convertImage, ImageLayout.TransferSrcOptimal,
-            _sharedImage, ImageLayout.TransferDstOptimal, 1, &region);
+            _sharedImages[_sharedActive], ImageLayout.TransferDstOptimal, 1, &region);
 
         // 4) Android（VulkanNativeImage→Skia 直采样）：交付前把 _sharedImage 转入
         //    ShaderReadOnlyOptimal 并使拷贝写入对后续采样可见（dstStage 覆盖片元/计算着色器读取）。
@@ -940,7 +950,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 NewLayout = ImageLayout.ShaderReadOnlyOptimal,
                 SrcQueueFamilyIndex = ~0u,
                 DstQueueFamilyIndex = ~0u,
-                Image = _sharedImage,
+                Image = _sharedImages[_sharedActive],
                 SubresourceRange = new ImageSubresourceRange
                 {
                     AspectMask = ImageAspectFlags.ColorBit,
@@ -955,9 +965,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 0, 0, null, 0, null, 1, &readyBarrier);
         }
 
-        // 标记 _sharedImage 已进入交付布局（Android=ShaderReadOnlyOptimal / 其余=TransferDstOptimal，
+        // 标记当前槽位已进入交付布局（Android=ShaderReadOnlyOptimal / 其余=TransferDstOptimal，
         // 供后续帧复用，避免重复 Undefined 重排）。
-        _sharedImageCopyReady = true;
+        _sharedCopyReady[_sharedActive] = true;
     }
 
     /// <summary>
@@ -966,7 +976,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     /// </summary>
     private bool SubmitAhbStep(string stepTag, int w, int h)
     {
-        _logger.LogInformation("[AHB-DIAG] ▶ {Step} 进入提交（EndCommandBuffer 前）", stepTag);
+        _logger.LogTrace("[AHB-DIAG] ▶ {Step} 进入提交（EndCommandBuffer 前）", stepTag);
         Result endR = VulkanNative.EndCommandBuffer(_commandBuffer);
         if (endR != Result.Success)
         {
@@ -1000,7 +1010,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             _logger.LogWarning("[AHB-DIAG] {Step} WaitForFences 失败：{Result}", stepTag, waitR);
             return false;
         }
-        _logger.LogInformation("[AHB-DIAG] ✓ {Step} 提交成功（无 DEVICE_LOST）{W}x{H}", stepTag, w, h);
+        _logger.LogTrace("[AHB-DIAG] ✓ {Step} 提交成功（无 DEVICE_LOST）{W}x{H}", stepTag, w, h);
         return true;
     }
 
@@ -1183,7 +1193,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     /// </summary>
     private void EnsureSharedSurface(int w, int h)
     {
-        if (_sharedImage.Handle != 0 && _texW == w && _texH == h)
+        if (_sharedImages[0].Handle != 0 && _texW == w && _texH == h)
             return;
 
         // 拆除旧图像（保留 _version 语义：重建才 +1）
@@ -1198,6 +1208,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         // 图像创建：启用外部内存导出（pNext=ExternalMemoryImageCreateInfo）。
         // Android（VulkanNativeImage 同 device 直采样）为<b>平面图像</b>：无外部导出、无 dedicated、
         // 无 fd——彻底绕开 Adreno external-memory 分配的厂商坑；Usage 含 Sampled（Skia 采样必需）。
+        // Android 建 2 槽（双缓冲轮换交付），其余平台 1 槽。
+        for (int slot = 0; slot < _slotCount; slot++)
+        {
         ExternalMemoryImageCreateInfo extImageInfo = new()
         {
             SType = StructureType.ExternalMemoryImageCreateInfo,
@@ -1231,7 +1244,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         _sharedUsage = imageInfo.Usage;
         _sharedFlags = imageInfo.Flags;
 
-        Result result = VulkanNative.CreateImage(_device, &imageInfo, null, out _sharedImage);
+        Result result = VulkanNative.CreateImage(_device, &imageInfo, null, out Image img);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkCreateImage（共享表面离屏）失败: {result}");
 
@@ -1242,13 +1255,13 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         // dedicated 语义导入，规范上两侧必须匹配。
         // Android（VulkanNativeImage）：平面内存即可，无导出/dedicated 约束。
         MemoryRequirements memReq;
-        VulkanNative.GetImageMemoryRequirements(_device, _sharedImage, &memReq);
+        VulkanNative.GetImageMemoryRequirements(_device, img, &memReq);
         uint memType = FindMemoryType(memReq.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit);
 
         MemoryDedicatedAllocateInfo dedicated = new MemoryDedicatedAllocateInfo
         {
             SType = StructureType.MemoryDedicatedAllocateInfo,
-            Image = _sharedImage,
+            Image = img,
         };
 
         ExternalMemoryHandleTypeFlags memHandle = _memHandleType;
@@ -1265,10 +1278,10 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             MemoryTypeIndex = memType,
             PNext = _isAndroid ? (void*)null : (void*)&extMemInfo,
         };
-        result = VulkanNative.AllocateMemory(_device, &allocInfo, null, out _sharedMemory);
+        result = VulkanNative.AllocateMemory(_device, &allocInfo, null, out DeviceMemory mem);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkAllocateMemory（共享表面离屏）失败: {result}");
-        result = VulkanNative.BindImageMemory(_device, _sharedImage, _sharedMemory, 0);
+        result = VulkanNative.BindImageMemory(_device, img, mem, 0);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkBindImageMemory（共享表面离屏）失败: {result}");
         // 记录本次分配的真实字节数（= vkGetImageMemoryRequirements().size），随描述符交给合成器。
@@ -1276,7 +1289,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         // properties.MemorySize 与它自己 vkGetImageMemoryRequirements(导入图像).size 做**严格相等**校验，
         // 不等即抛 "Invalid memory size"（真机实证：留 0 → 每帧导入失败 → 不出画）。OPAQUE_FD 不携带
         // 内存元数据，此值只能由生产者如实上报。注意：不是 w*h*4 —— 驱动会按 tile/对齐扩到更大。
-        _sharedMemorySize = memReq.Size;
+        _sharedMemorySizes[slot] = memReq.Size;
 
         // 导出内存句柄（交合成器）：
         //  - Windows：HANDLE（OpaqueWin32）。
@@ -1289,7 +1302,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             MemoryGetWin32HandleInfoKHR getInfo = new()
             {
                 SType = StructureType.MemoryGetWin32HandleInfoKhr,
-                Memory = _sharedMemory,
+                Memory = mem,
                 HandleType = memHandle,
             };
             Result hR = VulkanNative.GetMemoryWin32HandleKHR(_device, &getInfo, out nint hMem);
@@ -1302,8 +1315,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             // VulkanNativeImage（同 device 直采样）：无需导出任何外部句柄——
             // 消费方（UI 层 Skia）直接按描述符的 Native* 字段包装本图像采样绘制。
             _exportedMemoryHandle = IntPtr.Zero;
-            _logger.LogInformation(
-                "[VULKAN-SHARED] Android VulkanNativeImage：平面图像+平面内存（无 fd/无 dedicated），同 device 直接采样。");
+            if (slot == 0)
+                _logger.LogInformation(
+                    "[VULKAN-SHARED] Android VulkanNativeImage：平面图像+平面内存（无 fd/无 dedicated），双缓冲轮换直接采样。");
         }
         else
         {
@@ -1311,7 +1325,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             MemoryGetFdInfoKHR getInfo = new()
             {
                 SType = StructureType.MemoryGetFDInfoKhr,
-                Memory = _sharedMemory,
+                Memory = mem,
                 HandleType = memHandle,
             };
             Result hR = VulkanNative.GetMemoryFdKHR(_device, &getInfo, out int fd);
@@ -1324,7 +1338,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         ImageViewCreateInfo viewInfo = new()
         {
             SType = StructureType.ImageViewCreateInfo,
-            Image = _sharedImage,
+            Image = img,
             ViewType = ImageViewType.Type2D,
             Format = _surfaceVkFormat,
             SubresourceRange = new ImageSubresourceRange
@@ -1336,9 +1350,14 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 LayerCount = 1,
             },
         };
-        result = VulkanNative.CreateImageView(_device, &viewInfo, null, out _sharedImageView);
+        result = VulkanNative.CreateImageView(_device, &viewInfo, null, out ImageView view);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkCreateImageView（共享表面离屏）失败: {result}");
+
+        _sharedImages[slot] = img;
+        _sharedMemories[slot] = mem;
+        _sharedImageViews[slot] = view;
+        } // end slot loop
 
         // Android：额外创建 plain 内部 RGBA 转换目标（color attachment + transfer src），
         // 所有转换/上传先渲进它，再 vkCmdCopyImage 拷进 AHB 离屏（规避 AHB 作 color attachment
@@ -1424,12 +1443,12 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             InitialLayout = ImageLayout.Undefined,
             PNext = (void*)&metalImageInfo,
         };
-        Result result = VulkanNative.CreateImage(_device, &imageInfo, null, out _sharedImage);
+        Result result = VulkanNative.CreateImage(_device, &imageInfo, null, out _sharedImages[0]);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkCreateImage（Apple 共享表面离屏）失败: {result}");
 
         MemoryRequirements memReq;
-        VulkanNative.GetImageMemoryRequirements(_device, _sharedImage, &memReq);
+        VulkanNative.GetImageMemoryRequirements(_device, _sharedImages[0], &memReq);
         uint memType = FindMemoryType(memReq.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit);
 
         // MoltenVK 自行管理 IOSurface 底层内存，普通设备本地分配即可（无需 ExportMemoryAllocateInfo）。
@@ -1439,24 +1458,24 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             AllocationSize = memReq.Size,
             MemoryTypeIndex = memType,
         };
-        result = VulkanNative.AllocateMemory(_device, &allocInfo, null, out _sharedMemory);
+        result = VulkanNative.AllocateMemory(_device, &allocInfo, null, out _sharedMemories[0]);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkAllocateMemory（Apple 共享表面离屏）失败: {result}");
-        result = VulkanNative.BindImageMemory(_device, _sharedImage, _sharedMemory, 0);
+        result = VulkanNative.BindImageMemory(_device, _sharedImages[0], _sharedMemories[0], 0);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkBindImageMemory（Apple 共享表面离屏）失败: {result}");
         // 与 OPAQUE_FD 路径同理：记录真实分配字节数（IOSurface 路径合成器侧同样做严格相等校验）。
-        _sharedMemorySize = memReq.Size;
+        _sharedMemorySizes[0] = memReq.Size;
 
         // 导出 IOSurface（持久，随图像生命周期；消费方 Avalonia 经 IOSurfaceRef 直接导入采样）。
-        _exportedMemoryHandle = ExportIOSurface(_sharedImage);
+        _exportedMemoryHandle = ExportIOSurface(_sharedImages[0]);
         if (_exportedMemoryHandle == IntPtr.Zero)
             throw new InvalidOperationException("vkExportMetalObjectsEXT 未能导出 IOSurface（VK_EXT_metal_objects 可能未启用）。");
 
         ImageViewCreateInfo viewInfo = new()
         {
             SType = StructureType.ImageViewCreateInfo,
-            Image = _sharedImage,
+            Image = _sharedImages[0],
             ViewType = ImageViewType.Type2D,
             Format = Format.B8G8R8A8Unorm,
             SubresourceRange = new ImageSubresourceRange
@@ -1468,7 +1487,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 LayerCount = 1,
             },
         };
-        result = VulkanNative.CreateImageView(_device, &viewInfo, null, out _sharedImageView);
+        result = VulkanNative.CreateImageView(_device, &viewInfo, null, out _sharedImageViews[0]);
         if (result != Result.Success)
             throw new InvalidOperationException($"vkCreateImageView（Apple 共享表面离屏）失败: {result}");
 
@@ -1496,20 +1515,20 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private void ReleaseSharedSurface()
     {
         if (_device.Handle == 0) return;
-        if (_sharedImageView.Handle != 0)
+        if (_sharedImageViews[0].Handle != 0)
         {
-            VulkanNative.DestroyImageView(_device, _sharedImageView, null);
-            _sharedImageView = default;
+            VulkanNative.DestroyImageView(_device, _sharedImageViews[0], null);
+            _sharedImageViews[0] = default;
         }
-        if (_sharedImage.Handle != 0)
+        if (_sharedImages[0].Handle != 0)
         {
-            VulkanNative.DestroyImage(_device, _sharedImage, null);
-            _sharedImage = default;
+            VulkanNative.DestroyImage(_device, _sharedImages[0], null);
+            _sharedImages[0] = default;
         }
-        if (_sharedMemory.Handle != 0)
+        if (_sharedMemories[0].Handle != 0)
         {
-            VulkanNative.FreeMemory(_device, _sharedMemory, null);
-            _sharedMemory = default;
+            VulkanNative.FreeMemory(_device, _sharedMemories[0], null);
+            _sharedMemories[0] = default;
         }
         if (_convertView.Handle != 0)
         {
@@ -1528,7 +1547,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         }
         // 导出的外部句柄随内存释放自动失效，无需 CloseHandle/dup；_version 保留递增语义。
         _exportedMemoryHandle = IntPtr.Zero;
-        _sharedImageCopyReady = false;
+        _sharedCopyReady[0] = false; _sharedCopyReady[1] = false; _sharedActive = 0;
         _texW = 0;
         _texH = 0;
     }
