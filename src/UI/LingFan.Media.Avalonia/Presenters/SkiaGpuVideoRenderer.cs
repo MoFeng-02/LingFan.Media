@@ -388,9 +388,27 @@ internal sealed class SkiaGpuVideoDrawOp : ICustomDrawOperation
                 return;
             }
 
+            // 旋转呈现：容器声明的显示旋转（90/180/270）。源纹理像素本身不旋转，
+            // 以 canvas 变换把已算好的 dest 矩形（按旋转后的显示宽高适配）转回源方向绘制。
+            int rot = ((int)_descriptor.RotationDegrees % 360 + 360) % 360;
             SKRect dest = ComputeDestRect();
-            // 线性过滤（视频缩放平滑）；无 Mipmap（单级纹理）。
-            canvas.DrawImage(image, dest, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), null);
+            if (rot == 90 || rot == 180 || rot == 270)
+            {
+                int save = canvas.Save();
+                canvas.Translate(dest.MidX, dest.MidY);
+                canvas.RotateDegrees(rot);
+                // 旋转后源图占据的矩形：宽高随角度互换。
+                float rw = (rot == 90 || rot == 270) ? dest.Height : dest.Width;
+                float rh = (rot == 90 || rot == 270) ? dest.Width : dest.Height;
+                canvas.DrawImage(image, new SKRect(-rw / 2, -rh / 2, rw / 2, rh / 2),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), null);
+                canvas.RestoreToCount(save);
+            }
+            else
+            {
+                // 线性过滤（视频缩放平滑）；无 Mipmap（单级纹理）。
+                canvas.DrawImage(image, dest, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), null);
+            }
         }
         catch (Exception ex)
         {
@@ -405,11 +423,15 @@ internal sealed class SkiaGpuVideoDrawOp : ICustomDrawOperation
         }
     }
 
-    /// <summary>按拉伸模式计算目标矩形（DIP），画面恒不越控件边界。</summary>
+    /// <summary>按拉伸模式计算目标矩形（DIP），画面恒不越控件边界。
+    /// 90/270° 旋转时以「旋转后的显示宽高」（互换）参与适配——dest 矩形是画面最终呈现区域。</summary>
     private SKRect ComputeDestRect()
     {
         double fw = _descriptor.Width;
         double fh = _descriptor.Height;
+        int rot = ((int)_descriptor.RotationDegrees % 360 + 360) % 360;
+        if (rot == 90 || rot == 270)
+            (fw, fh) = (fh, fw);
         if (fw <= 0 || fh <= 0 || _controlW <= 0 || _controlH <= 0)
             return SKRect.Empty;
 

@@ -38,6 +38,10 @@ public sealed class VideoFrame : IDisposableFrame
     /// <summary>帧的色彩空间描述（可空；渲染端据此选 YUV→RGB 矩阵，null 时用默认。</summary>
     public VideoColorInfo? ColorInfo { get; set; }
 
+    /// <summary>显示旋转（度，0/90/180/270）。由容器元数据（如 MP4 tkhd 旋转矩阵）给出，
+    /// 解码器输出像素本身不旋转——渲染端须按此角度旋转呈现（90/270° 时显示宽高互换）。</summary>
+    public int RotationDegrees { get; internal set; }
+
     /// <inheritdoc/>
     public bool IsDisposed { get; private set; }
 
@@ -45,7 +49,8 @@ public sealed class VideoFrame : IDisposableFrame
     /// 初始化 <see cref="VideoFrame"/> 的新实例。
     /// </summary>
     public VideoFrame(int width, int height, PixelFormat format, IFrameResource resource,
-        TimeSpan timestamp, TimeSpan duration, bool keyFrame, VideoColorInfo? colorInfo = null)
+        TimeSpan timestamp, TimeSpan duration, bool keyFrame, VideoColorInfo? colorInfo = null,
+        int rotationDegrees = 0)
     {
         Width = width;
         Height = height;
@@ -55,6 +60,7 @@ public sealed class VideoFrame : IDisposableFrame
         Duration = duration;
         KeyFrame = keyFrame;
         ColorInfo = colorInfo;
+        RotationDegrees = rotationDegrees;
     }
 
     /// <summary>
@@ -84,7 +90,8 @@ public sealed class VideoFrame : IDisposableFrame
     /// <param name="duration">帧持续时间。</param>
     /// <param name="keyFrame">是否关键帧。</param>
     public void Reset(int width, int height, PixelFormat format, IFrameResource? resource,
-        TimeSpan timestamp, TimeSpan duration, bool keyFrame, VideoColorInfo? colorInfo = null)
+        TimeSpan timestamp, TimeSpan duration, bool keyFrame, VideoColorInfo? colorInfo = null,
+        int rotationDegrees = 0)
     {
         // 释放旧 Resource（安全：SoftwareFrameResource.Dispose 检查 _disposed）
         Resource?.Dispose();
@@ -97,6 +104,7 @@ public sealed class VideoFrame : IDisposableFrame
         Duration = duration;
         KeyFrame = keyFrame;
         ColorInfo = colorInfo;
+        RotationDegrees = rotationDegrees;
         IsDisposed = false;
     }
 
@@ -107,6 +115,12 @@ public sealed class VideoFrame : IDisposableFrame
     {
         if (IsDisposed) return;
         IsDisposed = true;
+        // 泄漏对账（诊断期）：Dispose 到达但 Resource 已为 null = 帧壳在归还前被清空。
+        if (Resource == null)
+            System.Threading.Interlocked.Increment(ref DisposeWithNullResource);
         Resource?.Dispose();
     }
+
+    // 泄漏对账（诊断期）: Dispose 时 Resource 已为 null 的次数。
+    public static long DisposeWithNullResource;
 }

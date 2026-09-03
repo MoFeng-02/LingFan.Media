@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 
 namespace LingFan.Media.Core;
@@ -61,6 +62,7 @@ public sealed class FramePool<T> : IFramePool<T>, IDisposable where T : class
 
         if (_disposed)
         {
+            System.Threading.Interlocked.Increment(ref _retDisposedBranch);
             if (frame is IDisposable d) d.Dispose();
             return;
         }
@@ -68,13 +70,21 @@ public sealed class FramePool<T> : IFramePool<T>, IDisposable where T : class
         if (_pool.Count >= _maxSize)
         {
             // 池满，释放帧
+            System.Threading.Interlocked.Increment(ref _retFullBranch);
             if (frame is IDisposable d) d.Dispose();
             return;
         }
 
+        // 泄漏对账（诊断期）：确认 reset 被调且 Resource 类型符合预期。
+        if (frame is VideoFrame vf && vf.Resource != null)
+            Console.WriteLine($"[POOL-RET] resource={vf.Resource.GetType().Name}");
+        System.Threading.Interlocked.Increment(ref _retEnqueueBranch);
         _reset?.Invoke(frame);
         _pool.Push(frame);
     }
+
+    // 泄漏对账（诊断期）：三分支命中计数（disposed/满池/入池）。
+    internal static long _retDisposedBranch, _retFullBranch, _retEnqueueBranch;
 
     /// <summary>
     /// 释放池中所有帧。池 Dispose 后 Return 的帧也会被 Dispose。

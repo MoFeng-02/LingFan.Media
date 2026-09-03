@@ -117,7 +117,8 @@ public readonly record struct SharedGpuSurfaceDescriptor(
     uint NativeVkFormat = 0,
     uint NativeQueueFamilyIndex = 0,
     uint NativeImageUsage = 0,
-    uint NativeImageTiling = 0)
+    uint NativeImageTiling = 0,
+    int RotationDegrees = 0)
 {
     /// <summary>句柄是否有效（非空且尺寸为正）。</summary>
     public bool IsValid => Handle != IntPtr.Zero && Width > 0 && Height > 0;

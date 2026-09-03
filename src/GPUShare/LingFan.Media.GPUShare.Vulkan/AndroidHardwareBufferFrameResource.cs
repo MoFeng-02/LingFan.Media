@@ -27,6 +27,11 @@ public sealed unsafe partial class AndroidHardwareBufferFrameResource : IFrameRe
     private readonly IntPtr _ahbHandle;
     private bool _disposed;
 
+    // AHB 引用对账（泄漏定位）：构造 +1 / Dispose -1。Live 持续增长 = Dispose 链断
+    // （真机实证：Graphics 内存每遍播放 +51MB、AHB 地址零复用 = release 未达 gralloc）。
+    internal static long LiveCount => System.Threading.Interlocked.Read(ref _liveCount);
+    private static long _liveCount;
+
     /// <inheritdoc/>
     public int Width { get; }
 
@@ -52,6 +57,10 @@ public sealed unsafe partial class AndroidHardwareBufferFrameResource : IFrameRe
         Width = width;
         Height = height;
         Format = format;
+        System.Threading.Interlocked.Increment(ref _liveCount);
+        // 泄漏对账日志（每 64 帧一条）：Live 应稳定在 in-flight 峰值（≤~24）；持续上涨即泄漏。
+        if (LiveCount % 64 == 1)
+            Console.WriteLine($"[AHB-LEAK] live={LiveCount}");
     }
 
     /// <inheritdoc/>
@@ -59,6 +68,9 @@ public sealed unsafe partial class AndroidHardwareBufferFrameResource : IFrameRe
     {
         if (_disposed) return;
         _disposed = true;
+        System.Threading.Interlocked.Decrement(ref _liveCount);
+        if ((LiveCount % 64) == 0)
+            Console.WriteLine($"[AHB-LEAK] disposed live={LiveCount}");
         if (_ahbHandle != IntPtr.Zero)
             AHardwareBufferRelease(_ahbHandle);
     }

@@ -200,11 +200,24 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     private void ReturnFrame(VideoFrame frame)
     {
+        // 泄漏对账（诊断期）：ReturnFrame 调用计数。AHB 泄漏排查用——
+        // 若 [RET-COUNT] 与已呈数同步增长而 [AHB-LEAK] live 仍涨，则断点在池 reset 之后（池未执行 reset）。
+        int ret = System.Threading.Interlocked.Increment(ref _returnCount);
+        if ((ret % 128) == 1)
+            _logger.LogInformation(
+                "[RET-COUNT] ReturnFrame 第 {N} 次 res={Res} 池三分支(disp/full/enq)={D}/{F}/{E}",
+                ret, frame.Resource?.GetType().Name ?? "null",
+                System.Threading.Volatile.Read(ref LingFan.Media.Core.FramePool<VideoFrame>._retDisposedBranch),
+                System.Threading.Volatile.Read(ref LingFan.Media.Core.FramePool<VideoFrame>._retFullBranch),
+                System.Threading.Volatile.Read(ref LingFan.Media.Core.FramePool<VideoFrame>._retEnqueueBranch));
         if (_framePool != null)
             _framePool.Return(frame);
         else
             frame.Dispose();
     }
+
+    // 泄漏对账计数（ReturnFrame 调用次数）。
+    private int _returnCount;
 
     /// <summary>管线是否运行。</summary>
     public bool IsRunning => _isRunning;

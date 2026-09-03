@@ -386,7 +386,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 NativeVkFormat: (uint)_surfaceVkFormat,
                 NativeQueueFamilyIndex: _queueFamilyIndex,
                 NativeImageUsage: (uint)_sharedUsage,
-                NativeImageTiling: (uint)ImageTiling.Optimal);
+                NativeImageTiling: (uint)ImageTiling.Optimal,
+                RotationDegrees: frame.RotationDegrees);
             return true;
         }
 
@@ -398,7 +399,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             _version,
             _syncMode,
             _sharedMemorySize,
-            0);
+            0,
+            RotationDegrees: frame.RotationDegrees);
         return true;
     }
 

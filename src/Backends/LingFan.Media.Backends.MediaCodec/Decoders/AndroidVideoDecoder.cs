@@ -219,11 +219,12 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         // 桥接不可用时回落 ① 硬解 + ByteBuffer（绝不 c2 软解 + ByteBuffer——那是 numClientBuffers 僵死档）。
         bool zeroCopy = AndroidVideoDecodePolicy.EnableHardwareZeroCopy;
         _useAhbFrames = zeroCopy && TryCreateAhbOutputSurface(frameW, frameH);
-        // 零拷贝档软解（c2）优先；能播档硬解（OMX）优先（避开 c2 僵死）。
-        // 单变量对照实验：ForceSoftwareDecoder 只换解码器（AOSP 软解），帧提取/重排/同步/上屏完全不变，
-        // 用于判定坏帧来自硬解侧还是我们自己的帧处理段（见 AndroidVideoDecodePolicy.ForceSoftwareDecoder）。
+        // 零拷贝档也用硬解（真机实证 2026-09-03：c2 软解 + Surface 桥吞输入不吐输出——喂入已 1:1 修复
+        // 后仍产帧停滞 5 帧；旧注释「软解+桥接产帧稳定」系未充分验证的假设）。硬解 + Surface 模式
+        // 与历史真机教训一致（「高通硬解 ByteBuffer 输出停滞系误诊，Surface 模式才是正解」）。
+        // 单变量对照实验：ForceSoftwareDecoder 只换解码器（AOSP 软解），帧提取/重排/同步/上屏完全不变。
         var codecObj = CreateVideoCodec(mime, codec,
-            preferSoftwareDecoder: _useAhbFrames || AndroidVideoDecodePolicy.ForceSoftwareDecoder);
+            preferSoftwareDecoder: AndroidVideoDecodePolicy.ForceSoftwareDecoder);
         try
         {
             ConfigureFlexibleYuv(ref codecObj, mime, codec, csd, frameW, frameH, _outputSurface, _useAhbFrames);
@@ -1181,7 +1182,8 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
                 _framesProduced, w, h, PixelFormat.RGBA32, pts);
         _framesProduced++;
         _drainDequeued++;
-        return new VideoFrame(w, h, PixelFormat.RGBA32, resource, pts, TimeSpan.Zero, false, _colorInfo);
+        return new VideoFrame(w, h, PixelFormat.RGBA32, resource, pts, TimeSpan.Zero, false, _colorInfo,
+            _rotationDegrees);
     }
 
     /// <summary>从 <see cref="Image"/>（YUV_420_888，灵活 YUV420 经 getOutputImage 取得）用托管 CPU 平面提取
