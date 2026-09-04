@@ -187,9 +187,9 @@ public sealed class VideoView : Control, IRenderTarget
     {
         ArgumentNullException.ThrowIfNull(frame);
 
-        // 诊断节流：帧到达 VideoView（区分「帧未到达」vs「到达但渲染器未就绪」）
+        // 诊断节流：帧到达 VideoView（区分「帧未到达」vs「到达但渲染器未就绪」），Trace 级。
         if ((_presentedFrames % 64) == 0)
-            _logger?.LogInformation("[VIDEOVIEW] 收到帧 #{Count} {W}x{H} pts={Pts:g} renderer={Renderer}",
+            _logger?.LogTrace("[VIDEOVIEW] 收到帧 #{Count} {W}x{H} pts={Pts:g} renderer={Renderer}",
                 _presentedFrames, frame.Width, frame.Height, frame.Timestamp,
                 _renderer?.GetType().Name ?? "null");
         _presentedFrames++;

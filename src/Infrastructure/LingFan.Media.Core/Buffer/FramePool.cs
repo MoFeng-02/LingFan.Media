@@ -75,9 +75,6 @@ public sealed class FramePool<T> : IFramePool<T>, IDisposable where T : class
             return;
         }
 
-        // 泄漏对账（诊断期）：确认 reset 被调且 Resource 类型符合预期。
-        if (frame is VideoFrame vf && vf.Resource != null)
-            Console.WriteLine($"[POOL-RET] resource={vf.Resource.GetType().Name}");
         System.Threading.Interlocked.Increment(ref _retEnqueueBranch);
         _reset?.Invoke(frame);
         _pool.Push(frame);

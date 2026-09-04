@@ -115,12 +115,6 @@ public sealed class VideoFrame : IDisposableFrame
     {
         if (IsDisposed) return;
         IsDisposed = true;
-        // 泄漏对账（诊断期）：Dispose 到达但 Resource 已为 null = 帧壳在归还前被清空。
-        if (Resource == null)
-            System.Threading.Interlocked.Increment(ref DisposeWithNullResource);
         Resource?.Dispose();
     }
-
-    // 泄漏对账（诊断期）: Dispose 时 Resource 已为 null 的次数。
-    public static long DisposeWithNullResource;
 }

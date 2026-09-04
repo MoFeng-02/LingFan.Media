@@ -60,9 +60,9 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
     private bool _firstFrameLogged;
     private bool _drawFailureLogged;
 
-    /// <summary>渲染线程绘制几何诊断（DrawOp 调用，放大溢出排查用）。</summary>
+    /// <summary>渲染线程绘制诊断（DrawOp 调用：[DRAW-OP] 心跳/wrap 遥测/几何对账，Trace 级）。</summary>
     internal void LogDrawGeometry(string message)
-        => _logger.LogInformation("[SKIA-GPU-DRAW] {Message}", message);
+        => _logger.LogTrace("[SKIA-GPU-DRAW] {Message}", message);
 
     // 渲染线程回调计数（冻结看门狗心跳）。
     private int _renderCallbacks;
@@ -212,10 +212,10 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
         if (cw <= 0 || ch <= 0)
             return;
 
-        // 冻结看门狗（渲染线程心跳）：每 60 次回调打一条，证明渲染线程仍活跃（冻结排查）。
+        // 冻结看门狗（渲染线程心跳）：每 60 次回调打一条（Trace 级），证明渲染线程仍活跃。
         _renderCallbacks++;
         if ((_renderCallbacks % 60) == 1)
-            _logger.LogInformation("[SKIA-GPU] 渲染回调 #{N}（渲染线程活跃）", _renderCallbacks);
+            _logger.LogTrace("[SKIA-GPU] 渲染回调 #{N}（渲染线程活跃）", _renderCallbacks);
 
         var op = new SkiaGpuVideoDrawOp(this, desc, cw, ch, _stretch)
         {
@@ -313,7 +313,7 @@ internal sealed class SkiaGpuVideoDrawOp : ICustomDrawOperation
     private readonly double _controlH;
     private readonly Stretch _stretch;
     private static bool _drawGeomLogged; // 一次性几何对账打点标志（static：DrawOp 每帧新建实例，实例字段会每帧打点）
-    private static uint _dbgFrameSeq; // 【定格对照实验】绘制帧序号（跨 DrawOp 实例单调）
+    private static uint _dbgFrameSeq; // 绘制帧序号（跨 DrawOp 实例单调；[DRAW-OP] 心跳与 wrap 遥测共用，Trace 级）
 
     /// <summary>初始化帧绘制操作。</summary>
     /// <param name="owner">宿主渲染器（失败计数回调用）。</param>
@@ -341,10 +341,10 @@ internal sealed class SkiaGpuVideoDrawOp : ICustomDrawOperation
     /// <inheritdoc/>
     public void Render(ImmediateDrawingContext context)
     {
-        // 【定格对照实验】绘制阶段心跳：DrawOp.Render 才是真正往画布画东西的回调（渲染线程）。
-        // 冻结窗口内本心跳持续 ⇒ 绘制在跑但未上屏（提交/交换链停摆）；
-        // 本心跳停而「渲染回调 #N」仍在 ⇒ 绘制线程被楔死（GPU 等待永不返回）。
-        // logcat 的 tid 同时暴露绘制线程身份，与管线/UI 线程 tid 对比可判定同队列并发提交竞争。
+        // 绘制阶段心跳（Trace 级）：DrawOp.Render 才是真正往画布画东西的回调（渲染线程）。
+        // 冻结窗口内心跳持续 ⇒ 绘制在跑但未上屏（提交/交换链停摆）；
+        // 心跳停而管线侧心跳仍在 ⇒ 渲染线程被楔死（GPU 等待永不返回）；
+        // wrap=FAIL ⇒ SKImage.FromTexture 拒收（声明与创建 usage/layout 不一致的经典症状）。
         uint n = Interlocked.Increment(ref _dbgFrameSeq);
         if ((n % 60) == 1)
             _owner.LogDrawGeometry(
@@ -438,15 +438,6 @@ internal sealed class SkiaGpuVideoDrawOp : ICustomDrawOperation
                 // 线性过滤（视频缩放平滑）；无 Mipmap（单级纹理）。
                 canvas.DrawImage(image, dest, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), null);
             }
-
-            // 【定格对照实验】帧计数水印（Skia 直接绘制，与 VkImage 内容无关）：
-            // 数字在屏幕上跳动而视频冻结 ⇒ 合成/提交正常、VkImage 采样陈旧；
-            // 数字也定格 ⇒ 合成器/交换链停更。诊断期保留。
-            // SkiaSharp 3.x：SKPaint.TextSize 与 4 参 DrawText 已废弃（TreatWarningsAsErrors 升为
-            // 错误），改用 SKFont 现代重载。帧序号 n 已在 Render 顶部统一递增（供心跳复用）。
-            using var dbg = new SKPaint { Color = SKColors.Red, IsAntialias = true };
-            using var dbgFont = new SKFont(SKTypeface.Default, 48);
-            canvas.DrawText($"F{n}", dest.Left + 16, dest.Top + 56, SKTextAlign.Left, dbgFont, dbg);
         }
         catch (Exception ex)
         {

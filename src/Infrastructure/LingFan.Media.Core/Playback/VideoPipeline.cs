@@ -200,11 +200,11 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     private void ReturnFrame(VideoFrame frame)
     {
-        // 泄漏对账（诊断期）：ReturnFrame 调用计数。AHB 泄漏排查用——
+        // 泄漏对账（诊断期，Trace 级）：ReturnFrame 调用计数。AHB 泄漏排查用——
         // 若 [RET-COUNT] 与已呈数同步增长而 [AHB-LEAK] live 仍涨，则断点在池 reset 之后（池未执行 reset）。
         int ret = System.Threading.Interlocked.Increment(ref _returnCount);
         if ((ret % 128) == 1)
-            _logger.LogInformation(
+            _logger.LogTrace(
                 "[RET-COUNT] ReturnFrame 第 {N} 次 res={Res} 池三分支(disp/full/enq)={D}/{F}/{E}",
                 ret, frame.Resource?.GetType().Name ?? "null",
                 System.Threading.Volatile.Read(ref LingFan.Media.Core.FramePool<VideoFrame>._retDisposedBranch),
@@ -326,7 +326,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     // 呈/解线程存活状态：心跳停更既可能是卡死也可能是线程已自然退出（EOS 收尾），
                     // 不加此列会把「已退出」误诊为「死锁」（真机实证教训）。
                     string alive = $"呈线程={(IsRunning ? "运行" : "已退出")} 解线程={(_decodeTask?.IsCompleted == true ? "已退出" : "运行")}";
-                    _logger.LogInformation(
+                    _logger.LogTrace(
                         "[FREEZE] 循环心跳={LoopIdle:F2}s前 解码心跳={DecodeIdle:F2}s前 master={Master:g} 队列={Q} 已呈={P} " +
                         "sinkInFlight={D} sink末次返回={SinkIdle:F2}s前 阶段(呈/解)={PP}/{DP} {Alive}",
                         loopIdleSec, decodeIdleSec, _synchronizer.GetCurrentMasterTime(), _frameQueue.Count,
