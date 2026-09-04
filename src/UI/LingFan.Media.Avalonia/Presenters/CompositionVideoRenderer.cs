@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace LingFan.Media.Avalonia;
 
 /// <summary>
-/// 后端无关的「无空域、纯控件级」GPU 上屏渲染器（Avalonia <see cref="ICompositionGpuInterop"/>）。
+/// 后端无关的「无空域、纯控件级」GPU 上屏渲染器（Avalonia <see cref="Avalonia.Rendering.Composition.ICompositionGpuInterop"/>）。
 /// </summary>
 /// <remarks>
 /// <para>经 <see cref="ISharedGpuSurfaceSource"/>（D3D11 适配器等 GPU 适配层）把视频帧写入
@@ -564,7 +564,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     /// <c>Context = compositor.Server.RenderInterface.Value</c> 一次性冻结；<see cref="IsUsable"/>
     /// 要求呈现时 <c>RenderInterface.Value</c> 与该 Context 为同一实例。Android 合成器 RenderInterface
     /// 跨帧重建，跨帧缓存导入必失配（PlatformGraphicsContextLostException）。每帧重解析+重导+await
-    /// <see cref="ICompositionGpuImportedObject.ImportCompleted"/>，保证呈现瞬间 Context 与 Value 一致。
+    /// <c>ICompositionGpuImportedObject.ImportCompleted</c>，保证呈现瞬间 Context 与 Value 一致。
     /// </summary>
     /// <returns>本帧导入图像；任一环节失败返回 <see langword="null"/>（调用方应跳过本帧）。</returns>
     // 把生产者描述符携带的 SharedGpuSurfaceFormat 映射到合成器导入所需的 PlatformGraphicsExternalImageFormat。

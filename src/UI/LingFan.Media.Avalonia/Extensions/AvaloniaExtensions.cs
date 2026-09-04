@@ -63,7 +63,8 @@ public static class AvaloniaExtensions
     /// <param name="builder">媒体服务构建器。</param>
     /// <returns>构建器（链式调用）。</returns>
     /// <remarks>
-    /// <para>无空域 GPU 合成上屏（Avalonia <see cref="Avalonia.Rendering.Composition.ICompositionGpuInterop"/>）：
+    /// <para>无空域 GPU 合成上屏（Avalonia <c>ICompositionGpuInterop</c>；该接口在 Avalonia 12 标注为 android 平台不支持，
+    /// 故用行内代码而非 cref——android 变体下 cref 解析失败）：</para>
     /// 解码侧 GPU 硬解纹理经 <see cref="ISharedGpuSurfaceSource"/>（D3D11 适配器等，由 <c>AddD3D11Renderer</c> 注册）
     /// 写入跨设备共享纹理，由宿主合成器直接导入并作为控件子视觉合成——无独占 HWND、无空域、Skia 兜底。</para>
     /// <para><b>依赖</b>：须先调用 <c>AddD3D11Renderer</c>（或将来其他 GPU 后端）注册

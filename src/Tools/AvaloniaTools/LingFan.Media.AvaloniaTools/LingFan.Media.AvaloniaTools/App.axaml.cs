@@ -113,13 +113,14 @@ public partial class App : Application
 
         Services = builder.Services.BuildServiceProvider();
 
-        // ── R2 治根BA（2026-09-02）：把 LingFanVulkanBootstrap 自建的 device 注入 VulkanRendererFactory ──
-        // 共享表面源（VulkanSharedSurfaceSource）经 factory.SharedDevice 使用同一 device，
-        // 其 dma_buf fd 导入从「跨实例」变为「同 device」，根治 Adreno 跨实例导入缺陷（INITIALIZATION_FAILED）。
-        // 注入须在渲染器首次使用（EnsureDeviceCreated 触发）之前，此处 DI 刚构建完成、尚未触碰渲染器，时机正确。
-// 治根BA（2026-09-02）：共享工程是单目标 net10.0，#if ANDROID 永不成立（上一版注入因此被编译期排除）。
-        // 改用运行时接口探测：IVulkanSharedDeviceProvider（Abstractions 定义，Android 入口工程实现并注册 DI），
-        // 共享工程零平台依赖、AOT 零反射。
+        // ── 共享 Vulkan device 注入（Android GPU 路径前提）──
+        // Android 平台模块（LingFan.Media.Platforms.Android）自建 Vulkan device 并注册
+        // IVulkanSharedDeviceProvider 到 DI，此处把同一 device 注入 VulkanRendererFactory：
+        // 共享表面源的 dma_buf fd 导入从「跨实例」变为「同 device」，规避 Adreno 跨实例导入缺陷
+        // （vkAllocateMemory 返回 ErrorInitializationFailed）。注入须在渲染器首次使用之前——
+        // 此处 DI 刚构建完成、尚未触碰渲染器，时机正确。
+        // 探测式设计原因：共享工程单目标 net10.0，#if ANDROID 永不成立，改用运行时接口探测，
+        // 共享工程零平台依赖、AOT 零反射（桌面端无 provider 注册，条件不成立即跳过）。
         {
             var provider = Services.GetService<LingFan.Media.GPUShare.Vulkan.IVulkanSharedDeviceProvider>();
             var vulkanFactory = Services.GetService<LingFan.Media.Renderers.Vulkan.VulkanRendererFactory>();
@@ -127,11 +128,15 @@ public partial class App : Application
             {
                 var d = provider.GetSharedDevice();
                 vulkanFactory.UseExternalDevice(d.InstanceHandle, d.PhysicalDeviceHandle, d.DeviceHandle, d.GraphicsQueueFamilyIndex);
-                Console.WriteLine("[R2PROBE] [6] 已向 VulkanRendererFactory 注入外部 device（治根BA）。");
+                Console.WriteLine("[ANDROID-VULKAN] 已向 VulkanRendererFactory 注入共享 device（Avalonia 与视频管线同 device）。");
             }
-            else
+            else if (OperatingSystem.IsAndroid())
             {
-                Console.WriteLine($"[R2PROBE] [6] 注入跳过：provider={provider is not null} factory={vulkanFactory is not null}");
+                // 显式失败而非静默降级：provider 缺失 = 视频管线与 Avalonia 各自建 device，
+                // Adreno 上 AHB/dma_buf 导入失败，GPU 零拷贝整链不可用（退化为 CPU 软渲）。
+                Console.WriteLine("[ANDROID-VULKAN][ERROR] GPU 零拷贝不可用：IVulkanSharedDeviceProvider 或 VulkanRendererFactory 缺失"
+                    + $"（provider={provider is not null}，factory={vulkanFactory is not null}）。"
+                    + "请确认入口调用了 UseLingFanMediaAndroidVulkan()，并在平台注册钩子中注册 IVulkanSharedDeviceProvider。");
             }
         }
 

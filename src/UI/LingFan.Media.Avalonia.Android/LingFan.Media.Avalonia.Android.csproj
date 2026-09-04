@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<!-- Avalonia 的 Android 绑定桥（与 Backends.MediaCodec 同类的平台特化包，被 Android 宿主工程直引）：
+		     自建 Vulkan device + 注入 Avalonia（VulkanOptions.CustomSharedDevice），使合成器与视频管线同 device。
+		     定位见 .memory/审计更改/20260904_Android开箱即用层违规审计_01.md 落点执行记录。 -->
+		<TargetFramework>net10.0-android</TargetFramework>
+		<SupportedOSPlatformVersion>23</SupportedOSPlatformVersion>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<Nullable>enable</Nullable>
+		<RootNamespace>LingFan.Media.Avalonia.Android</RootNamespace>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Avalonia.Android" Version="12.1.1" />
+		<!-- VulkanOptions / IVulkanInstance / IVulkanDevice 所在程序集显式直引（IgnoresAccessChecksTo 对传递引用不生效） -->
+		<PackageReference Include="Avalonia.Skia" Version="12.1.1" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Vulkan\LingFan.Media.GPUShare.Vulkan.csproj" />
+	</ItemGroup>
+
+</Project>

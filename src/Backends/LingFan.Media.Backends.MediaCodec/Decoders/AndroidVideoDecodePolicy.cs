@@ -5,9 +5,9 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// <list type="number">
 /// <item><b>硬解 + CPU 帧</b>（能播档，默认）：OMX 硬件解码器 + ByteBuffer CPU 帧 + Skia 软渲染。
 /// OMX 走旧 OMX 框架（非 Codec2），无 c2 的 numClientBuffers 僵死。</item>
-/// <item><b>软解 + 桥接零拷贝</b>（增强档，<see cref="EnableHardwareZeroCopy"/>）：c2 软件解码器渲入
+/// <item><b>软解 + 桥接零拷贝</b>（增强档，<see cref="EnableHardwareZeroCopy"/>）：解码器渲入
 /// GLES 桥接 SurfaceTexture → GPU 内 YUV→RGBA 落 AHardwareBuffer，渲染侧零拷贝。产帧稳定，
-/// 但 Vulkan AHB 采样在 Adreno 上驱动崩（已联网核实为 Adreno workaround 重灾区），GL 纹理路线重做中。</item>
+/// 显示侧经 Vulkan AHB 导入 / Skia 直绘承接。</item>
 /// </list>
 /// 桥接不可用时回落 ①（绝不 c2 软解 + ByteBuffer——那是 numClientBuffers 僵死档）。
 /// </summary>

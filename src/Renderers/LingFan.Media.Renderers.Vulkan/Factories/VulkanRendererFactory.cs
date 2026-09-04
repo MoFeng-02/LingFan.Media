@@ -206,7 +206,8 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 _device = _externalDevice;
                 _queue = extQueue;
                 _queueFamilyIndex = _externalQueueFamilyIndex;
-                // 外部 device 由我们自建（LingFanVulkanDeviceFactory），设备级已启用
+                // 外部 device 由平台模块自建（LingFan.Media.Platforms.Android.VulkanDeviceFactory），
+                // 设备级已启用
                 // VK_KHR_external_memory_fd / external_semaphore_fd —— 与自建分支同判据置位，
                 // 否则 VulkanSharedSurfaceSourceFactory.Create 会因 ExternalSharingEnabled=false 直接抛
                 // NotSupportedException（外部分支跳过自建流程时最初漏了这一步）。

@@ -690,7 +690,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// <remarks>
     /// <b>DPI 固定 96（=1.0 逻辑缩放）</b>：Avalonia 的 <see cref="WriteableBitmap"/> 逻辑尺寸 =
     /// <c>PixelSize / Dpi * 96</c>；DPI 设为 96 时逻辑尺寸 == 物理像素尺寸，与
-    /// <see cref="CalculateDestRect"/> 传入的 DIP 帧/目标尺寸单位完全一致，<see cref="DrawImage"/>
+    /// <see cref="CalculateDestRect"/> 传入的 DIP 帧/目标尺寸单位完全一致，<c>DrawImage</c>
     /// 不会再二次缩放。旧实现用 <c>96 * _scale</c> 使 bitmap 逻辑尺寸缩小为 1/scale，与 DIP 目标
     /// 混算后被 DrawImage 再放大 scale 倍，导致画面只显示左上角局部（溢出观感）。
     /// </remarks>

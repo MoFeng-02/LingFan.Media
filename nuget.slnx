@@ -27,10 +27,15 @@
     <Project Path="src/Outputs/LingFan.Media.Outputs.Shared/LingFan.Media.Outputs.Shared.csproj" />
     <Project Path="src/Outputs/LingFan.Media.Outputs/LingFan.Media.Outputs.csproj" />
   </Folder>
+  <Folder Name="/GPUShare/">
+    <Project Path="src/GPUShare/LingFan.Media.GPUShare.D3D11/LingFan.Media.GPUShare.D3D11.csproj" />
+    <Project Path="src/GPUShare/LingFan.Media.GPUShare.Vulkan/LingFan.Media.GPUShare.Vulkan.csproj" />
+  </Folder>
   <Folder Name="/Platforms/">
     <Project Path="src/Platforms/LingFan.Media.Platforms/LingFan.Media.Platforms.csproj" />
   </Folder>
   <Folder Name="/UI/">
     <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
+    <Project Path="src/UI/LingFan.Media.Avalonia.Android/LingFan.Media.Avalonia.Android.csproj" />
   </Folder>
 </Solution>

@@ -251,7 +251,7 @@ public sealed class VideoView : Control, IRenderTarget
     /// <remarks>
     /// <para><b>推荐路径</b>：原生 GPU 模式下，<c>await _player.DisposeAsync()</c> 释放 GPU 资源
     /// （GPU flush + SwapChain 释放是真实异步 I/O，不能同步阻塞 UI 线程）。</para>
-    /// <para><b>ValueTask</b> 与 <see cref="IMediaPlayer.DisposeAsync()"/> 返回类型一致。</para>
+    /// <para><b>ValueTask</b> 与 <c>IMediaPlayer.DisposeAsync()</c> 返回类型一致。</para>
     /// <para><b>async void 绝对禁止</b>——此方法不是 void 覆写，是新增独立 async 方法。</para>
     /// <para>void 覆写 <see cref="OnDetachedFromVisualTree"/> 内调同步清理兜底（解绑事件 + 同步释放 Presenter），
     /// 禁止调 <c>DisposeAsync().GetResult()</c> 伪异步。</para>

@@ -36,6 +36,11 @@ public static class AndroidExtensions
         var options = new AndroidOptions();
         configure?.Invoke(options);
 
+        // 零拷贝策略由库内部收敛到 AndroidVideoDecodePolicy（环境变量 LFM_ANDROID_ZERO_COPY
+        // 仍是运行时覆盖入口，与 Options 形成两层配置）。
+        if (options.EnableHardwareZeroCopy)
+            Decoders.AndroidVideoDecodePolicy.EnableHardwareZeroCopy = true;
+
         // 注册 Android 后端入口（Singleton，持有选项与平台能力标记，无原生全局状态）
         builder.Services.AddSingleton<AndroidBackend>();
         builder.Services.AddSingleton(options);
