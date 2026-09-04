@@ -396,6 +396,11 @@ internal sealed class SkiaGpuVideoDrawOp : ICustomDrawOperation
             image = SKImage.FromTexture(
                 gr, backendTexture, GRSurfaceOrigin.TopLeft,
                 SKColorType.Rgba8888, SKAlphaType.Opaque);
+            // 【包装遥测】每 60 帧报一次 wrap 结果（与 DRAW-OP 心跳同 n 对齐）。失败警告只打一次
+            // 会被日志捕获窗口错过（direct3 教训），周期遥测让包装成败在任何窗口都可见。
+            if ((n % 60) == 1)
+                _owner.LogDrawGeometry(
+                    $"[DRAW-OP] #{n} wrap={(image is null ? "FAIL" : "OK")} layout={_descriptor.NativeImageLayout} usage=0x{_descriptor.NativeImageUsage:X}");
             if (image is null)
             {
                 _owner.OnDrawFailure("SKImage.FromTexture 返回 null（VkImage 包装失败）");
