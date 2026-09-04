@@ -76,7 +76,7 @@ public sealed unsafe partial class AndroidHardwareBufferFrameResource : IFrameRe
     }
 
     // NDK AHardwareBuffer_release：释放一个 AHardwareBuffer 引用（+1 由本类持有）。
-    // 源生成 P/Invoke（AOT 友好），EntryPoint 显式带下划线（与 VulkanSharedSurfaceSource 同款声明一致）。
+    // 源生成 P/Invoke（AOT 友好），EntryPoint 显式带下划线（与 GL 桥/共享表面源同款声明一致）。
     [LibraryImport("libandroid.so", EntryPoint = "AHardwareBuffer_release")]
     private static partial void AHardwareBufferRelease(IntPtr buffer);
 }

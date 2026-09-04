@@ -110,6 +110,11 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private uint _scratchTex;      // 每帧重绑 EGLImage（AHB）的 GL 纹理
     private uint _fbo;            // FBO（附着 scratchTex）
 
+    // ⚠️ AHB 环形缓冲池已在 direct7 实验后回退（每帧 allocate+一次性 EGLImage 是本机 Adreno
+    // 唯一稳定形态）：EGLImage 与 Vulkan import 并存/同 AHB 二次 CreateImage 均触发驱动故障
+    //（0x300C 循环失败 / 直采导入失败+旧路径崩溃）。直采架构下我方 0 次 vkQueueSubmit，
+    // gralloc churn 已无 -3 暴露面，池化收益不抵驱动兼容代价。
+
     // 扩展函数（运行时经 eglGetProcAddress 解析，AOT 友好 delegate*）。
     private delegate* unmanaged[Cdecl]<nint, nint> _eglGetNativeClientBufferAndroid = null;
     private delegate* unmanaged[Cdecl]<nint, nint, uint, nint, nint, nint> _eglCreateImageKhr = null;
@@ -317,10 +322,8 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         // 上下文保持 current：GL 线程常驻持有，不在此释放（治根T）。
     }
 
-    /// <summary>
-    /// 在 GL 线程上闩取最新帧并渲染进 RGBA AHardwareBuffer。上下文此时已 current（建上下文后从未释放），
-    /// 故此处<b>不做</b> eglMakeCurrent / 不做 finally 释放上下文——仅失败路径清理本帧的 AHB / EGLImage 资源。
-    /// </summary>
+    /// <summary>在 GL 线程上闩取最新帧并渲染进 RGBA AHardwareBuffer。上下文此时已 current（建上下文后从未释放），
+    /// 故此处<b>不做</b> eglMakeCurrent / 不做 finally 释放上下文——仅失败路径清理本帧的 AHB / EGLImage 资源。</summary>
     private nint ProduceFrameOnThisThread()
     {
         _logger?.LogTrace("[ANDROID-AHB-TRACE] ①GL线程产帧（托管线程={Tid}）", Environment.CurrentManagedThreadId);
