@@ -73,8 +73,9 @@
     <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.iOS/LingFan.Media.AvaloniaTools.iOS.csproj" />
     <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.csproj" />
   </Folder>
-  <Folder Name="/UI/">
-    <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
-    <Project Path="src/UI/LingFan.Media.Avalonia.Android/LingFan.Media.Avalonia.Android.csproj" />
+  <Folder Name="/UI/" />
+  <Folder Name="/UI/Avalonia/">
+    <Project Path="src/UI/Avalonia/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
+    <Project Path="src/UI/Avalonia/LingFan.Media.Avalonia.Android/LingFan.Media.Avalonia.Android.csproj" />
   </Folder>
 </Solution>

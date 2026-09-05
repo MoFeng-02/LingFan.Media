@@ -101,6 +101,10 @@ public partial class App : Application
         services.AddLogging(options =>
         {
             options.AddConsole();
+            // Debug provider 走 System.Diagnostics.Debug → .NET Android 转发 logcat DOTNET tag，
+            // 不经 stdout——Fast Deployment（xamarin.sync）模式下 Console 的 stdout 重定向失效，
+            // Android 设备上的托管日志只有这条通道可见。
+            //options.AddDebug();
             options.SetMinimumLevel(LogLevel.Information);
         });
 

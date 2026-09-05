@@ -2,6 +2,7 @@
   <Folder Name="/Infrastructure/">
     <Project Path="src/Infrastructure/LingFan.Media.Abstractions/LingFan.Media.Abstractions.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Audio/LingFan.Media.Audio.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Consumers/LingFan.Media.Consumers.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Core/LingFan.Media.Core.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Extensions/LingFan.Media.Extensions.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Formats/LingFan.Media.Formats.csproj" />
@@ -10,16 +11,23 @@
     <Project Path="src/Infrastructure/LingFan.Media.Video/LingFan.Media.Video.csproj" />
   </Folder>
   <Folder Name="/Backends/">
+    <Project Path="src/Backends/LingFan.Media.Backends.Apple/LingFan.Media.Backends.Apple.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.FFmpeg/LingFan.Media.Backends.FFmpeg.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.GStreamer/LingFan.Media.Backends.GStreamer.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.MediaCodec/LingFan.Media.Backends.MediaCodec.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.MediaFoundation/LingFan.Media.Backends.MediaFoundation.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj" />
+    <Project Path="src/Backends/LingFan.Media.Backends.VulkanVideo/LingFan.Media.Backends.VulkanVideo.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.WebRTC/LingFan.Media.Backends.WebRTC.csproj" />
+  </Folder>
+  <Folder Name="/Presenters/">
+    <Project Path="src/Presenters/LingFan.Media.GpuPresenter/LingFan.Media.GpuPresenter.csproj" />
   </Folder>
   <Folder Name="/Renderers/">
     <Project Path="src/Renderers/LingFan.Media.Renderers.D3D11/LingFan.Media.Renderers.D3D11.csproj" />
     <Project Path="src/Renderers/LingFan.Media.Renderers.Metal/LingFan.Media.Renderers.Metal.csproj" />
     <Project Path="src/Renderers/LingFan.Media.Renderers.OpenGL/LingFan.Media.Renderers.OpenGL.csproj" />
+    <Project Path="src/Renderers/LingFan.Media.Renderers.OpenGLES/LingFan.Media.Renderers.OpenGLES.csproj" />
     <Project Path="src/Renderers/LingFan.Media.Renderers.Shared/LingFan.Media.Renderers.Shared.csproj" />
     <Project Path="src/Renderers/LingFan.Media.Renderers.Vulkan/LingFan.Media.Renderers.Vulkan.csproj" />
   </Folder>
@@ -34,8 +42,12 @@
   <Folder Name="/Platforms/">
     <Project Path="src/Platforms/LingFan.Media.Platforms/LingFan.Media.Platforms.csproj" />
   </Folder>
-  <Folder Name="/UI/">
-    <Project Path="src/UI/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
-    <Project Path="src/UI/LingFan.Media.Avalonia.Android/LingFan.Media.Avalonia.Android.csproj" />
+  <Folder Name="/Apple/">
+    <Project Path="src/Apple/LingFan.Media.Apple.Shared/LingFan.Media.Apple.Shared.csproj" />
+  </Folder>
+  <Folder Name="/UI/" />
+  <Folder Name="/UI/Avalonia/">
+    <Project Path="src/UI/Avalonia/LingFan.Media.Avalonia/LingFan.Media.Avalonia.csproj" />
+    <Project Path="src/UI/Avalonia/LingFan.Media.Avalonia.Android/LingFan.Media.Avalonia.Android.csproj" />
   </Folder>
 </Solution>
