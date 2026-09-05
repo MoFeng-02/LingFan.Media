@@ -33,7 +33,12 @@ public sealed class VulkanSharedDeviceBootstrap : IVulkanSharedDeviceProvider
     }
 
     /// <inheritdoc />
-    public VulkanSharedDeviceHandles GetSharedDevice() =>
-        new(InstanceAdapter!.Handle, DeviceAdapter!.PhysicalDeviceHandle,
+    /// <remarks>幂等懒初始化：宿主未先行调用 <c>UseLingFanMediaAndroidVulkan</c>（如对照实验注释掉该行，
+    /// 但 DI 仍注册了本 provider）时在此补建，杜绝「已注册未初始化」状态下 null 解引用。</remarks>
+    public VulkanSharedDeviceHandles GetSharedDevice()
+    {
+        Initialize();
+        return new(InstanceAdapter!.Handle, DeviceAdapter!.PhysicalDeviceHandle,
             DeviceAdapter.Handle, DeviceAdapter.GraphicsQueueFamilyIndex);
+    }
 }

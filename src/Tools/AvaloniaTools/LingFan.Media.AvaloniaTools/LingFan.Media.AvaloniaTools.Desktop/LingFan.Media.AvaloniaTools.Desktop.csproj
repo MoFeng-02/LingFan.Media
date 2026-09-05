@@ -13,7 +13,7 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+		<PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
 		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
 	</ItemGroup>
 
@@ -57,31 +57,19 @@
        NativeAOT 下 dotnet publish 不会自动携带构建期复制的原生 dylib，须显式复制到 $(PublishDir)。
        仅 Apple 构建触发；Windows/Linux 跳过（Vulkan loader 由系统/驱动提供，无需此库）。 -->
 	<ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib"
-			  Link="%(Filename)%(Extension)"
-			  CopyToOutputDirectory="PreserveNewest"
-			  CopyToPublishDirectory="PreserveNewest" />
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 	</ItemGroup>
 
-	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish"
-			Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
 		<ItemGroup>
 			<MoltenVKDylib Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" />
 		</ItemGroup>
 		<!-- 构建输出（dotnet run / Debug） -->
-		<Copy SourceFiles="@(MoltenVKDylib)"
-			  DestinationFolder="$(OutDir)"
-			  SkipUnchangedFiles="true"
-			  Condition="'@(MoltenVKDylib)' != ''" />
+		<Copy SourceFiles="@(MoltenVKDylib)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(MoltenVKDylib)' != ''" />
 		<!-- 发布输出（dotnet publish / AOT） -->
-		<Copy SourceFiles="@(MoltenVKDylib)"
-			  DestinationFolder="$(PublishDir)"
-			  SkipUnchangedFiles="true"
-			  Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
-		<Message Condition="'@(MoltenVKDylib)' != ''"
-				 Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
-		<Message Condition="'@(MoltenVKDylib)' == ''"
-				 Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
+		<Copy SourceFiles="@(MoltenVKDylib)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
+		<Message Condition="'@(MoltenVKDylib)' != ''" Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(MoltenVKDylib)' == ''" Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
 		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 	</Target>
 	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish" Condition="$([MSBuild]::IsOSPlatform('OSX'))">

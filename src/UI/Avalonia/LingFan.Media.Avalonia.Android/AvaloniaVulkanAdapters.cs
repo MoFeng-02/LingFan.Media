@@ -8,6 +8,7 @@ public sealed class AvaloniaVulkanInstanceAdapter : global::Avalonia.Vulkan.IVul
 {
     private readonly nint _handle;
     private readonly string[] _extensions;
+    private nint _deviceFallbackHandle;
 
     public AvaloniaVulkanInstanceAdapter(nint handle, string[] extensions)
     {
@@ -19,9 +20,21 @@ public sealed class AvaloniaVulkanInstanceAdapter : global::Avalonia.Vulkan.IVul
 
     public IEnumerable<string> EnabledExtensions => _extensions;
 
-    // 直接转发 VulkanNative 的 proc-addr 封装（与 Avalonia 内部语义一致：实例级/设备级分派）。
-    public nint GetInstanceProcAddress(nint instance, string name) =>
-        LingFan.Media.GPUShare.Vulkan.VulkanNative.GetInstanceProcAddress(instance, name);
+    /// <summary>注册共享 device，供 NULL 实例解析兜底（VulkanDeviceFactory 在设备创建后调用）。</summary>
+    public void SetDeviceFallback(nint deviceHandle) => _deviceFallbackHandle = deviceHandle;
+
+    // 全局派发（instance=NULL）按 Vulkan 规范只保证返回引导子集；Avalonia 的 Skia getProc
+    // 在 device/instance 两路都未命中时以 NULL 实例解析设备级函数，Android loader 对此返回
+    // NULL（并打 invalid call 日志）→ GrContext 创建失败。本应用仅一个共享 device，此处
+    // 以其二次解析。核心名提升函数的 KHR 别名回退统一在 VulkanNative 解析层实现
+    //（实例/设备两路共用，媒体管线同享此兼容）。
+    public nint GetInstanceProcAddress(nint instance, string name)
+    {
+        var addr = LingFan.Media.GPUShare.Vulkan.VulkanNative.GetInstanceProcAddress(instance, name);
+        if (addr == 0 && _deviceFallbackHandle != 0)
+            addr = LingFan.Media.GPUShare.Vulkan.VulkanNative.GetDeviceProcAddress(_deviceFallbackHandle, name);
+        return addr;
+    }
 
     public nint GetDeviceProcAddress(nint device, string name) =>
         LingFan.Media.GPUShare.Vulkan.VulkanNative.GetDeviceProcAddress(device, name);

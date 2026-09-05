@@ -18,22 +18,34 @@ namespace LingFan.Media.AvaloniaTools.Android
 
         protected override AppBuilder CustomizeAppBuilder(AppBuilder builder)
         {
-            // 一步式引导：自建 Vulkan device 并注入 Avalonia（CustomSharedDevice），
-            // 使 Avalonia 与视频管线共用同一 VkDevice；同时设置 RenderingMode [Vulkan, Egl, Software]。
-            // 内部细节见 LingFan.Media.Platforms.Android.AndroidVulkanAppBuilderExtensions。
-            builder = builder.UseLingFanMediaAndroidVulkan();
+            try
+            {
 
-            // GPU 零拷贝出帧：经 AddMediaCodec 的 Options 配置（后端内部收敛到解码策略）。
-            // Android 平台后端（MediaCodec）经共享层平台注册钩子注入，共享层不引用平台后端。
-            MediaBuilderPlatformRegistrar.PlatformRegistrar =
-                b =>
-                {
-                    b.AddMediaCodec(o => o.EnableHardwareZeroCopy = true);
-                    // 共享 App 构建完成后按此契约把自建 device 注入 VulkanRendererFactory
-                    //（同 device 化 dma_buf 导入）。
-                    b.Services.AddSingleton<IVulkanSharedDeviceProvider>(VulkanSharedDeviceBootstrap.Instance);
-                };
+                // 一步式引导：自建 Vulkan device 并注入 Avalonia（CustomSharedDevice），
+                // 使 Avalonia 与视频管线共用同一 VkDevice；同时设置 RenderingMode [Vulkan, Egl, Software]。
+                // 内部细节见 LingFan.Media.Platforms.Android.AndroidVulkanAppBuilderExtensions。
+                builder = builder.UseLingFanMediaAndroidVulkan();
 
+                // GPU 零拷贝出帧：经 AddMediaCodec 的 Options 配置（后端内部收敛到解码策略）。
+                // Android 平台后端（MediaCodec）经共享层平台注册钩子注入，共享层不引用平台后端。
+                MediaBuilderPlatformRegistrar.PlatformRegistrar =
+                    b =>
+                    {
+                        b.AddMediaCodec(o => o.EnableHardwareZeroCopy = true);
+                        // 共享 App 构建完成后按此契约把自建 device 注入 VulkanRendererFactory
+                        //（同 device 化 dma_buf 导入）。
+                        b.Services.AddSingleton<IVulkanSharedDeviceProvider>(VulkanSharedDeviceBootstrap.Instance);
+                        // 直写 Android.Util.Log 的日志通道：Console/Debug provider 在 Fast Deployment
+                        // 下均不进 logcat，此 provider 是 Android 设备上托管日志的唯一可靠出口。
+                        b.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider, LogCatLoggerProvider>();
+                    };
+
+            }
+            catch (Exception ex)
+            {
+                var a = ex;
+                throw;
+            }
             return base.CustomizeAppBuilder(builder).WithInterFont();
         }
     }

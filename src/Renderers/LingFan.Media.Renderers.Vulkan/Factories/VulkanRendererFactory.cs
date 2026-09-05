@@ -774,8 +774,17 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
             AddIfAvail("VK_KHR_external_semaphore_fd");
             // Android AHB 零拷贝导入（MediaCodec 硬解帧 → Vulkan）：VK_ANDROID_external_memory_android_hardware_buffer。
             // 按可用性过滤（缺失则 AHB 导入路径由生产者 TryImport 返回 false 回落软解，不影响渲染）。
+            // VK_EXT_queue_family_foreign 是 AHB 扩展的规范依赖（外部持有 AHardwareBuffer 期间
+            // 图像处于 foreign 队列族），须与 AHB 成对按可用性启用。
             if (OperatingSystem.IsAndroid())
+            {
+                AddIfAvail("VK_EXT_queue_family_foreign");
                 AddIfAvail("VK_ANDROID_external_memory_android_hardware_buffer");
+                // 1.1/1.2/1.3 提升函数的 KHR 来源扩展：按可用性启用（严格 loader/驱动上提升函数
+                // 经 KHR 别名解析需要来源扩展；VulkanNative 解析层统一回退）。
+                foreach (var ext in VulkanNative.PromotedKhrDeviceExtensions)
+                    AddIfAvail(ext);
+            }
         }
         else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
         {

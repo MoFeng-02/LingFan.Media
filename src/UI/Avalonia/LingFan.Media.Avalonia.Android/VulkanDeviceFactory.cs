@@ -26,8 +26,9 @@ public static unsafe class VulkanDeviceFactory
     {
         LingFan.Media.GPUShare.Vulkan.VulkanNative.InitBootstrap();
 
-        // instance 扩展：surface 呈现 + 物理设备/外部内存能力枚举。
-        string[] instExt =
+        // instance 扩展：surface 呈现 + 物理设备/外部内存能力枚举；提升函数 KHR 来源扩展
+        // 按实例层可用性条件补齐（严格 loader/驱动上提升函数经别名解析需要来源扩展）。
+        List<string> instExt =
         [
             "VK_KHR_surface",
             "VK_KHR_android_surface",
@@ -35,11 +36,26 @@ public static unsafe class VulkanDeviceFactory
             "VK_KHR_external_memory_capabilities",
             "VK_KHR_external_semaphore_capabilities",
         ];
+        var availableInstanceExts = LingFan.Media.GPUShare.Vulkan.VulkanNative.EnumerateInstanceExtensionNames();
+        foreach (var ext in LingFan.Media.GPUShare.Vulkan.VulkanNative.PromotedKhrInstanceExtensions)
+            if (!instExt.Contains(ext) && availableInstanceExts.Contains(ext))
+                instExt.Add(ext);
+        string[] instExtArr = [.. instExt];
+
+        // 声明实例 apiVersion=1.1：未设 ApplicationInfo 时实例被 loader 视为 1.0，使用 1.1 提升
+        // 扩展/函数属规范违规。部分严格 loader/驱动对提升函数核心名派发的拒绝独立于此声明，
+        // KHR 别名回退（见 VulkanNative 解析层）才是兼容主通道；本声明合规且无害。
+        ApplicationInfo appInfo = new()
+        {
+            SType = StructureType.ApplicationInfo,
+            ApiVersion = (1u << 22) | (1u << 12), // VK_API_VERSION_1_1（major<<22 | minor<<12 | patch）
+        };
         InstanceCreateInfo ici = new()
         {
             SType = StructureType.InstanceCreateInfo,
-            EnabledExtensionCount = (uint)instExt.Length,
-            PpEnabledExtensionNames = AllocStringPtrArray(instExt),
+            PApplicationInfo = &appInfo,
+            EnabledExtensionCount = (uint)instExtArr.Length,
+            PpEnabledExtensionNames = AllocStringPtrArray(instExtArr),
         };
         Silk.NET.Vulkan.Result r = LingFan.Media.GPUShare.Vulkan.VulkanNative.CreateInstance(ref ici, null, out Instance instance);
         if (r != Silk.NET.Vulkan.Result.Success)
@@ -89,18 +105,33 @@ public static unsafe class VulkanDeviceFactory
             "VK_KHR_sampler_ycbcr_conversion",
             "VK_KHR_maintenance1",
         ];
+        // foreign 队列族扩展：VK_ANDROID_external_memory_android_hardware_buffer 的规范依赖
+        //（MediaCodec/GLES 持有 AHardwareBuffer 期间图像处于 VK_QUEUE_FAMILY_FOREIGN_EXT 队列族，
+        // 相关所有权转移须启用本扩展才符合规范）。Avalonia 官方 Android Vulkan 契约亦要求
+        // {AHB, foreign} 成对启用；宽松驱动缺它也放行，严格驱动按规范校验，缺失可致 AHB 导入失效。
+        // 按物理设备支持条件启用，不硬塞以免 CreateDevice 失败。
+        bool foreignSupported = DeviceSupportsExtension(physicalDevices[0], "VK_EXT_queue_family_foreign");
+        if (foreignSupported)
+            devExt.Add("VK_EXT_queue_family_foreign");
+
         // AHB 零拷贝帧导入：GLES 桥接产出的 AHardwareBuffer 帧须经此扩展导入 Vulkan 采样；
         // 未启用时 vkGetAndroidHardwareBufferPropertiesANDROID 不可解析，AHB 帧路径整体不可用
         //（解码器自动回退 ByteBuffer CPU 档）。按物理设备支持条件启用，不硬塞以免 CreateDevice 失败。
-        if (DeviceSupportsExtension(physicalDevices[0], "VK_ANDROID_external_memory_android_hardware_buffer"))
-        {
+        bool ahbSupported = DeviceSupportsExtension(physicalDevices[0], "VK_ANDROID_external_memory_android_hardware_buffer");
+        if (ahbSupported)
             devExt.Add("VK_ANDROID_external_memory_android_hardware_buffer");
-            Console.WriteLine("[ANDROID-VULKAN] 已启用 VK_ANDROID_external_memory_android_hardware_buffer（AHB 零拷贝帧导入就绪）。");
-        }
-        else
-        {
+        if (!ahbSupported)
             Console.WriteLine("[ANDROID-VULKAN] 物理设备不支持 AHB 外部内存扩展，AHB 零拷贝不可用（解码器自动回退 CPU 帧）。");
-        }
+        else if (!foreignSupported)
+            Console.WriteLine("[ANDROID-VULKAN] 物理设备不支持 foreign 队列族扩展（AHB 规范依赖），AHB 导入在此驱动上可能失效。");
+
+        // 1.1/1.2/1.3 提升函数的 KHR 来源扩展：按物理设备支持条件启用——严格 loader/驱动上
+        // 提升函数经别名解析（见 VulkanNative 解析层）需要来源扩展处于启用态。
+        foreach (var ext in LingFan.Media.GPUShare.Vulkan.VulkanNative.PromotedKhrDeviceExtensions)
+            if (!devExt.Contains(ext) && DeviceSupportsExtension(physicalDevices[0], ext))
+                devExt.Add(ext);
+
+        Console.WriteLine($"[ANDROID-VULKAN] device 扩展绑定清单：{string.Join(", ", devExt)}");
 
         float queuePriority = 1.0f;
         DeviceQueueCreateInfo qci = new()
@@ -124,9 +155,19 @@ public static unsafe class VulkanDeviceFactory
         LingFan.Media.GPUShare.Vulkan.VulkanNative.InitDevice(device, samplerYcbcrFeatureEnabled: true);
         LingFan.Media.GPUShare.Vulkan.VulkanNative.GetDeviceQueue(device, family, 0, out Queue queue);
 
-        var instanceAdapter = new AvaloniaVulkanInstanceAdapter(instance.Handle, instExt);
+        // 派发探测：1.1 核心函数能否经本 device 解析（含 KHR 别名回退），是 Skia GrContext
+        // 创建成败的直接前兆。NULL 表示核心名与别名双路均被 loader/驱动拒绝。
+        nint probe11 = LingFan.Media.GPUShare.Vulkan.VulkanNative.GetDeviceProcAddress(
+            device.Handle, "vkGetImageMemoryRequirements2");
+        Console.WriteLine($"[ANDROID-VULKAN] instance apiVersion=1.1（ApplicationInfo）；" +
+            $"1.1 核心函数派发探测（含 KHR 别名回退，vkGetImageMemoryRequirements2）={(probe11 != 0 ? "可解析" : "NULL")}");
+
+        var instanceAdapter = new AvaloniaVulkanInstanceAdapter(instance.Handle, instExtArr);
         var deviceAdapter = new AvaloniaVulkanDeviceAdapter(
             device.Handle, physicalDevices[0].Handle, queue.Handle, family, instanceAdapter, [.. devExt]);
+        // Avalonia 的 Skia getProc 兜底会以 NULL 实例解析设备级函数（Android loader 非法），
+        // 适配器以本应用唯一共享 device 二次解析（见 AvaloniaVulkanInstanceAdapter）。
+        instanceAdapter.SetDeviceFallback(device.Handle);
         return (instanceAdapter, deviceAdapter);
     }
 

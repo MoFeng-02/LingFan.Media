@@ -1,6 +1,8 @@
+#if ANDROID23_0_OR_GREATER
 using System.Runtime.Versioning;
 using Avalonia;
 using Avalonia.Android;
+using Avalonia.Logging;
 
 namespace LingFan.Media.Avalonia.Android;
 
@@ -19,6 +21,10 @@ public static class AndroidVulkanAppBuilderExtensions
     /// 恒为空集，共享表面源工厂不可能命中；切到 Vulkan 后合成器上报
     /// <c>VulkanOpaquePosixFileDescriptor</c>（dma_buf），与 Linux 一致。
     /// 设备不支持 Vulkan 时自动回落 EGL/软件，不影响能播档。</para>
+    /// <para>同时开启 Avalonia 内部日志直灌 logcat（tag AVALONIA，Verbose 级）：Avalonia 平台渲染层
+    /// （后端初始化/合成器 render target/swapchain——黑屏问题的所在层）不走 MEL 且默认全静默，
+    /// LogToTrace→调试器通道、LogToConsole→stdout 在 Fast Deployment 下均不可见，
+    /// LogToDelegate→Android.Util.Log 是设备上唯一可靠出口。</para>
     /// <para>配套要求：DI 侧注册 <c>AddSingleton&lt;IVulkanSharedDeviceProvider&gt;(VulkanSharedDeviceBootstrap.Instance)</c>
     /// 并在 App 构建后向 <c>VulkanRendererFactory</c> 注入外部 device（共享 App 已内置该逻辑）。</para>
     /// </remarks>
@@ -42,6 +48,15 @@ public static class AndroidVulkanAppBuilderExtensions
                     AndroidRenderingMode.Egl,
                     AndroidRenderingMode.Software,
                 ],
-            });
+            })
+            // Avalonia 内部日志直灌 logcat（tag AVALONIA，全量 Verbose）：平台渲染层（后端初始化/
+            // 合成器 render target/swapchain——黑屏问题所在层）不走 MEL 且默认全静默；LogToTrace→
+            // 调试器通道、LogToConsole→stdout 在 Fast Deployment 下均不可见，LogToDelegate→
+            // Android.Util.Log 是设备上唯一可靠出口。回调为 Action&lt;string&gt;（官方 API，无 level 参数）。
+            .LogToDelegate(
+                message => global::Android.Util.Log.WriteLine(
+                    global::Android.Util.LogPriority.Info, "AVALONIA", message),
+                LogEventLevel.Verbose);
     }
 }
+#endif

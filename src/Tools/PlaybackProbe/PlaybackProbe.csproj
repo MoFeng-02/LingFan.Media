@@ -18,7 +18,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
 		<!-- 原生 libvlc 运行时分发包（LGPL）。随 PlaybackProbe 输出自带，供 VLCNative 后端运行时加载（库本体不含原生运行时）。 -->
-		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
 	</ItemGroup>
 
   <ItemGroup>
