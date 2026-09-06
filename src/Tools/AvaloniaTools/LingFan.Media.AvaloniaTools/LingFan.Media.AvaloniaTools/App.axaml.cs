@@ -73,7 +73,8 @@ public partial class App : Application
             // MF（同步 MFT）+ D3D11 共享设备（FFmpeg D3D11VA 零拷贝 / MF DXVA）+ D3D11 渲染器 + WASAPI 音频。
             // AddD3D11Renderer 同时注册共享表面源工厂（ISharedGpuSurfaceSourceFactory，供无空域合成上屏使用）。
             builder
-                //.AddMediaFoundation()
+                .AddMediaFoundation()
+                .AddFFmpeg()
                 .AddD3D11Renderer()
                 .AddWasapiOutput();
         }

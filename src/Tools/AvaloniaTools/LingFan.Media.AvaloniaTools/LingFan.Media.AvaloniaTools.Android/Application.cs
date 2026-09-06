@@ -16,9 +16,27 @@ namespace LingFan.Media.AvaloniaTools.Android
         {
         }
 
+        private static void Marker(string name)
+        {
+            try
+            {
+                var dir = global::Android.App.Application.Context?.FilesDir?.AbsolutePath ?? "/data/data/com.CompanyName.LingFan.Media.AvaloniaTools/files";
+                System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.WriteAllText(System.IO.Path.Combine(dir, name), DateTime.Now.ToString("HH:mm:ss.fff"));
+            }
+            catch { }
+        }
+
+        public override void OnCreate()
+        {
+            Marker("mark_oncreate.txt");
+            base.OnCreate();
+        }
+
         protected override AppBuilder CustomizeAppBuilder(AppBuilder builder)
         {
             // Release AOT 下 Console 可能不经 stdout→logcat，启动期锚点一律用 Android.Util.Log 直写。
+            Marker("mark_customize.txt");
             global::Android.Util.Log.WriteLine(global::Android.Util.LogPriority.Info, "DOTNET",
                 "[ANDROID-VULKAN] Application.CustomizeAppBuilder 进入");
             try

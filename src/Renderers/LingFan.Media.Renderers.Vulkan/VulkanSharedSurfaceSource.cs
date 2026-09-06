@@ -1256,10 +1256,17 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             SType = StructureType.ExportSemaphoreCreateInfo,
             HandleTypes = _semHandleType,
         };
+        // 关键：必须在 flags 置 VK_SEMAPHORE_CREATE_EXTERNAL_SEMAPHORE_EXPORT_BIT(0x1)。
+        // VkExportSemaphoreCreateInfo(handleTypes=OPAQUE_FD) 只有在该 flag 置位时才生效；
+        // 只塞 exportInfo 而不置 flag，严格驱动（Adreno/Mali）不把信号量标为可导出 →
+        // vkGetSemaphoreFdKHR 返回 VK_ERROR_INVALID_EXTERNAL_HANDLE → 工厂创建失败 → 回退 Skia。
+        //（Mesa 宽松忽略该约束故 Linux 不炸；Silk.NET 的 SemaphoreCreateFlags 仅含 None，
+        //  导出位必须以字面值 1 强转，无命名常量。）
         SemaphoreCreateInfo semInfo = new()
         {
             SType = StructureType.SemaphoreCreateInfo,
             PNext = (void*)&extSemInfo,
+            Flags = (SemaphoreCreateFlags)1, // VK_SEMAPHORE_CREATE_EXTERNAL_SEMAPHORE_EXPORT_BIT
         };
 
         Result r1 = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _consumerWaitSem);

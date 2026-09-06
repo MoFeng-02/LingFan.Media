@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using LingFan.Media.Abstractions;
-using Microsoft.Extensions.Logging;
-
 namespace LingFan.Media.Avalonia;
 
 /// <summary>
