@@ -18,8 +18,15 @@ namespace LingFan.Media.AvaloniaTools.Android
 
         protected override AppBuilder CustomizeAppBuilder(AppBuilder builder)
         {
+            // Release AOT 下 Console 可能不经 stdout→logcat，启动期锚点一律用 Android.Util.Log 直写。
+            global::Android.Util.Log.WriteLine(global::Android.Util.LogPriority.Info, "DOTNET",
+                "[ANDROID-VULKAN] Application.CustomizeAppBuilder 进入");
             try
             {
+                // Release（无调试器）下 Mono 不再把 stdout 重定向到 logcat，Console 诊断锚点会静默；
+                // 启动期把两个标准流接回 logcat（tag=DOTNET），恢复 Release 构建的观测能力。
+                Console.SetOut(new LogCatTextWriter(global::Android.Util.LogPriority.Info));
+                Console.SetError(new LogCatTextWriter(global::Android.Util.LogPriority.Error));
 
                 // 一步式引导：自建 Vulkan device 并注入 Avalonia（CustomSharedDevice），
                 // 使 Avalonia 与视频管线共用同一 VkDevice；同时设置 RenderingMode [Vulkan, Egl, Software]。

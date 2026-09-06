@@ -37,27 +37,36 @@ public sealed class VulkanSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
 {
     private readonly VulkanRendererFactory _rendererFactory;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly SharedGpuHandleKind? _handleKindOverride;
 
     /// <summary>
     /// 初始化 <see cref="VulkanSharedSurfaceSourceFactory"/> 的新实例。
     /// </summary>
     /// <param name="rendererFactory">Vulkan 渲染器工厂（持有共享 Vulkan 设备与设备身份）。</param>
     /// <param name="loggerFactory">日志工厂。</param>
-    public VulkanSharedSurfaceSourceFactory(VulkanRendererFactory rendererFactory, ILoggerFactory loggerFactory)
+    /// <param name="handleKindOverride">
+    /// 句柄形态覆盖（缺省为 null = 按平台默认）。同一平台可注册多形态工厂供不同消费方按
+    /// 契约自选：如 Android 上默认 <see cref="SharedGpuHandleKind.VulkanNativeImage"/>（Skia GPU
+    /// 直采样回退），另注册 <see cref="SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor"/> 形态
+    /// 交宿主合成器零拷贝导入（fd 由同一注入 VkDevice 导入）。
+    /// </param>
+    public VulkanSharedSurfaceSourceFactory(VulkanRendererFactory rendererFactory, ILoggerFactory loggerFactory, SharedGpuHandleKind? handleKindOverride = null)
     {
         _rendererFactory = rendererFactory ?? throw new ArgumentNullException(nameof(rendererFactory));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _handleKindOverride = handleKindOverride;
     }
 
     /// <inheritdoc/>
     public SharedGpuHandleKind HandleKind =>
-        OperatingSystem.IsWindows()
+        _handleKindOverride
+        ?? (OperatingSystem.IsWindows()
             ? SharedGpuHandleKind.VulkanOpaqueNtHandle
             : OperatingSystem.IsMacOS() || OperatingSystem.IsIOS()
                 ? SharedGpuHandleKind.IOSurfaceRef
                 : OperatingSystem.IsAndroid()
                     ? SharedGpuHandleKind.VulkanNativeImage
-                    : SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
+                    : SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor);
 
     /// <inheritdoc/>
     /// <remarks>平台级判定（不触碰原生资源）：Windows / Linux / Android / macOS / iOS 均放行；
@@ -97,6 +106,6 @@ public sealed class VulkanSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
         }
 
         return new VulkanSharedSurfaceSource(
-            _rendererFactory, _loggerFactory.CreateLogger<VulkanSharedSurfaceSource>());
+            _rendererFactory, _loggerFactory.CreateLogger<VulkanSharedSurfaceSource>(), _handleKindOverride);
     }
 }

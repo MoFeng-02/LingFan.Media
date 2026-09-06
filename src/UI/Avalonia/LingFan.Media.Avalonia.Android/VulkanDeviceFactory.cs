@@ -24,6 +24,9 @@ public static unsafe class VulkanDeviceFactory
     /// <exception cref="InvalidOperationException">Vulkan 初始化任一步失败。</exception>
     public static (AvaloniaVulkanInstanceAdapter Instance, AvaloniaVulkanDeviceAdapter Device) Create()
     {
+        // 直写 Android.Util.Log（不依赖 Console→logcat 链路）：Release AOT 下确认本工厂是否被执行。
+        global::Android.Util.Log.WriteLine(global::Android.Util.LogPriority.Info, "DOTNET",
+            "[ANDROID-VULKAN] VulkanDeviceFactory.Create 进入");
         LingFan.Media.GPUShare.Vulkan.VulkanNative.InitBootstrap();
 
         // instance 扩展：surface 呈现 + 物理设备/外部内存能力枚举；提升函数 KHR 来源扩展

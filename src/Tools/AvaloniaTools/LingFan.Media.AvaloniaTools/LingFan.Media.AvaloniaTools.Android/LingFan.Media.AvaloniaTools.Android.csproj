@@ -39,6 +39,12 @@
 	       ============================================================ -->
 		<RunAOTCompilation>true</RunAOTCompilation>
 		<EnableLLVM>False</EnableLLVM>
+		<!-- 链接模式 SdkOnly（仅链接 SDK/BCL 程序集，保留 Avalonia.Android 等 NuGet 原样）：
+		     默认的完整链接会把 AvaloniaAndroidApplication&lt;T&gt; 泛型基类对 CustomizeAppBuilder
+		     的虚调用链裁断，导致 Vulkan 共享 device 注入（自建 instance/device + LogCatLoggerProvider
+		     + fd 形态工厂注册）在 Release AOT 下整体不执行（Debug 无链接器故正常）。
+		     None + AOT 会触发 Mono instance_size 断言崩溃，不可用；SdkOnly 是经典兼容组合。 -->
+		<AndroidLinkMode>SdkOnly</AndroidLinkMode>
 		<!-- Release 下 .NET for Android 会做程序集裁剪（"优化程序集大小"），其 trim 分析器扫描整张
 	       依赖图。Avalonia.DesignerSupport / Avalonia.Remote.Protocol（经 Avalonia.Android →
 	       Avalonia 传递引入）是 **XAML 预览器的设计时程序集**，重度依赖反射（Assembly.LoadFrom、

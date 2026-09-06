@@ -65,6 +65,19 @@ public static class VulkanExtensions
         builder.Services.AddSingleton<ISharedGpuSurfaceSourceFactory>(sp =>
             sp.GetRequiredService<VulkanSharedSurfaceSourceFactory>());
 
+        // Android 追加 fd 形态工厂（VulkanOpaquePosixFileDescriptor）：交宿主合成器零拷贝导入。
+        // fd 由宿主注入的同一 VkDevice 导入，跨实例时代的 dedicated 导入死结已随同 device 化化解；
+        // 消费方导入自检失败时自动回退下一工厂（NativeImage 形态 / Skia），既有路径零回归。
+        // 与默认形态（VulkanNativeImage，Skia GPU 直采样回退）并存，消费方按契约自选。
+        if (OperatingSystem.IsAndroid())
+        {
+            builder.Services.AddSingleton<ISharedGpuSurfaceSourceFactory>(sp =>
+                new VulkanSharedSurfaceSourceFactory(
+                    sp.GetRequiredService<VulkanRendererFactory>(),
+                    sp.GetRequiredService<ILoggerFactory>(),
+                    SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor));
+        }
+
         // E3 后端自动选择：启用且未显式指定时，Vulkan 作为候选默认 GPU 后端（与 D3D11 同构守卫）。
         // 默认仍面向无空域合成；独立 Win32 HWND 路径为 opt-in（由消费方显式 Attach HWND 启用）。
         if (builder.Options.EnableAutoBackendSelection && builder.Options.DefaultVideoRenderer is null)
