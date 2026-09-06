@@ -122,6 +122,52 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private const int AhbDirectRetireDepth = 8;
     private bool _ahbDirectDiagLogged;
 
+    // ── 写入停摆看门狗 ──
+    // TryWriteFrame 只在管线线程串行执行。此处仅记录「当前阶段 + 进入时刻」，由独立定时器在
+    // 写入久未返回时告警，用于定位卡死在哪个原生调用；正常播放期间零日志输出。
+    private long _writeSeq;
+    private int _stageActive; // 0=空闲 1=写入中
+    private string? _lastStage;
+    private long _lastStageQpc;
+    private long _stallMarkQpc;       // 上次告警对应的阶段进入时刻（阶段推进后重新武装）
+    private long _stallNextReportQpc; // 同一阶段的重复告警节流（10s）
+    private System.Threading.Timer? _stallTimer;
+
+    /// <summary>记录当前写入阶段（Volatile 写，供看门狗定时器线程读取）。</summary>
+    private void MarkStage(string stage)
+    {
+        Volatile.Write(ref _lastStage, stage);
+        Volatile.Write(ref _lastStageQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+    }
+
+    /// <summary>懒启动停摆看门狗定时器（首次写入时创建，Dispose 时停止）。</summary>
+    private void EnsureStallTimer()
+    {
+        if (_stallTimer is not null)
+            return;
+        var timer = new System.Threading.Timer(StallTick, null, 2000, 2000);
+        if (Interlocked.CompareExchange(ref _stallTimer, timer, null) is not null)
+            timer.Dispose();
+    }
+
+    private void StallTick(object? state)
+    {
+        if (_disposed || Volatile.Read(ref _stageActive) == 0)
+            return;
+        long stageStart = Volatile.Read(ref _lastStageQpc);
+        double stuckSec = System.Diagnostics.Stopwatch.GetElapsedTime(stageStart).TotalSeconds;
+        if (stuckSec < 3.0)
+            return;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (stageStart == Volatile.Read(ref _stallMarkQpc) && now < Volatile.Read(ref _stallNextReportQpc))
+            return;
+        Volatile.Write(ref _stallMarkQpc, stageStart);
+        Volatile.Write(ref _stallNextReportQpc, now + 10 * System.Diagnostics.Stopwatch.Frequency);
+        _logger.LogError(
+            "[VSS-STALL] 共享表面写入疑似停摆：帧={Seq} 卡在={Stage} 已停留={Sec:F1}s（未返回=阻塞在该阶段内部的原生调用）",
+            Volatile.Read(ref _writeSeq), Volatile.Read(ref _lastStage) ?? "<unknown>", stuckSec);
+    }
+
     // 信号量对（长期对象，随源创建/释放；消费方导入一次长期使用）。
     private Semaphore _consumerWaitSem;
     private Semaphore _consumerSignalSem;
@@ -267,11 +313,29 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     /// <inheritdoc/>
     public bool TryWriteFrame(VideoFrame frame, out SharedGpuSurfaceDescriptor descriptor)
     {
+        // 停摆看门狗：进入即置位并记录阶段，返回（含异常路径）时复位。
+        EnsureStallTimer();
+        Volatile.Write(ref _stageActive, 1);
+        MarkStage("enter");
+        try
+        {
+            return TryWriteFrameCore(frame, out descriptor);
+        }
+        finally
+        {
+            MarkStage("done");
+            Volatile.Write(ref _stageActive, 0);
+        }
+    }
+
+    private bool TryWriteFrameCore(VideoFrame frame, out SharedGpuSurfaceDescriptor descriptor)
+    {
         descriptor = default;
         if (_disposed)
             return false;
         if (frame.Resource is null)
             return false;
+        Interlocked.Increment(ref _writeSeq);
 
         // 每帧重置 AHB 自提交标志（仅 Android AHB 零拷贝路径在 TryRecordAhbConversion 内部分步自提交后置位）。
         _ahbSelfSubmitted = false;
@@ -303,8 +367,10 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             if (_isAndroid && TryBuildAhbDirectDescriptor(ahb, w, h, frame.RotationDegrees, out descriptor))
                 return true;
 
+            MarkStage("EnsureSharedSurface");
             EnsureSharedSurface(w, h);
             _pipeline!.EnsureOffscreenResources(_surfaceVkFormat, new Extent2D((uint)w, (uint)h), _isAndroid ? _convertView : _sharedImageViews[0]);
+            MarkStage("AhbConvert.Record");
             recorded = TryRecordAhbConversion(ahb, w, h);
         }
         else if (frame.Resource is SoftwareFrameResource sw)
@@ -319,8 +385,10 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             path = "SOFT-UPLOAD(CPU→GPU)";
             w = sw.Width;
             h = sw.Height;
+            MarkStage("EnsureSharedSurface");
             EnsureSharedSurface(w, h);
             _pipeline!.EnsureOffscreenResources(_surfaceVkFormat, new Extent2D((uint)w, (uint)h), _isAndroid ? _convertView : _sharedImageViews[0]);
+            MarkStage("SoftwareUpload.Record");
             recorded = TryRecordSoftwareUpload(sw, w, h);
         }
         else
@@ -336,6 +404,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         if (!_ahbSelfSubmitted)
         {
             // 公共提交段：EndCommandBuffer → QueueSubmit（可选信号量握手）→ 有限超时 WaitForFences。
+            MarkStage("Submit.EndCommandBuffer");
             Result result = VulkanNative.EndCommandBuffer(_commandBuffer);
             if (result != Result.Success)
             {
@@ -367,6 +436,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 submitInfo.PSignalSemaphores = &signalSem;
             }
 
+            MarkStage("Submit.QueueSubmit");
             result = VulkanNative.QueueSubmit(_queue, 1, &submitInfo, (nint)fence.Handle);
             if (result != Result.Success)
             {
@@ -375,6 +445,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             }
 
             // 有限超时等待 GPU 完成（与 D3D11 16ms keyed mutex 超时对称）——超时=消费方未归还 → 丢帧。
+            MarkStage("Submit.WaitForFences");
             Result waitR = VulkanNative.WaitForFences(_device, 1, &fence, 1u, WriteWaitTimeoutNs);
             if (waitR == Result.Timeout)
             {
@@ -729,6 +800,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     {
         descriptor = default;
 
+        MarkStage("AHB-DIRECT.GetAhbProperties");
         AndroidHardwareBufferFormatPropertiesANDROID formatProps = new()
         {
             SType = StructureType.AndroidHardwareBufferFormatPropertiesAndroid,
@@ -776,6 +848,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             InitialLayout = ImageLayout.Undefined,
             PNext = &extMem,
         };
+        MarkStage("AHB-DIRECT.CreateImage");
         if (VulkanNative.CreateImage(_device, &ci, null, out Image ahbImage) != Result.Success)
         {
             _logger.LogTrace("vkCreateImage（AHB 直采样 usage=0x17）失败，回落 SAMPLED-only。");
@@ -805,12 +878,14 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             AllocationSize = props.AllocationSize,
             MemoryTypeIndex = ExternalCompatibleMemoryType(props.MemoryTypeBits),
         };
+        MarkStage("AHB-DIRECT.AllocateMemory");
         if (VulkanNative.AllocateMemory(_device, &ai, null, out DeviceMemory ahbMemory) != Result.Success)
         {
             _logger.LogTrace("vkAllocateMemory（AHB 直采样导入）失败。");
             VulkanNative.DestroyImage(_device, ahbImage, null);
             return false;
         }
+        MarkStage("AHB-DIRECT.BindImageMemory");
         if (VulkanNative.BindImageMemory(_device, ahbImage, ahbMemory, 0) != Result.Success)
         {
             _logger.LogTrace("vkBindImageMemory（AHB 直采样导入）失败。");
@@ -832,7 +907,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         while (_ahbDirectRetire.Count >= AhbDirectRetireDepth)
         {
             (Image oldImage, DeviceMemory oldMemory) = _ahbDirectRetire.Dequeue();
+            MarkStage("AHB-DIRECT.RetireDestroyImage");
             VulkanNative.DestroyImage(_device, oldImage, null);
+            MarkStage("AHB-DIRECT.RetireFreeMemory");
             VulkanNative.FreeMemory(_device, oldMemory, null);
         }
         _ahbDirectRetire.Enqueue((ahbImage, ahbMemory));
@@ -1256,17 +1333,10 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             SType = StructureType.ExportSemaphoreCreateInfo,
             HandleTypes = _semHandleType,
         };
-        // 关键：必须在 flags 置 VK_SEMAPHORE_CREATE_EXTERNAL_SEMAPHORE_EXPORT_BIT(0x1)。
-        // VkExportSemaphoreCreateInfo(handleTypes=OPAQUE_FD) 只有在该 flag 置位时才生效；
-        // 只塞 exportInfo 而不置 flag，严格驱动（Adreno/Mali）不把信号量标为可导出 →
-        // vkGetSemaphoreFdKHR 返回 VK_ERROR_INVALID_EXTERNAL_HANDLE → 工厂创建失败 → 回退 Skia。
-        //（Mesa 宽松忽略该约束故 Linux 不炸；Silk.NET 的 SemaphoreCreateFlags 仅含 None，
-        //  导出位必须以字面值 1 强转，无命名常量。）
         SemaphoreCreateInfo semInfo = new()
         {
             SType = StructureType.SemaphoreCreateInfo,
             PNext = (void*)&extSemInfo,
-            Flags = (SemaphoreCreateFlags)1, // VK_SEMAPHORE_CREATE_EXTERNAL_SEMAPHORE_EXPORT_BIT
         };
 
         Result r1 = VulkanNative.CreateSemaphore(_device, ref semInfo, null, out _consumerWaitSem);
@@ -1791,6 +1861,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         if (_disposed)
             return;
         _disposed = true;
+        _stallTimer?.Dispose();
+        _stallTimer = null;
 
         if (_device.Handle != 0)
             VulkanNative.DeviceWaitIdle(_device);

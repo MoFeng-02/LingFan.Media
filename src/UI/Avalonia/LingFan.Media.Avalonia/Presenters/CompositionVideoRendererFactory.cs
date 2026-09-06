@@ -36,6 +36,15 @@ public sealed class CompositionVideoRendererFactory : IVideoRendererFactory
     /// <inheritdoc/>
     public IVideoRenderer Create()
     {
+        // Android 直接让位：合成器句柄类型（VulkanOpaquePosixFileDescriptor）不含生产者提供的
+        // VulkanNativeImage，且 Vulkan 外部信号量的 fd 导出在 Android 驱动上不受支持（创建共享源
+        // 时必失败）——本渲染器在 Android 上不存在可用导入路径，同 device Skia GPU 直绘
+        // （SkiaGpuVideoRendererFactory）完整覆盖该场景。此处直接抛出，让 VideoView 回退链
+        // 跳过本工厂，避免每次挂载都要经历一次完整的延迟解析失败再回退。
+        if (OperatingSystem.IsAndroid())
+            throw new NotSupportedException(
+                "Android 上无空域合成导入路线不可用（合成器句柄类型不含 VulkanNativeImage，且外部信号量 fd 导出不受支持）；请使用同 device Skia GPU 直绘路径。");
+
         // 零拷贝硬解硬渲染路径（Android 同其他平台）：优先无空域 GPU 合成
         // （CompositionVideoRenderer → VulkanSharedSurfaceSource 消费 AndroidHardwareBufferFrameResource），
         // 解码侧零 CPU 拷贝、渲染侧 GPU 内 YCbCr 转换上屏。

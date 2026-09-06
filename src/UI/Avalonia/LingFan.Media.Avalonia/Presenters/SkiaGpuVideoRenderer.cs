@@ -60,6 +60,22 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
     private bool _firstFrameLogged;
     private bool _drawFailureLogged;
 
+    // ── 渲染线程消费心跳 ──
+    // Present（管线线程）持续写入共享表面；DrawOp.Render（Avalonia 渲染线程）消费并绘制。
+    // 若写入持续推进而渲染线程长时间未绘制，说明画面可能定格（管线侧计数与真实上屏脱节）。
+    // Present 侧据此告警（节流：重新积累写入帧数后才可能再次触发），渲染线程侧零日志开销。
+    private long _drawSeq;                  // 渲染线程已成功绘制的帧序号
+    private long _lastDrawQpc;              // 最近一次成功绘制的时刻
+    private int _framesSinceLastDraw;       // 自上次成功绘制以来管线写入的帧数
+
+    /// <summary>渲染线程完成一帧采样绘制后回调（记录心跳，供写入侧判定渲染线程是否停滞）。</summary>
+    internal void OnDrawn()
+    {
+        Interlocked.Increment(ref _drawSeq);
+        Volatile.Write(ref _lastDrawQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+        Interlocked.Exchange(ref _framesSinceLastDraw, 0);
+    }
+
     /// <summary>渲染线程绘制诊断（DrawOp 调用：[DRAW-OP] 心跳/wrap 遥测/几何对账，Trace 级）。</summary>
     internal void LogDrawGeometry(string message)
         => _logger.LogTrace("[SKIA-GPU-DRAW] {Message}", message);
@@ -167,6 +183,20 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
                     desc.Width, desc.Height, desc.Version);
             }
             _consecutiveFailures = 0;
+
+            // 渲染线程消费心跳检查：管线持续写入而渲染线程长时间未绘制 ⇒ 画面可能定格。
+            // 仅告警不干预——真实修复取决于渲染线程侧状态（包装失败已有 OnDrawFailure 通道）。
+            if (Volatile.Read(ref _lastDrawQpc) != 0 && Interlocked.Increment(ref _framesSinceLastDraw) > 90)
+            {
+                double drawIdleSec = System.Diagnostics.Stopwatch.GetElapsedTime(Volatile.Read(ref _lastDrawQpc)).TotalSeconds;
+                if (drawIdleSec > 3.0)
+                {
+                    _logger.LogWarning(
+                        "[SKIA-GPU-STALL] 管线已连续写入 {N} 帧，渲染线程 {Sec:F1}s 未绘制（最后绘制序号={Seq}）⇒ 画面可能定格，管线侧计数与真实上屏脱节。",
+                        _framesSinceLastDraw, drawIdleSec, Volatile.Read(ref _drawSeq));
+                    Interlocked.Exchange(ref _framesSinceLastDraw, 0);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -438,6 +468,9 @@ internal sealed class SkiaGpuVideoDrawOp : ICustomDrawOperation
                 // 线性过滤（视频缩放平滑）；无 Mipmap（单级纹理）。
                 canvas.DrawImage(image, dest, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), null);
             }
+
+            // 本帧采样命令已成功记录：向宿主回报渲染线程心跳（管线侧据此判定画面是否定格）。
+            _owner.OnDrawn();
         }
         catch (Exception ex)
         {

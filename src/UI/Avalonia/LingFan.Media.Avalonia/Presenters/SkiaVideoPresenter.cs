@@ -121,7 +121,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     //   · 色标条偏色        ⇒ YUV→RGB 矩阵或色彩区间错误
     //   · 竖条纹变斜/错位   ⇒ 行距（stride）处理错误
     // 排查完成后务必改回 false —— 水印会遮挡画面且每帧多写约 30 万像素。
-    private const bool FrameWatermark = true;
+    private const bool FrameWatermark = false;
     private int _presentSeq;
 
     /// <summary>5×7 点阵数字字形（'1' 为亮点），行优先，每个数字 35 个字符（7 行 × 5 列）。</summary>

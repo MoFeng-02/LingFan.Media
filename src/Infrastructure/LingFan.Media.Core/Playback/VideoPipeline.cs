@@ -326,12 +326,18 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     // 呈/解线程存活状态：心跳停更既可能是卡死也可能是线程已自然退出（EOS 收尾），
                     // 不加此列会把「已退出」误诊为「死锁」（真机实证教训）。
                     string alive = $"呈线程={(IsRunning ? "运行" : "已退出")} 解线程={(_decodeTask?.IsCompleted == true ? "已退出" : "运行")}";
-                    _logger.LogTrace(
-                        "[FREEZE] 循环心跳={LoopIdle:F2}s前 解码心跳={DecodeIdle:F2}s前 master={Master:g} 队列={Q} 已呈={P} " +
-                        "sinkInFlight={D} sink末次返回={SinkIdle:F2}s前 阶段(呈/解)={PP}/{DP} {Alive}",
-                        loopIdleSec, decodeIdleSec, _synchronizer.GetCurrentMasterTime(), _frameQueue.Count,
-                        _presentedCount, Volatile.Read(ref _sinkInFlight), sinkIdleSec,
-                        _pipelinePhase, _decodePhase, alive);
+                    // 异常升级：任一心跳停更超 1s（且对应线程仍标注运行中）时以 Warning 级输出，
+                    // 使「卡死在某个不打日志的调用里」的场景在默认日志级别下可见；
+                    // 正常心跳保持 Trace 级，不产生常态噪声。
+                    bool loopStalled = loopIdleSec > 1.0 && IsRunning;
+                    bool decodeStalled = decodeIdleSec > 1.0 && _decodeTask?.IsCompleted == false;
+                    string message =
+                        $"[FREEZE] 循环心跳={loopIdleSec:F2}s前 解码心跳={decodeIdleSec:F2}s前 master={_synchronizer.GetCurrentMasterTime():g} 队列={_frameQueue.Count} 已呈={_presentedCount} " +
+                        $"sinkInFlight={Volatile.Read(ref _sinkInFlight)} sink末次返回={sinkIdleSec:F2}s前 阶段(呈/解)={_pipelinePhase}/{_decodePhase} {alive}";
+                    if (loopStalled || decodeStalled)
+                        _logger.LogWarning(message);
+                    else
+                        _logger.LogTrace("{Message}", message);
                 }
             }
             catch (OperationCanceledException)
