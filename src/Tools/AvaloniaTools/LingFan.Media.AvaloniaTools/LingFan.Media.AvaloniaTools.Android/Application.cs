@@ -4,7 +4,9 @@ using Avalonia.Android;
 using LingFan.Media.Backends.MediaCodec;
 using LingFan.Media.Extensions;
 using LingFan.Media.Avalonia.Android;
+using LingFan.Media.Abstractions;
 using LingFan.Media.GPUShare.Vulkan;
+using LingFan.Media.Renderers.OpenGL;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LingFan.Media.AvaloniaTools.Android
@@ -51,6 +53,11 @@ namespace LingFan.Media.AvaloniaTools.Android
                 // 内部细节见 LingFan.Media.Platforms.Android.AndroidVulkanAppBuilderExtensions。
                 builder = builder.UseLingFanMediaAndroidVulkan();
 
+                // 选型策略：回 Vulkan 后端基线（EGL 后端的合成循环在此设备不驱动上屏，GL 路线挂起）——
+                // 声明优先 VulkanNativeImage 形态。GL 导入链路（AHB→EGLImage→GL 纹理，已全通验证）
+                // 作为可移植资产保留：PreferredKind 改 GlTexture 即可重新插拔启用。
+                SharedGpuSourcePolicy.PreferredKind = SharedGpuHandleKind.VulkanNativeImage;
+
                 // GPU 零拷贝出帧：经 AddMediaCodec 的 Options 配置（后端内部收敛到解码策略）。
                 // Android 平台后端（MediaCodec）经共享层平台注册钩子注入，共享层不引用平台后端。
                 MediaBuilderPlatformRegistrar.PlatformRegistrar =
@@ -60,6 +67,8 @@ namespace LingFan.Media.AvaloniaTools.Android
                         // 共享 App 构建完成后按此契约把自建 device 注入 VulkanRendererFactory
                         //（同 device 化 dma_buf 导入）。
                         b.Services.AddSingleton<IVulkanSharedDeviceProvider>(VulkanSharedDeviceBootstrap.Instance);
+                        // GL 共享表面源（GlTexture 句柄）：EGL 后端下由 GL 宿主呈现适配器直采。
+                        b.AddOpenGLSharedSurfaceSource();
                         // 直写 Android.Util.Log 的日志通道：Console/Debug provider 在 Fast Deployment
                         // 下均不进 logcat，此 provider 是 Android 设备上托管日志的唯一可靠出口。
                         b.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider, LogCatLoggerProvider>();

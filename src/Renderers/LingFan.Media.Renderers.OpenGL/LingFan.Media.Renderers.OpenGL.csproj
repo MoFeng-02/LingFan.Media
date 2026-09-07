@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Android\LingFan.Media.GPUShare.Android.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
     <ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
     <!-- 零拷贝桥接 D3D11 设备创建：与 ffmpeg 解码器同源（FindPreferredAdapter + D3D11CreateDeviceOnAdapter，独显优先），

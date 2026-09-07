@@ -32,6 +32,8 @@ internal sealed unsafe class EglContext : IGlContext
     private const uint EglHeight = 0x3056;
     private const uint EglContextClientVersion = 0x3098;
     private const uint EglOpenglApi = 0x30A0;
+    private const uint EglOpenglEsApi = 0x3080;
+    private const uint EglOpenglEsBit = 0x0040; // EGL_OPENGL_ES3_BIT
 
     private nint _display;
     private nint _surface;
@@ -173,6 +175,13 @@ internal sealed unsafe class EglContext : IGlContext
     /// </summary>
     public static EglContext CreateOffscreen(ILogger? logger = null)
     {
+        // Android 仅支持 OpenGL ES：API 绑定与 renderable type 必须用 ES 族——
+        // 桌面 GL 位（EGL_OPENGL_API / EGL_OPENGL_BIT）在 Android 平台 EGL 上不被支持，
+        // eglChooseConfig 会以 EGL_BAD_ATTRIBUTE 失败。桌面 GL（Windows/Linux WGL/EGL）不受影响。
+        bool isGles = OperatingSystem.IsAndroid();
+        uint api = isGles ? EglOpenglEsApi : EglOpenglApi;
+        uint renderableType = isGles ? EglOpenglEsBit : EglOpenglBit;
+
         nint display = GLNative.eglGetDisplay(nint.Zero); // EGL_DEFAULT_DISPLAY
         if (display == nint.Zero)
             throw new InvalidOperationException("EGL：eglGetDisplay(DEFAULT) 失败（无可用 EGL 显示）。");
@@ -181,13 +190,18 @@ internal sealed unsafe class EglContext : IGlContext
         if (GLNative.eglInitialize(display, &major, &minor) == 0)
             throw new InvalidOperationException($"EGL：eglInitialize 失败（0x{GLNative.eglGetError():X8}）。");
 
-        if (GLNative.eglBindAPI(EglOpenglApi) == 0)
-            throw new InvalidOperationException("EGL：eglBindAPI(EGL_OPENGL_API) 失败（无法绑定桌面 GL）。");
+        if (isGles)
+        {
+            // Android：ES 是 EGL 默认绑定 API，且实测部分线程上下文下显式 eglBindAPI 会以
+            // EGL_BAD_DISPLAY 拒绝——直接跳过（默认绑定即所需 ES），避免无意义的平台差异。
+        }
+        else if (GLNative.eglBindAPI(api) == 0)
+            throw new InvalidOperationException($"EGL：eglBindAPI(0x{api:X4}) 失败（0x{GLNative.eglGetError():X8}，无法绑定所需 GL API）。");
 
         int[] configAttribs =
         {
             (int)EglSurfaceType, (int)(EglWindowBit | EglPbufferBit),
-            (int)EglRenderableType, (int)EglOpenglBit,
+            (int)EglRenderableType, (int)renderableType,
             (int)EglRedSize, 8,
             (int)EglGreenSize, 8,
             (int)EglBlueSize, 8,

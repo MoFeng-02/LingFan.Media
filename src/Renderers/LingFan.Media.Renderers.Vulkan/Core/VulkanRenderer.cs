@@ -164,7 +164,10 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             if (_attached) { _logger.LogWarning("Vulkan 渲染器已附加，先 Detach。"); Detach(); }
 
             if (target.HandleType != RenderHandleType.Pointer)
-                throw new NotSupportedException($"Vulkan 渲染器仅支持 {nameof(RenderHandleType.Pointer)}。");
+                throw new NotSupportedException(
+                    $"Vulkan SwapChain 直绘需要原生窗口句柄（{nameof(RenderHandleType.Pointer)}：Windows=HWND / Android=ANativeWindow / Linux=X11·Wayland 句柄）；" +
+                    $"当前目标为 {target.HandleType}。无原生窗口的控件内场景（无空域）不受 SwapChain 窗口独占模型支持" +
+                    "（同一原生窗口同时只允许一个表面，且与宿主渲染器的表面互斥），应改用共享表面源 + 宿主直采路线。");
             if (OperatingSystem.IsLinux())
             {
                 // Linux X11/Wayland 经中性句柄类型 X11WindowHandle / WaylandWindowHandle 携带 Display* 指针（定义于 Renderers.Shared，非契约层）。

@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <ProjectReference Include="..\LingFan.Media.GPUShare.Android\LingFan.Media.GPUShare.Android.csproj" />
   </ItemGroup>
 
   <ItemGroup>

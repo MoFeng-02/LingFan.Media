@@ -1,6 +1,8 @@
 // Global using directives for LingFan.Media.GPUShare.Vulkan
 // Abstractions 命名空间全局引入
 global using LingFan.Media.Abstractions;
+// Android 中立胶水（AHB 帧资源承载，跨 GPU API 共用）
+global using LingFan.Media.GPUShare.Android;
 // Silk.NET Vulkan 纯数据结构（struct/enum/handle 类型，零反射、ABI 精确，仅作数据类型复用）
 global using Silk.NET.Vulkan;
 // 消除命名歧义：Vulkan 的 Semaphore/Buffer 优先于 System.Threading.Semaphore/System.Buffer

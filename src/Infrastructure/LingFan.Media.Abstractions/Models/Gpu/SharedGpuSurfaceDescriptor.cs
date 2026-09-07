@@ -43,6 +43,16 @@ public enum SharedGpuHandleKind
     /// <see cref="SharedGpuSurfaceDescriptor"/> 的 Native* 可选字段传递。</para>
     /// </remarks>
     VulkanNativeImage = 6,
+
+    /// <summary>OpenGL / GL ES 纹理对象名（<b>同 EGL 上下文共享组</b>，或经 EGLImage 导入后的纹理名）。</summary>
+    /// <remarks>
+    /// <para>适用于宿主 UI 框架为 OpenGL(EGL) 后端、且生产者纹理与宿主采样上下文位于同一
+    /// <b>EGLDisplay</b> 的场景：消费方（UI 层 Skia GPU 上下文）直接把该纹理对象名包装为
+    /// GL 采样纹理绘制上屏，全程零跨 API（GL 世界内部共享）。</para>
+    /// <para>纹理对象名经 <see cref="SharedGpuSurfaceDescriptor"/> 的 <c>NativeImage</c> 字段传递，
+    /// 内部格式（RGBA8）经 <c>NativeVkFormat</c> 字段传递；纹理生命周期归生产者，消费方只借用。</para>
+    /// </remarks>
+    GlTexture = 7,
 }
 
 /// <summary>

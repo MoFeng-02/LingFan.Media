@@ -38,6 +38,7 @@ internal static unsafe partial class GLNative
     private static nint ResolveGlLoader(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
     {
         // 中性名 "GL"（桌面 GL）：Windows WGL(opengl32) / Linux Mesa(libGL.so.1)。
+        // Android：GLES 3.0 的 GL 1.1 基线函数全部由 libGLESv2.so 导出（离屏上下文路径）。
         // 不含 Apple 平台——Apple 不使用 OpenGL，由 Metal 后端覆盖，故 macOS/iOS 不走此分支（返回 Zero）。
         if (string.Equals(libraryName, "GL", StringComparison.Ordinal))
         {
@@ -45,6 +46,8 @@ internal static unsafe partial class GLNative
                 return NativeLibrary.TryLoad("opengl32.dll", assembly, searchPath, out nint h) ? h : nint.Zero;
             if (OperatingSystem.IsLinux())
                 return NativeLibrary.TryLoad("libGL.so.1", assembly, searchPath, out nint h) ? h : nint.Zero;
+            if (OperatingSystem.IsAndroid())
+                return NativeLibrary.TryLoad("libGLESv2.so", assembly, searchPath, out nint h) ? h : nint.Zero;
             return nint.Zero;
         }
 

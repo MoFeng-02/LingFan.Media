@@ -90,6 +90,10 @@ public static class AvaloniaExtensions
         // VulkanNativeImage 源，Attach 即抛 NotSupportedException，VideoView 自动跳过，
         // 既有 Composition 路径不受影响。
         builder.Services.AddSingleton<IVideoRendererFactory, SkiaGpuVideoRendererFactory>();
+        // 宿主表面呈现适配器（渲染器骨架与包装方式之间的原子插拔单元）：渲染器骨架与「描述符 → 可采样图像」
+        // 的包装方式解耦；新增宿主/句柄组合 = 新增一个实现 + 此处一行注册，骨架零改动。
+        builder.Services.AddSingleton<IHostSurfacePresenter, SkiaVulkanImagePresenter>();
+        builder.Services.AddSingleton<IHostSurfacePresenter, SkiaGlTexturePresenter>();
         return builder;
     }
 }

@@ -8,14 +8,14 @@ using Android.Graphics;       // SurfaceTexture / Surface
 using Android.Views;
 using Microsoft.Extensions.Logging;
 using LingFan.Media.Abstractions;
-using LingFan.Media.GPUShare.Vulkan; // AndroidHardwareBufferFrameResource（跨工程平台帧 DTO）
+using LingFan.Media.GPUShare.Android; // AndroidHardwareBufferFrameResource（跨 GPU API 中立帧 DTO）
 
 namespace LingFan.Media.Backends.MediaCodec.Decoders;
 
 /// <summary>
 /// Android GLES/EGL 桥接：把 MediaCodec 经 <see cref="SurfaceTexture"/> 产出的 OES 外部纹理
-/// （驱动已在 GPU 内完成 YUV→RGB 色彩转换）渲染进 <b>RGBA AHardwareBuffer</b>，再交 Vulkan 渲染器
-/// 以「普通 RGBA 纹理」采样上屏（<see cref="VulkanRgbaToRgbaConverter"/> 路径，Adreno 兼容、不崩）。
+/// （驱动已在 GPU 内完成 YUV→RGB 色彩转换）渲染进 <b>RGBA AHardwareBuffer</b>，再交渲染侧
+/// 以「普通 RGBA 纹理」经 RGBA→RGBA blit 采样上屏（Adreno 兼容、不崩）。
 /// </summary>
 /// <remarks>
 /// <para><b>为何绕开 YCbCr 采样</b>：Adreno 650（Android 12 实测）对「MediaCodec 产出的 YUV AHB + Vulkan
@@ -33,7 +33,7 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// 与 Renderers.OpenGLES 的 <c>GlesNative</c> 同范式）；AHardwareBuffer 经 <c>libandroid.so</c>。属图形底层原语
 /// （非媒体 API），AOT 源生成、零反射；符合 2026-08-22 架构裁定（Android 后端媒体 API 走托管绑定，
 /// 仅图形原语例外，与解码器既有 <c>AHardwareBuffer_fromHardwareBuffer</c> carve-out 一致）。</para>
-/// <para><b>DIP</b>：本类仅依赖 Abstractions + GPUShare.Vulkan（平台帧 DTO），不反向引用任何 Renderer，依赖倒置合规。</para>
+/// <para><b>DIP</b>：本类仅依赖 Abstractions + GPUShare.Android（跨 GPU API 中立帧 DTO），不反向引用任何 Renderer，依赖倒置合规。</para>
 /// </remarks>
 internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
 {

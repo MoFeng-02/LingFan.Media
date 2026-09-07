@@ -70,4 +70,19 @@ public static class OpenGLExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// 注册 GL 共享表面源工厂（<see cref="SharedSurface.OpenGLSharedSurfaceSourceFactory"/>，
+    /// <see cref="ISharedGpuSurfaceSourceFactory"/> → GlTexture 句柄）。
+    /// </summary>
+    /// <remarks>
+    /// <para>宿主为 OpenGL(EGL) 后端时，宿主呈现适配器经 GlTexture 描述符直采上屏（零跨 API）。
+    /// 平台逻辑收敛于工厂 <see cref="ISharedGpuSurfaceSourceFactory.IsAvailable"/> 能力自报。</para>
+    /// </remarks>
+    public static MediaBuilder AddOpenGLSharedSurfaceSource(this MediaBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        builder.Services.AddSingleton<ISharedGpuSurfaceSourceFactory, SharedSurface.OpenGLSharedSurfaceSourceFactory>();
+        return builder;
+    }
 }

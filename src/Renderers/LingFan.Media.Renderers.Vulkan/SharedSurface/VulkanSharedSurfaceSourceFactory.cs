@@ -73,9 +73,23 @@ public sealed class VulkanSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
     /// 真实能力由 <see cref="Create"/> 把关——Apple 须 <c>MetalObjectsSharingEnabled</c>（VK_EXT_metal_objects），
     /// 其余平台须 <c>ExternalSharingEnabled</c>（VK_KHR_external_memory*）。能力不满足时 Create 抛
     /// NotSupportedException，由调用方回退下一个工厂 / Skia。</remarks>
-    public bool IsAvailable =>
-        OperatingSystem.IsWindows() || OperatingSystem.IsLinux() || OperatingSystem.IsAndroid()
-        || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
+    public bool IsAvailable
+    {
+        get
+        {
+            // 宿主已声明优先形态且非 Vulkan 系 ⇒ 自报不可用（选型决策在宿主，模块只自报）。
+            var preferred = SharedGpuSourcePolicy.PreferredKind;
+            if (preferred.HasValue && !IsVulkanFamily(preferred.Value))
+                return false;
+            return OperatingSystem.IsWindows() || OperatingSystem.IsLinux() || OperatingSystem.IsAndroid()
+                || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
+        }
+    }
+
+    private static bool IsVulkanFamily(SharedGpuHandleKind kind)
+        => kind is SharedGpuHandleKind.VulkanNativeImage
+            or SharedGpuHandleKind.VulkanOpaqueNtHandle
+            or SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor;
 
     /// <inheritdoc/>
     /// <exception cref="NotSupportedException">当前环境无法创建 Vulkan 共享表面源时（调用方应回退下一个工厂）。</exception>

@@ -3,7 +3,7 @@ using Android.Graphics;
 using Android.Media;
 using Android.Views;
 using Java.Nio;
-using LingFan.Media.GPUShare.Vulkan; // AndroidHardwareBufferFrameResource（跨工程平台帧 DTO，消费方向：Backends→GPUShare.Vulkan）
+using LingFan.Media.GPUShare.Android; // AndroidHardwareBufferFrameResource（跨 GPU API 中立帧 DTO，消费方向：Backends→GPUShare.Android）
 // 本后端命名空间段为 ...MediaCodec，会遮蔽类型 Android.Media.MediaCodec → 用不撞名的别名。
 using AndroidMediaCodec = Android.Media.MediaCodec;
 // Android.Graphics.PixelFormat 与 Abstractions 全局冲突 → 别名锁定契约层像素格式。
@@ -385,7 +385,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// <summary>尝试建立 GLES/EGL 桥接的 AHB 输出 Surface（GPU 零拷贝前置）：构造
     /// <see cref="AndroidAhbRgbaBridge"/> 并初始化 EGL/GLES 上下文、SurfaceTexture 与输出 Surface。
     /// 失败（API&lt;29 或 EGL/GLES 不可用）则回退 ByteBuffer CPU 路径，返回 false。</summary>
-    /// <remarks>DIP：桥接仅依赖 Abstractions + GPUShare.Vulkan，本解码器不引用任何 Renderer 或图形 API 绑定。
+    /// <remarks>DIP：桥接仅依赖 Abstractions + GPUShare.Android，本解码器不引用任何 Renderer 或图形 API 绑定。
     /// 桥接初始化抛 <see cref="NotSupportedException"/> 视为「环境不支持」，catch 回退，不影响 ByteBuffer 主路径。</remarks>
     private bool TryCreateAhbOutputSurface(int frameW, int frameH)
     {
