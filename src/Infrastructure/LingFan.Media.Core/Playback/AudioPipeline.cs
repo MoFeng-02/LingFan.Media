@@ -375,44 +375,8 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 //    （解决诊断仪"假 stall"），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时、抗 decode 抖动）。
                 if (_sampleQueue.Count > 0)
                 {
-                    // 关闭/停止：不再向渲染线程阻塞提交，直接归还剩余帧。
-                    // 避免 Stop/Dispose 时 SubmitBatch 卡在 WaitForBufferSpace 2s 超时累加 → 退出挂起 5s。
-                    if (_cts.IsCancellationRequested)
-                    {
-                        while (_sampleQueue.TryDequeue(out var f) && f != null)
-                            ReturnFrame(f);
+                    if (!TrySubmitChunk())
                         break;
-                    }
-
-                    // 先出首帧以确定小量子采样数上限（采样率跨流可能变化，故每流首帧懒初始化一次）
-                    if (!_sampleQueue.TryDequeue(out var head) || head is null)
-                        continue;
-                    if (_submitChunkSamples == 0)
-                        _submitChunkSamples = Math.Max(MinChunkSamples, (int)(head.SampleRate * MaxSubmitChunkMs / 1000.0));
-
-                    var batch = new List<AudioFrame>(_sampleQueue.Count + 1) { head };
-                    int chunkSamples = head.FrameCount;
-                    while (_sampleQueue.TryDequeue(out var f) && f != null)
-                    {
-                        batch.Add(f);
-                        chunkSamples += f.FrameCount;
-                        if (chunkSamples >= _submitChunkSamples)
-                            break; // 达小量子上限即停，剩余帧留队列供下一轮循环提交
-                    }
-                    if (AudioDiagEnabled)
-                    {
-                        var subStart = Stopwatch.GetTimestamp();
-                        SubmitBatch(batch, _cts.Token);
-                        _lastSubmitEndTs = Stopwatch.GetTimestamp();
-                        var subMs = Stopwatch.GetElapsedTime(subStart).TotalMilliseconds;
-                        if (subMs > 80)
-                            _logger.LogWarning("[AUDIO-DIAG] SubmitBatch 阻塞 {Ms}ms（WaitForBufferSpace 设备节奏，属正常）", subMs);
-                    }
-                    else
-                    {
-                        SubmitBatch(batch, _cts.Token);
-                        _lastSubmitEndTs = Stopwatch.GetTimestamp();
-                    }
                     continue;
                 }
 
@@ -464,7 +428,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     await DecodeAndEnqueueAsync(packet);
                 }
 
-                // 前瞻：采样队列未填满且仍有包立即可用时，连续解码（不 await），把解码与提交解耦
+                // 前瞻：采样队列未填满且仍有包立即可用时，连续解码（不 await），把解码与提交解耦。
+                // 【关键】前瞻中每解码一帧即穿插一次提交——设备 BufferQueue（8×46.4ms≈372ms 水库）
+                // 由本线程独占供血，解码阶段若零提交，水库被 DAC 定速抽干 → 欠载（音频咔哒 +
+                // 主时钟停走 → 视频帧卡顿）。穿插提交使在途水位全程 ≥6 缓冲，解码慢/抖不再欠载。
                 while (_sampleQueue.Count < PrerollFrames && _packetQueue.Reader.TryRead(out var next))
                 {
                     if (AudioDiagEnabled)
@@ -478,6 +445,12 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     else
                     {
                         await DecodeAndEnqueueAsync(next);
+                    }
+
+                    if (_sampleQueue.Count > 0)
+                    {
+                        if (!TrySubmitChunk())
+                            break;
                     }
                 }
 
@@ -506,6 +479,55 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 Completed?.Invoke(this, EventArgs.Empty);
             _isRunning = false;
         }
+    }
+
+    /// <summary>
+    /// 提交阶段单步：从采样队列出队至多一小量子（~<see cref="MaxSubmitChunkMs"/>）并提交。
+    /// 管线主循环与解码前瞻阶段共用——前瞻解码中穿插提交，保证设备在途缓冲持续补货
+    /// （消除"解码阶段零提交 → 水库抽干 → 欠载"窗口）。
+    /// </summary>
+    /// <returns>false = 已取消且队列已清空（调用方应退出循环）。</returns>
+    private bool TrySubmitChunk()
+    {
+        // 关闭/停止：不再向渲染线程阻塞提交，直接归还剩余帧。
+        // 避免 Stop/Dispose 时 SubmitBatch 卡在 WaitForBufferSpace 2s 超时累加 → 退出挂起 5s。
+        if (_cts.IsCancellationRequested)
+        {
+            while (_sampleQueue.TryDequeue(out var f) && f != null)
+                ReturnFrame(f);
+            return false;
+        }
+
+        // 先出首帧以确定小量子采样数上限（采样率跨流可能变化，故每流首帧懒初始化一次）
+        if (!_sampleQueue.TryDequeue(out var head) || head is null)
+            return true;
+        if (_submitChunkSamples == 0)
+            _submitChunkSamples = Math.Max(MinChunkSamples, (int)(head.SampleRate * MaxSubmitChunkMs / 1000.0));
+
+        var batch = new List<AudioFrame>(1) { head };
+        int chunkSamples = head.FrameCount;
+        while (_sampleQueue.TryDequeue(out var f) && f != null)
+        {
+            batch.Add(f);
+            chunkSamples += f.FrameCount;
+            if (chunkSamples >= _submitChunkSamples)
+                break; // 达小量子上限即停，剩余帧留队列供下一轮循环提交
+        }
+        if (AudioDiagEnabled)
+        {
+            var subStart = Stopwatch.GetTimestamp();
+            SubmitBatch(batch, _cts.Token);
+            _lastSubmitEndTs = Stopwatch.GetTimestamp();
+            var subMs = Stopwatch.GetElapsedTime(subStart).TotalMilliseconds;
+            if (subMs > 80)
+                _logger.LogWarning("[AUDIO-DIAG] SubmitBatch 阻塞 {Ms}ms（WaitForBufferSpace 设备节奏，属正常）", subMs);
+        }
+        else
+        {
+            SubmitBatch(batch, _cts.Token);
+            _lastSubmitEndTs = Stopwatch.GetTimestamp();
+        }
+        return true;
     }
 
     /// <summary>

@@ -77,7 +77,11 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private const int SLOT_BQ_RegisterCallback = 3;
     private const int SLOT_Volume_SetVolumeLevel = 0;
 
-    private const int MaxInFlightBuffers = 4;
+    // 在途缓冲深度：设备 BufferQueue 水库 = MaxInFlightBuffers × 单缓冲时长。8 × 46.4ms ≈ 372ms
+    // ——吸收音频解码阶段的零提交窗口（16 包 × DequeueOutput 5ms 轮询 + JNI ≈ 80~150ms）与
+    // CPU 调度抖动，消除周期性欠载（音频咔哒 + 主时钟停走 = 帧卡顿根因）。深度翻倍仅增加
+    // ~186ms 常驻内存与等量呈现延迟，对 A/V 同步无影响（视频按 master 呈现）。
+    private const int MaxInFlightBuffers = 8;
 
     // NDK 对象（SLObjectItf = void**，以 IntPtr 持有方法表指针）
     private IntPtr _engineObject;
@@ -511,15 +515,27 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _bqItf == IntPtr.Zero) return;
-        var clear = GetVTable<SLResult_VoidDelegate>(_bqItf, SLOT_BQ_Clear);
-        clear(_bqItf);
-        // 清空在途缓冲回到空闲池（被清缓冲未播完，不计入主时钟消费）
-        while (_inFlightBuffers.TryDequeue(out IntPtr buf))
-            _freeBuffers.Enqueue(buf);
-        _inFlightSamples.Clear();
-        _backpressure.Release(MaxInFlightBuffers - _backpressure.CurrentCount);
-        // 步进锚点重置：清空后在途深度归零，旧锚点携带的流逝不再有意义（封顶虽兜底 ≤ 一个缓冲，重置更精确）。
-        Volatile.Write(ref _lastStepQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+        // 全程持 _gate：Clear + 排空 + 背压释放必须与完成回调（持 _gate Release）互斥——
+        // 否则 CurrentCount 读取与回调 Release 并发可超发票数 → 后续 Submit 撞
+        // SL_RESULT_BUFFER_INSUFFICIENT 丢帧 + consumed 缺计。
+        lock (_gate)
+        {
+            var clear = GetVTable<SLResult_VoidDelegate>(_bqItf, SLOT_BQ_Clear);
+            clear(_bqItf);
+            // 清空在途缓冲回到空闲池（被清缓冲未播完，不计入主时钟消费）
+            int drained = 0;
+            while (_inFlightBuffers.TryDequeue(out IntPtr buf))
+            {
+                _freeBuffers.Enqueue(buf);
+                drained++;
+            }
+            _inFlightSamples.Clear();
+            // 背压对账：按实际排空数释放（每个在途缓冲恰好对应一次获取），消除超发窗口。
+            if (drained > 0)
+                _backpressure.Release(drained);
+            // 步进锚点重置：清空后在途深度归零，旧锚点携带的流逝不再有意义（封顶虽兜底 ≤ 一个缓冲，重置更精确）。
+            Volatile.Write(ref _lastStepQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+        }
     }
 
     /// <inheritdoc/>
@@ -537,10 +553,19 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         long anchor = Interlocked.Read(ref _anchorMediaTicks);
         if (anchor == long.MinValue || _sampleRate <= 0)
             return TimeSpan.Zero; // 尚无音频提交：主时钟保持 0（视频首帧门控期内）
+        // seqlock 式一致性读：consumed 与 stepQpc 必须来自同一次步进——步进落在两次读取间隙
+        // 会使插值在新 consumed 上叠加至多一缓冲（±46ms 锯齿 = 迟到 errMs 峰值的直接来源）。
+        // 写序（回调线程）= 先 consumed 后 stepQpc，故两次 stepQpc 相同即 consumed 一致。
+        long stepQpcFirst = Volatile.Read(ref _lastStepQpc);
         long consumed = Interlocked.Read(ref _framesConsumed);
+        long stepQpc = Volatile.Read(ref _lastStepQpc);
+        if (stepQpc != stepQpcFirst)
+        {
+            consumed = Interlocked.Read(ref _framesConsumed);
+            stepQpc = stepQpcFirst;
+        }
         long consumedTicks = (long)(consumed * (double)TimeSpan.TicksPerSecond / _sampleRate);
         long baseTicks = anchor + consumedTicks;
-        long stepQpc = Volatile.Read(ref _lastStepQpc);
         int bufferSamples = _lastBufferSamples;
         if (!_clockRunning || stepQpc == 0 || bufferSamples <= 0)
             return TimeSpan.FromTicks(baseTicks); // 未步进/暂停：退回纯记账值（行为与插值前一致）
@@ -572,9 +597,10 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     {
         get
         {
-            if (!_initialized || _sampleRate <= 0) return TimeSpan.Zero;
-            // 估算：MaxInFlightBuffers 个缓冲、每缓冲一帧的保守延迟
-            return TimeSpan.FromSeconds((double)MaxInFlightBuffers / _sampleRate);
+            if (!_initialized || _sampleRate <= 0 || _lastBufferSamples <= 0) return TimeSpan.Zero;
+            // 估算：在途缓冲深度 × 单缓冲时长（最近完成缓冲的采样数）。
+            // 旧实现 MaxInFlightBuffers/_sampleRate 单位错误（缓冲"个数"除以"采样/秒"，差缓冲时长倍数）。
+            return TimeSpan.FromSeconds((double)(MaxInFlightBuffers * _lastBufferSamples) / _sampleRate);
         }
     }
 
