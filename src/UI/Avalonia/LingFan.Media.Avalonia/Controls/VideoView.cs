@@ -205,7 +205,11 @@ public sealed class VideoView : Control, IRenderTarget
         }
 
         renderer.Present(frame);
-        Dispatcher.UIThread.Post(() => InvalidateVisual());
+        // 重绘调度：自带重绘的渲染器（如 Skia GPU 直绘）已在 Present 内经合成器动画时钟
+        // 预约下一帧重绘（跟随显示实际刷新率自适应），此处不再逐帧投递，避免两套节拍叠加；
+        // 其余渲染器（CPU Skia 软渲染等）仍由逐帧 InvalidateVisual 驱动。
+        if (renderer is not IAvaloniaRenderAware { DrivesOwnRenderLoop: true })
+            Dispatcher.UIThread.Post(() => InvalidateVisual());
     }
 
     /// <inheritdoc/>

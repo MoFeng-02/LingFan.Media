@@ -23,4 +23,14 @@ public interface IAvaloniaRenderAware
 
     /// <summary>通知目标尺寸/DPI 变化（Avalonia 控件尺寸/DPI 变化）。</summary>
     void Resize(int width, int height, float scale);
+
+    /// <summary>渲染器是否自带重绘调度（Present 后经 TopLevel 动画时钟预约下一帧重绘）。</summary>
+    /// <remarks>
+    /// <para>默认 false：<see cref="VideoView"/> 在每帧 Present 后投递一次
+    /// <c>InvalidateVisual</c>，按内容帧率逐帧驱动整树重建——内容帧率高于调度能力时
+    /// 重绘节拍落后于帧到达节拍，产生周期性跳帧（画面重复一拍）。</para>
+    /// <para>实现方可返回 true 接管重绘调度：重绘改为跟随合成器动画时钟（即显示实际
+    /// 刷新率，60/90/120Hz 自适应，无固定频率假设），仅在有待呈现新帧时预约，暂停零开销。</para>
+    /// </remarks>
+    bool DrivesOwnRenderLoop => false;
 }

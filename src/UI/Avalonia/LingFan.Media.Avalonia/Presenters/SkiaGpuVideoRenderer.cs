@@ -57,6 +57,18 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
     private ISharedGpuSurfaceSource? _source;
     private bool _disposed;
 
+    // ── 自适应重绘调度（带运行时自愈探测）──
+    // Present 存入待呈现帧后预约一次重绘：优先经 TopLevel 动画时钟（RequestAnimationFrame，
+    // UI 线程专属 API，回调在 MediaContext 渲染 pass 内执行并同 pass commit——呈现线程调用
+    // 须经 Dispatcher 编组）。动画时钟回调未在探测超时（100ms ≫ 任意常见刷新周期）内执行
+    // 时，永久切换为逐帧 Post（既有已验证路径），自愈期间至多黑屏一个探测窗。
+    private TopLevel? _topLevel;
+    // 仅经 Interlocked.Exchange（预约去重）与 Volatile.Write（回调内复位）访问，无需 volatile。
+    private int _renderTickScheduled;
+    private long _renderTickDispatchQpc;   // 本次预约时刻（探测超时判据）
+    private bool _useAnimationClock = true; // 动画时钟探测结果（仅管线线程读写）
+    private const double AnimationClockProbeTimeoutMs = 100.0;
+
     // ── 源级运行时回退 ──
     // 呈现失败（如共享句柄类型与宿主渲染后端不匹配）时优先切换下一个共享表面源，
     // 全部源穷尽后才触发 Unhealthy 整体回退——保证任何源组合都有出场机会，骨架零句柄分支。
@@ -93,6 +105,82 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
     /// <summary>渲染线程绘制诊断（DrawOp 调用：[DRAW-OP] 心跳/wrap 遥测/几何对账，Trace 级）。</summary>
     internal void LogDrawGeometry(string message)
         => _logger.LogTrace("[SKIA-GPU-DRAW] {Message}", message);
+
+    /// <inheritdoc/>
+    /// <remarks>本渲染器在 <see cref="Present"/> 内预约重绘（动画时钟优先、超时自愈回退
+    /// 逐帧 Post），VideoView 无需再逐帧投递 InvalidateVisual（见 <see cref="RequestRenderTick"/>）。</remarks>
+    public bool DrivesOwnRenderLoop => true;
+
+    /// <summary>
+    /// 预约一次重绘（管线线程调用）：动画时钟模式经 Dispatcher 编组到 UI 线程调用
+    /// TopLevel.RequestAnimationFrame（该 API 为 UI 线程专属，VerifyAccess 强制）——回调在
+    /// MediaContext 渲染 pass 内执行，InvalidateVisual 与 compositor commit 同 pass 完成；
+    /// 同一帧窗口内多次 Present 合并为一拍。预约后 100ms 回调仍未执行（UI 线程饥饿或
+    /// 后端异常）即永久切换为逐帧 Post，保证任何后端总有重绘。
+    /// </summary>
+    private void RequestRenderTick()
+    {
+        var control = _control;
+        if (control is null)
+            return;
+
+        if (_renderTickScheduled != 0)
+        {
+            if (_useAnimationClock)
+            {
+                // 已有动画时钟预约在途：超时未回调 ⇒ 永久退回逐帧 Post。
+                // 退回后继续走下方 Post 分支，本帧立即补一次调度（自愈，不丢待呈现帧）。
+                double pendingMs = System.Diagnostics.Stopwatch.GetElapsedTime(
+                    Volatile.Read(ref _renderTickDispatchQpc)).TotalMilliseconds;
+                if (pendingMs <= AnimationClockProbeTimeoutMs)
+                    return;
+                _useAnimationClock = false;
+                _logger.LogWarning(
+                    "合成器动画时钟预约 {Ms:F0}ms 未回调，重绘调度退回逐帧模式。",
+                    pendingMs);
+            }
+            else
+            {
+                return;
+            }
+        }
+
+        Interlocked.Exchange(ref _renderTickScheduled, 1);
+        Volatile.Write(ref _renderTickDispatchQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+        var topLevel = _topLevel;
+        if (_useAnimationClock && topLevel is not null)
+        {
+            // RequestAnimationFrame 为 UI 线程专属（VerifyAccess），呈现线程经 Dispatcher 编组。
+            // 回调在渲染 pass 内执行：InvalidateVisual 触发的 commit 与回调同 pass，
+            // 重绘与合成节拍对齐；rAF 自身 ScheduleRender 唤醒渲染循环，无空闲死锁。
+            Dispatcher.UIThread.Post(() =>
+            {
+                var tl = _topLevel;
+                if (tl is null || _disposed)
+                {
+                    Volatile.Write(ref _renderTickScheduled, 0);
+                    return;
+                }
+                tl.RequestAnimationFrame(_ =>
+                {
+                    Volatile.Write(ref _renderTickScheduled, 0);
+                    var c = _control;
+                    if (c is not null && !_disposed && HasPendingFrame)
+                        c.InvalidateVisual();
+                });
+            });
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                Volatile.Write(ref _renderTickScheduled, 0);
+                var c = _control;
+                if (c is not null && !_disposed && HasPendingFrame)
+                    c.InvalidateVisual();
+            });
+        }
+    }
 
     // 渲染线程回调计数（冻结看门狗心跳）。
     private int _renderCallbacks;
@@ -131,6 +219,7 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
         if (visual is Control control)
         {
             _control = control;
+            _topLevel = TopLevel.GetTopLevel(control);
             _controlSize = new Vector(control.Bounds.Width, control.Bounds.Height);
             _stretch = control.GetValue(VideoView.StretchProperty);
             _stretchSubscription = control.GetObservable(VideoView.StretchProperty)
@@ -286,6 +375,9 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
                 _hasPending = true;
             }
 
+            // 有新待呈现帧：预约一次合成时钟重绘（vsync 对齐、去重合并）。
+            RequestRenderTick();
+
             if (!_firstFrameLogged)
             {
                 _firstFrameLogged = true;
@@ -309,16 +401,23 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
             // 从未成功绘制（lastDraw==0）也算停滞：原判据会静默跳过，掩盖「渲染线程从未上屏」。
             if (Interlocked.Increment(ref _framesSinceLastDraw) > 90)
             {
-                bool neverDrawn = lastDraw == 0;
-                double drawIdleSec = neverDrawn ? 0 : System.Diagnostics.Stopwatch.GetElapsedTime(lastDraw).TotalSeconds;
-                if (neverDrawn) drawIdleSec = 999;
+                double drawIdleSec = lastDraw == 0
+                    ? double.PositiveInfinity
+                    : System.Diagnostics.Stopwatch.GetElapsedTime(lastDraw).TotalSeconds;
                 if (drawIdleSec > 3.0)
                 {
-                    _logger.LogWarning(
-                        neverDrawn
-                            ? "[SKIA-GPU-STALL] 管线已连续写入 {N} 帧，渲染线程【从未成功绘制】（最后绘制序号={Seq}）⇒ 上屏路径未工作（合成循环未驱动或全部包装失败）。"
-                            : "[SKIA-GPU-STALL] 管线已连续写入 {N} 帧，渲染线程 {Sec:F1}s 未绘制（最后绘制序号={Seq}）⇒ 画面可能定格，管线侧计数与真实上屏脱节。",
-                        _framesSinceLastDraw, drawIdleSec, Volatile.Read(ref _drawSeq));
+                    if (lastDraw == 0)
+                    {
+                        _logger.LogWarning(
+                            "[SKIA-GPU-STALL] 管线已连续写入 {N} 帧，渲染线程【从未成功绘制】⇒ 上屏路径未工作（合成循环未驱动或全部包装失败）。",
+                            _framesSinceLastDraw);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "[SKIA-GPU-STALL] 管线已连续写入 {N} 帧，渲染线程 {Sec:F1}s 未绘制（最后绘制序号={Seq}）⇒ 画面可能定格，管线侧计数与真实上屏脱节。",
+                            _framesSinceLastDraw, drawIdleSec, Volatile.Read(ref _drawSeq));
+                    }
                     Interlocked.Exchange(ref _framesSinceLastDraw, 0);
 
                     // 合成帧循环看门狗：已挂 CompositionCustomVisual 却从未收到帧回调
@@ -646,6 +745,7 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
     private void UnsubscribeControl()
     {
         _control = null;
+        _topLevel = null;
         _stretchSubscription?.Dispose();
         _stretchSubscription = null;
     }

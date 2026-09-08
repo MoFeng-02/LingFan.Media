@@ -112,6 +112,14 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private long _anchorMediaTicks = long.MinValue;  // 首个提交帧的媒体 PTS（哨兵=尚未提交）
     private readonly ConcurrentQueue<int> _inFlightSamples = new(); // 与 _inFlightBuffers 严格同序的每缓冲采样数
 
+    // ── 记账时钟平滑插值：消费步进随缓冲完成回调发生（阶梯信号），视频呈现时刻若直接消费
+    // 该阶梯值，会被量化到回调边界（±一个缓冲时长），呈现节拍随之抖动。插值 = 步进值 +
+    // 距最近一次步进的真实流逝（1× 实时），并封顶一个缓冲时长：欠载/回调停摆时时钟冻结在
+    // "已播完 + 至多一个在途缓冲"，绝不越过实际可闻位置漂移。暂停期间插值关闭。
+    private long _lastStepQpc;      // 最近一次消费步进时刻（Volatile 读写；0=尚未步进）
+    private int _lastBufferSamples; // 最近一个完成缓冲的采样数（插值封顶用）
+    private volatile bool _clockRunning; // 播放中（Resume 置位；Pause/重播复位清除）
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int SLResult_IntPtrDelegate(IntPtr self, IntPtr iid, out IntPtr pInterface);
 
@@ -462,9 +470,14 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
             {
                 _freeBuffers.Enqueue(buffer);
                 _backpressure.Release();
-                // 主时钟记账：该缓冲的采样已实际播完（可闻）
+                // 主时钟记账：该缓冲的采样已实际播完（可闻）。同时记录步进时刻与缓冲时长，
+                // 供 GetPlaybackPosition 在两次步进之间做 1× 实时插值（消除阶梯量化）。
                 if (_inFlightSamples.TryDequeue(out int samples))
+                {
                     Interlocked.Add(ref _framesConsumed, samples);
+                    Volatile.Write(ref _lastStepQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+                    _lastBufferSamples = samples;
+                }
             }
         }
     }
@@ -477,6 +490,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         var setState = GetVTable<SLResult_UintDelegate>(_playItf, SLOT_Play_SetPlayState);
         // PAUSED 保留播放头（STOPPED 会把 GetPosition 归零 → 恢复后主时钟与媒体时间错位、画面冻结）。
         setState(_playItf, SL_PLAYSTATE_PAUSED);
+        _clockRunning = false; // 暂停期间关闭时钟插值（记账值本身随回调停摆自然冻结）
     }
 
     /// <inheritdoc/>
@@ -486,6 +500,10 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         if (!_initialized || _playItf == IntPtr.Zero) return;
         var setState = GetVTable<SLResult_UintDelegate>(_playItf, SLOT_Play_SetPlayState);
         setState(_playItf, SL_PLAYSTATE_PLAYING);
+        // 重新武装插值：步进锚点重置为当前时刻，避免恢复瞬间读到暂停期累积的陈旧流逝
+        // （封顶虽兜底 ≤ 一个缓冲，重置更精确）。
+        _clockRunning = true;
+        Volatile.Write(ref _lastStepQpc, System.Diagnostics.Stopwatch.GetTimestamp());
     }
 
     /// <inheritdoc/>
@@ -500,6 +518,8 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
             _freeBuffers.Enqueue(buf);
         _inFlightSamples.Clear();
         _backpressure.Release(MaxInFlightBuffers - _backpressure.CurrentCount);
+        // 步进锚点重置：清空后在途深度归零，旧锚点携带的流逝不再有意义（封顶虽兜底 ≤ 一个缓冲，重置更精确）。
+        Volatile.Write(ref _lastStepQpc, System.Diagnostics.Stopwatch.GetTimestamp());
     }
 
     /// <inheritdoc/>
@@ -508,7 +528,9 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     /// 不读 SLPlayItf::GetPosition——该 API 在部分厂商设备（vivo/Qualcomm 实测）返回半冻结值，
     /// 曾致主时钟推进 ≪ 墙钟 → 视频帧永久 Wait、画面冻结而音频照常（详见字段区注释）。
     /// 记账时钟的性质：消费严格 1× 实时（单调）、暂停自然冻结、欠载自然停摆——主时钟所需全部性质。
-    /// 线程安全：Interlocked 读写，视频管线线程高频轮询无锁。
+    /// 步进值经 1× 实时插值平滑（封顶一个缓冲时长，见字段区注释），消除呈现时刻的阶梯量化；
+    /// 暂停/欠载时封顶使时钟自然冻结，单调性不受影响。
+    /// 线程安全：Interlocked/Volatile 读写，视频管线线程高频轮询无锁。
     /// </remarks>
     public TimeSpan GetPlaybackPosition()
     {
@@ -517,7 +539,16 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
             return TimeSpan.Zero; // 尚无音频提交：主时钟保持 0（视频首帧门控期内）
         long consumed = Interlocked.Read(ref _framesConsumed);
         long consumedTicks = (long)(consumed * (double)TimeSpan.TicksPerSecond / _sampleRate);
-        return TimeSpan.FromTicks(anchor + consumedTicks);
+        long baseTicks = anchor + consumedTicks;
+        long stepQpc = Volatile.Read(ref _lastStepQpc);
+        int bufferSamples = _lastBufferSamples;
+        if (!_clockRunning || stepQpc == 0 || bufferSamples <= 0)
+            return TimeSpan.FromTicks(baseTicks); // 未步进/暂停：退回纯记账值（行为与插值前一致）
+        // 插值：距最近一次步进的真实流逝，封顶一个缓冲时长（欠载/回调停摆时不越过在途音频）。
+        double elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(stepQpc).TotalMilliseconds;
+        double capMs = bufferSamples * 1000.0 / _sampleRate;
+        double interpMs = Math.Clamp(elapsedMs, 0, capMs);
+        return TimeSpan.FromTicks(baseTicks + (long)(interpMs * TimeSpan.TicksPerMillisecond));
     }
 
     /// <inheritdoc/>
@@ -531,6 +562,9 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         Interlocked.Exchange(ref _anchorMediaTicks, long.MinValue);
         Interlocked.Exchange(ref _framesConsumed, 0);
         _inFlightSamples.Clear(); // 与在途缓冲同步清空（Flush/重建路径亦然）
+        _clockRunning = false;
+        Volatile.Write(ref _lastStepQpc, 0);
+        _lastBufferSamples = 0;
     }
 
     /// <inheritdoc/>

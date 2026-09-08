@@ -1105,11 +1105,24 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// 全程零 CPU 像素拷贝，绕开 Adreno 对「YUV AHB + Vulkan YCbCr 采样」的原生空指针崩溃。
     /// 渲染侧据 AHB 的 ExternalFormat==0 自动路由到 <c>VulkanRgbaToRgbaConverter</c> RGBA 直通。</summary>
     /// <remarks>一帧一产：每次调用最多渲染一帧到 SurfaceTexture 并转换一帧。
-    /// <see cref="AndroidAhbRgbaBridge.ConvertLatest"/> 返回 0（GL 异常态）时清空
-    /// <see cref="_pendingSurfaceTextureFrame"/> 并丢弃该帧，等下一帧渲入 SurfaceTexture 再试，避免异常态空转死循环。</remarks>
+    /// <see cref="AndroidAhbRgbaBridge.ConvertLatest"/> 返回 0（GL 异常态）时保留
+    /// <see cref="_pendingSurfaceTextureFrame"/> 标志，下一轮<b>先闩后排空</b>优先重试——
+    /// 滞留帧已被渲进 SurfaceTexture，若先排空新包会把新帧渲入致 updateTexImage 闩取最新帧、
+    /// 滞留帧被静默顶出（永不显示）。先闩先出保证帧不丢、内容与 pts 恒对齐；
+    /// GL 持续异常时每轮至多一次闩取尝试，无空转死循环。</remarks>
     private VideoFrame? DrainOutputAhb(long timeoutUs)
     {
         _drainCalls++;
+
+        // 先闩后排空：优先闩出上一轮滞留帧（见方法 remarks）。滞留帧的 pts 仍由
+        // _lastPresentationTimeUs 持有（该帧 ReleaseOutputBuffer 时绑定，此后无新帧渲入）。
+        if (_pendingSurfaceTextureFrame)
+        {
+            var pending = TryLatchSurfaceTextureFrame();
+            if (pending != null)
+                return pending;
+        }
+
         while (true)
         {
             var info = new AndroidMediaCodec.BufferInfo();
@@ -1152,18 +1165,26 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             _logger.LogTrace("[ANDROID-AHB-DEC] 诊断: 排空={Calls} tryAgain={Try} 喂入={Fed} 累计产帧={Frames}",
                 _drainCalls, _drainTryAgain, _inputQueued, _framesProduced);
 
-        // 仅当 SurfaceTexture 有待闩帧时才触发 GL 转换（避免空跑）。ConvertLatest 失败则清空标志、
-        // 丢弃该帧（GL 异常态，等下一帧渲入 SurfaceTexture 再试），避免 updateTexImage 异常后的空转重试死循环。
+        // 仅当 SurfaceTexture 有待闩帧时才触发 GL 转换（避免空跑）。闩取失败（GL 异常态）时
+        // 保留标志：下一轮先闩后排空优先重试，本帧不会被新渲入的帧顶替（调用序保证）。
         if (!_pendingSurfaceTextureFrame)
             return null;
+        return TryLatchSurfaceTextureFrame();
+    }
 
+    /// <summary>闩取 SurfaceTexture 待处理帧并包装为视频帧（ConvertLatest 跨线程阻塞往返：
+    /// GL 线程分配 AHB → updateTexImage 闩帧 → 渲染 → glFinish → 移交 AHB 引用）。
+    /// 失败（GL 异常态）返回 null 并保留 _pendingSurfaceTextureFrame 标志待下轮重试；
+    /// 成功则清除标志。pts 取当前 _lastPresentationTimeUs——"先闩后排空"调用序保证其
+    /// 恒与闩取帧对应（闩取时不可能已有更新帧渲入）。</summary>
+    private VideoFrame? TryLatchSurfaceTextureFrame()
+    {
         _logger.LogTrace("[ANDROID-AHB-DEC] ▶ ConvertLatest（等待 GL 线程闩帧）");
         nint ahb = _bridge!.ConvertLatest();
         _logger.LogTrace("[ANDROID-AHB-DEC] ✓ ConvertLatest 返回 ahb={Ahb}", ahb);
         if (ahb == nint.Zero)
         {
-            _logger.LogWarning("[ANDROID-AHB-DEC] ConvertLatest 返回 0（GL 异常态），丢弃该帧待下帧重试。");
-            _pendingSurfaceTextureFrame = false;
+            _logger.LogWarning("[ANDROID-AHB-DEC] ConvertLatest 返回 0（GL 异常态），保留待闩帧标志待下轮重试。");
             return null;
         }
         _pendingSurfaceTextureFrame = false;

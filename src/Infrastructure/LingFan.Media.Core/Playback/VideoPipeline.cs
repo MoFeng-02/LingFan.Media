@@ -107,6 +107,19 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // 平均值被系统性低估（真机实证：真实 ~52ms/帧 显示成 4.8ms），直接导致瓶颈被误判到别处。
     private int _presentedInWindow;
     private long _droppedFrames;
+    // ── 呈现节拍指标（快照上报）：帧间隔与迟到量。呈现节拍抖动（迟到呈现⇒画面重复一拍）
+    // 不进丢帧计数——缺少本组指标时，此类卡顿在 [SYNC] 快照中完全不可见。
+    // 仅呈现线程读写（快照日志同线程），无需 Interlocked。
+    private long _lastPresentQpc;
+    private double _presentIntervalAccum;
+    private double _presentIntervalMaxMs;
+    private int _latePresentsInWindow;
+    private double _lateMaxMs;
+    // 迟到判定阈值：超过即计入迟到（自旋收口精度 + 调度抖动的合理余量）。
+    private const double LatePresentThresholdMs = 4.0;
+    // 呈现提前量的手动微调（LINGFAN_SYNC_LEAD_MS，构造期捕获）。
+    // 渲染器的 PresentationLatency 可在运行期自适应更新，每帧叠加本偏移后同步给 Synchronizer。
+    private readonly TimeSpan _manualLeadOffset;
     // A/V 同步诊断节流字段（仅 LINGFAN_SYNC_DIAG=1 时读取，生产路径恒 0 不影响任何逻辑）。
     private long _lastSyncDiagTicks;
     private int _presentCount;
@@ -187,7 +200,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         string? leadEnv = System.Environment.GetEnvironmentVariable("LINGFAN_SYNC_LEAD_MS");
         if (int.TryParse(leadEnv, out int leadMs) && leadMs > 0)
             manualLeadMs = leadMs;
-        _synchronizer.PresentationLatency = _renderer.PresentationLatency + TimeSpan.FromMilliseconds(manualLeadMs);
+        _manualLeadOffset = TimeSpan.FromMilliseconds(manualLeadMs);
+        _synchronizer.PresentationLatency = _renderer.PresentationLatency + _manualLeadOffset;
         _logger = logger;
         _framePool = framePool;
         _processors = processors;
@@ -643,15 +657,27 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     _pacingSnapshotQpc = snapQpc;
                     // 均值必须用**窗口内**帧数做分母（_presentedInWindow），不能用累计 _presentedCount。
                     double avgPresentMs = _presentedInWindow > 0 ? _presentMsAccum / _presentedInWindow : 0;
+                    // 帧间隔均值用窗口内间隔数（= 窗口帧数 − 1）做分母；间隔/迟到是呈现节拍抖动的
+                    // 直接观感——理想间隔≈内容帧间隔，峰值显著偏大即该帧迟到（画面重复一拍）。
+                    double avgIntervalMs = _presentedInWindow > 1 ? _presentIntervalAccum / (_presentedInWindow - 1) : 0;
                     int windowFrames = _presentedInWindow;
+                    int lateFrames = _latePresentsInWindow;
+                    double lateMaxMs = _lateMaxMs;
+                    double intervalMaxMs = _presentIntervalMaxMs;
                     _presentMsAccum = 0;
                     _presentedInWindow = 0;
+                    _presentIntervalAccum = 0;
+                    _presentIntervalMaxMs = 0;
+                    _latePresentsInWindow = 0;
+                    _lateMaxMs = 0;
                     _logger.LogInformation(
                         "[SYNC] 快照 master={Master:g} 队列={Queue} 已呈={Presented} 累计丢={Dropped} " +
-                        "窗口帧数={Window} 呈现均耗时={AvgMs:F1}ms 上帧={LastMs:F1}ms",
+                        "窗口帧数={Window} 呈现均耗时={AvgMs:F1}ms 上帧={LastMs:F1}ms " +
+                        "间隔均值={IvAvg:F1}ms/峰值={IvMax:F1}ms 迟到={Late}帧(峰值{LateMax:F1}ms)",
                         _synchronizer.GetCurrentMasterTime(), _frameQueue.Count,
                         _presentedCount, Interlocked.Read(ref _droppedFrames),
-                        windowFrames, avgPresentMs, _lastPresentMs);
+                        windowFrames, avgPresentMs, _lastPresentMs,
+                        avgIntervalMs, intervalMaxMs, lateFrames, lateMaxMs);
                 }
 
                 // 队头帧不出队即判定（Peek 在 SingleReader 下安全）。
@@ -709,7 +735,12 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     {
                         WaitUntilDue(headTimestamp, _cts.Token);
                     }
-                    continue;
+                    // 主时钟停摆降级：WaitUntilDue 已按宽限期（50ms）限速返回，此时若继续重判
+                    // 只会空转到时钟恢复（画面冻结）。落入下方 Present 路径按宽限节拍出帧——
+                    // 宁可短暂不同步也绝不冻结；主时钟一旦恢复推进，WaitUntilDue 内部复位标志，
+                    // 自然回到正常同步等待。
+                    if (!_masterClockStalled)
+                        continue;
                 }
 
                 if (action == SyncAction.Drop)
@@ -908,6 +939,16 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         {
             _lastPresentMs = System.Diagnostics.Stopwatch.GetElapsedTime(presentStart).TotalMilliseconds;
             _presentMsAccum += _lastPresentMs;
+            // 呈现节拍：本次 Present 与上次 Present 的间隔（理想 ≈ 内容帧间隔）。
+            // 峰值显著偏大 = 存在迟到呈现/短暂停顿，画面节拍不匀的直接证据。
+            if (_lastPresentQpc != 0)
+            {
+                double intervalMs = System.Diagnostics.Stopwatch.GetElapsedTime(_lastPresentQpc, presentStart).TotalMilliseconds;
+                _presentIntervalAccum += intervalMs;
+                if (intervalMs > _presentIntervalMaxMs)
+                    _presentIntervalMaxMs = intervalMs;
+            }
+            _lastPresentQpc = presentStart;
             _presentedCount++;     // 播放以来累计（快照中「已呈」展示用）
             _presentedInWindow++;  // 本快照窗口内计数（「呈现均耗时」的分母）
         }
@@ -917,14 +958,27 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     {
         // 仅处理「呈现」分支。同步决策（Wait / Drop）已上移到 PipelineLoop 的
         // Peek-then-Dequeue 逻辑：Wait 时帧留队头等待时钟追近，Drop 时取走并归还过期帧。此处被调用即表示队头帧已判定为 Present。
+        // 呈现提前量每帧同步：渲染器可在运行期更新 PresentationLatency（如按实测显示刷新率
+        // 自适应），每帧取最新值保证 CheckVideoFrame / WaitUntilDue / 呈现误差三者判据一致。
+        _synchronizer.PresentationLatency = _renderer.PresentationLatency + _manualLeadOffset;
+
+        // 呈现误差：相对"最早可呈现时刻"(frame.Timestamp − 真实上屏延迟)的偏移。
+        // Peek 方案下理想值 ≈ 0~2ms（WaitUntilDue 自旋收口精度）；若该值显著 >0
+        // 说明帧在队头等到了过期后才被取走呈现（仍被某处阻塞）。
+        // 常开统计（成本=两次无锁时钟读）：超阈值计入迟到帧数/峰值，进 [SYNC] 快照——
+        // 迟到呈现使画面重复一拍但不进丢帧计数，是"肉眼卡顿而其他指标全绿"时的关键信号。
+        // 必须在 ReturnFrame 之前计算：帧归还池后 Timestamp 可能被复用改写。
+        var thr = _synchronizer.PresentationLatency;
+        var masterNow = _synchronizer.GetCurrentMasterTime();
+        double errMs = (masterNow - (frame.Timestamp - thr)).TotalMilliseconds;
+        if (errMs > LatePresentThresholdMs)
+        {
+            _latePresentsInWindow++;
+            if (errMs > _lateMaxMs)
+                _lateMaxMs = errMs;
+        }
         if (PacingDiagnostics.Enabled)
         {
-            // 呈现误差：相对"最早可呈现时刻"(frame.Timestamp − 真实上屏延迟)的偏移。
-            // Peek 方案下理想值 ≈ 0~2ms（WaitUntilDue 自旋收口精度）；若该值显著 >0
-            // 说明帧在队头等到了过期后才被取走呈现（仍被某处阻塞）。
-            var thr = _synchronizer.PresentationLatency;
-            var masterNow = _synchronizer.GetCurrentMasterTime();
-            double errMs = (masterNow - (frame.Timestamp - thr)).TotalMilliseconds;
             string? report = PacingDiagnostics.Present.OnPresent(frame.Timestamp, _frameQueue.Count, errMs);
             if (report != null)
             {
@@ -941,7 +995,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         // 纯观测：SyncDiagEnabled 恒 false 时整块跳过，且不依赖 PacingDiagnostics.Enabled。
         if (SyncDiagEnabled)
         {
-            var masterNow = _synchronizer.GetCurrentMasterTime();
+            // masterNow 复用本方法前段呈现误差计算的读取值（同一呈现瞬间，且避免重复声明）。
             double syncDeltaMs = (frame.Timestamp - masterNow).TotalMilliseconds;
             long nowTicks = DateTime.UtcNow.Ticks;
             if (_presentCount < 8 || nowTicks - _lastSyncDiagTicks > 5_000_000L) // 前 8 帧 + 每 500ms
@@ -1031,6 +1085,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
         // 主体：睡到目标前的一个小提前量（补偿平滑时钟读取开销），每轮一次平滑时钟读取。Stop() 取消时立即返回，
         // 避免专用实时线程在退出/暂停时仍按帧时睡眠（回归：原 Thread.Sleep 不感知取消）。
+        // 分段睡眠：单次长睡的醒点 = 目标时刻 ± 调度粒度/抢占抖动，抖动超过尾部余量即转化为
+        // 呈现迟到（画面重复一拍且零计数）。片长逐轮减半至 1ms，末段以细粒度逼近目标时刻，
+        // 再由尾部自旋精确收口——醒点误差从「整段睡眠的抖动」压缩到「末段睡眠的抖动」。
+        int segmentMs = 16;
         while (true)
         {
             if (ct.IsCancellationRequested) return;
@@ -1071,7 +1129,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
             // 睡眠时长按宽限期截断：主时钟停摆时 remaining 可能高达整片时长（如 PTS=30s、master=0
             // ⇒ 睡 30 秒），必须在宽限期内醒来复查，否则看门狗永无机会触发。
-            Thread.Sleep((int)Math.Ceiling(Math.Min(remaining - tailMs, graceMs)));
+            double sleepBudget = Math.Min(remaining - tailMs, graceMs);
+            sleepBudget = Math.Min(sleepBudget, segmentMs);
+            segmentMs = Math.Max(1, segmentMs / 2);
+            Thread.Sleep((int)Math.Ceiling(sleepBudget));
         }
 
         // 尾部：仅用本地 QPC 自旋精确收口（≤5ms 安全阀，防异常时钟停滞死自旋），无跨线程 COM。
