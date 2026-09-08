@@ -153,9 +153,11 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
 
         if (packet is null) return new ValueTask<AudioFrame?>(ReadOutput());
 
-        // 诊断节流：音频收包节奏（确认喂入是否到达解码器）
+        // 诊断节流：音频收包节奏（确认喂入是否到达解码器）。
+        // Trace 级：音频线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
+        // 会周期性延迟 Submit → 设备欠载（音频咔哒 + 主时钟停走），调高日志级别即可查看。
         if ((_packetsFed % LogInterval) == 0)
-            _logger.LogInformation("[ANDROID-AUD] 收包 #{Count} size={Size} pts={Pts:g}", _packetsFed, packet.Data.Length, packet.Timestamp);
+            _logger.LogTrace("[ANDROID-AUD] 收包 #{Count} size={Size} pts={Pts:g}", _packetsFed, packet.Data.Length, packet.Timestamp);
         _packetsFed++;
 
         _pendingInput.Enqueue(packet);
@@ -298,9 +300,11 @@ internal sealed class AndroidAudioDecoder : IAudioDecoder
             _pendingFrames.Enqueue(frame);
         }
 
-        // 周期性诊断（定位 audio 是否同样 dequeue 恒 TRY_AGAIN）
+        // 周期性诊断（定位 audio 是否同样 dequeue 恒 TRY_AGAIN）。
+        // Trace 级：音频线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
+        // 会周期性延迟 Submit → 设备欠载（音频咔哒 + 主时钟停走），调高日志级别即可查看。
         if ((_drainCalls % LogInterval) == 0)
-            _logger.LogInformation(
+            _logger.LogTrace(
                 "[ANDROID-AUD] 诊断: 排空={Calls} tryAgain={Try} 累计产帧={Frames} 喂入={Fed} 阻塞={Blk} 待喂={Pending}",
                 _drainCalls, _drainTryAgain, _drainProduced, _inputQueued, _inputBlocked, _pendingInput.Count);
 

@@ -648,9 +648,11 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             return new ValueTask<VideoFrame?>(drained);
         }
 
-        // 诊断节流：收包节奏
+        // 诊断节流：收包节奏。
+        // Trace 级：解码线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
+        // 会周期性延迟解码出帧 → 队列下探 → 呈现等帧（卡顿根因之一），调高日志级别即可查看。
         if ((_packetsFed % LogInterval) == 0)
-            _logger.LogInformation("[ANDROID-VID] 收包 #{Count} size={Size} pts={Pts:g} key={Key}",
+            _logger.LogTrace("[ANDROID-VID] 收包 #{Count} size={Size} pts={Pts:g} key={Key}",
                 _packetsFed, packet.Data.Length, packet.Timestamp, packet.KeyFrame);
         _packetsFed++;
 
@@ -1071,8 +1073,10 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             }
             _lastOutputPtsUs = ptsUs;
 
+            // Trace 级：解码线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
+            // 会周期性延迟解码出帧（卡顿根因之一），调高日志级别即可查看。
             if ((_framesProduced % LogInterval) == 0)
-                _logger.LogInformation("[ANDROID-VID] 产帧 #{Count} {W}x{H} {Fmt} pts={Pts:g}",
+                _logger.LogTrace("[ANDROID-VID] 产帧 #{Count} {W}x{H} {Fmt} pts={Pts:g}",
                     _framesProduced, frame.Width, frame.Height, frame.Format, frame.Timestamp);
             _framesProduced++;
             _drainDequeued++;
@@ -1089,9 +1093,11 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         // 重排缓冲兜底：EOS 已入队即强制排空，绝不让末帧滞留缓冲里被 Complete 截断。
         FlushReorder(force: _eosQueued);
 
-        // 周期性诊断（定位 dequeue 是否恒 TRY_AGAIN）
+        // 周期性诊断（定位 dequeue 是否恒 TRY_AGAIN）。
+        // Trace 级：解码线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
+        // 会周期性延迟解码出帧（卡顿根因之一），调高日志级别即可查看。
         if ((_drainCalls % LogInterval) == 0)
-            _logger.LogInformation("[ANDROID-VID] 诊断: 排空={Calls} dequeue成功={Deq} tryAgain={Try} 喂入={Fed} 累计产帧={Frames} pts回退={Reg} 重排缓冲={Hold} 校正={Fix} 待喂={Pend} 补喂={PostFed}/{PostCalls} 阻塞={Blk} 空洞={Gap}",
+            _logger.LogTrace("[ANDROID-VID] 诊断: 排空={Calls} dequeue成功={Deq} tryAgain={Try} 喂入={Fed} 累计产帧={Frames} pts回退={Reg} 重排缓冲={Hold} 校正={Fix} 待喂={Pend} 补喂={PostFed}/{PostCalls} 阻塞={Blk} 空洞={Gap}",
                 _drainCalls, _drainDequeued, _drainTryAgain, _inputQueued, _framesProduced, _ptsRegressions,
                 _reorder.Count, _reorderCorrections, _pendingInput.Count,
                 _postDrainFed, _postDrainCalls, _inputDequeueBlocked, _releaseGaps);

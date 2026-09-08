@@ -389,9 +389,11 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
 
             // 交付到渲染线程的入口心跳（不依赖合成循环）：证明帧确实抵达渲染器输入端。
             // 若本条出现而下游无绘制 ⇒ 卡在 Avalonia 渲染循环/合成调度，而非解码或导入链。
+            // Trace 级（每 300 帧）：呈现线程为实时线程，Information 写 logcat（双 provider）
+            // 单次可达数十 ms，不应周期性落在呈现线程；[SKIA-GPU-STALL] 与 [SYNC] 承担异常可见性。
             _deliveredFrames++;
-            if ((_deliveredFrames % 60) == 1)
-                _logger.LogInformation(
+            if ((_deliveredFrames % 300) == 1)
+                _logger.LogTrace(
                     "[SKIA-GPU] 已交付渲染线程 #{N} v={Version} kind={Kind} {W}x{H}",
                     _deliveredFrames, desc.Version, desc.Kind, desc.Width, desc.Height);
 
@@ -473,10 +475,12 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
         if (_compositionVisual is not null)
             return;
 
-        // 渲染回调心跳（Information 级，每 60 次）：统计本方法（scene 重建路径）的调度频率。
+        // 渲染回调心跳（Trace 级，每 300 次 ≈ 10s@30fps）：统计本方法（scene 重建路径）
+        // 的调度频率。Trace 级理由同交付心跳——Information 日志经双 provider 写 logcat，
+        // 单次可达数十 ms，不应周期性落在 UI/渲染线程。
         _renderCallbacks++;
-        if ((_renderCallbacks % 60) == 1)
-            _logger.LogInformation("[SKIA-GPU] 渲染回调 #{N}（渲染线程活跃）", _renderCallbacks);
+        if ((_renderCallbacks % 300) == 1)
+            _logger.LogTrace("[SKIA-GPU] 渲染回调 #{N}（渲染线程活跃）", _renderCallbacks);
 
         var op = new SkiaGpuVideoDrawOp(this)
         {

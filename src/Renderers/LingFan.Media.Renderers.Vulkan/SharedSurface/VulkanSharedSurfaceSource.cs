@@ -449,8 +449,10 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 "[VULKAN-SHARED] MemorySize 在分配点未记录，交付前现查兜底={Size}（应排查分配点为何漏记）。",
                 fallbackReq.Size);
         }
+        // Trace 级：呈现线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
+        // 会周期性阻塞 Present（卡顿根因之一），调高日志级别即可查看。
         if ((_writtenFrames % FrameLogInterval) == 0)
-            _logger.LogInformation(
+            _logger.LogTrace(
                 "[VULKAN-SHARED] 转移口 帧#{N} 路径={Path} 出参Kind={Kind} version={Ver} sync={Sync} {W}x{H} mem={Mem} usage=0x{Usage:X} flags=0x{Flags:X}",
                 _writtenFrames, path, _handleKind, _version, _syncMode, w, h, _sharedMemorySize,
                 (uint)_sharedUsage, (uint)_sharedFlags);

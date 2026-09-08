@@ -386,16 +386,18 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
             var pkt = new MediaPacket(trackIdx, data.AsMemory(0, n), ts, TimeSpan.Zero, key,
                 dataOwner: new RentedBufferOwner(data));
 
-            // 诊断节流日志：读包节奏（track/size/pts/key）；首包附前 12 字节 hex（验证取回方向正确、非全零）
+            // 诊断节流日志：读包节奏（track/size/pts/key）；首包附前 12 字节 hex（验证取回方向正确、非全零）。
+            // Trace 级：解封装线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
+            // 会周期性阻断包供给 → 音频欠载/解码断粮（卡顿根因之一），调高日志级别即可查看。
             if ((_packetCounter++ % PacketLogInterval) == 0)
             {
                 if (_packetCounter == 1)
-                    _logger.LogInformation(
+                    _logger.LogTrace(
                         "[ANDROID-DEMUX] 读包 track={Track} size={Size} pts={PtsUs}us key={Key} 累计={Total} hex={Hex}",
                         trackIdx, n, ptsUs, key, _packetCounter,
                         Convert.ToHexString(data.AsSpan(0, Math.Min(12, n))));
                 else
-                    _logger.LogInformation(
+                    _logger.LogTrace(
                         "[ANDROID-DEMUX] 读包 track={Track} size={Size} pts={PtsUs}us key={Key} 累计={Total}",
                         trackIdx, n, ptsUs, key, _packetCounter);
             }

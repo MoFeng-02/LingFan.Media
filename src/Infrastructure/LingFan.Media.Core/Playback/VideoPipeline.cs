@@ -92,6 +92,11 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // 主时钟停摆降级标志（仅呈现线程读写，无需 volatile）：见 WaitUntilDue 的停摆看门狗。
     // 置位后同步等待改用 50ms 宽限期，避免每帧空等 500ms 把画面压到 2fps；主时钟恢复推进即复位。
     private bool _masterClockStalled;
+    // 停摆看门狗跨调用锚点（仅呈现线程读写）：master 推进 ≥ 墙钟 50% 即重锚；长期停滞时
+    // 跨调用累计等待，超过宽限期触发降级出帧。
+    private long _stallWatchQpc;
+    private TimeSpan _stallWatchMaster;
+    private bool _stallWatchAnchored;
 
     // ── 主时钟可见性（快照日志）：同步类问题的第一现场。此前主时钟从未被观测，
     // 排障只能靠间接推断（教训：vivo 上 SLPlayItf::GetPosition 半冻结导致全链路冻结，
@@ -117,6 +122,39 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private double _lateMaxMs;
     // 迟到判定阈值：超过即计入迟到（自旋收口精度 + 调度抖动的合理余量）。
     private const double LatePresentThresholdMs = 4.0;
+    // 呈现段尖峰告警阈值：sink 链单帧超过即限频告警（正常 ≈2ms，告警即归因线索）。
+    private const double SinkSpikeLogThresholdMs = 15.0;
+    // 等待过调告警阈值：醒点越过墙钟年线超过即限频告警（抢占/睡眠过冲的直接观测）。
+    private const double WaitOvershootLogThresholdMs = 15.0;
+    private long _lastOvershootLogQpc; // 过调告警节流（呈现线程）
+
+    // ── 快照发布（呈现线程 → 看门狗线程）──
+    // [SYNC] 快照的日志写入（Console/Debug 双 provider → logcat/调试器）在部分设备上单次
+    // 可达数十 ms；周期性落在呈现线程会制造它自己所度量的迟到帧。故窗口统计由呈现线程
+    // 发布（纯内存引用替换，零 I/O），由冻结看门狗线程代为输出。
+    private sealed record PacingWindowStats(
+        int WindowFrames, double AvgPresentMs, double LastPresentMs,
+        double AvgIntervalMs, double MaxIntervalMs, int LateFrames, double LateMaxMs,
+        double QueueEmptyWaitMs, string GcDelta, double MasterClockRatio,
+        double PtsSpacingAvgMs, double PtsSpacingMaxMs, long PublishedQpc);
+    private PacingWindowStats? _publishedPacingStats;
+    private long _lastEmittedStatsQpc;   // 看门狗线程：上次已输出的统计版本
+    private double _lastSnapshotWriteMs; // 看门狗线程：上一次快照日志写入耗时（自测量）
+    private double _queueEmptyWaitMsAccum; // 队空等待累积（呈现线程，解码供帧不及的直接观测）
+    private long _lastSpikeLogQpc;         // 呈现段尖峰告警节流（呈现线程）
+    private int _lastGcGen0, _lastGcGen1, _lastGcGen2; // GC 代际计数基线（呈现线程，窗口差值）
+    // 主时钟速率对表：窗口内 master 增量 / 墙钟增量（两者都用精确 Stopwatch 测量）。
+    // 比值 ≈1.0 = 音频时钟健康；持续 <1 = 音频记账时钟慢（卡顿根因在音频侧）。
+    private double _lastPublishMaster;
+    private long _lastPublishWallQpc;
+    private bool _hasLastPublish;
+    // 视频 PTS 间距（呈现线程逐帧统计）：区分「内容帧率/PTS 抖动」与「管线 pacing 问题」——
+    // 若 PTS 间距本身 ≈ 间隔均值，则呈现完全跟随内容，卡顿源于素材而非管线。
+    private TimeSpan _lastPresentPts;
+    private bool _hasLastPresentPts;
+    private double _ptsSpacingAccum;
+    private double _ptsSpacingMaxMs;
+    private int _ptsSpacingCount;
     // 呈现提前量的手动微调（LINGFAN_SYNC_LEAD_MS，构造期捕获）。
     // 渲染器的 PresentationLatency 可在运行期自适应更新，每帧叠加本偏移后同步给 Synchronizer。
     private readonly TimeSpan _manualLeadOffset;
@@ -352,6 +390,30 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                         _logger.LogWarning(message);
                     else
                         _logger.LogTrace("{Message}", message);
+
+                    // [SYNC] 节拍快照：输出呈现线程发布的窗口统计。日志写入在本（看门狗）线程
+                    // 执行，呈现线程零 I/O；写入耗时自测量随下一条快照输出——若单次写入达
+                    // 数十 ms，即坐实"诊断日志自身制造迟到帧"的通道成本。
+                    var stats = Volatile.Read(ref _publishedPacingStats);
+                    if (stats is not null && stats.PublishedQpc != Volatile.Read(ref _lastEmittedStatsQpc))
+                    {
+                        Volatile.Write(ref _lastEmittedStatsQpc, stats.PublishedQpc);
+                        long writeStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                        _logger.LogInformation(
+                            "[SYNC] 快照 master={Master:g} 队列={Queue} 已呈={Presented} 累计丢={Dropped} " +
+                            "窗口帧数={Window} 呈现均耗时={AvgMs:F1}ms 上帧={LastMs:F1}ms " +
+                            "间隔均值={IvAvg:F1}ms/峰值={IvMax:F1}ms 迟到={Late}帧(峰值{LateMax:F1}ms) " +
+                            "队空等待={QeWait:F1}ms GC={Gc} 时钟比={ClockRatio:F3} " +
+                            "PTS间距={PtsAvg:F1}ms/峰{PtsMax:F1}ms 快照写入={WriteMs:F1}ms",
+                            _synchronizer.GetCurrentMasterTime(), _frameQueue.Count,
+                            _presentedCount, Interlocked.Read(ref _droppedFrames),
+                            stats.WindowFrames, stats.AvgPresentMs, stats.LastPresentMs,
+                            stats.AvgIntervalMs, stats.MaxIntervalMs, stats.LateFrames, stats.LateMaxMs,
+                            stats.QueueEmptyWaitMs, stats.GcDelta, stats.MasterClockRatio,
+                            stats.PtsSpacingAvgMs, stats.PtsSpacingMaxMs,
+                            _lastSnapshotWriteMs);
+                        _lastSnapshotWriteMs = System.Diagnostics.Stopwatch.GetElapsedTime(writeStart).TotalMilliseconds;
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -650,34 +712,54 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     continue;   // 重新走一轮，确保暂停/取消状态在放行后被重新评估
                 }
 
-                // 主时钟快照（每 2s）：master 应以 1× 实时推进、队列应小且流动、呈现耗时应 <10ms——同步问题第一现场。
+                // 主时钟节拍窗口（每 2s）：master 应以 1× 实时推进、队列应小且流动、呈现耗时应 <10ms。
+                // 窗口统计由呈现线程发布（纯内存引用替换，零 I/O），由冻结看门狗线程读取并输出——
+                // 日志写入（Console/Debug 双 provider → logcat/调试器）单次可达数十 ms，周期性落在
+                // 呈现线程会制造它自己所度量的迟到帧。
                 long snapQpc = System.Diagnostics.Stopwatch.GetTimestamp();
                 if (System.Diagnostics.Stopwatch.GetElapsedTime(_pacingSnapshotQpc).TotalMilliseconds >= 2000)
                 {
                     _pacingSnapshotQpc = snapQpc;
                     // 均值必须用**窗口内**帧数做分母（_presentedInWindow），不能用累计 _presentedCount。
-                    double avgPresentMs = _presentedInWindow > 0 ? _presentMsAccum / _presentedInWindow : 0;
                     // 帧间隔均值用窗口内间隔数（= 窗口帧数 − 1）做分母；间隔/迟到是呈现节拍抖动的
                     // 直接观感——理想间隔≈内容帧间隔，峰值显著偏大即该帧迟到（画面重复一拍）。
-                    double avgIntervalMs = _presentedInWindow > 1 ? _presentIntervalAccum / (_presentedInWindow - 1) : 0;
                     int windowFrames = _presentedInWindow;
-                    int lateFrames = _latePresentsInWindow;
-                    double lateMaxMs = _lateMaxMs;
-                    double intervalMaxMs = _presentIntervalMaxMs;
+                    double avgPresentMs = windowFrames > 0 ? _presentMsAccum / windowFrames : 0;
+                    double avgIntervalMs = windowFrames > 1 ? _presentIntervalAccum / (_presentedInWindow - 1) : 0;
+                    // GC 代际窗口差：STW 停顿是呈现线程偶发阻塞的候选来源之一，计数差与
+                    // 迟到/间隔峰值逐窗对照即可定量归因。
+                    int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
+                    string gcDelta = $"{g0 - _lastGcGen0}/{g1 - _lastGcGen1}/{g2 - _lastGcGen2}";
+                    _lastGcGen0 = g0;
+                    _lastGcGen1 = g1;
+                    _lastGcGen2 = g2;
+                    // 主时钟速率对表：窗口内 master 增量 / 墙钟增量（同线程同源 Stopwatch 测量）。
+                    double masterNow = _synchronizer.GetCurrentMasterTime().TotalMilliseconds;
+                    double wallDeltaMs = System.Diagnostics.Stopwatch.GetElapsedTime(_lastPublishWallQpc).TotalMilliseconds;
+                    double clockRatio = 0;
+                    if (_hasLastPublish && wallDeltaMs > 100)
+                        clockRatio = (masterNow - _lastPublishMaster) / wallDeltaMs;
+                    _lastPublishMaster = masterNow;
+                    _lastPublishWallQpc = snapQpc;
+                    _hasLastPublish = true;
+                    double ptsSpacingAvgMs = _ptsSpacingCount > 0 ? _ptsSpacingAccum / _ptsSpacingCount : 0;
+                    double queueEmptyWaitMs = _queueEmptyWaitMsAccum;
+                    _queueEmptyWaitMsAccum = 0;
+                    Volatile.Write(ref _publishedPacingStats, new PacingWindowStats(
+                        windowFrames, avgPresentMs, _lastPresentMs,
+                        avgIntervalMs, _presentIntervalMaxMs,
+                        _latePresentsInWindow, _lateMaxMs,
+                        queueEmptyWaitMs, gcDelta, clockRatio,
+                        ptsSpacingAvgMs, _ptsSpacingMaxMs, snapQpc));
+                    _ptsSpacingAccum = 0;
+                    _ptsSpacingMaxMs = 0;
+                    _ptsSpacingCount = 0;
                     _presentMsAccum = 0;
                     _presentedInWindow = 0;
                     _presentIntervalAccum = 0;
                     _presentIntervalMaxMs = 0;
                     _latePresentsInWindow = 0;
                     _lateMaxMs = 0;
-                    _logger.LogInformation(
-                        "[SYNC] 快照 master={Master:g} 队列={Queue} 已呈={Presented} 累计丢={Dropped} " +
-                        "窗口帧数={Window} 呈现均耗时={AvgMs:F1}ms 上帧={LastMs:F1}ms " +
-                        "间隔均值={IvAvg:F1}ms/峰值={IvMax:F1}ms 迟到={Late}帧(峰值{LateMax:F1}ms)",
-                        _synchronizer.GetCurrentMasterTime(), _frameQueue.Count,
-                        _presentedCount, Interlocked.Read(ref _droppedFrames),
-                        windowFrames, avgPresentMs, _lastPresentMs,
-                        avgIntervalMs, intervalMaxMs, lateFrames, lateMaxMs);
                 }
 
                 // 队头帧不出队即判定（Peek 在 SingleReader 下安全）。
@@ -695,7 +777,12 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                         _completedNaturally = true;
                         break;
                     }
+                    long emptyWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
                     Thread.Sleep(1);
+                    // 队空等待累积：呈现端因解码供帧不及而等待的墙钟时间——解码侧抖动
+                    //（ConvertLatest 阻塞往返/glFinish/gralloc 分配）的直接观测，
+                    // 与"呈现段尖峰"（本线程阻塞）形成归因对照。
+                    _queueEmptyWaitMsAccum += System.Diagnostics.Stopwatch.GetElapsedTime(emptyWaitStart).TotalMilliseconds;
                     continue;
                 }
 
@@ -977,6 +1064,21 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             if (errMs > _lateMaxMs)
                 _lateMaxMs = errMs;
         }
+        // 视频 PTS 间距逐帧统计：呈现完全跟随内容 PTS——本统计与间隔均值的对照可区分
+        // 「内容帧率/PTS 抖动（卡顿源于素材）」与「管线 pacing 问题」。
+        if (_hasLastPresentPts)
+        {
+            double ptsGapMs = (frame.Timestamp - _lastPresentPts).TotalMilliseconds;
+            if (ptsGapMs > 0)
+            {
+                _ptsSpacingAccum += ptsGapMs;
+                _ptsSpacingCount++;
+                if (ptsGapMs > _ptsSpacingMaxMs)
+                    _ptsSpacingMaxMs = ptsGapMs;
+            }
+        }
+        _lastPresentPts = frame.Timestamp;
+        _hasLastPresentPts = true;
         if (PacingDiagnostics.Enabled)
         {
             string? report = PacingDiagnostics.Present.OnPresent(frame.Timestamp, _frameQueue.Count, errMs);
@@ -1020,6 +1122,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             // 那样会让 D3D11 模式（无订阅方，但 lambda 非空）永不调用渲染器，导致视频不显示。
             // 冻结看门狗：sink 链（Emit→OnFrame→PresentFrame→renderer.Present→TryWriteFrame）为同步调用，
             // 在途深度 + 进入时刻暴露该链是否卡死。
+            long sinkStart = System.Diagnostics.Stopwatch.GetTimestamp();
             _pipelinePhase = PipelinePhaseSink;
             Interlocked.Exchange(ref _sinkEnterQpc, System.Diagnostics.Stopwatch.GetTimestamp());
             Interlocked.Increment(ref _sinkInFlight);
@@ -1031,6 +1134,17 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             {
                 Interlocked.Decrement(ref _sinkInFlight);
                 Interlocked.Exchange(ref _sinkExitQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+            }
+            // 呈现段尖峰：sink 链（含渲染器帧间驱动调用与帧资源归还前的导入/退役开销）单帧
+            // 超过阈值即限频告警——与队空等待形成归因对照（本线程阻塞 vs 解码供帧不及）。
+            double sinkMs = System.Diagnostics.Stopwatch.GetElapsedTime(sinkStart).TotalMilliseconds;
+            if (sinkMs > SinkSpikeLogThresholdMs &&
+                System.Diagnostics.Stopwatch.GetElapsedTime(Volatile.Read(ref _lastSpikeLogQpc)).TotalMilliseconds > 3000)
+            {
+                Volatile.Write(ref _lastSpikeLogQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+                _logger.LogWarning(
+                    "[SYNC] 呈现段尖峰 {SinkMs:F1}ms 队列={Q} —— 帧间驱动调用（AHB 导入/退役销毁）或同线程 GC 停顿，为迟到帧直接来源",
+                    sinkMs, _frameQueue.Count);
             }
             // 首帧已真正提交上屏：通知 A/V 启动编排等待点，
             // 使音频 WASAPI 启动不早于视频首帧上屏 → 解决「声音比视频先出」。
@@ -1049,14 +1163,17 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 同步精确等待直到视频帧到达呈现时刻（<c>frameTimestamp - SyncThreshold</c>）。
+    /// 同步精确等待直到视频帧到达呈现时刻（<c>frameTimestamp − PresentationLatency</c>）。
     /// 仅在 LongRunning 专用实时线程上调用（热路径零 await，无续体调度延迟）。
     /// </summary>
     /// <remarks>
-    /// <para>主体：<see cref="Thread.Sleep"/> 睡到「目标时刻前的一个小提前量（补偿平滑时钟读取开销）」，每轮只读一次平滑主时钟
-    /// （QPC 插值优化，跨线程 COM 仅 2~3 次/帧）；尾部用<b>本地 QPC 自旋</b>精确收口，
-    /// 彻底去掉原 WaitUntilDueAsync 每帧上千次跨线程 <c>IAudioClock::GetPosition</c> 的 CPU/缓存行争用。
-    /// 专用线程上 Thread.Sleep 不阻塞任何线程池工作，且 Highest 优先级下不被 OS 抢占。</para>
+    /// <para>进入时把「due 点」一次性换算为<b>绝对墙钟年线</b>（音频主时钟 ≈ 1× 实时），睡眠
+    /// 分段（单片 ≤16ms，逐轮减半收细醒点）与尾部自旋都以该年线收口——主时钟的窗内摆动、
+    /// 记账步进回跳不再扰动醒点（master 读数仅保留给停摆看门狗）。每次调用以进入时刻的
+    /// master 重新换算年线，master 的长期速率仍主导呈现节拍（音画同步不变）。</para>
+    /// <para>停摆看门狗为<b>跨调用锚点</b>：master 推进 ≥ 墙钟 50% 视为健康（重锚；从停摆恢复
+    /// 时复位降级标志），推进 &lt; 墙钟 10% 且跨调用累计等待超过宽限期（首判 500ms，确认后
+    /// 50ms）判定停摆，立即返回交由 Wait 分支限速出帧——宁可轻微不同步也绝不冻结。</para>
     /// <para>与 <see cref="Synchronizer.CheckVideoFrame"/> 使用同一主时钟源与同一阈值，判据一致。</para>
     /// </remarks>
     private void WaitUntilDue(TimeSpan frameTimestamp, CancellationToken ct = default)
@@ -1067,82 +1184,104 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         var threshold = _synchronizer.PresentationLatency;
         long targetQpc = 0;
 
-        // 主时钟停摆看门狗：主时钟取自音频设备游标，一旦音频侧异常
-        // （设备未启动、启动锚点未捕获、引擎停摆），GetCurrentMasterTime 会恒定不前进 →
-        // 本循环永久自旋 → 画面永久冻结（现象：present=1 dropped=0，整片只上屏首帧）。
-        // 故记录进入时的主时钟与墙钟：墙钟已过 StallGraceMs 而主时钟推进不足，即判定停摆，
-        // 放弃等待直接呈现——降级为「按解码节奏出帧」，宁可轻微不同步也绝不冻结。
-        // 【速率判据】停摆 = 主时钟推进 < 墙钟推进 × 10%（advanced*10 < waited）。
-        //   旧判据（advanced < 20ms 绝对值）存在致命漏洞：半冻结时钟（间歇推进 ≥20ms 后长时间停滞，
-        //   vivo/Qualcomm 的 SLPlayItf::GetPosition 实测行为）每次检查都"恰好达标"→ 看门狗永不触发，
-        //   而 remaining 又始终为小的正值（帧"临门一脚"）→ 循环以微小睡眠空转到永远。速率判据
-        //   对冻结/半冻结/极慢（<10% 实时）一律触发，无死角。
-        // 宽限期粘滞：首次判定用 500ms（足够长，绝不误伤正常抖动）；一旦确认停摆则降到 50ms，
-        // 否则每帧空等 500ms 会把画面压到 2fps。主时钟恢复推进时自动复位回正常模式。
-        double graceMs = _masterClockStalled ? 50.0 : 500.0;
-        var entryMaster = _synchronizer.GetCurrentMasterTime();
-        long entryQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        // 绝对墙钟年线：进入时一次性换算（100ns ticks）。remaining ≤ 0（帧已过期，如停摆降级、
+        // 追帧）→ 年线取当前时刻，自旋立即退出，本帧即时呈现。
+        long nowQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        double remainingAtEntry = (frameTimestamp - threshold - _synchronizer.GetCurrentMasterTime()).TotalMilliseconds;
+        long dueWallQpc = nowQpc + (long)(Math.Max(remainingAtEntry, 0) * 10_000);
 
-        // 主体：睡到目标前的一个小提前量（补偿平滑时钟读取开销），每轮一次平滑时钟读取。Stop() 取消时立即返回，
-        // 避免专用实时线程在退出/暂停时仍按帧时睡眠（回归：原 Thread.Sleep 不感知取消）。
-        // 分段睡眠：单次长睡的醒点 = 目标时刻 ± 调度粒度/抢占抖动，抖动超过尾部余量即转化为
-        // 呈现迟到（画面重复一拍且零计数）。片长逐轮减半至 1ms，末段以细粒度逼近目标时刻，
-        // 再由尾部自旋精确收口——醒点误差从「整段睡眠的抖动」压缩到「末段睡眠的抖动」。
+        // 停摆看门狗锚点：首次调用建立，之后跨调用累计（见方法 remarks）。
+        if (!_stallWatchAnchored)
+        {
+            _stallWatchAnchored = true;
+            _stallWatchQpc = nowQpc;
+            _stallWatchMaster = _synchronizer.GetCurrentMasterTime();
+        }
+
+        // 分段睡眠：醒点误差 = 末段睡眠的调度抖动（单片 ≤16ms），远小于整段长睡的抖动。
         int segmentMs = 16;
         while (true)
         {
             if (ct.IsCancellationRequested) return;
-            var master = _synchronizer.GetCurrentMasterTime();
-            var remaining = (frameTimestamp - threshold - master).TotalMilliseconds;
-            if (remaining <= tailMs)
+            nowQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+            double wallRemainingMs = (dueWallQpc - nowQpc) / 10_000.0;
+            if (wallRemainingMs <= tailMs)
             {
-                // 音频时钟≈实时，故用本地高精度时钟反推目标 QPC，尾部纯自旋收口（零 COM 调用）。
-                targetQpc = System.Diagnostics.Stopwatch.GetTimestamp()
-                            + (long)(remaining * 10_000); // 100ns ticks
+                // 尾部自旋收口目标 = 绝对墙钟年线（进入时定格）：master 的窗内摆动不再推迟醒点。
+                targetQpc = dueWallQpc;
                 break;
             }
 
-            double waitedMs = System.Diagnostics.Stopwatch.GetElapsedTime(entryQpc).TotalMilliseconds;
-            double advancedMs = (master - entryMaster).TotalMilliseconds;
+            var master = _synchronizer.GetCurrentMasterTime();
+            double waitedMs = System.Diagnostics.Stopwatch.GetElapsedTime(_stallWatchQpc).TotalMilliseconds;
+            double advancedMs = (master - _stallWatchMaster).TotalMilliseconds;
 
-            // 恢复判定：主时钟已以接近实时的速率推进（≥墙钟 50%）
-            if (advancedMs * 2 >= waitedMs && _masterClockStalled)
+            if (advancedMs < 0)
             {
-                _masterClockStalled = false;
-                graceMs = 500.0;
-                _logger.LogInformation("[SYNC] 主时钟已恢复推进，同步等待回到正常模式。");
+                // master 回跳 = 时间线重建（音频管线重启/Flush 后重锚点、Seek）的合法形态，
+                // 不是停摆：重锚累计，避免跨调用等待把合法跳变误判为停摆。
+                _stallWatchQpc = nowQpc;
+                _stallWatchMaster = master;
             }
-
-            // 停摆判定（速率）：主时钟推进 < 墙钟 × 10%
-            if (waitedMs > graceMs && advancedMs * 10 < waitedMs)
+            else
             {
-                if (!_masterClockStalled)
+                // 健康/恢复判定：master 以接近实时的速率推进（≥墙钟 50%）→ 重锚；从停摆恢复时
+                // 复位降级标志，回到正常同步等待。
+                if (advancedMs * 2 >= waitedMs)
                 {
-                    _masterClockStalled = true;
-                    _logger.LogWarning(
-                        "[SYNC] 主时钟停摆：等待 {Waited:F0}ms 内主时钟仅前进 {Advanced:F1}ms（master={Master}），" +
-                        "放弃等待直接呈现帧 PTS={Pts}，避免画面永久冻结。后续帧改用 50ms 宽限期降级出帧。",
-                        waitedMs, advancedMs, master, frameTimestamp);
+                    _stallWatchQpc = nowQpc;
+                    _stallWatchMaster = master;
+                    if (_masterClockStalled)
+                    {
+                        _masterClockStalled = false;
+                        _logger.LogInformation("[SYNC] 主时钟已恢复推进，同步等待回到正常模式。");
+                    }
                 }
-                return;   // 立即呈现（跳过尾部自旋收口）
+                else if (waitedMs > (_masterClockStalled ? 50.0 : 500.0) && advancedMs * 10 < waitedMs)
+                {
+                    // 停摆判定（速率）：master 推进 < 墙钟 × 10%（对冻结/半冻结/极慢一律触发）。
+                    if (!_masterClockStalled)
+                    {
+                        _masterClockStalled = true;
+                        _logger.LogWarning(
+                            "[SYNC] 主时钟停摆：等待 {Waited:F0}ms 内主时钟仅前进 {Advanced:F1}ms（master={Master}），" +
+                            "放弃等待直接呈现帧 PTS={Pts}，避免画面永久冻结。后续帧改用 50ms 宽限期降级出帧。",
+                            waitedMs, advancedMs, master, frameTimestamp);
+                    }
+                    // 重锚：已在停摆降级态，后续调用以 50ms 宽限期重新累计，维持限速出帧节拍。
+                    _stallWatchQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+                    _stallWatchMaster = master;
+                    return;   // 立即呈现（跳过尾部自旋收口）
+                }
             }
 
-            // 睡眠时长按宽限期截断：主时钟停摆时 remaining 可能高达整片时长（如 PTS=30s、master=0
-            // ⇒ 睡 30 秒），必须在宽限期内醒来复查，否则看门狗永无机会触发。
-            double sleepBudget = Math.Min(remaining - tailMs, graceMs);
-            sleepBudget = Math.Min(sleepBudget, segmentMs);
+            // 分段睡眠（按墙钟年线预算）：同时不超过停摆宽限期余量，保证看门狗有机会触发
+            // （master 停摆时墙钟年线可能仍远，若无余量上限将整段睡穿宽限期）。
+            double graceMs = _masterClockStalled ? 50.0 : 500.0;
+            double graceRemainingMs = Math.Max(graceMs - waitedMs, 1.0);
+            double sleepBudget = Math.Min(wallRemainingMs - tailMs, Math.Min(graceRemainingMs, segmentMs));
             segmentMs = Math.Max(1, segmentMs / 2);
             Thread.Sleep((int)Math.Ceiling(sleepBudget));
         }
 
-        // 尾部：仅用本地 QPC 自旋精确收口（≤5ms 安全阀，防异常时钟停滞死自旋），无跨线程 COM。
-        var sw = System.Diagnostics.Stopwatch.GetTimestamp();
+        // 尾部：自旋到绝对墙钟年线（deadline 恒会到来，无死自旋风险），零跨线程时钟读取。
         while (System.Diagnostics.Stopwatch.GetTimestamp() < targetQpc)
         {
             if (ct.IsCancellationRequested) return;
-            if (System.Diagnostics.Stopwatch.GetElapsedTime(sw).TotalMilliseconds > 5)
-                break;
             System.Threading.Thread.SpinWait(10);
+        }
+
+        // 等待过调探针：醒来时已越过墙钟年线超过阈值 ⇒ 呈现线程被抢占（GL 桥/解码/合成器
+        // 争抢大核）或睡眠过冲——这是"间隔峰值/迟到帧"的最后一块无观测盲区（errMs 大但
+        // sink/队空/GC 均干净的唯一剩余解释）。限频 3s，数据用于定夺线程优先级等处置。
+        double overshootMs = System.Diagnostics.Stopwatch.GetElapsedTime(targetQpc).TotalMilliseconds;
+        if (overshootMs > WaitOvershootLogThresholdMs &&
+            System.Diagnostics.Stopwatch.GetElapsedTime(Volatile.Read(ref _lastOvershootLogQpc)).TotalMilliseconds > 3000)
+        {
+            Volatile.Write(ref _lastOvershootLogQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+            _logger.LogWarning(
+                "[SYNC] 等待过调 {OvershootMs:F1}ms PTS={Pts:g} —— 呈现线程被抢占或睡眠过冲，该帧将迟到同量级",
+                overshootMs, frameTimestamp);
         }
     }
 
