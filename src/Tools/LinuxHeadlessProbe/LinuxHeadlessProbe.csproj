@@ -37,9 +37,24 @@
     ffmpeg 原生库（Linux）：不走 Windows 的 CopyFFmpegNative(.dll) 逻辑。
     Linux 下自写 FF 加载器按 lib{name}.so.{ver} 名称 dlopen（如 libavutil.so.60），
     BtbN lgpl-shared 构建已直接提供这些文件。
-    运行时通过环境变量 LF_FFMPEG_LIB 指向 BtbN 的 lib/ 目录（详见交付说明），
-    并在运行环境 export LD_LIBRARY_PATH=$LF_FFMPEG_LIB 以保证依赖链 dlopen 可见。
-    自写 FF 加载器仅处理 .so 带版本名，Linux 上无需 .dll 无版本别名兜底。
+    运行时优先由下方 CopyFFmpegNativeLinux 在 Linux 构建期把 ThirdParty 的 lib/*.so* 复制到输出目录
+    （与 Windows 探针对齐：bin 内直接可用，免环境变量）；备选方案是环境变量
+    LF_FFMPEG_LIB 指向 BtbN 的 lib/ 目录，并在运行环境 export LD_LIBRARY_PATH=$LF_FFMPEG_LIB
+    以保证依赖链 dlopen 可见。自写 FF 加载器按带版本名优先探测，无版本名兜底。
   -->
+
+  <!-- ffmpeg 原生库（Linux）：复制全部名字层级（libX.so / libX.so.62 / libX.so.62.x.y）——
+       无版本名供默认探测，带 soname 名供依赖链解析；BtbN 构建自带 DT_RUNPATH=$ORIGIN，
+       bin 内即可依赖闭环。MSBuild Copy 在 Linux 上将符号链接解引用为真实文件，每个名字都是完整 ELF。
+       默认取 n8.1（avutil 60，与自绑定结构镜像校准版本一致）；改用其他构建时调整通配符。 -->
+  <ItemGroup Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*n8.1*linux64*\lib\*.so*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopyFFmpegNativeLinux" AfterTargets="Build;Publish" Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+    <ItemGroup>
+      <FFmpegSo Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*n8.1*linux64*\lib\*.so*" />
+    </ItemGroup>
+    <Message Condition="'@(FFmpegSo)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*n8.1*linux64*/lib/*.so*，请在 Linux 侧解包 ThirdParty/ffmpeg/ffmpeg-n8.1-latest-linux64-lgpl-shared-8.1.tar.xz，或设置环境变量 LF_FFMPEG_LIB 指向已解包的 lib 目录。" Importance="high" />
+  </Target>
 
 </Project>

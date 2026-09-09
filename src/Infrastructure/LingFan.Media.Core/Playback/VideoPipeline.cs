@@ -91,6 +91,14 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // 主时钟停摆降级标志（仅呈现线程读写，无需 volatile）：见 WaitUntilDue 的停摆看门狗。
     // 置位后同步等待改用 50ms 宽限期，避免每帧空等 500ms 把画面压到 2fps；主时钟恢复推进即复位。
     private bool _masterClockStalled;
+    // 起播瞬态保持：门控放行后、音频设备起跑前，主时钟（音频游标）设计内冻结——这不是停摆。
+    // 保持期内帧年线随当前 master 滑行重算，帧等到 master 追上 PTS 才呈现（首帧海报不前导、
+    // 后续帧不提前）；观测到 master 首次真实推进即结束保持，回到 PTS 同步。消除「音频冷启动
+    // 窗口被停摆看门狗降级提前出帧 → 音频起跑后画面冻结追同步」的起播不同步。
+    private bool _masterClockEverAdvanced;
+    // 保持预算：音频启动失败且时钟无任何回退源时的兜底（超限进入停摆降级保底出帧）。
+    // 须大于最慢的音频设备冷启动（含设备激活/格式协商，可达数秒）。
+    private const int StartupClockHoldTimeoutMs = 8000;
     // 停摆看门狗跨调用锚点（仅呈现线程读写）：master 推进 ≥ 墙钟 50% 即重锚；长期停滞时
     // 跨调用累计等待，超过宽限期触发降级出帧。
     private long _stallWatchQpc;
@@ -470,8 +478,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 通知视频管线「音频设备已启动、主时钟已可用」，放行呈现循环的首帧门控。
-    /// 由 <see cref="MediaPipelineHost.StartAsync"/> 在音频管线启动后（含异常路径的 finally）调用。
+    /// 放行呈现循环的首帧门控。由 <see cref="MediaPipelineHost.StartAsync"/> 在视频预滚动后、
+    /// **音频管线启动前**调用（首帧在主时钟 ≈0 的起跑瞬态同刻呈现，与音频无缝对齐）；
+    /// 放行后主时钟仍冻结的窗口由 <see cref="WaitUntilDue"/> 的起播保持兜住。
     /// </summary>
     /// <remarks>
     /// 无音频轨时也必须调用（否则呈现线程会空等到 <see cref="AudioGateTimeoutMs"/> 兜底超时）。
@@ -679,10 +688,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 }
 
                 // 首帧门控：音频设备（主时钟源）启动前，**不做任何同步判定/呈现**。
-                // 若不门控，此窗口内 GetCurrentMasterTime 恒为 0：第 0 帧会被立即 Present，
-                // 后续帧走 Wait 分支并触发 WaitUntilDue 的「主时钟停摆」看门狗（500ms 后降级直接出帧）
-                // → 画面按解码节奏爆发式推进，比原缺陷更糟。门控期间屏幕保持上一次播放的末帧，
-                // 待主时钟起跑后从 PTS=0 起同刻呈现，衔接无跳变。
+                // 门控放行发生在音频启动之前（起播瞬态设计，见 MediaPipelineHost.StartAsync）；
+                // 放行后主时钟仍冻结的窗口由 WaitUntilDue 的「起播保持」兜住：帧等 master 追上
+                // PTS 才呈现，不前导不爆发推进；主时钟起跑后从 PTS=0 起同刻呈现，衔接无跳变。
                 if (!_audioGateOpened)
                 {
                     long gateStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -1214,6 +1222,51 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             var master = _synchronizer.GetCurrentMasterTime();
             double waitedMs = System.Diagnostics.Stopwatch.GetElapsedTime(_stallWatchQpc).TotalMilliseconds;
             double advancedMs = (master - _stallWatchMaster).TotalMilliseconds;
+
+            if (!_masterClockEverAdvanced)
+            {
+                if (advancedMs >= 1.0)
+                {
+                    // 起播瞬态结束：主时钟首次观测到推进（音频设备起跑），回到正常 PTS 同步。
+                    _masterClockEverAdvanced = true;
+                    _stallWatchQpc = nowQpc;
+                    _stallWatchMaster = master;
+                    if (waitedMs > 100.0)
+                        _logger.LogInformation(
+                            "[SYNC] 主时钟起跑（起播保持 {HeldMs:F0}ms），呈现回到 PTS 同步。", waitedMs);
+                    // 保持期的旧年线已失效（按冻结 master 换算），按当前 master 重算后正常等待。
+                    dueWallQpc = nowQpc + (long)(Math.Max((frameTimestamp - threshold - master).TotalMilliseconds, tailMs) * 10_000);
+                    continue;
+                }
+
+                if (!_masterClockStalled)
+                {
+                    // 起播保持：门控放行后音频设备仍在启动（设计内时序，master 冻结 ≠ 停摆）。
+                    // 年线随当前 master 滑行重算 → 本帧等到 master 追上 PTS 才呈现，不前导不冻结；
+                    // 音频启动失败且时钟无任何推进时由保持预算兜底降级，保底出帧。
+                    if (waitedMs > StartupClockHoldTimeoutMs)
+                    {
+                        _masterClockStalled = true;
+                        _logger.LogWarning(
+                            "[SYNC] 起播保持超时：{Waited:F0}ms 内主时钟无推进（master={Master}），降级按宽限期出帧。",
+                            waitedMs, master);
+                        _stallWatchQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+                        _stallWatchMaster = master;
+                        return;   // 立即呈现（进入 50ms 降级节拍）
+                    }
+                    double remainingNowMs = (frameTimestamp - threshold - master).TotalMilliseconds;
+                    if (remainingNowMs <= tailMs)
+                    {
+                        targetQpc = nowQpc;
+                        break;
+                    }
+                    dueWallQpc = nowQpc + (long)(remainingNowMs * 10_000);
+                    Thread.Sleep(segmentMs);
+                    segmentMs = Math.Max(1, segmentMs / 2);
+                    continue;
+                }
+                // 已因保持超时进入降级（时钟始终未起跑）：落入下方既有停摆逻辑按 50ms 限速。
+            }
 
             if (advancedMs < 0)
             {

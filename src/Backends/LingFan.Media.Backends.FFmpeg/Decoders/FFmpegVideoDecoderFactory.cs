@@ -5,6 +5,8 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// </summary>
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂，无状态。每次 <see cref="Create"/> 返回新实例。</para>
+/// <para>工厂构造期零原生触碰；<see cref="Create"/> 前调用 <see cref="FFmpegBackend.EnsureNativeInitialized"/>
+/// 确保自绑定加载器就绪——只有真正使用 FFmpeg 后端时才要求原生库在场。</para>
 /// <para><b>异步策略</b>：</para>
 /// <list type="bullet">
 /// <item><see cref="Create"/>：同步，手动 new + <see cref="IVideoDecoder.Initialize"/>。</item>
@@ -40,6 +42,7 @@ public sealed class FFmpegVideoDecoderFactory : IVideoDecoderFactory
     /// <inheritdoc/>
     public IVideoDecoder Create(VideoCodec codec, VideoSettings settings)
     {
+        FFmpegBackend.EnsureNativeInitialized(_options);
         var decoder = new FFmpegVideoDecoder(_loggerFactory.CreateLogger<FFmpegVideoDecoder>(), _gpuContext, _options, _frameProducers, _vaApiExport);
         decoder.Initialize(codec, settings);
         return decoder;

@@ -20,8 +20,8 @@ namespace LinuxHeadlessProbe;
 /// </summary>
 /// <remarks>
 /// <para>用法（在 WSL2 / Linux 内执行）：</para>
-/// <para>1) 设置 ffmpeg 原生库目录环境变量 LF_FFMPEG_LIB 指向 BtbN 解包后的 lib 目录；</para>
-/// <para>2) 将该目录加入 LD_LIBRARY_PATH；</para>
+/// <para>1) Linux 侧构建时，构建目标会自动把 ThirdParty 的 ffmpeg 共享库复制到输出目录，无需环境变量；</para>
+/// <para>2) 若库未随构建复制（ThirdParty 缺失），设置 LF_FFMPEG_LIB 指向解包后的 lib 目录作兜底；</para>
 /// <para>3) 用 dotnet run 启动本探针，参数前缀用两个短横线，例如 --file /abs/video.mp4 --seconds 12 -v。</para>
 /// </remarks>
 internal static class Program

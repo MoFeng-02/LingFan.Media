@@ -53,8 +53,12 @@ internal static partial class FF
         }
     }
 
-    /// <summary>核心组件（必载）；avfilter 预留但可选（当前未绑定其函数）。</summary>
-    private static readonly string[] CoreComponents = { "avutil", "avcodec", "avformat", "swscale", "swresample" };
+    /// <summary>
+    /// 核心组件（必载），按依赖闭包序加载：被依赖者先载，后续库的 DT_NEEDED 即可命中已加载对象（无需搜索路径兜底）。
+    /// 依赖关系：avcodec 依赖 avutil+swresample；avformat 依赖 avcodec+avutil；swresample/swscale 依赖 avutil。
+    /// avfilter 预留但可选（当前未绑定其函数），单独 best-effort。
+    /// </summary>
+    private static readonly string[] CoreComponents = { "avutil", "swresample", "swscale", "avcodec", "avformat" };
 
     /// <summary>已知发布版本 → 各组件主版本号（新→旧，优先最新兼容版本）。</summary>
     private static readonly (int util, int codec, int format, int swscale, int swresample, int avfilter)[] Releases =
@@ -71,14 +75,22 @@ internal static partial class FF
     {
         foreach (var rel in Releases)
         {
-            int[] majors = { rel.util, rel.codec, rel.format, rel.swscale, rel.swresample, rel.avfilter };
+            int MajorOf(string simple) => simple switch
+            {
+                "avutil" => rel.util,
+                "avcodec" => rel.codec,
+                "avformat" => rel.format,
+                "swscale" => rel.swscale,
+                "swresample" => rel.swresample,
+                _ => rel.avfilter,
+            };
             var loaded = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
             bool ok = true;
 
             for (int i = 0; i < CoreComponents.Length; i++)
             {
                 string simple = CoreComponents[i];
-                if (!TryLoadVersioned(baseDir, simple, majors[i], out IntPtr h))
+                if (!TryLoadVersioned(baseDir, simple, MajorOf(simple), out IntPtr h))
                 {
                     ok = false;
                     break;
@@ -221,14 +233,18 @@ internal static partial class FF
         if (ctx == null) return; // 极端 OOM：跳过自测，不阻断加载（正常必非 null）
         try
         {
-            // 在结构体不同深度布点（覆盖 hw_device_ctx@560 前后区域）。
-            // av_opt_set_int 写入原生真实偏移；按镜像字段偏移读回；不一致即镜像偏移错误。
-            CheckAvOptField(ctx, "strict_std_compliance", 0x62B);
-            CheckAvOptField(ctx, "err_recognition", 0x73C);
-            CheckAvOptField(ctx, "hwaccel_flags", 0x84D);
-            CheckAvOptField(ctx, "extra_hw_frames", 0x95E);
-            CheckAvOptField(ctx, "width", 0xA6F);
-            CheckAvOptField(ctx, "height", 0xB70);
+            // 在结构体不同深度布点（覆盖 hwaccel/hw_frames_ctx/hw_device_ctx@536-560 关键区前后）。
+            // 布点字段须同时满足：是 AVCodecContext 的 AVOption（经 av_opt_set_int 写入原生真实偏移）
+            // 且镜像有同名字段（按 Marshal.OffsetOf 读回比对）。
+            // 选用 FFmpeg 4.x–9.0 选项表全程存在的字段：8.0 大版本从选项表移除了
+            // strict_std_compliance / err_recognition / workaround_bugs / error_concealment 等
+            // （结构体字段仍在，但不可再经 av_opt 写），width/height 则从来不是 AVCodecContext 选项。
+            // 哨兵值取各选项 min/max 合法区间内的值（越界会被 av_opt 以 ERANGE 拒绝）。
+            CheckAvOptField(ctx, "qmin", 0x2B);
+            CheckAvOptField(ctx, "trellis", 0x73C);
+            CheckAvOptField(ctx, "debug", 0x84D);
+            CheckAvOptField(ctx, "hwaccel_flags", 0x95E);
+            CheckAvOptField(ctx, "extra_hw_frames", 0xA6F);
         }
         finally
         {
