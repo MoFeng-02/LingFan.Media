@@ -11,7 +11,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// 须由 <see cref="VulkanNative.InitInstance(Instance)"/> 用 <c>vkGetInstanceProcAddr</c> 解析（且实例须启用 <c>VK_KHR_video_queue</c> 实例扩展）；
 /// 经 <c>vkGetDeviceProcAddr</c> 解析必返回 NULL——此坑曾导致硬解初始化崩溃。</para>
 /// <para>解析为 null 时（设备未启用 VK_KHR_video_decode_* 扩展）对应包装方法抛 <see cref="InvalidOperationException"/>，
-/// 调用方须回落软件解码——符合「S_OK≠被接受」与跨平台降级铁律。</para>
+/// 调用方须回落软件解码——原生调用返回成功不等于解码能力可用（S_OK≠被接受），按能力探测降级。</para>
 /// <para>视频解码函数指针独立于渲染函数指针存储（独立 <c>_videoReady</c> 标志），
 /// 同一 VkDevice 上渲染与视频解码可各自按需解析，互不阻塞。</para>
 /// </remarks>
@@ -60,7 +60,7 @@ public static unsafe partial class VulkanNative
     private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, VideoProfileInfoKHR*, VideoCapabilitiesKHR*, Result> _getPhysicalDeviceVideoCapabilitiesKHR;
     private static unsafe delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceVideoFormatInfoKHR*, uint*, VideoFormatPropertiesKHR*, Result> _getPhysicalDeviceVideoFormatPropertiesKHR;
 
-    // ── 物理设备视频能力 / 格式属性查询 ──
+    // 物理设备视频能力 / 格式属性查询
 
     public static unsafe Result GetPhysicalDeviceVideoCapabilitiesKHR(PhysicalDevice physicalDevice, VideoProfileInfoKHR* pVideoProfile, VideoCapabilitiesKHR* pCapabilities)
     {
@@ -70,7 +70,7 @@ public static unsafe partial class VulkanNative
     }
 
     /// <summary>
-    /// 查询指定视频 profile 下支持的 DPB/输出图像格式与 usage/flags（VUID-06811 铁律）。
+    /// 查询指定视频 profile 下支持的 DPB/输出图像格式与 usage/flags（VUID-06811 规范要求）。
     /// 须用返回值构造带 VIDEO_DECODE_* usage 的图像，硬编码组合会被判"profile 无关"→ 解码静默 no-op。
     /// </summary>
     public static unsafe Result GetPhysicalDeviceVideoFormatPropertiesKHR(PhysicalDevice physicalDevice, PhysicalDeviceVideoFormatInfoKHR* pVideoFormatInfo, uint* pPropertyCount, VideoFormatPropertiesKHR* pProperties)
@@ -80,7 +80,7 @@ public static unsafe partial class VulkanNative
         return _getPhysicalDeviceVideoFormatPropertiesKHR(physicalDevice, pVideoFormatInfo, pPropertyCount, pProperties);
     }
 
-    // ── 视频会话（Video Session）生命周期 ──
+    // 视频会话（Video Session）生命周期
 
     public static unsafe Result CreateVideoSessionKHR(Device device, ref VideoSessionCreateInfoKHR pCreateInfo, AllocationCallbacks* pAllocator, out VideoSessionKHR pVideoSession)
     {
@@ -116,7 +116,7 @@ public static unsafe partial class VulkanNative
         return _bindVideoSessionMemoryKHR(device, videoSession, bindIndex, pBindInfo);
     }
 
-    // ── 视频会话参数（SPS/PPS 等 codec 参数） ──
+    // 视频会话参数（SPS/PPS 等 codec 参数）
 
     public static unsafe Result CreateVideoSessionParametersKHR(Device device, ref VideoSessionParametersCreateInfoKHR pCreateInfo, AllocationCallbacks* pAllocator, out VideoSessionParametersKHR pVideoSessionParameters)
     {
@@ -144,7 +144,7 @@ public static unsafe partial class VulkanNative
         _destroyVideoSessionParametersKHR(device, videoSessionParameters, pAllocator);
     }
 
-    // ── 解码命令（须包在 vkCmdBeginVideoCodingKHR … vkCmdEndVideoCodingKHR 之间）──
+    // 解码命令（须包在 vkCmdBeginVideoCodingKHR … vkCmdEndVideoCodingKHR 之间）
 
     public static unsafe void CmdBeginVideoCodingKHR(CommandBuffer commandBuffer, VideoBeginCodingInfoKHR* pBeginInfo)
     {

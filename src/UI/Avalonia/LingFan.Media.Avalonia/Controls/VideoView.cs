@@ -22,7 +22,7 @@ namespace LingFan.Media.Avalonia;
 /// （Windows: DirectComposition / macOS: CAMetalLayer / Linux: Wayland subsurface / Android: TextureView / iOS: CAMetalLayer）</item>
 /// </list>
 /// <para>两种模式下 UI 控件均可自由覆盖视频上方，无 z-order / 裁剪 / DPI 问题。</para>
-/// <para><b>异步策略</b>（遵守异步同步分类表）：</para>
+/// <para><b>异步策略</b>（有真实 I/O 走 async、纯内存保持 sync）：</para>
 /// <list type="bullet">
 /// <item>OnAttachedToVisualTree：sync——创建 Presenter + Initialize，纯内存</item>
 /// <item>OnDetachedFromVisualTree：sync（SkiaVideoRenderer.Dispose 同步，无 I/O 可 await）。

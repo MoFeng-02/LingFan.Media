@@ -12,9 +12,9 @@ namespace LingFan.Media.Backends.Apple.Decoders;
 /// <para><b>架构</b>：demuxer 经 <see cref="MediaPacket"/> 传入<b>压缩</b>样本（avcC/hvcC 长度前缀 NAL），
 /// 解码器在 <see cref="Initialize"/> 用 SPS/PPS/VPS 构建 <c>CMVideoFormatDescription</c>，
 /// 创建 <c>VTDecompressionSession</c>，逐包喂入解出 <c>CVPixelBuffer</c>。</para>
-/// <para><b>先软解后硬解</b>（B0/B1）：默认软件路径——把 CVPixelBuffer（NV12）拷贝进
+/// <para><b>先软解后硬解</b>：默认软件路径——把 CVPixelBuffer（NV12）拷贝进
 /// <see cref="SoftwareFrameResource"/>。零拷贝 IOSurface→Metal 由 <c>EnableVideoToolboxZeroCopy</c> 门控，
-/// 需 C0 Metal 消费侧生产者注入，当前未接线，开启即诚实抛 <see cref="NotSupportedException"/>。</para>
+/// 需 Metal 消费侧生产者注入，当前未接线，开启即诚实抛 <see cref="NotSupportedException"/>。</para>
 /// <para><b>同步解码</b>：不清算 <c>kVTDecodeFrame_EnableAsynchronousDecompression</c>，回调在
 /// <c>VTDecompressionSessionDecodeFrame</c> 返回前同步触发（Apple 文档保证），故热路径返回
 /// <see cref="ValueTask.FromResult{TResult}"/>，无伪异步。</para>
@@ -57,10 +57,10 @@ internal sealed unsafe class AppleVideoDecoder : IVideoDecoder
     /// <inheritdoc/>
     // 与 AndroidVideoDecoder 同构：当前为「软件回读」路径——VideoToolbox 解出 CVPixelBuffer 后经
     // CVPixelBufferLockBaseAddress 强制 CPU 读回、拷贝进 SoftwareFrameResource，不交付 GPU/零拷贝帧。
-    // 本仓约定（见 MF 设计文档「修复 IsHardwareAccelerated 假回显 bug」与 AndroidVideoDecoder）：
+    // 本仓约定（与 MediaFoundation / Android 解码器一致）：
     // 仅当确能交付 GPU 纹理/零拷贝帧才报 true。此路径未达，故报 false——
     // 高复杂度内容（4K/8K HDR）将正确触发 MediaPlayer 的「可能无法实时」告警，而非静默假绿。
-    // 零拷贝 IOSurface→Metal（C0）落地、能交付 GPU 纹理帧后，此处方可改 true。
+    // 零拷贝 IOSurface→Metal 落地、能交付 GPU 纹理帧后，此处方可改 true。
     public bool IsHardwareAccelerated => false;
 
     /// <inheritdoc/>
@@ -75,8 +75,8 @@ internal sealed unsafe class AppleVideoDecoder : IVideoDecoder
 
         if (_backend.Options.EnableVideoToolboxZeroCopy)
             throw new NotSupportedException(
-                "[APPLE-VID] 零拷贝上屏需 C0 Metal 消费侧 IOSurface→MTLTexture 生产者（IGpuFrameProducer）注入，" +
-                "当前未接线；请关闭 EnableVideoToolboxZeroCopy 或待 C0 完成后启用。");
+                "[APPLE-VID] 零拷贝上屏需 Metal 消费侧 IOSurface→MTLTexture 生产者（IGpuFrameProducer）注入，" +
+                "当前未接线；请关闭 EnableVideoToolboxZeroCopy 或待消费侧接线完成后启用。");
 
         if (codec != VideoCodec.H264 && codec != VideoCodec.H265)
             throw new NotSupportedException($"Apple 视频解码器仅支持 H264 / HEVC，收到 {codec}。");

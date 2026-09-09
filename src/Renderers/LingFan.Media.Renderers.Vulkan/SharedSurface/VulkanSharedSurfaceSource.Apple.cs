@@ -33,11 +33,11 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// </remarks>
 internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
 {
-    // ── 信号量握手键（Semaphores 模型不使用 keyed mutex，恒为 0）──
-    // ═══════ Apple / MoltenVK 平台实现（MTLSharedEvent 信号量导出、IOSurface 离屏导出）═══════
+    // 信号量握手键（Semaphores 模型不使用 keyed mutex，恒为 0）
+    // Apple / MoltenVK 平台实现（MTLSharedEvent 信号量导出、IOSurface 离屏导出）
 
 
-    // ── Apple / MoltenVK：经 VK_EXT_metal_objects 把 Vulkan 信号量导出为 MTLSharedEvent ──
+    // Apple / MoltenVK：经 VK_EXT_metal_objects 把 Vulkan 信号量导出为 MTLSharedEvent
     private void CreateSemaphoresApple()
     {
         // 创建信号量时 pNext 链 ExportMetalObjectCreateInfoEXT（SharedEvent 位），
@@ -95,7 +95,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         return evt.MtlSharedEvent;
     }
 
-        // ── Apple / MoltenVK：经 VK_EXT_metal_objects 把 Vulkan 离屏图像导出为 IOSurface ──
+        // Apple / MoltenVK：经 VK_EXT_metal_objects 把 Vulkan 离屏图像导出为 IOSurface
     private void EnsureSharedSurfaceApple(int w, int h)
     {
         // 图像创建：pNext 链 ExportMetalObjectCreateInfoEXT（IOSurface 位），告知 MoltenVK

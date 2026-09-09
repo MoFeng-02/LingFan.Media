@@ -5,7 +5,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.OpenAL;
 
 /// <summary>
-/// OpenAL 音频输出（跨平台备选，C 组 AUDIO-STUB 唯一遗留项的真实实现）。
+/// OpenAL 音频输出（跨平台备选，真实实现）。
 /// </summary>
 /// <remarks>
 /// <para>职责：通过 OpenAL（alc* 设备/上下文 + al* 源/缓冲）播放 PCM 数据，作为跨平台统一回退输出。</para>

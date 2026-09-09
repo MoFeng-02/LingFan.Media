@@ -948,7 +948,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         return ValueTask.CompletedTask;
     }
 
-    // ── 辅助方法 ──
+    // 辅助方法
 
     /// <summary>从 AVFrame 创建 VideoFrame。</summary>
     /// <remarks>
@@ -1234,7 +1234,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         return i < 0 ? 0 : i > 255 ? 255 : i;
     }
 
-    // ── D3D11VA 硬件解码 ──
+    // D3D11VA 硬件解码
 
     /// <summary>
     /// 初始化 D3D11VA 硬件解码设备上下文（使用渲染器共享的 D3D11 设备，实现零拷贝）。
@@ -1468,7 +1468,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
     }
 
-    // ── Linux VAAPI 硬件解码（真实零拷贝路径）──
+    // Linux VAAPI 硬件解码（真实零拷贝路径）
 
     /// <summary>
     /// 初始化 VAAPI 硬件解码设备上下文（Linux 真实零拷贝路径）。
@@ -1616,7 +1616,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
     }
 
-    // ── Android MediaCodec 硬件解码 ──
+    // Android MediaCodec 硬件解码
 
     /// <summary>
     /// 初始化 MediaCodec 硬件设备上下文（宿主注入 Surface → 表面直渲染；未注入 → 缓冲模式）。

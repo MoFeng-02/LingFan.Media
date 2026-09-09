@@ -49,8 +49,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
     private ulong _pipelineExternalFormat;      // 当前管线对应的 externalFormat（0=未建）
 
     // 帧缓冲缓存：须<b>存活至引用它的命令缓冲执行完毕</b>。记录后立即销毁会让命令缓冲悬挂引用
-    // 已释放对象，Adreno 在 vkEndCommandBuffer 收拢时解引用它 → SIGSEGV fault addr 0x0
-    // （tombstone #01 qglinternal::vkEndCommandBuffer，真机实证 2026-09-03；与 RGBA 转换器同修）。
+    // 已释放对象，Adreno 在 vkEndCommandBuffer 收拢时解引用它 → 进程级原生崩溃（空指针解引用）。
     // 按（目标视图, 尺寸）惰性复用；管线/RenderPass 重建或 Dispose 时释放。
     private Framebuffer _framebuffer;
     private ImageView _framebufferView;
@@ -165,7 +164,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
             throw new InvalidOperationException("管线尚未创建（须先调用 EnsurePipeline）。");
 
         // 帧缓冲须与命令缓冲同生命周期：缓存复用（目标视图/尺寸变化时重建），
-        // 绝不在记录后立即销毁（见字段注释的悬挂引用实证）。
+        // 绝不在记录后立即销毁（悬挂引用会导致命令缓冲解引用已释放对象，见字段注释）。
         if (_framebuffer.Handle == 0 || _framebufferView.Handle != rgbaView.Handle
             || _framebufferW != width || _framebufferH != height)
         {
@@ -253,7 +252,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         if (_fragModule.Handle != 0) { VulkanNative.DestroyShaderModule(_device, _fragModule, null); _fragModule = default; }
     }
 
-    // ── 转换对象 / 采样器 / 描述符构建 ──
+    // 转换对象 / 采样器 / 描述符构建
 
     private void CreateYcbcrConversion(ulong externalFormat, in AndroidHardwareBufferFormatPropertiesANDROID formatProps)
     {
@@ -385,7 +384,7 @@ public sealed unsafe class VulkanYcbcrToRgbaConverter : IDisposable
         VulkanNative.UpdateDescriptorSets(_device, 1, &write, 0, null);
     }
 
-    // ── 管线构建（与 VulkanNv12ToRgbaConverter 同构，仅无推送常量——翻转烘焙进着色器）──
+    // 管线构建（与 VulkanNv12ToRgbaConverter 同构，仅无推送常量——翻转烘焙进着色器）
 
     private void EnsurePipelineLayout()
     {

@@ -29,7 +29,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// </remarks>
 internal static unsafe partial class GLNative
 {
-    // ── 中性库名重定向：GL(跨平台) / EGL(Linux) ──
+    // 中性库名重定向：GL(跨平台) / EGL(Linux)
     static GLNative()
     {
         NativeLibrary.SetDllImportResolver(typeof(GLNative).Assembly, ResolveGlLoader);
@@ -67,7 +67,7 @@ internal static unsafe partial class GLNative
         return nint.Zero;
     }
 
-    // ── GL 1.1 基线：平台库直接导出，加载期解析（OS 加载器在首次调用时绑定）──
+    // GL 1.1 基线：平台库直接导出，加载期解析（OS 加载器在首次调用时绑定）
 
     [LibraryImport("GL")]
     public static partial void glClear(uint mask);
@@ -148,7 +148,7 @@ internal static unsafe partial class GLNative
     [LibraryImport("GL")]
     public static partial void glTexCoord2f(float s, float t);
 
-    // ── GL 1.2+ 现代函数：运行时经 GetProcAddress 解析（需当前上下文）──
+    // GL 1.2+ 现代函数：运行时经 GetProcAddress 解析（需当前上下文）
 
     private static bool _modernLoaded;
 

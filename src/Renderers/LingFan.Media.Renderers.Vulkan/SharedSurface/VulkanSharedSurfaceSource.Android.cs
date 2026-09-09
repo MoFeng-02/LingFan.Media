@@ -31,29 +31,29 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// </remarks>
 internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
 {
-    // ── 信号量握手键（Semaphores 模型不使用 keyed mutex，恒为 0）──
-    // ═══════ Android 平台实现（AHB 零拷贝全家：YCbCr/RGBA 转换、直采样描述符、分步提交、退役环）═══════
+    // 信号量握手键（Semaphores 模型不使用 keyed mutex，恒为 0）
+    // Android 平台实现（AHB 零拷贝全家：YCbCr/RGBA 转换、直采样描述符、分步提交、退役环）
 
     // Android 零拷贝稳健层：解码侧 AHB 仅作 SOURCE——经 YCbCr 转换渲进 plain 内部 RGBA 图像
     // （_convertImage，用法与 VulkanGpuFrameProducer.TryCreateRgbaTarget 完全同款），再 vkCmdCopyImage
     // 拷进普通 Vulkan 外部图像 _sharedImage（OpaqueFd 导出交合成器）。此 GPU→GPU 拷贝为零 CPU 像素拷贝；
     // _sharedImage 现为普通 Vulkan 图像（与 Linux 完全一致），规避 AHB gralloc fd 经 OPAQUE_FD 重导入的
-    // stride 失配（VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR，见 3.txt）。仅 Android 启用内部 _convertImage。
+    // stride 失配（VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR）。仅 Android 启用内部 _convertImage。
     private Image _convertImage;
     private DeviceMemory _convertMemory;
     private ImageView _convertView;
 
     // _sharedImage 当前交付槽位是否已进入 TransferDstOptimal（跨命令缓冲持久；尺寸变化时重建归零）。
 
-    // Android AHB 诊断/自提交标志：AHB 路径改为「转换」「拷贝」两步分提交以隔离 Mali DEVICE_LOST 真因
-    // （① AHB YCbCr 采样 还是 ② 写入导入的 AHB 离屏）。置位后 TryWriteFrame 跳过公共提交段（已在内部完成）。
+    // Android AHB 诊断/自提交标志：AHB 路径改为「转换」「拷贝」两步分提交以隔离 Mali DEVICE_LOST
+    // （发生在 AHB YCbCr 采样，还是写入导入的 AHB 离屏）。置位后 TryWriteFrame 跳过公共提交段（已在内部完成）。
     private bool _ahbSelfSubmitted;
 
     // AHB YCbCr 转换建议值诊断仅打印一次。
     private bool _ahbYcbcrDiagLogged;
     private bool _ahbRgbaDiagLogged;
 
-    // ── AHB 直采样（DIRECT，Android RGBA 零队列提交路径）──
+    // AHB 直采样（DIRECT，Android RGBA 零队列提交路径）
     // 导入图像退役环：导入内存持有驱动侧 AHB 引用（钉住 gralloc 缓冲，ImageReader 无法复用），
     // 交付后延迟 N 帧销毁导入，确保 Skia 在自身帧提交内的采样早已执行完毕。
     private readonly Queue<(Image Image, DeviceMemory Memory)> _ahbDirectRetire = new();
@@ -69,8 +69,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     /// <item><description>非外部格式（RGBA，ImageReader 以 Rgba8888 产出）：经 <see cref="VulkanRgbaToRgbaConverter"/>
     /// 普通采样直渲，绕开 Adreno 对「外部格式 YUV AHB + YCbCr 采样」的原生空指针崩溃。</description></item>
     /// </list>
-    /// 复用 <c>VulkanGpuFrameProducer.TryImportAndroidAHardwareBuffer</c> 已真机验证的导入范式
-    /// （含 <c>Buffer=(nint*)ahb.AhbHandle</c> 传值，规避 SIGBUS）。
+    /// 复用 <c>VulkanGpuFrameProducer.TryImportAndroidAHardwareBuffer</c> 已验证的导入范式
+    /// （含 <c>Buffer=(nint*)ahb.AhbHandle</c> 传值，规避把栈地址当 AHB 解引用的原生崩溃）。
     /// </summary>
     /// <returns>是否成功记录命令（true 时命令缓冲由本方法或调用方提交）。</returns>
     private bool TryRecordAhbConversion(AndroidHardwareBufferFrameResource ahb, int w, int h)
@@ -162,7 +162,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         try
         {
             // 3) dedicated 内存导入：Buffer 须存 AHardwareBuffer* 的【值】=(nint*)ahb.AhbHandle
-            //    （SIGBUS 根因：此前误传 &localVar 致驱动解引用栈地址 → BUS_ADRALN）。
+            //    （防回归：误传 &localVar 会致驱动解引用栈地址 → 对齐错误的原生崩溃）。
             var dedicated = new MemoryDedicatedAllocateInfo
             {
                 SType = StructureType.MemoryDedicatedAllocateInfo,
@@ -219,19 +219,19 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             }
 
             // 5) AHB 源 → 渲染进【plain 内部 RGBA 目标】_convertImage（Android）/ _sharedImage（Win/Linux）。
-            //    Android 走「分步提交」以隔离 Mali DEVICE_LOST 真因：先单独提交 ① 转换（AHB YCbCr 采样），
-            //    再单独提交 ② 拷贝（写入导入的 AHB 离屏 _sharedImage）。任一步 DEVICE_LOST 即在日志定位。
+            //    Android 走「分步提交」以隔离 Mali DEVICE_LOST 的发生步：先单独提交转换（AHB YCbCr 采样），
+            //    再单独提交拷贝（写入共享离屏 _sharedImage）。任一步 DEVICE_LOST 即在日志定位。
             Image convertTarget = _isAndroid ? _convertImage : _sharedImages[0];
             ImageView convertView = _isAndroid ? _convertView : _sharedImageViews[0];
-            _logger.LogTrace("[AHB-DIAG] ▶ 进入 Convert（AHB→_convertImage GPU 绘制）{W}x{H}", w, h);
+            _logger.LogTrace("[AHB-DIAG] 进入 Convert（AHB→_convertImage GPU 绘制）{W}x{H}", w, h);
             _ycbcrConverter.Convert(_commandBuffer, ahbImage, ahbView, (uint)w, (uint)h,
                 _surfaceVkFormat, convertTarget, convertView);
-            _logger.LogTrace("[AHB-DIAG] ✓ Convert 记录完成，准备分步提交①");
+            _logger.LogTrace("[AHB-DIAG] Convert 记录完成，准备分步提交");
 
-            // 6) Android：分步提交。先提交并等待 ① 转换（AHB→_convertImage），隔离 AHB 采样是否触发 fault。
+            // 6) Android：分步提交。先提交并等待转换（AHB→_convertImage），隔离 AHB 采样是否触发设备级错误。
             if (_isAndroid)
             {
-                if (!SubmitAhbStep("①AHB-YCbCr采样转换", w, h))
+                if (!SubmitAhbStep("AHB-YCbCr采样转换", w, h))
                 {
                     _ycbcrConverter.DestroyImageView(ahbView);
                     viewCreated = false;
@@ -245,7 +245,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 VulkanNative.DestroyImage(_device, ahbImage, null);
                 VulkanNative.FreeMemory(_device, ahbMemory, null);
 
-                // 7) ② 拷贝：_convertImage(TransferSrcOptimal) → AHB 离屏 _sharedImage（仅 TRANSFER_DST）。
+                // 7) 拷贝：_convertImage(TransferSrcOptimal) → 共享离屏 _sharedImage（仅 TRANSFER_DST）。
                 VulkanNative.ResetCommandBuffer(_commandBuffer, 0);
                 CommandBufferBeginInfo begin2 = new()
                 {
@@ -254,11 +254,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 };
                 if (VulkanNative.BeginCommandBuffer(_commandBuffer, ref begin2) != Result.Success)
                 {
-                    _logger.LogWarning("[AHB-DIAG] ② 拷贝 BeginCommandBuffer 失败。");
+                    _logger.LogWarning("[AHB-DIAG] 拷贝 BeginCommandBuffer 失败。");
                     return false;
                 }
                 CopyToSharedImage(_commandBuffer, ImageLayout.TransferSrcOptimal, w, h);
-                if (!SubmitAhbStep("②拷贝进AHB离屏_sharedImage", w, h))
+                if (!SubmitAhbStep("拷贝进共享离屏_sharedImage", w, h))
                     return false;
                 _ahbSelfSubmitted = true; // 已自提交，TryWriteFrame 跳过公共提交段
                 return true;
@@ -288,20 +288,19 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     /// 不提交队列——Skia 在自身帧提交内直接采样该导入图像（AHB-DIRECT 路径）。
     /// </summary>
     /// <remarks>
-    /// <para><b>背景</b>：旧 ①转换+②拷贝 双提交与 Skia 帧提交共用同一 VkQueue（device 仅单一队列族），
-    /// 在 Adreno 上以 ~1/2000 频率随机触发 vkQueueSubmit ErrorInitializationFailed（规范外错误码），
-    /// 同秒殃及 Skia 提交 → Avalonia 渲染循环停摆 → 画面永久定格（2026-09-04 drawop2 实证：
-    /// [DRAW-OP] 心跳与 ② 失败同秒终止，同线程管线侧照常跑完 985 帧）。</para>
+    /// <para><b>背景</b>：旧「转换+拷贝」双提交与 Skia 帧提交共用同一 VkQueue（device 仅单一队列族），
+    /// 在 Adreno 上以极低频率随机触发 vkQueueSubmit ErrorInitializationFailed（规范外错误码），
+    /// 并殃及同队列的 Skia 提交 → Avalonia 渲染循环停摆 → 画面永久定格（管线侧照常出帧而绘制侧心跳终止）。</para>
     /// <para><b>生命周期</b>：导入内存持有驱动侧 AHB 引用（钉住 gralloc 缓冲）——本源侧
     /// AHardwareBuffer_release（ReturnFrame/池回收）不会回收缓冲，ImageReader 无法复用，Skia 采样
     /// 窗口内内容稳定；导入由 <see cref="_ahbDirectRetire"/> 退役环在 <see cref="AhbDirectRetireDepth"/>
     /// 帧后销毁（GPU 早已执行完采样）。</para>
     /// <para><b>布局</b>：导入图像实际布局按 Android AHB 惯例视作 GENERAL（全程无屏障无过渡；采样在
-    /// GENERAL 下合法）。交付描述符声明为 ShaderReadOnlyOptimal——与旧 ①② 路径一致的可包装形状
-    /// （direct2 实证声明 GENERAL 会被 SKImage.FromTexture 拒收）；采样型包装无布局屏障，声明值
+    /// GENERAL 下合法）。交付描述符声明为 ShaderReadOnlyOptimal——与旧双提交路径一致的可包装形状
+    /// （实测声明 GENERAL 会被 SKImage.FromTexture 拒收）；采样型包装无布局屏障，声明值
     /// 仅作 Skia 内部记账。</para>
     /// </remarks>
-    /// <returns>是否成功建立直采样描述符（false 时调用方落回旧 ①② 转换路径）。</returns>
+    /// <returns>是否成功建立直采样描述符（false 时调用方落回旧转换路径）。</returns>
     private bool TryBuildAhbDirectDescriptor(
         AndroidHardwareBufferFrameResource ahb, int w, int h, int rotationDegrees,
         out SharedGpuSurfaceDescriptor descriptor)
@@ -324,9 +323,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             return false;
         }
 
-        // 仅 concrete RGBA（vkFormat 非 UNDEFINED）可直采。判 format 而非 externalFormat：Adreno 实测
-        // （2026-09-04 direct1）concrete R8G8B8A8Unorm 存在时 externalFormat 仍报实现定义值 0x1C
-        // （规范允许），判 externalFormat!=0 会恒误退回旧路径（直采修复从未生效的铁证）。
+        // 仅 concrete RGBA（vkFormat 非 UNDEFINED）可直采。判 format 而非 externalFormat：Adreno 上
+        // concrete R8G8B8A8Unorm 存在时 externalFormat 仍报实现定义值 0x1C（规范允许），
+        // 判 externalFormat!=0 会恒误退回旧路径。
         // format=UNDEFINED 且 externalFormat!=0 才是 YCbCr 外部格式，需 samplerYcbcrConversion，
         // Skia 的 GRBackendTexture 无对应包装 → 落回旧 YCbCr 转换路径。
         if (formatProps.Format == Format.Undefined)
@@ -337,8 +336,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             SType = StructureType.ExternalMemoryImageCreateInfo,
             HandleTypes = ExternalMemoryHandleTypeFlags.AndroidHardwareBufferBitAndroid,
         };
-        // 用法 = 0x17（SAMPLED|TRANSFER_SRC|TRANSFER_DST|COLOR_ATTACHMENT），与旧 ①② 路径被 Skia
-        // 实证接受的 usage 逐位一致（direct2 的 SAMPLED-only(0x4) 被拒是混淆变量之一）。
+        // 用法 = 0x17（SAMPLED|TRANSFER_SRC|TRANSFER_DST|COLOR_ATTACHMENT），与旧双提交路径被 Skia
+        // 接受的 usage 逐位一致（实测 SAMPLED-only(0x4) 会被拒）。
         // AHB 按 GPU_FRAMEBUFFER 分配，COLOR_ATTACHMENT 在 formatFeatures 内；万一驱动拒绝再回落 0x4。
         ImageCreateInfo ci = new()
         {
@@ -402,7 +401,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             return false;
         }
 
-        // 一次性锚点日志（直采路径启用确认；usage 记录实际创建值，供包装校验排查）。
+        // 一次性锚点日志（直采路径启用确认；usage 记录实际创建值，供包装校验对表）。
         if (!_ahbDirectDiagLogged)
         {
             _ahbDirectDiagLogged = true;
@@ -425,10 +424,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         // 描述符直指导入图像：声明布局=GENERAL、独占共享（同队列族），Skia 按此包装采样。
         // 布局声明=GENERAL 是【诚实的实际布局】（AHB 外部内存惯例：GL 写入后无任何 Vulkan 屏障，
         // 实际即 GENERAL），也是 Adreno 采样契约的正确声明——descriptor imageLayout 与实际一致时
-        // 采样才可靠（direct3 实证：声明 SHADER_READ_ONLY(5) 而实际 GENERAL，包装可能过了但采样黑屏）。
-        // 【direct4 修复】NativeImageUsage 此前硬编码 SampledBit(0x4)，而创建侧 usage 已是 0x17——
-        // 三轮直采实验 Skia 见到的声明 usage 恒为 0x4（唯一稳定判别变量，全部 wrap=FAIL），0x17
-        // 从未到达包装校验。现如实引用 ci.Usage（创建=声明，逐位一致），usage 维度混淆根除。
+        // 采样才可靠（实测声明 SHADER_READ_ONLY(5) 而实际 GENERAL，包装可能通过但采样黑屏）。
+        // 【防回归】NativeImageUsage 须如实引用 ci.Usage（创建=声明，逐位一致）：若声明值与创建值
+        // 不一致，Skia 侧包装校验会以声明 usage 判定而失败，创建侧的正确 usage 从未到达包装校验。
         descriptor = new SharedGpuSurfaceDescriptor(
             (nint)ahbImage.Handle,
             _handleKind,
@@ -566,14 +564,14 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             // 5) AHB 源（普通 RGBA）→ 渲染进内部 _convertImage（Android）/ _sharedImages[0]（非 Android）。
             Image convertTarget = _isAndroid ? _convertImage : _sharedImages[0];
             ImageView convertView = _isAndroid ? _convertView : _sharedImageViews[0];
-            _logger.LogTrace("[AHB-DIAG] ▶ 进入 Convert（RGBA AHB→_convertImage 普通采样）{W}x{H}", w, h);
+            _logger.LogTrace("[AHB-DIAG] 进入 Convert（RGBA AHB→_convertImage 普通采样）{W}x{H}", w, h);
             _rgbaConverter.Convert(_commandBuffer, ahbImage, ahbView, (uint)w, (uint)h, convertTarget, convertView);
-            _logger.LogTrace("[AHB-DIAG] ✓ Convert 记录完成，准备分步提交①");
+            _logger.LogTrace("[AHB-DIAG] Convert 记录完成，准备分步提交");
 
-            // 6) Android：分步提交。先提交并等待 ① 转换（RGBA AHB 采样），隔离采样是否触发 fault。
+            // 6) Android：分步提交。先提交并等待转换（RGBA AHB 采样），隔离采样是否触发设备级错误。
             if (_isAndroid)
             {
-                if (!SubmitAhbStep("①RGBA-AHB采样转换", w, h))
+                if (!SubmitAhbStep("RGBA-AHB采样转换", w, h))
                 {
                     _rgbaConverter.DestroyImageView(ahbView);
                     viewCreated = false;
@@ -586,7 +584,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 VulkanNative.DestroyImage(_device, ahbImage, null);
                 VulkanNative.FreeMemory(_device, ahbMemory, null);
 
-                // 7) ② 拷贝：_convertImage(TransferSrcOptimal) → AHB 离屏 _sharedImage（仅 TRANSFER_DST）。
+                // 7) 拷贝：_convertImage(TransferSrcOptimal) → 共享离屏 _sharedImage（仅 TRANSFER_DST）。
                 VulkanNative.ResetCommandBuffer(_commandBuffer, 0);
                 CommandBufferBeginInfo begin2 = new()
                 {
@@ -595,11 +593,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
                 };
                 if (VulkanNative.BeginCommandBuffer(_commandBuffer, ref begin2) != Result.Success)
                 {
-                    _logger.LogWarning("[AHB-DIAG] ② 拷贝 BeginCommandBuffer 失败（RGBA）。");
+                    _logger.LogWarning("[AHB-DIAG] 拷贝 BeginCommandBuffer 失败（RGBA）。");
                     return false;
                 }
                 CopyToSharedImage(_commandBuffer, ImageLayout.TransferSrcOptimal, w, h);
-                if (!SubmitAhbStep("②拷贝进AHB离屏_sharedImage", w, h))
+                if (!SubmitAhbStep("拷贝进共享离屏_sharedImage", w, h))
                     return false;
                 _ahbSelfSubmitted = true; // 已自提交，TryWriteFrame 跳过公共提交段
                 return true;
@@ -625,11 +623,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
 
     /// <summary>
     /// Android AHB 分步提交：把当前记录的 <see cref="_commandBuffer"/> 提交并等待，检测 Mali DEVICE_LOST，
-    /// 精确定位 fault 落在 ① AHB YCbCr 采样 还是 ② 写入导入的 AHB 离屏。返回是否成功（无 device lost）。
+    /// 精确定位错误发生在 AHB YCbCr/RGBA 采样步还是写入共享离屏步。返回是否成功（无 device lost）。
     /// </summary>
     private bool SubmitAhbStep(string stepTag, int w, int h)
     {
-        _logger.LogTrace("[AHB-DIAG] ▶ {Step} 进入提交（EndCommandBuffer 前）", stepTag);
+        _logger.LogTrace("[AHB-DIAG] {Step} 进入提交（EndCommandBuffer 前）", stepTag);
         Result endR = VulkanNative.EndCommandBuffer(_commandBuffer);
         if (endR != Result.Success)
         {
@@ -655,7 +653,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         Result waitR = VulkanNative.WaitForFences(_device, 1, &fence, 1u, WriteWaitTimeoutNs);
         if (waitR == Result.ErrorDeviceLost)
         {
-            _logger.LogWarning("[AHB-DIAG] ★ {Step} 触发 Mali DEVICE_LOST（GROUP_ERROR_FATAL）—— 真因定位在此步。", stepTag);
+            _logger.LogWarning("[AHB-DIAG] {Step} 触发 Mali DEVICE_LOST（GROUP_ERROR_FATAL）—— 定位到此步。", stepTag);
             return false;
         }
         if (waitR != Result.Success)
@@ -663,7 +661,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             _logger.LogWarning("[AHB-DIAG] {Step} WaitForFences 失败：{Result}", stepTag, waitR);
             return false;
         }
-        _logger.LogTrace("[AHB-DIAG] ✓ {Step} 提交成功（无 DEVICE_LOST）{W}x{H}", stepTag, w, h);
+        _logger.LogTrace("[AHB-DIAG] {Step} 提交成功（无 DEVICE_LOST）{W}x{H}", stepTag, w, h);
         return true;
     }
 }

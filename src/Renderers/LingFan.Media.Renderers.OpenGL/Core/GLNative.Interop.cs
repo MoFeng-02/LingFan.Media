@@ -22,12 +22,12 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// </remarks>
 internal static unsafe partial class GLNative
 {
-    // ── WGL_NV_DX_interop2 常量 ──
+    // WGL_NV_DX_interop2 常量
     internal const int WglAccessReadOnlyNV = 0x0000;     // WGL_ACCESS_READ_ONLY_NV
     internal const int WglAccessReadWriteNV = 0x0001;    // WGL_ACCESS_READ_WRITE_NV
     internal const int WglAccessWriteDiscardNV = 0x0002; // WGL_ACCESS_WRITE_DISCARD_NV
 
-    // ── EGL_EXT_image_dma_buf_import 常量 ──
+    // EGL_EXT_image_dma_buf_import 常量
     internal const int EglImageTarget = 0x30D1;          // EGL_IMAGE_TARGET (OES 目标枚举)
     internal const int EglLinuxDmaBufExt = 0x3272;       // EGL_LINUX_DMA_BUF_EXT
     internal const int EglWidth = 0x3057;                // EGL_WIDTH
@@ -41,7 +41,7 @@ internal static unsafe partial class GLNative
     internal const int EglLinuxDrmFourccExt = 0x3271;    // EGL_LINUX_DRM_FOURCC_EXT
     internal const int EglNone = 0x3038;                 // EGL_NONE
 
-    // ── WGL_NV_DX_interop2 函数指针（Windows 调用；x64/arm64 下原生 ABI 即 WINAPI，无需 [Winapi] 调用约定后缀）──
+    // WGL_NV_DX_interop2 函数指针（Windows 调用；x64/arm64 下原生 ABI 即 WINAPI，无需 [Winapi] 调用约定后缀）
     private static unsafe delegate* unmanaged<void*, nint> _wglDXOpenDeviceNV;
     private static unsafe delegate* unmanaged<nint, void*, uint, uint, uint, nint> _wglDXRegisterObjectNV;
     private static unsafe delegate* unmanaged<nint, nint, int> _wglDXUnregisterObjectNV;
@@ -50,7 +50,7 @@ internal static unsafe partial class GLNative
     private static unsafe delegate* unmanaged<nint, int, void*, int> _wglDXLockObjectsNV;
     private static unsafe delegate* unmanaged<nint, int, void*, int> _wglDXUnlockObjectsNV;
 
-    // ── EGL dma_buf / OES 函数指针（Linux 调用，平台默认 ABI）──
+    // EGL dma_buf / OES 函数指针（Linux 调用，平台默认 ABI）
     private static unsafe delegate* unmanaged<nint, nint, uint, int*, nint> _eglCreateImageKHR;
     private static unsafe delegate* unmanaged<nint, nint, int> _eglDestroyImageKHR;
     private static unsafe delegate* unmanaged<uint, nint, void> _glEGLImageTargetTexture2DOES;
@@ -100,7 +100,7 @@ internal static unsafe partial class GLNative
         return _eglCreateImageKHR != null && _glEGLImageTargetTexture2DOES != null;
     }
 
-    // ── WGL_NV_DX_interop2 包装（调用前须 MakeCurrent GL 上下文；GL 上下文须为离屏共享组所有者）──
+    // WGL_NV_DX_interop2 包装（调用前须 MakeCurrent GL 上下文；GL 上下文须为离屏共享组所有者）
 
     internal static unsafe nint WglDXOpenDeviceNV(void* dxDevice)
         => _wglDXOpenDeviceNV != null ? _wglDXOpenDeviceNV(dxDevice) : nint.Zero;
@@ -121,7 +121,7 @@ internal static unsafe partial class GLNative
     internal static unsafe int WglDXUnlockObjectsNV(nint hDevice, int count, void* objects)
         => _wglDXUnlockObjectsNV != null ? _wglDXUnlockObjectsNV(hDevice, count, objects) : 0;
 
-    // ── EGL dma_buf / OES 包装 ──
+    // EGL dma_buf / OES 包装
 
     internal static unsafe nint EglCreateImageKHR(nint dpy, nint ctx, uint target, int* attribList)
         => _eglCreateImageKHR != null ? _eglCreateImageKHR(dpy, ctx, target, attribList) : nint.Zero;

@@ -68,7 +68,7 @@ internal static class Program
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "[HH:mm:ss.fff] "; })
             .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
 
-        // 🔑 开箱即用：注册多个后端（顺序=回退优先级）+ 一个渲染器 + 一个输出。
+        //  开箱即用：注册多个后端（顺序=回退优先级）+ 一个渲染器 + 一个输出。
         // 之后 GetRequiredService<IMediaPlayer>() 拿到的就是「回退中间件」，完全不知道后端。
         // 顺序 MF → FFmpeg → VLC：贴合“264/MP4 由 MF 命中、WebM/HEVC 由 MF 失败再回退 ffmpeg”的回退叙事。
         var builder = services.AddLingFanMedia()

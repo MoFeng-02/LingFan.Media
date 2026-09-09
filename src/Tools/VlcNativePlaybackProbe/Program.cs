@@ -6,19 +6,19 @@ using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-// ─────────────────────────────────────────────────────────────────────────────
+
 // VLCNative 集成验证探针
 //
 // 分六步递进，任一步失败都能直接定位环节：
-//   ① 原生模块定位与加载（NativeLibrary.Load + SetDllImportResolver）
-//   ② P/Invoke 解析与 Cdecl 调用约定（libvlc_get_version，无需引擎实例）
-//   ③ libvlc_new(0, NULL)（引擎起来 = plugins 目录被 libvlc 自身推导成功）
-//   ④ libvlc_new(argc, argv)（UTF-8 argv 手工封送的 ABI 正确性）
-//   ⑤ VLCNativeBackend 构造（真实 VLCOptions args 路径 + 单例化生命周期）
-//   ⑥ VLCNativeDemuxer 播放验证（地址式打开本地 m1.mp4，读帧计数）
+//   (1) 原生模块定位与加载（NativeLibrary.Load + SetDllImportResolver）
+//   (2) P/Invoke 解析与 Cdecl 调用约定（libvlc_get_version，无需引擎实例）
+//   (3) libvlc_new(0, NULL)（引擎起来 = plugins 目录被 libvlc 自身推导成功）
+//   (4) libvlc_new(argc, argv)（UTF-8 argv 手工封送的 ABI 正确性）
+//   (5) VLCNativeBackend 构造（真实 VLCOptions args 路径 + 单例化生命周期）
+//   (6) VLCNativeDemuxer 播放验证（地址式打开本地 m1.mp4，读帧计数）
 //
-// 要求：六步均成功，且 ⑥ 须取出视频帧≥1 或音频包≥1。
-// ─────────────────────────────────────────────────────────────────────────────
+// 要求：六步均成功，且 (6) 须取出视频帧≥1 或音频包≥1。
+
 
 var step = 0;
 

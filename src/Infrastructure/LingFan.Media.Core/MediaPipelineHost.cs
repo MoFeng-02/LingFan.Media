@@ -63,35 +63,35 @@ public sealed class MediaPipelineHost
         }
 
         // 启动编排（A/V 启动顺序）：
-        //   ① 视频管线先 Start —— 呈现循环被「首帧门控」挡住，**一帧都不上屏**，
+        //   (1) 视频管线先 Start —— 呈现循环被「首帧门控」挡住，**一帧都不上屏**，
         //      仅让解码生产者提前把帧队列暖起来；
-        //   ② await 视频预滚动（≥2 帧或超时）——重播时此等待吸收 demuxer 重定位 + 解码器 Reset 的产出延迟；
-        //   ③ **先放行视频门控**（此刻音频设备即将/刚刚启动，主时钟处于「起转瞬态」≈0）；
-        //   ④ 再 await 音频管线启动 —— 主时钟随音频设备从 0 起跑。
+        //   (2) await 视频预滚动（≥2 帧或超时）——重播时此等待吸收 demuxer 重定位 + 解码器 Reset 的产出延迟；
+        //   (3) **先放行视频门控**（此刻音频设备即将/刚刚启动，主时钟处于「起转瞬态」≈0）；
+        //   (4) 再 await 音频管线启动 —— 主时钟随音频设备从 0 起跑。
         //
         // 关键时序：WASAPI 主时钟在 audio.StartAsync 的 preroll +
         // 校准锁定期间会从 0 爬到一定值（瞬态期返回 ≈0，之后锁定引擎领先偏移
-        // 才跳到可闻位置）。若把 SignalAudioReady 放在 ④ 之后（preroll 跑完、校准已锁定），
+        // 才跳到可闻位置）。若把 SignalAudioReady 放在 (4) 之后（preroll 跑完、校准已锁定），
         // 门控放行时主时钟已明显大于 0 → 开头一小段 PTS 靠前的帧被 DropThreshold 全判掉，
         // 首帧落到较晚位置。
-        // 修正：把放行提前到 ③ —— 让首帧 PTS=0 在「主时钟≈0 的瞬态期」就同刻呈现，完全复刻首播
+        // 修正：把放行提前到 (3) —— 让首帧 PTS=0 在「主时钟≈0 的瞬态期」就同刻呈现，完全复刻首播
         // （首帧 delta≈0）的无缝行为；重播衔接处从「跳到较晚位置」变为「从 0.0 续上」。
         // GetPlaybackPositionDirect 在设备未开/瞬态期返回 0（不抛），故提前放行安全。
         _videoPipeline?.Start();
         if (_videoPipeline != null)
             await _videoPipeline.WaitForPrerollAsync();
 
-        // ③ 在主时钟≈0（音频设备即将启动的瞬态期）先行放开视频门控。
+        // (3) 在主时钟≈0（音频设备即将启动的瞬态期）先行放开视频门控。
         _videoPipeline?.SignalAudioReady();
 
-        // ③.5 等视频首帧真正上屏后再启动音频：视频首帧经 D3D11 上传 + vsync 上屏
-        // 比音频 WASAPI preroll 出声慢；若不在 ④ 前等待，音频会早于视频首帧出声（用户感知「声音比视频先出」）。
-        // 等待期间视频首帧(PTS≈0)在「主时钟≈0 瞬态期」已先行呈现，④ 启动音频时主时钟仍≈0 → 音画同源对齐。
+        // (3).5 等视频首帧真正上屏后再启动音频：视频首帧经 D3D11 上传 + vsync 上屏
+        // 比音频 WASAPI preroll 出声慢；若不在 (4) 前等待，音频会早于视频首帧出声（用户感知「声音比视频先出」）。
+        // 等待期间视频首帧(PTS≈0)在「主时钟≈0 瞬态期」已先行呈现，(4) 启动音频时主时钟仍≈0 → 音画同源对齐。
         // 带超时兜底(1.5s)，绝不阻塞播放（超时则照常启动音频）。
         if (_videoPipeline != null)
             await _videoPipeline.WaitForFirstFramePresentedAsync(TimeSpan.FromMilliseconds(1500));
 
-        // ④ 启动音频设备；主时钟随其从 0 起跑。音频失败也保留已放行的视频门控（画面仍能播）。
+        // (4) 启动音频设备；主时钟随其从 0 起跑。音频失败也保留已放行的视频门控（画面仍能播）。
         if (_audioPipeline != null)
             await _audioPipeline.StartAsync();
 

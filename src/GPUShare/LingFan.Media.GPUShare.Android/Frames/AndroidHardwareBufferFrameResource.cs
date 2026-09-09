@@ -13,7 +13,7 @@ namespace LingFan.Media.GPUShare.Android;
 /// <c>AHardwareBuffer_release</c> 释放；导入方（EGLImage / VkImage）持有各自的独立引用，
 /// 与本资源互不干扰。</para>
 /// <para><b>AHB 引用对账</b>：构造 +1 / Dispose -1。Live 持续增长 = Dispose 链断
-/// （真机实证：Graphics 内存每遍播放 +51MB、AHB 地址零复用 = release 未达 gralloc）。</para>
+/// （现象：Graphics 内存每遍播放持续增长、AHB 地址零复用 = release 未达 gralloc）。</para>
 /// <para><b>AOT 兼容</b>：裸 P/Invoke（<c>[LibraryImport]</c>），零反射。</para>
 /// </remarks>
 public sealed unsafe partial class AndroidHardwareBufferFrameResource : IFrameResource

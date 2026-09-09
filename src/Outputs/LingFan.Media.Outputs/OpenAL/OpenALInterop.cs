@@ -7,7 +7,7 @@ namespace LingFan.Media.Outputs.OpenAL;
 /// OpenAL 原生 API P/Invoke 绑定（跨平台：Windows / Linux / macOS / Android）。
 /// </summary>
 /// <remarks>
-/// <para>覆盖推送式缓冲播放（alc* 设备/上下文 + al* 源/缓冲）。C 组 AUDIO-STUB 唯一遗留项的真实实现。</para>
+/// <para>覆盖推送式缓冲播放（alc* 设备/上下文 + al* 源/缓冲）。</para>
 /// <para><b>AOT 兼容</b>：纯 C API 直接 <see cref="LibraryImport"/>，零 COM、零反射、零动态代码。</para>
 /// <para><b>原生库解析</b>：不同平台库名不同，统一用哨兵名 <c>"openal"</c>，
 /// 由静态构造函数注册 <see cref="NativeLibrary.SetDllImportResolver"/> 按 OS 运行时映射到正确文件名。
@@ -50,14 +50,14 @@ internal static unsafe partial class OpenALInterop
         return IntPtr.Zero;
     }
 
-    // ── ALC 常量 ──
+    // ALC 常量
     internal const int ALC_FALSE = 0;
     internal const int ALC_TRUE = 1;
     internal const int ALC_FREQUENCY = 0x1007;
     internal const int ALC_MONO_SOURCES = 0x1010;
     internal const int ALC_STEREO_SOURCES = 0x1011;
 
-    // ── AL 常量 ──
+    // AL 常量
     internal const int AL_INVALID = -1;
     internal const int AL_NONE = 0;
     internal const int AL_FALSE = 0;
@@ -76,7 +76,7 @@ internal static unsafe partial class OpenALInterop
     internal const int AL_BUFFERS_PROCESSED = 0x1016;
     internal const int AL_GAIN = 0x100A;
 
-    // ── ALC 设备 / 上下文 ──
+    // ALC 设备 / 上下文
 
     [LibraryImport(LibraryName)]
     internal static partial IntPtr alcOpenDevice(byte* deviceName);
@@ -98,7 +98,7 @@ internal static unsafe partial class OpenALInterop
     [LibraryImport(LibraryName)]
     internal static partial int alcGetError(IntPtr device);
 
-    // ── AL 源 / 缓冲 ──
+    // AL 源 / 缓冲
 
     [LibraryImport(LibraryName)]
     internal static partial void alGenSources(int n, uint* sources);

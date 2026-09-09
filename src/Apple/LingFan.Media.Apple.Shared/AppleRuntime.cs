@@ -41,7 +41,7 @@ namespace LingFan.Media.Apple.Shared;
 /// </remarks>
 public static unsafe partial class AppleRuntime
 {
-    // ── 中性库名 → Apple framework 全路径（非 Apple 返回 Zero，fail-fast）──
+    // 中性库名 → Apple framework 全路径（非 Apple 返回 Zero，fail-fast）
     static AppleRuntime()
     {
         NativeLibrary.SetDllImportResolver(typeof(AppleRuntime).Assembly, ResolveLoader);
@@ -117,7 +117,7 @@ public static unsafe partial class AppleRuntime
     private static nint ResolveLoader(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
         => ResolveAppleFramework(libraryName, assembly, searchPath);
 
-    // ── Objective-C 运行时 C 函数（libobjc）──
+    // Objective-C 运行时 C 函数（libobjc）
 
     [LibraryImport("libobjc", EntryPoint = "objc_getClass")]
     public static partial nint objc_getClass(byte* name);
@@ -137,7 +137,7 @@ public static unsafe partial class AppleRuntime
     [LibraryImport("libobjc", EntryPoint = "objc_autoreleasePoolPop")]
     public static partial void objc_autoreleasePoolPop(nint pool);
 
-    // ── CoreFoundation 引用计数（IOSurface / CVPixelBuffer 等 CF 类型）──
+    // CoreFoundation 引用计数（IOSurface / CVPixelBuffer 等 CF 类型）
 
     [LibraryImport("CoreFoundation", EntryPoint = "CFRetain")]
     public static partial nint CFRetain(nint cf);
@@ -145,12 +145,12 @@ public static unsafe partial class AppleRuntime
     [LibraryImport("CoreFoundation", EntryPoint = "CFRelease")]
     public static partial void CFRelease(nint cf);
 
-    // ── Metal C 函数（Metal.framework）──
+    // Metal C 函数（Metal.framework）
 
     [LibraryImport("Metal", EntryPoint = "MTLCreateSystemDefaultDevice")]
     public static partial nint MTLCreateSystemDefaultDevice();
 
-    // ── objc_msgSend 多固定签名重载（id 返回 = nint；标量 NSUInteger 用 nuint，id/指针用 nint）──
+    // objc_msgSend 多固定签名重载（id 返回 = nint；标量 NSUInteger 用 nuint，id/指针用 nint）
 
     // 无参（getter / 工厂 / alloc / init / 命令缓冲 / drawable / commit 等）
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
@@ -210,7 +210,7 @@ public static unsafe partial class AppleRuntime
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, ref MTLClearColor clearColor);
 
-    // ── 结构类型（AOT 兼容：LayoutKind.Sequential，按 ABI 逐字段映射）──
+    // 结构类型（AOT 兼容：LayoutKind.Sequential，按 ABI 逐字段映射）
 
     /// <summary>MTLRegion——纹理替换区域（origin + size，6 × NSUInteger = 48 字节，&gt;16 字节按指针传递）。</summary>
     [StructLayout(LayoutKind.Sequential)]
@@ -227,7 +227,7 @@ public static unsafe partial class AppleRuntime
         public double Red, Green, Blue, Alpha;
     }
 
-    // ── 安全包装（托管侧便捷方法，非 P/Invoke）──
+    // 安全包装（托管侧便捷方法，非 P/Invoke）
 
     /// <summary>按名称取得 Objective-C 类对象（<c>objc_getClass</c>）。</summary>
     public static nint Class(string name)

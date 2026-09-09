@@ -15,7 +15,7 @@ namespace LingFan.Media.Backends.Apple;
     Justification = "无 [ComImport]，使用原始 [LibraryImport] P/Invoke，不会被裁剪器移除。仅 Apple 运行时使用。")]
 internal static class AppleCodecMaps
 {
-    // ── 视频 FourCharCode ──
+    // 视频 FourCharCode
     private const uint kCMVideoCodecType_H264 = 0x61766331u; // 'avc1'
     private const uint kCMVideoCodecType_H264Alt = 0x61766333u; // 'avc3'
     private const uint kCMVideoCodecType_HEVC = 0x68766331u; // 'hvc1'
@@ -37,7 +37,7 @@ internal static class AppleCodecMaps
             _ => VideoCodec.Unknown,
         };
 
-    // ── 音频 FourCharCode ──
+    // 音频 FourCharCode
     private const uint kCMAudioFormatType_AAC = 0x61616320u; // 'aac '
     private const uint kCMAudioFormatType_MP3 = 0x2E6D7033u; // '.mp3'
     private const uint kCMAudioFormatType_OPUS = 0x6F707573u; // 'opus'

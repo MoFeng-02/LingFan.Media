@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.OpenAL;
 
 /// <summary>
-/// OpenAL 音频输出 DI 注册扩展方法（跨平台回退输出，C 组 AUDIO-STUB 真实实现）。
+/// OpenAL 音频输出 DI 注册扩展方法（跨平台回退输出，真实实现）。
 /// </summary>
 /// <remarks>
 /// <para>使用模式：<code>services.AddLingFanMedia().AddOpenALOutput()</code></para>
@@ -14,7 +14,7 @@ namespace LingFan.Media.Outputs.OpenAL;
 public static class OpenALExtensions
 {
     /// <summary>
-    /// 注册 OpenAL 音频输出（跨平台回退，C 组 AUDIO-STUB 真实实现）。
+    /// 注册 OpenAL 音频输出（跨平台回退，真实实现）。
     /// </summary>
     /// <param name="builder">媒体构建器。</param>
     /// <returns>构建器（链式调用）。</returns>

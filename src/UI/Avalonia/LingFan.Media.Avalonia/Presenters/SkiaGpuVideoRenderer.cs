@@ -57,7 +57,7 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
     private ISharedGpuSurfaceSource? _source;
     private bool _disposed;
 
-    // ── 自适应重绘调度（带运行时自愈探测）──
+    // 自适应重绘调度（带运行时自愈探测）
     // Present 存入待呈现帧后预约一次重绘：优先经 TopLevel 动画时钟（RequestAnimationFrame，
     // UI 线程专属 API，回调在 MediaContext 渲染 pass 内执行并同 pass commit——呈现线程调用
     // 须经 Dispatcher 编组）。动画时钟回调未在探测超时（100ms ≫ 任意常见刷新周期）内执行
@@ -69,7 +69,7 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
     private bool _useAnimationClock = true; // 动画时钟探测结果（仅管线线程读写）
     private const double AnimationClockProbeTimeoutMs = 100.0;
 
-    // ── 源级运行时回退 ──
+    // 源级运行时回退
     // 呈现失败（如共享句柄类型与宿主渲染后端不匹配）时优先切换下一个共享表面源，
     // 全部源穷尽后才触发 Unhealthy 整体回退——保证任何源组合都有出场机会，骨架零句柄分支。
     private List<ISharedGpuSurfaceSourceFactory> _availableFactories = new();
@@ -85,7 +85,7 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
     private bool _firstFrameLogged;
     private string? _lastFailureReason;
 
-    // ── 渲染线程消费心跳 ──
+    // 渲染线程消费心跳
     // Present（管线线程）持续写入共享表面；DrawOp.Render（Avalonia 渲染线程）消费并绘制。
     // 若写入持续推进而渲染线程长时间未绘制，说明画面可能定格（管线侧计数与真实上屏脱节）。
     // Present 侧据此告警（节流：重新积累写入帧数后才可能再次触发），渲染线程侧零日志开销。
@@ -255,9 +255,9 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
         _logger.LogInformation("[SKIA-GPU] SkiaGpuVideoRenderer 挂载成功，源={Source}（{Done}/{Total}）。",
             _source.GetType().Name, _triedCount, _availableFactories.Count);
 
-        // ⚠️ CompositionCustomVisual 上屏路径【挂起】（2026-09-07）：
+        // CompositionCustomVisual 上屏路径【挂起】：
         // 实验结论——Android EGL/Vulkan 后端下 SendHandlerMessage 消息不达 handler、
-        // OnAnimationFrameUpdate 从不回调、合成器不渲染该 visual（真机多场实证 + 帧循环看门狗），
+        // OnAnimationFrameUpdate 从不回调、合成器不渲染该 visual（实测 + 帧循环看门狗），
         // 且该路径会顶掉已验证的 DrawOp 上屏路径导致黑屏。挂载调用保留（下方 if 置 false），
         // 待 Avalonia composition 层查明后再启用。
         const bool EnableCompositionCustomVisual = false;
@@ -272,7 +272,7 @@ internal sealed class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRenderAwar
         UnsubscribeControl();
     }
 
-    // ── 合成 Custom Visual（Android EGL 后端上屏路径）──
+    // 合成 Custom Visual（Android EGL 后端上屏路径）
     private VideoCompositionCustomVisualHandler? _compositionHandler;
     private CompositionCustomVisual? _compositionVisual;
     private Control? _compositionSizeHost;
@@ -874,7 +874,7 @@ internal sealed class SkiaGpuVideoDrawOp : ICustomDrawOperation
             // 以 canvas 变换把已算好的 dest 矩形（按旋转后的显示宽高适配）转回源方向绘制。
             int rot = ((int)descriptor.RotationDegrees % 360 + 360) % 360;
             SKRect dest = ComputeDestRect(descriptor, controlW, controlH, stretch);
-            // 【诊断】一次性对账坐标单位（放大溢出排查）：desc/控件(DIP)/dest/画布本地与设备裁剪盒。
+            // 【诊断】一次性对账坐标单位（放大溢出定位）：desc/控件(DIP)/dest/画布本地与设备裁剪盒。
             // LocalClipBounds=canvas 当前变换下的本地单位；DeviceClipBounds=物理像素。
             // 两者比值 = 画布有效缩放。dest 落在 Local 内 = 单位一致（DIP）；溢出 Device = 单位错位。
             if (!_drawGeomLogged)

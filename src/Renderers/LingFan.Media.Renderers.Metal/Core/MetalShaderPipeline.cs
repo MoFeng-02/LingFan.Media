@@ -20,7 +20,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// <item>源纹理上传走 <c>replaceRegion:mipmapLevel:withBytes:bytesPerRow:</c>；逐行上传以支持非零 stride 的零拷贝帧。</item>
 /// </list>
 /// <para><b>支持格式</b>：与 GLES 同源——BGRA32 / RGBA32 / RGB24 / YUV420P / YUV422P / YUV444P / NV12 / NV21。
-/// 10-bit（P010 / YUV420P10）由解码侧解包为 BGRA32 后流入，渲染器仅消费 BGRA32（单一收敛点，与总记忆一致）。</para>
+/// 10-bit（P010 / YUV420P10）由解码侧解包为 BGRA32 后流入，渲染器仅消费 BGRA32（单一收敛点）。</para>
 /// <para><b>异步策略</b>：全部同步（native 分类）——MSL 编译与 GPU 提交均为同步原生调用，无 I/O await；包 async/Task.Run 即伪异步，禁止。</para>
 /// <para><b>线程安全</b>：所有方法由 <see cref="MetalRenderer"/> 在其 <c>_gate</c> 锁内调用，本类不再加锁。</para>
 /// <para><b>资源所有权</b>：设备由渲染器持有（不 Dispose）；库/管线状态/顶点缓冲由本类持有，<see cref="Dispose"/> 释放；
@@ -29,7 +29,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// </remarks>
 internal sealed unsafe class MetalShaderPipeline : IDisposable
 {
-    // ── Metal Shading Language 源码（运行期编译；顶点缩放 + YUV→RGB BT.601 全范围）──
+    // Metal Shading Language 源码（运行期编译；顶点缩放 + YUV→RGB BT.601 全范围）
     private const string MslSource = """
         #include <metal_stdlib>
         using namespace metal;
@@ -126,7 +126,7 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
         PixelFormat.YUV420P or PixelFormat.YUV422P or PixelFormat.YUV444P or
         PixelFormat.NV12 or PixelFormat.NV21;
 
-    // ── 初始化 ──
+    // 初始化
 
     /// <summary>延迟初始化 Metal 资源（MSL 库 + 3 套渲染管线 + 顶点缓冲）。
     /// 必须在 autorelease 池内、可绘制层就绪时调用——由 <see cref="MetalRenderer.Present"/> 首次触发，仅执行一次。</summary>
@@ -202,7 +202,7 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
         // newBufferWithBytes: 返回 +1（本类所有），Dispose 释放一次即平衡，无需额外 retain。
     }
 
-    // ── 纹理管理 ──
+    // 纹理管理
 
     private nint CreatePlaneTexture(int w, int h, nuint pixelFormat)
     {
@@ -248,7 +248,7 @@ internal sealed unsafe class MetalShaderPipeline : IDisposable
         }
     }
 
-    // ── 对外呈现 ──
+    // 对外呈现
 
     /// <summary>用 Shader 路径将软件帧渲染到指定可绘制纹理（不提交——由调用方 presentDrawable + commit）。</summary>
     /// <param name="sw">软件帧。</param>

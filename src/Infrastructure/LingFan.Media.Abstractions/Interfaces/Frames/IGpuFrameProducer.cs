@@ -59,7 +59,7 @@ public readonly struct GpuFrameImportSource
     /// 缺省 1：v1 渐进式 H.264/H.265 常见 arrayLayers=1；D3D11VA 纹理数组>1 时必须填真实层数，否则外部内存导入校验失败回落软解。</summary>
     public int ArrayLayers { get; init; } = 1;
 
-    // ── Linux VAAPI dma_buf 多平面描述（真实零拷贝，composed NV12 = 单 fd + 双平面）──
+    // Linux VAAPI dma_buf 多平面描述（真实零拷贝，composed NV12 = 单 fd + 双平面）
     // 单 Handle（nint）仅承载主 fd，不足以表达 Y/UV 双平面的 offset/pitch/修饰符，
     // 故在此中性桥补逐平面视图；Windows D3D11 路径不读这些字段（保持向后兼容）。
 

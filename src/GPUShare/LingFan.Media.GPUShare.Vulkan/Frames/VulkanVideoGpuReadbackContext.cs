@@ -87,7 +87,7 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
 
         EnsureStaging(w, h);
 
-        // ── 录命令 ──
+        // 录命令
         CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
         if (VulkanNative.BeginCommandBuffer(_commandBuffer, ref beginInfo) != Result.Success)
             throw new InvalidOperationException("readback: BeginCommandBuffer 失败");
@@ -179,7 +179,7 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
         if (VulkanNative.EndCommandBuffer(_commandBuffer) != Result.Success)
             throw new InvalidOperationException("readback: EndCommandBuffer 失败");
 
-        // ── 提交 + fence 等 ──
+        // 提交 + fence 等
         var cb = _commandBuffer;
         SubmitInfo submitInfo = new()
         {
@@ -199,7 +199,7 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
                 throw new InvalidOperationException("readback: ResetFences 失败");
         }
 
-        // ── map + NV12→BGRA32（CPU 软转；诊断用，几帧够看）──
+        // map + NV12→BGRA32（CPU 软转；诊断用，几帧够看）
         int wInt = (int)w;
         int hInt = (int)h;
         byte[] bgra = new byte[wInt * hInt * 4];

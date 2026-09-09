@@ -8,9 +8,9 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// MediaFoundation DXVA 硬件解码零拷贝互操作。
 /// </summary>
 /// <remarks>
-/// <para>提供：① <see cref="MFCreateDXGIDeviceManager"/>（mfplat.dll 扁平导出）创建 DXGI 设备管理器；
-/// ② <see cref="D3D11CreateDevice"/>（d3d11.dll 扁平导出）创建窗口无关共享 D3D11 设备（无头模式自备）；
-/// ③ <c>IMFDXGIDeviceManager.ResetDevice</c> / <c>IMFDXGIBuffer.GetResource</c> / <c>IMFDXGIBuffer.GetSubresourceIndex</c>
+/// <para>提供：(1) <see cref="MFCreateDXGIDeviceManager"/>（mfplat.dll 扁平导出）创建 DXGI 设备管理器；
+/// (2) <see cref="D3D11CreateDevice"/>（d3d11.dll 扁平导出）创建窗口无关共享 D3D11 设备（无头模式自备）；
+/// (3) <c>IMFDXGIDeviceManager.ResetDevice</c> / <c>IMFDXGIBuffer.GetResource</c> / <c>IMFDXGIBuffer.GetSubresourceIndex</c>
 /// 三个原始 vtable 委托（与 <see cref="MfVTable"/> 同款按槽取函数指针）。</para>
 /// <para><b>AOT 兼容</b>：全 <c>[LibraryImport]</c> 源生成 P/Invoke + 原始 vtable 委托（<c>CallingConvention.Winapi</c>），无反射、无 <c>[ComImport]</c>。</para>
 /// <para><b>依赖倒置</b>：本类仅暴露原生设备/纹理句柄（<see cref="IntPtr"/>），不引用任何渲染器模块；
@@ -69,9 +69,9 @@ internal static partial class MfDxvaInterop
         }
     }
 
-    // ── IMFDXGIDeviceManager（IUnknown 之后 vtable 绝对槽，MfVTable.Get 的 slotIndex = 绝对槽 − 3）：
+    // IMFDXGIDeviceManager（IUnknown 之后 vtable 绝对槽，MfVTable.Get 的 slotIndex = 绝对槽 − 3）：
     //    CloseDeviceHandle=3(→0), GetVideoService=4(→1), LockDevice=5(→2), OpenDeviceHandle=6(→3),
-    //    ResetDevice=7(→4), TestDevice=8(→5), UnlockDevice=9(→6) ──
+    //    ResetDevice=7(→4), TestDevice=8(→5), UnlockDevice=9(→6)
     //  顺序以 SDK 头文件（IMFDXGIDeviceManagerVtbl）为权威：
     //  ResetDevice 在绝对槽 7（即 slotIndex=4）。若误置为 slotIndex=1（=GetVideoService）则语义错误，须以 SDK 头文件为准。
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -97,14 +97,14 @@ internal static partial class MfDxvaInterop
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate int IMFDXGIDeviceManager_GetVideoService(IntPtr self, IntPtr hDevice, ref Guid riid, out IntPtr ppService);
 
-    // ── IMFDXGIBuffer（IUnknown 之后：GetResource=3, GetSubresourceIndex=4）──
+    // IMFDXGIBuffer（IUnknown 之后：GetResource=3, GetSubresourceIndex=4）
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate int IMFDXGIBuffer_GetResource(IntPtr self, ref Guid guid, out IntPtr ppv);
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate int IMFDXGIBuffer_GetSubresourceIndex(IntPtr self, out uint puSubresource);
 
-    // ── ID3D10Multithread（d3d10.h ID3D10MultithreadVtbl 实物顺序）：
+    // ID3D10Multithread（d3d10.h ID3D10MultithreadVtbl 实物顺序）：
     //    QueryInterface=0, AddRef=1, Release=2, Enter=3, Leave=4, SetMultithreadProtected=5, GetMultithreadProtected=6。
     //    MfVTable.Get 的 slotIndex = 绝对槽 − 3 ⇒ SetMultithreadProtected = slotIndex 2。
     //    返回类型是 **BOOL（返回旧状态）而非 HRESULT**，绝不能按 HRESULT 判失败（旧状态 FALSE=0 会被误读成 S_OK，
@@ -133,7 +133,7 @@ internal static partial class MfDxvaInterop
         }
     }
 
-    // ── ID3D11VideoDevice（d3d11.h ID3D11VideoDeviceVtbl 实物顺序，IUnknown 之后绝对槽）：
+    // ID3D11VideoDevice（d3d11.h ID3D11VideoDeviceVtbl 实物顺序，IUnknown 之后绝对槽）：
     //    CreateVideoDecoder=3, CreateVideoProcessor=4, CreateAuthenticatedChannel=5, CreateCryptoSession=6,
     //    CreateVideoDecoderOutputView=7, CreateVideoProcessorInputView=8, CreateVideoProcessorOutputView=9,
     //    CreateVideoProcessorEnumerator=10, GetVideoDecoderProfileCount=11, GetVideoDecoderProfile=12,
@@ -202,7 +202,7 @@ internal static partial class MfDxvaInterop
     internal static bool TryProbeH264DxvaSupport(IntPtr d3d11Device, out bool supported)
         => TryProbeDxvaSupport(d3d11Device, MFConstants.D3D11_DECODER_PROFILE_H264_VLD_NOFGT, out supported);
 
-    // ── ID3D11VideoDevice 解码 profile 枚举（诊断「profile 不匹配致 CreateVideoDecoder 失败」）──
+    // ID3D11VideoDevice 解码 profile 枚举（诊断「profile 不匹配致 CreateVideoDecoder 失败」）
     //    GetVideoDecoderProfileCount=11(→8), GetVideoDecoderProfile=12(→9)。
     // SDK 实物 d3d11.h:13965-13967：GetVideoDecoderProfileCount 真实签名为
     //     UINT GetVideoDecoderProfileCount(THIS);  —— 直接以【返回值】返回 profile 数量（UINT），【无 out 参数】。
@@ -295,9 +295,9 @@ internal static partial class MfDxvaInterop
         }
     }
 
-    // ── IDXGIDevice（dxgi.h IDXGIDeviceVtbl 实物顺序，IUnknown 之后继承 IDXGIObject）：
+    // IDXGIDevice（dxgi.h IDXGIDeviceVtbl 实物顺序，IUnknown 之后继承 IDXGIObject）：
     //    IDXGIObject: SetPrivateData=3, SetPrivateDataInterface=4, GetPrivateData=5, GetParent=6
-    //    IDXGIDevice: GetAdapter=7(→slotIndex 4), GetGPUThreadPriority=8, SetGPUThreadPriority=9, … ──
+    //    IDXGIDevice: GetAdapter=7(→slotIndex 4), GetGPUThreadPriority=8, SetGPUThreadPriority=9, …
     //    IID 取自 dxgi.idl：54ec77fa-1377-44e6-8c32-88fd5f44c84c
     internal static readonly Guid IID_IDXGIDevice = new(0x54ec77fa, 0x1377, 0x44e6, 0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c);
 

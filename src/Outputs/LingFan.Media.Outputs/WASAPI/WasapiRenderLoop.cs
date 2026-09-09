@@ -35,8 +35,8 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// 的原生指针均由本类持有（Session 级），Dispose 时通过 Marshal.Release(IntPtr) 逆序释放。
 /// 事件句柄（EventWaitHandle）由本类创建并持有，Dispose 时释放。</para>
 /// <para><b>Submit 所有权</b>：语义保持——Submit 不接管帧所有权，不 Dispose 帧。调用方（AudioPipeline）负责 Return 到 FramePool 或 Dispose。</para>
-/// <para><b>增强</b>：O7 独占模式（IsFormatSupported 协商 + 错误处理）、O8 事件驱动（SetEventHandle + WaitOne 替代 Sleep 轮询）、
-/// O9 多格式直出（GetMixFormat 检测 + S16/S32/F32 直出）。</para>
+/// <para><b>增强</b>：独占模式（IsFormatSupported 协商 + 错误处理）、事件驱动（SetEventHandle + WaitOne 替代 Sleep 轮询）、
+/// 多格式直出（GetMixFormat 检测 + S16/S32/F32 直出）。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal sealed class WasapiRenderLoop
@@ -140,7 +140,7 @@ internal sealed class WasapiRenderLoop
     // 0 表示不可用（GetFrequency 失败），此时 GetPlaybackPosition 回落到采样率换算并告警。
     private long _audioClockFrequency;
 
-    // ── STA 渲染线程基础设施（Phase 1：常驻渲染循环，替代原"每次 RunOnSta 跨线程封送"）──
+    // STA 渲染线程基础设施（Phase 1：常驻渲染循环，替代原"每次 RunOnSta 跨线程封送"）
     // 单一 STA 线程：CoInitializeEx(STA) → 处理控制消息与音频帧 → 关闭时释放 COM + CoUninitialize。
     // 所有 COM 调用都在该线程，调用方通过 ConcurrentQueue + AutoResetEvent 投递工作项并等待完成。
     private Thread? _thread;
@@ -473,8 +473,8 @@ internal sealed class WasapiRenderLoop
         // wallElapsed（引擎领先+常偏），主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。
         // 瞬态期（≤100ms）devicePosition≈墙钟，直接以墙钟为准，避免相位跳变。
         // 稳态锁定引擎领先：若在「devicePosition 尚未与墙钟锁步」的起播瞬态就捕获 bias 并永久减回，
-        // 此刻 devicePosition 落后墙钟约 29ms（bias 为负）→ 减负数 = 变相给主时钟加 29ms →
-        // 音频时钟比真实可闻位置快约 29ms → 视频按此时钟提前约 29ms 呈现。因此必须等偏差稳定后再锁定：
+        // 此刻 devicePosition 落后墙钟一个瞬态量（bias 为负）→ 减负数 = 变相给主时钟加上该量 →
+        // 音频时钟比真实可闻位置快同一量 → 视频按此时钟提前呈现。因此必须等偏差稳定后再锁定：
         // 主时钟应反映真实可闻位置。devicePosition→可闻 的延迟（引擎领先 L）在稳态时
         // 等于 (devicePosition − 墙钟) 的锁定值；起播瞬态该值为负且持续收敛，故须等其稳定后再锁定。
         // 稳定判据：连续两次采样偏差 < 1ms，即引擎已与墙钟锁步、L 不再漂移。锁定后 bias 即为稳态 L，
@@ -538,8 +538,8 @@ internal sealed class WasapiRenderLoop
     /// 重播（Ended→Playing）主时钟归零：解除武装并清校准，使 <see cref="GetPlaybackPositionDirect"/>
     /// 在音频重新 Start 之前恒定返回 0。
     /// <para><b>成因</b>：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），<c>_startStopwatch</c>
-    /// 持续累计（未随 Ended 归零）；而重播的视频门控（MediaPipelineHost.StartAsync 第③步 SignalAudioReady）早于音频
-    /// Start（第⑤步），预滚动窗口内同步器据此读到的主时钟是陈旧值，把 PTS=0 重播首帧判为「落后过多 → Drop」，
+    /// 持续累计（未随 Ended 归零）；而重播的视频门控（MediaPipelineHost.StartAsync 第(3)步 SignalAudioReady）早于音频
+    /// Start（第(5)步），预滚动窗口内同步器据此读到的主时钟是陈旧值，把 PTS=0 重播首帧判为「落后过多 → Drop」，
     /// 直到解码器把流推进、首帧追上主时钟才切入。</para>
     /// <para>本方法在 MediaPlayer 重播分支（SeekAsync 后、StartAsync 前）调用，使该窗口主时钟=0，首帧立即呈现，无缝重播。</para>
     /// </summary>
@@ -665,7 +665,7 @@ internal sealed class WasapiRenderLoop
         return ValueTask.CompletedTask;
     }
 
-    // ── 渲染线程基础设施 ──
+    // 渲染线程基础设施
 
     private enum ItemKind : byte { Control, Frame, Shutdown }
 
@@ -921,7 +921,7 @@ internal sealed class WasapiRenderLoop
             if (_options.EnableBackgroundCapableSession)
                 TrySetSessionCategory(pAudioClient);
 
-            // 2. 格式协商（O7 独占模式 + O9 多格式直出）
+            // 2. 格式协商（独占模式 + 多格式直出）
             WAVEFORMATEX format;
             if (_exclusiveMode)
             {
@@ -941,7 +941,7 @@ internal sealed class WasapiRenderLoop
                 ? WasapiInterop.AUDCLNT_SHAREMODE_EXCLUSIVE
                 : WasapiInterop.AUDCLNT_SHAREMODE_SHARED;
 
-            // O8: 事件驱动模式
+            // 事件驱动模式
             int streamFlags = _eventDrivenMode
                 ? WasapiInterop.AUDCLNT_STREAMFLAGS_EVENTCALLBACK
                 : 0;
@@ -971,7 +971,7 @@ internal sealed class WasapiRenderLoop
             }
             LogOpen("IAudioClient.Initialize");
 
-            // O7: 独占模式错误处理
+            // 独占模式错误处理
             if (hr == WasapiInterop.AUDCLNT_E_DEVICE_IN_USE)
             {
                 throw new InvalidOperationException(
@@ -1002,7 +1002,7 @@ internal sealed class WasapiRenderLoop
                 Marshal.ThrowExceptionForHR(hr);
             }
 
-            // 4. O8: 事件驱动模式——注册事件句柄
+            // 4. 事件驱动模式——注册事件句柄
             if (_eventDrivenMode)
             {
                 _bufferEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
@@ -1177,12 +1177,12 @@ internal sealed class WasapiRenderLoop
         }
 
         // 分段写入 + 缓冲事件续写，既不丢样本也不死锁。要点：
-        //  ①若要求「整帧连续空间」并硬阻塞，配合 BeginStreamingAsync 在 !_initialized 时 early-return
+        //  (1)若要求「整帧连续空间」并硬阻塞，配合 BeginStreamingAsync 在 !_initialized 时 early-return
         //    （preroll 从未 arm）→ 设备永不 Start → 引擎不消费 → 缓冲恒满 → 每帧超时 → 音频饥饿死锁；
         //    且启动锚点永不捕获 → 主时钟恒 0 → 视频管线永久 Wait（现象：present=1、dropped=0，画面全程冻结）。
-        //  ②若改为「只写 available、写不下的直接丢弃」：解了死锁，却把背压变成了采样丢弃 →
+        //  (2)若改为「只写 available、写不下的直接丢弃」：解了死锁，却把背压变成了采样丢弃 →
         //    持续跳样 → 电音 / 音频加速（submitted 远小于 played 即此症状）。
-        //  ③本实现：循环分段写入直至整帧写完；空间不足时在渲染线程内等一次引擎缓冲事件后续写。
+        //  (3)本实现：循环分段写入直至整帧写完；空间不足时在渲染线程内等一次引擎缓冲事件后续写。
         //    Submit 本就阻塞等待渲染线程完成，故此举等价于「把音频管线节流到设备实时速率」——正确的背压形态，
         //    一个采样都不丢。等待有 BufferWaitTimeoutMs 上限 + _shutdownEvent 立即放弃，绝不退化为无界阻塞。
         //    帧大小可超过设备缓冲区（分段天然支持），故不再限制 frame.FrameCount <= _bufferSize。
@@ -1197,7 +1197,7 @@ internal sealed class WasapiRenderLoop
             if (available == 0)
             {
                 // 缓冲满。先确保引擎已在消费，否则等待必然全部超时：
-                // ①preroll 已 arm → 正常自动启动路径；②调用方未走 BeginStreaming/Resume → 兜底强制启动。
+                // (1)preroll 已 arm → 正常自动启动路径；(2)调用方未走 BeginStreaming/Resume → 兜底强制启动。
                 TryStartPreroll();
                 EnsureDeviceStarted();
 
@@ -1248,7 +1248,7 @@ internal sealed class WasapiRenderLoop
             writtenFrames += (int)toWrite;
             _submittedSamples += toWrite;   // 诊断：累计成功提交的采样帧数
 
-            // 治本①（起播静默窗）：首段真实 PCM 落入设备缓冲后立即启动引擎，抓取的是真实数据而非静音。
+            // 治本(1)（起播静默窗）：首段真实 PCM 落入设备缓冲后立即启动引擎，抓取的是真实数据而非静音。
             // 提前到「每段写入后」而非「整帧写完后」，保证后续分段等待时引擎已在消费，等待必有进展。
             TryStartPreroll();
         }
@@ -1332,7 +1332,7 @@ internal sealed class WasapiRenderLoop
         return !_shutdownEvent.Wait(BufferPollIntervalMs);
     }
 
-    // ── 格式协商方法（O7 独占模式 + O9 多格式直出）──
+    // 格式协商方法（独占模式 + 多格式直出）
 
     /// <summary>
     /// 共享模式格式协商：通过 GetMixFormat 获取设备原生格式。
@@ -1526,7 +1526,7 @@ internal sealed class WasapiRenderLoop
         return SampleFormat.F32;
     }
 
-    // ── PCM 拷贝/转换方法（O9 多格式直出）──
+    // PCM 拷贝/转换方法（多格式直出）
 
     /// <summary>
     /// 将源 PCM 数据拷贝或转换到 WASAPI 缓冲区。格式匹配时零转换直接拷贝。

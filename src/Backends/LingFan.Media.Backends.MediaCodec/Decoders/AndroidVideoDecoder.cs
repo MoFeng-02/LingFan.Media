@@ -13,12 +13,12 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 
 /// <summary>
 /// 基于托管 <see cref="AndroidMediaCodec"/> 的视频解码器，双路径：
-/// <b>① GLES 桥接零拷贝（默认优先）</b>：解码器输出到 <see cref="AndroidAhbRgbaBridge"/> 的 SurfaceTexture，
+/// <b>1) GLES 桥接零拷贝（默认优先）</b>：解码器输出到 <see cref="AndroidAhbRgbaBridge"/> 的 SurfaceTexture，
 /// 驱动在 GPU 内把 YUV→RGB 渲进 RGBA AHardwareBuffer，Vulkan 渲染器以普通 RGBA 纹理采样上屏
 /// （绕开 Adreno 对「YUV AHB + Vulkan YCbCr 采样」的原生空指针崩溃）；
-/// <b>② ByteBuffer + 灵活 YUV420 回退</b>：桥接不可用（API&lt;29 或 EGL/GLES 初始化失败）时，
+/// <b>2) ByteBuffer + 灵活 YUV420 回退</b>：桥接不可用（API&lt;29 或 EGL/GLES 初始化失败）时，
 /// 经 <c>getOutputImage</c> 取标准化三平面 I420 走 CPU。两条路径均走 net-android 托管绑定，
-/// 仅桥接的 EGL/GLES/AHardwareBuffer 图形原语经 [LibraryImport]，符合 2026-08-22 架构裁定（Android 后端
+/// 仅桥接的 EGL/GLES/AHardwareBuffer 图形原语经 [LibraryImport]（Android 后端
 /// 媒体 API 走托管绑定，仅图形原语例外，与解码器既有 carve-out 一致）。
 /// </summary>
 /// <remarks>
@@ -32,7 +32,7 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// （plane0=Y、plane1=U、plane2=V），无需按厂商私有 NV12/NV21 布局猜测。</para>
 /// <para><b>为何不走 ImageReader(Surface)+CPU 读</b>：Surface 原生输出是不透明 COLOR_FormatSurface，平台只承诺
 /// 可用于呈现/GL 采样，从不承诺能被 CPU 按 YUV_420_888 正确读出（色度是否落盘取决于 gralloc 用途位与厂商实现）。
-/// 真机实测即命中该缺口：V 平面恒≈0 → 画面泛绿。GPU 零拷贝的正确形态是 SurfaceTexture→GL 在 GPU 内把
+/// 实测即命中该缺口：V 平面恒≈0 → 画面泛绿。GPU 零拷贝的正确形态是 SurfaceTexture→GL 在 GPU 内把
 /// YUV→RGB 渲进 RGBA AHardwareBuffer，再交 Vulkan 以普通 RGBA 采样（<see cref="AndroidAhbRgbaBridge"/> 路径），
 /// 已实现为本解码器默认优先的零拷贝路径，不可用时回退本 ByteBuffer CPU 路径。</para>
 /// <para><b>可见区</b>：帧由 <see cref="ExtractI420FromImage"/> 按 <see cref="Image.CropRect"/>（= 输出格式
@@ -111,7 +111,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     private int _extractSamples;
     private long _extractTicks;
 
-    // ── 帧几何变化探测器 ──
+    // 帧几何变化探测器
     // 每帧的可见区（crop）与平面跨距（rowStride/pixelStride）都是从 Image 现读的，未做缓存。
     // 若 OMX.qcom 在开播期回报的几何与稳态不同（已知部分高通组件早期帧 plane 元数据不稳定），
     // 本实现会原样继承错误 —— 症状正是「开播十来秒花屏、之后完全正常」。
@@ -133,7 +133,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     // 一次性灌进 _pendingFrames，使 in-flight 帧数远超帧池每桶容量（16）；超额帧每帧都要
     // 新分配大数组、归还即弃 ⇒ 开播期垃圾风暴 ⇒ GC 停顿渲染线程，进而放大呈现侧抖动。
     // 加上限把 in-flight 峰值压回池容量内（未取完的帧留待下一轮，不丢帧）。
-    /// <summary>单次排空最多提取的帧数上限（治根AU 由 4 放宽到 12）。
+    /// <summary>单次排空最多提取的帧数上限（由 4 放宽到 12）。
     /// 原值 4 是为压制开播期 LOH GC 风暴（无上限排空会让 in-flight 帧数远超帧池每桶容量）。
     /// 但它同时把帧堵在解码器输出队列里、延缓缓冲归还，在 DPB 压力下会让解码器静默丢弃参考帧
     /// ⇒ 宏块 garbage。取 12：仍远低于帧池每桶 16 的上限（GC 风险可控），但排空吞吐翻三倍。</summary>
@@ -141,13 +141,13 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
     /// <summary>Surface 桥接（AHB/GL 路径）常规排空的 dequeue 阻塞超时（μs）。
     /// Surface 输出模式下 MediaCodec 的帧渲染与 dequeue 等待强耦合：非阻塞（timeout=0）轮询会令
-    /// 解码器持续吞入输入却不渲染输出（实测 957 包仅产出 7 帧，画面冻结在首帧后；ImageReader
-    /// 时代同病灶同修法）。10ms 与 FlushAsync 常规排空超时一致：30fps 帧距 33ms，等得起。</summary>
+    /// 解码器持续吞入输入却不渲染输出（画面冻结在首帧后）。10ms 与 FlushAsync 常规排空超时一致：
+    /// 30fps 帧距 33ms，等得起。</summary>
     private const long SurfaceDrainWaitUs = 10_000;
 
     // 本后端媒体 API 仅使用 net-android 托管的 Android.Media.* 绑定（MediaCodec / Image.Plane）；
     // 显式禁止手写 P/Invoke：Android/iOS/macOS 走 net-* workload 内置绑定，AOT 安全、零反射
-    // （符合 2026-08-22 架构裁定）。GPU 零拷贝的图形原语（EGL/GLES/AHardwareBuffer）属 carve-out，
+    // （架构约束）。GPU 零拷贝的图形原语（EGL/GLES/AHardwareBuffer）属 carve-out，
     // 经 [LibraryImport] 封装在 AndroidAhbRgbaBridge 内（与解码器既有 carve-out 一致），后端主体仍零 P/Invoke。
 
     public AndroidVideoDecoder(AndroidBackend backend, ILogger<AndroidVideoDecoder> logger)
@@ -182,22 +182,20 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
         // 编码尺寸：软解路径不向 configure 强塞 width/height——由解码器从 csd(SPS) 自行推导真实尺寸
-        // （解码器内置解析器才是真值来源；c2 软解对本样例导出 1080x1920 与容器声明一致，
-        // 旧「容器失真报 1080x1920、SPS 实为 320x240」结论源于手写 SPS 解析器的 bug，已证伪）。
+        // （解码器内置解析器才是真值来源；手写 SPS 解析曾有 bug 误报，已废弃）。
         // 真值在其 OutputFormat：解码器回报的 width/height/crop 才是真实可见尺寸，帧经 ExtractI420FromImage
         // 按 plane 的 pixelStride/rowStride 与 CropRect 提取（详见该方法）。
         var csd = settings.CodecConfiguration;
         _logger.LogInformation("[ANDROID-VID] csd({Len}B) hex={Hex}",
             csd.Length, Convert.ToHexString(csd.Span));
         int frameW = settings.Width ?? 0, frameH = settings.Height ?? 0;
-        // 【仅诊断】手写 SPS 位流解析不可信（实测把 1080x1920 的样例解析成 16x32）——
-        // 真值以解码器 OutputFormat 为准（c2 软解对本样例导出 width=1080 height=1920 crop(0,0,1079,1919)，
-        // 即容器声明正确）。绝不可参与 configure 决策（旧教训：错误尺寸喂高通硬解 → 0 帧产出）。
+        // 【仅诊断】手写 SPS 位流解析不可信（实测存在大幅误判）——真值以解码器 OutputFormat 为准。
+        // 绝不可参与 configure 决策（错误尺寸喂硬解会导致 0 帧产出）。
         if (csd.Length > 0 && AndroidCodecMaps.TryParseH264WidthHeight(csd.ToArray(), out int pw, out int ph))
             _logger.LogInformation("[ANDROID-VID] SPS 诊断解析 {W}x{H}（容器声明 {DW}x{DH}；仅供对照，不参与决策）",
                 pw, ph, frameW, frameH);
 
-        // ── 双路径：GLES 桥接零拷贝（Surface 输出 → RGBA AHB，增强档按开关启用）与 ByteBuffer CPU 路径（默认）──
+        // 双路径：GLES 桥接零拷贝（Surface 输出 → RGBA AHB，增强档按开关启用）与 ByteBuffer CPU 路径（默认）
         // 平台契约（MediaCodec「原始视频缓冲区」节）明文：灵活 YUV 缓冲（COLOR_FormatYUV420Flexible）
         // 既可用于输入/输出 Surface，也可用于 ByteBuffer 模式经 getOutputImage 访问；且自
         // LOLLIPOP_MR1 起「所有视频编解码器均支持灵活 YUV 4:2:0 缓冲」——即本路径对硬件与软件
@@ -206,22 +204,22 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         // 不采用「输出到 ImageReader(YUV_420_888) 再 CPU 读」：Surface 输出的原生格式是不透明的
         // COLOR_FormatSurface，平台只承诺其可用于呈现/GL 采样，从不承诺该缓冲能被 CPU 按
         // YUV_420_888 语义正确读出（是否可读、色度是否落盘取决于 gralloc 用途位与厂商实现）。
-        // 真机实测即命中该缺口：Y/U 有效而 V 平面恒 ≈0，而色度平面为 0（非 128）正是画面整体
+        // 实测即命中该缺口：Y/U 有效而 V 平面恒 ≈0，而色度平面为 0（非 128）正是画面整体
         // 泛绿的成因。GPU 零拷贝的正确形态是 SurfaceTexture/AHardwareBuffer→GL/Vulkan 采样，
         // 而非经 ImageReader 回读 CPU；该形态即本解码器的 GLES 桥接零拷贝路径（AndroidAhbRgbaBridge），
         // 经 AndroidVideoDecodePolicy 启用，不可用时回退到本 ByteBuffer CPU 路径。
         //
         // 解码分档（见 AndroidVideoDecodePolicy）：
-        // ① 硬解 + CPU 帧（能播档，默认）：OMX 硬件解码器 + ByteBuffer CPU 帧 + 渲染端 Skia 软渲。
-        //    OMX 走旧 OMX 框架（非 Codec2），无 c2 的 numClientBuffers 僵死；此为真机 PASS 路径。
-        // ② 桥接零拷贝（增强档，EnableHardwareZeroCopy）：软解（c2）+ GLES 桥接 → RGBA AHB。
-        //    软解 + 桥接产帧稳定（绕开 OMX 首帧崩）；Vulkan AHB 采样在 Adreno 上驱动崩，待 GL 路线重做。
-        // 桥接不可用时回落 ① 硬解 + ByteBuffer（绝不 c2 软解 + ByteBuffer——那是 numClientBuffers 僵死档）。
+        // 1) 硬解 + CPU 帧（能播档，默认）：OMX 硬件解码器 + ByteBuffer CPU 帧 + 渲染端 Skia 软渲。
+        //    OMX 走旧 OMX 框架（非 Codec2），无 c2 的 numClientBuffers 僵死；此为实测通过路径。
+        // 2) 桥接零拷贝（增强档，EnableHardwareZeroCopy）：软解（c2）+ GLES 桥接 → RGBA AHB。
+        //    Vulkan AHB 采样在 Adreno 上驱动崩，待 GL 路线重做。
+        // 桥接不可用时回落 1) 硬解 + ByteBuffer（绝不 c2 软解 + ByteBuffer——那是 numClientBuffers 僵死档）。
         bool zeroCopy = AndroidVideoDecodePolicy.EnableHardwareZeroCopy;
         _useAhbFrames = zeroCopy && TryCreateAhbOutputSurface(frameW, frameH);
-        // 零拷贝档也用硬解（真机实证 2026-09-03：c2 软解 + Surface 桥吞输入不吐输出——喂入已 1:1 修复
-        // 后仍产帧停滞 5 帧；旧注释「软解+桥接产帧稳定」系未充分验证的假设）。硬解 + Surface 模式
-        // 与历史真机教训一致（「高通硬解 ByteBuffer 输出停滞系误诊，Surface 模式才是正解」）。
+        // 零拷贝档也用硬解（实测：c2 软解 + Surface 桥在输入正常喂入时仍产帧停滞；
+        // 「软解+桥接产帧稳定」系未充分验证的假设）。硬解 + Surface 模式与历史结论一致
+        // （「高通硬解 ByteBuffer 输出停滞系误诊，Surface 模式才是正解」）。
         // 单变量对照实验：ForceSoftwareDecoder 只换解码器（AOSP 软解），帧提取/重排/同步/上屏完全不变。
         var codecObj = CreateVideoCodec(mime, codec,
             preferSoftwareDecoder: AndroidVideoDecodePolicy.ForceSoftwareDecoder);
@@ -259,7 +257,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     private void ConfigureFlexibleYuv(ref AndroidMediaCodec codecObj, string mime, VideoCodec codec,
         ReadOnlyMemory<byte> csd, int frameW, int frameH, Surface? outputSurface, bool useAhbFrames)
     {
-        // csd 拆分诊断（真机核对 SPS/PPS 切分是否正确；拆不出 PPS 会回退单 csd-0 旧形态）。
+        // csd 拆分诊断（在设备上核对 SPS/PPS 切分是否正确；拆不出 PPS 会回退单 csd-0 旧形态）。
         byte[] spsB = Array.Empty<byte>(), ppsB = Array.Empty<byte>();
         bool splitOk = mime == "video/avc" && TrySplitAvcCsd(csd, out spsB, out ppsB) && ppsB.Length > 0;
         _logger.LogInformation("[ANDROID-VID] csd 拆分: 成功={Ok} SPS={SpsLen}B PPS={PpsLen}B（总 {Total}B）",
@@ -301,8 +299,8 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         if (!useAhbFrames)
             fmt.SetInteger(MediaFormat.KeyColorFormat, (int)MediaCodecCapabilities.Formatyuv420flexible);
         // H.264/5 参数集必须按 NAL 类型拆分为 csd-0(SPS)/csd-1(PPS)（AOSP MediaCodec 契约）。
-        // 全部塞进单个 csd-0 时 Surface 输出模式的解码器会吞输入不吐输出（真机实证：957 包仅
-        // 产 7 帧、画面冻结；ByteBuffer 模式部分解码器自行重解析故未暴露）。解析失败时保守回退单 csd-0。
+        // 全部塞进单个 csd-0 时 Surface 输出模式的解码器会吞输入不吐输出（画面冻结；
+        // ByteBuffer 模式部分解码器自行重解析故未暴露）。解析失败时保守回退单 csd-0。
         if (csd.Length > 0)
         {
             if (mime == "video/avc" && TrySplitAvcCsd(csd, out var sps, out var pps) && pps.Length > 0)
@@ -432,9 +430,9 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
         if (preferSoftwareDecoder)
         {
-            // 软解候选顺序按输出模式区分（真机实证，两模式病灶相反）：
+            // 软解候选顺序按输出模式区分（实测两模式下症状相反）：
             // · Surface 输出（AHB 零拷贝桥接）：c2.android 优先。OMX.google 旧组件在
-            //   SurfaceTexture/GL 消费者模式下吞输入不吐输出（957 包仅产 7 帧后永久停摆，
+            //   SurfaceTexture/GL 消费者模式下吞输入不吐输出（产帧数次后永久停摆，
             //   画面冻结在首帧附近、音频正常播完）。
             // · ByteBuffer 输出（CPU 路径）：OMX.google 优先。c2 软解 + ByteBuffer 命中
             //   numClientBuffers 僵死（解码器不归还输出缓冲）。
@@ -457,9 +455,9 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             }
         }
 
-        // 治根AV：优先挑 Codec2 栈的厂商硬解（如 c2.qti.avc.decoder），而不是系统按类型默认给出的
+        // 优先挑 Codec2 栈的厂商硬解（如 c2.qti.avc.decoder），而不是系统按类型默认给出的
         // 旧 OMX 实现（OMX.qcom.video.decoder.avc）。后者在 ByteBuffer + 灵活 YUV 输出下存在开播期
-        // 输出坏帧的真机现象（宏块 garbage、参考帧损坏），且不报任何错误。Codec2 实现是同一硬件的
+        // 输出坏帧现象（宏块 garbage、参考帧损坏），且不报任何错误。Codec2 实现是同一硬件的
         // 另一套框架封装，可作为低风险对照。任何一步失败都回落到原来的 CreateDecoderByType。
         var hw = TryCreatePreferredHardwareCodec(mime);
         if (hw is not null)
@@ -475,7 +473,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
     /// <summary>
     /// 枚举本机支持该 mime 的解码器，按「Codec2 厂商硬解 → OMX 厂商硬解」顺序创建（跳过软件实现）。
-    /// 同时打印全部候选名，便于真机对照。失败返回 <c>null</c>，调用方回落到按类型创建。
+    /// 同时打印全部候选名，便于在设备上对照。失败返回 <c>null</c>，调用方回落到按类型创建。
     /// </summary>
     private AndroidMediaCodec? TryCreatePreferredHardwareCodec(string mime)
     {
@@ -540,7 +538,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     }
 
     /// <summary>AOSP 软件解码器候选。
-    /// <b>OMX.google 排在 c2.android 之前</b>：真机实测 c2 软解 + ByteBuffer 会命中
+    /// <b>OMX.google 排在 c2.android 之前</b>：实测 c2 软解 + ByteBuffer 会命中
     /// numClientBuffers 僵死（解码器不再归还输出缓冲），而 OMX.google 软解 + ByteBuffer 正常。
     /// 两者输出都是标准灵活 YUV 到 ByteBuffer，语义等价。</summary>
     private static string[] SoftwareCodecCandidates(VideoCodec codec) => codec switch
@@ -554,9 +552,8 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     };
 
     /// <summary>Surface 输出（AHB 零拷贝桥接）的 AOSP 软件解码器候选：<b>c2 新栈优先</b>。
-    /// OMX.google 旧组件在 SurfaceTexture/GL 消费者模式下会吞输入不吐输出
-    /// （真机实证：957 输入包仅渲染 7 帧后永久停摆）；c2.android 是 ExoPlayer 等
-    /// 主流播放器 Surface 模式的标准软解路径。</summary>
+    /// OMX.google 旧组件在 SurfaceTexture/GL 消费者模式下会吞输入不吐输出（产帧数次后永久停摆）；
+    /// c2.android 是 ExoPlayer 等主流播放器 Surface 模式的标准软解路径。</summary>
     private static string[] SoftwareCodecCandidatesSurfaceFirst(VideoCodec codec) => codec switch
     {
         VideoCodec.H264 => new[] { "c2.android.avc.decoder", "OMX.google.h264.decoder" },
@@ -580,7 +577,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         // 帧由 ExtractI420FromImage 按 plane 的 pixelStride/rowStride 统一产出标准紧凑 I420，
         // 与底层是 NV12/semiplanar 还是 I420/planar 无关（灵活 YUV420 二者皆可能）。
 
-        // ── 可见区（crop 矩形）──
+        // 可见区（crop 矩形）
         // 平台契约：输出格式的 width/height 是「视频帧」尺寸（常按 16 对齐做了填充），真正的可见图像
         // 只占其中一部分，由 crop 矩形界定，且右/下坐标是「减 1」语义：
         //   width  = crop-right  + 1 - crop-left
@@ -612,7 +609,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         // 平台契约：MediaCodec 输出 buffer 的 width/height 永远是「旋转前（编码）」尺寸，真实显示尺寸
         // 在 90/270° 时需交换宽高。当前 VideoFrame 不携带 rotation，渲染端按编码尺寸呈现——
         // 若视频带 90/270° 旋转（竖屏拍摄的横屏内容），将出现方向错乱/溢出观感。此处先读取诊断，
-        // 供真机确认旋转角度，再决定是否在解码端交换显示宽高 + 透传 rotation 给渲染端旋转。
+        // 供设备上确认旋转角度，再决定是否在解码端交换显示宽高 + 透传 rotation 给渲染端旋转。
         // 注：KEY_ROTATION 常量 MS Learn 标注仅 API 23+ 受支持（CA1416），故统一用字符串键读取以覆盖全版本。
         int rotationDeg = fmt.ContainsKey("rotation-degrees") ? fmt.GetInteger("rotation-degrees") : 0;
         _rotationDegrees = rotationDeg;
@@ -650,7 +647,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
         // 诊断节流：收包节奏。
         // Trace 级：解码线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
-        // 会周期性延迟解码出帧 → 队列下探 → 呈现等帧（卡顿根因之一），调高日志级别即可查看。
+        // 会周期性延迟解码出帧 → 队列下探 → 呈现等帧（卡顿诱因之一），调高日志级别即可查看。
         if ((_packetsFed % LogInterval) == 0)
             _logger.LogTrace("[ANDROID-VID] 收包 #{Count} size={Size} pts={Pts:g} key={Key}",
                 _packetsFed, packet.Data.Length, packet.Timestamp, packet.KeyFrame);
@@ -680,12 +677,11 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         long deadline = System.Diagnostics.Stopwatch.GetTimestamp()
                         + System.Diagnostics.Stopwatch.Frequency * DrainTimeoutSeconds;
 
-        // ── 阶段 1：EOS 入队（必须成功）──────────────────────────────────────
-        // 输入槽满时（真机日志：输入槽满，喂入被阻 pending=135）须先排空输出腾出槽位再重试。
+        // 阶段 1：EOS 入队（必须成功）
+        // 输入槽满时（喂入被阻）须先排空输出腾出槽位再重试。
         // 旧实现「固定 16 次重试后放弃」+「随后 !_eosQueued 即返回 null」，会让上层 DecodeLoop
         // 立刻判定排空完成并 Complete 帧队列 —— 末段 GOP 全部滞留解码器。
-        // 真机实证：32.8s 视频只呈现到 28.3~28.5s，末约 4.4s（~130 帧）永久丢失，
-        // 表现为「画面卡在最后几秒、音频照常播完」。
+        // 现象：视频末段数秒永久丢失，表现为「画面卡在最后几秒、音频照常播完」。
         // 修正：重试到成功为止（受总 deadline 约束）；**排空取到的帧立即交还上层、绝不丢弃**
         // （旧代码 `_ = DrainOutput(5_000);` 直接丢弃返回值 = 每轮白丢一帧）。
         while (!_eosQueued)
@@ -693,9 +689,8 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             FeedInput();
 
             // 【关键】待喂队列未排空前，绝不能入 EOS。
-            // EOS 一旦入队，_pendingInput 里剩余的包就永远进不了解码器，其帧永久丢失。
-            // 真机实证（2026-08-30）：32.8s 视频只产出 816/985 帧、喂入 844 包，
-            // 画面冻在 27.2s 而音频照常播完 —— 正是此处提前入 EOS 所致。
+            // EOS 一旦入队，_pendingInput 里剩余的包就永远进不了解码器，其帧永久丢失
+            // （表现为画面冻结在中段而音频照常播完）。
             if (_pendingInput.Count > 0)
             {
                 if (DrainOutput(5_000) is { } pending)
@@ -736,7 +731,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             }
         }
 
-        // ── 阶段 2：排空输出，直到解码器回报输出 EOS ──────────────────────────
+        // 阶段 2：排空输出，直到解码器回报输出 EOS
         // 【关键】单次 DrainOutput 的 TRY_AGAIN **绝不代表排空完成**：EOS 入队后，解码器内部
         // 仍持有末段 GOP 的 B 帧重排缓冲，需多轮 dequeue 才逐步吐出，期间必然穿插 TRY_AGAIN。
         // 修正：持续重试直到 `_eosOutputSeen`（DRAIN 真正的完成判据），总超时兜底防死锁。
@@ -852,7 +847,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
     /// <summary>排空输出后立即补喂输入。</summary>
     /// <remarks>
-    /// <b>为什么必须有这一步（真机实证，2026-08-31）</b>：MediaCodec 的输入槽位只有在
+    /// <b>为什么必须有这一步</b>：MediaCodec 的输入槽位只有在
     /// 输出缓冲被 <c>ReleaseOutputBuffer</c> 归还后才会腾出来。而调用链原本是
     /// 「收包 → <see cref="FeedInput"/> → <see cref="ReadOutput"/>」，即<b>先喂、后排空</b>：
     /// 喂的时候槽位还是满的（必失败），等排空把槽位腾出来了，<b>却再没有人补喂</b>，
@@ -860,9 +855,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// 更糟的是 <see cref="ReadOutput"/> 与 <see cref="DrainOutput"/> 在
     /// <c>_pendingFrames.Count &gt; 0</c> 时直接返回队首、<b>根本不走 dequeue</b>，
     /// 于是约 3/4 的调用既没排空也没补喂。
-    /// 后果：解码器长期半饥饿 —— 真机日志「前 256 次排空只喂入 9 个包、累计产帧=1」、
-    /// 「输入槽满累计阻塞 1280 次」，开播约 10 秒只跑出 20~27fps（应为 30），
-    /// 净少约 63 帧，<c>[SYNC]</c> 队列一度归零、窗口帧数跌到 36。
+    /// 后果：解码器长期半饥饿 —— 开播期帧率明显低于目标、帧队列一度归零。
     /// 画面表现即「开播十几秒糊/拖影、之后完全正常」——<b>不是像素错，是喂不饱</b>。
     /// </remarks>
     private void FeedAfterDrain()
@@ -876,7 +869,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// <summary>读出一个已解出帧（先返回 FIFO 余帧，再尝试从解码器申领）。</summary>
     private VideoFrame? ReadOutput()
     {
-        // 队列非空时也要排空一次（治根AU）：解码器输出缓冲只有经 ReleaseOutputBuffer 归还后
+        // 队列非空时也要排空一次：解码器输出缓冲只有经 ReleaseOutputBuffer 归还后
         // 才会回到解码器的缓冲池；若因为我们手上有积压就一直不 dequeue，解码器可用输出缓冲
         // 会持续减少（DPB 压力），最终静默丢弃参考帧 —— 后续帧以缺失/错误的参考做运动补偿，
         // 画面即宏块 garbage，且不报任何错误。排空的帧并入队列后再取队首，顺序不变。
@@ -886,24 +879,24 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             return _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
         }
         // Surface 桥接路径必须阻塞等待输出（SurfaceDrainWaitUs）；ByteBuffer/CPU 路径保持 0 非阻塞。
-        // ponytail: 统一 10ms——Grafika 官方范式（TIMEOUT_USEC=10000）：非阻塞轮询在「输入槽满+输出未就绪」
-        // 时从不给解码器墙钟时间完成手头工作 → 喂入饥饿（真机实证：排空 192 次仅喂入 4 包）→ 坏帧/时序空洞。
+        // 统一 10ms——参照 Grafika 官方范式（TIMEOUT_USEC=10000）：非阻塞轮询在「输入槽满+输出未就绪」
+        // 时从不给解码器墙钟时间完成手头工作 → 喂入饥饿 → 坏帧/时序空洞。
         return DrainOutput(SurfaceDrainWaitUs);
     }
 
-    // ── 自适应重排缓冲 ─────────────────────────────────────────────────────────
-    // MediaCodec 契约要求按**呈现序**输出，但 OMX.qcom 实测按**解码序**（B 帧重排）吐帧：
-    // 真机日志 pts回退=72 次，全部集中在开播约 10 秒内（I0 → P7 → B1 → B2…）。
+    // 自适应重排缓冲
+    // MediaCodec 契约要求按**呈现序**输出，但部分 OMX 厂商实现实测按**解码序**（B 帧重排）吐帧：
+    // pts 回退集中出现在开播初期（I/P/B 交错输出）。
     // 后果：管线只 Peek 队首，队首 pts 远在未来时整队被堵（队头阻塞），主时钟追上后
     // 其后各帧又集体超时被丢 —— 开播期时序错乱/花屏。
     //
-    // 关键约束：解码器领先量实测恒为负（−0.07~−1.0s，从不跑在主时钟前面），
-    // 所以**不能**用「固定深度重排缓冲」——那会原样变成延迟，被 200ms 丢帧阈值吃掉。
+    // 关键约束：解码器领先量为负（从不跑在主时钟前面），
+    // 所以**不能**用「固定深度重排缓冲」——那会原样变成延迟，被丢帧阈值吃掉。
     // 本实现只在检测到「超前跳变」时才暂存，稳态（pts 连续）逐帧直通，零额外延迟。
     private readonly List<VideoFrame> _reorder = new();
     private TimeSpan _lastReleasedPts = TimeSpan.MinValue;
     /// <summary>超过已释放 pts 多少算「超前跳变」（判定为重排的 P 帧，需等中间 B 帧补齐）。
-    /// 取 50ms：30fps 帧间隔 33ms，正常连续帧不会触发；观测到的回退最小跨度 33ms、最大 200ms。</summary>
+    /// 取 50ms：大于 30fps 帧间隔，正常连续帧不会触发。</summary>
     private static readonly TimeSpan ReorderHoldAhead = TimeSpan.FromMilliseconds(50);
     /// <summary>重排缓冲深度上限（防失控；超过即强制按序释放）。</summary>
     private const int MaxReorderHold = 8;
@@ -913,12 +906,12 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// <summary>交付序列检测到的 pts 空洞数（解码器吞帧的直接证据）。</summary>
     private int _releaseGaps;
 
-    // ── 帧间差分探测器（坏帧探针）──
+    // 帧间差分探测器（坏帧探针）
     // 正常相邻帧的亮度采样平均绝对差（MAD）平稳；参考帧损坏产生的宏块 garbage 会让 MAD 出现尖峰。
     // 用途：区分「帧丢了」（MAD 平稳，只是 pts 跳变）与「解码器输出了坏帧」（MAD 尖峰且持续若干帧）。
     // 分块覆盖全画面：12 行 × 8 段 × 8 字节 = 768 字节，共 96 个块位。
     // 早期版本只采 8 行 × 64 字节（占 Y 平面 0.025%），宏块 garbage 绝大多数落在采样点之外，
-    // 产生「假阴性」（真机实证：画面肉眼花屏但探针报告零突变）。必须按块覆盖整幅画面。
+    // 产生「假阴性」（画面肉眼花屏但探针报告零突变）。必须按块覆盖整幅画面。
     private const int DeltaRows = 12;
     private const int DeltaCols = 8;
     private const int DeltaBytesPerBlock = 8;
@@ -960,10 +953,9 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             _reorder.RemoveAt(0);
             // 【PTS 空洞探测器】在「重排后、交付前」的序列上检测 pts 跳变。
             // 正常 30fps 帧距 ≈33ms；跳变 > 60ms（≈2 帧距）即说明中间有帧没从解码器出来。
-            // 【为什么这是花屏的决定性判据】本流整段只有 1 个 IDR（真机实证：收包 key=True 仅 #0 一处），
-            // H.264 P/B 帧错误会传播到下一个 IDR —— 解码器只要吞掉一帧，其后的整个 GOP 全是
-            // 宏块马赛克（真机截图 seq=0050 全碎、seq=0259 完全干净，正是「第一个 GOP 碎、中途自愈」）。
-            // 此前所有排查都证明传输链路逐字节无损，故损坏只可能源自解码器吞帧。
+            // 【为什么这是花屏的决定性判据】单 IDR 流中 H.264 P/B 帧错误会传播到下一个 IDR ——
+            // 解码器只要吞掉一帧，其后的整个 GOP 全是宏块马赛克（表现即「第一个 GOP 碎、中途自愈」）。
+            // 传输链路逐字节无损时，损坏只可能源自解码器吞帧。
             if (_lastReleasedPts != TimeSpan.MinValue)
             {
                 TimeSpan gap = head.Timestamp - _lastReleasedPts;
@@ -973,7 +965,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
                     if (_releaseGaps <= 8 || (_releaseGaps % 20) == 0)
                         _logger.LogWarning(
                             "[ANDROID-VID] 帧空洞 #{N}: 交付序 pts 从 {Prev:g} 跳到 {Cur:g}，缺 {Miss:F1} 帧 " +
-                            "（解码器吞帧 ⇒ 其后参考链全碎 = 花屏真因）",
+                            "（解码器吞帧 ⇒ 其后参考链全碎 → 花屏）",
                             _releaseGaps, _lastReleasedPts, head.Timestamp,
                             gap.TotalMilliseconds / 33.333 - 1);
                 }
@@ -1045,7 +1037,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             finally
             {
                 // ByteBuffer 路径（render=false）必须显式关闭 Image，释放 native reader。
-                // 真机实证（2026-08-28）：仅 ReleaseOutputBuffer 而不 Close 会导致系统警告
+                // 实测：仅 ReleaseOutputBuffer 而不 Close 会导致系统警告
                 // "A resource failed to call close"，且 CCodec 把未释放的 Image 计入 client-held
                 // buffer，大量出现 pipelineRoom<=numClientBuffers，解码器异常复用/丢帧 → 画面
                 // 大面积块状破碎、色块错位。此处用 try/catch 保护，确保即使 Close 异常也不会
@@ -1074,7 +1066,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             _lastOutputPtsUs = ptsUs;
 
             // Trace 级：解码线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
-            // 会周期性延迟解码出帧（卡顿根因之一），调高日志级别即可查看。
+            // 会周期性延迟解码出帧（卡顿诱因之一），调高日志级别即可查看。
             if ((_framesProduced % LogInterval) == 0)
                 _logger.LogTrace("[ANDROID-VID] 产帧 #{Count} {W}x{H} {Fmt} pts={Pts:g}",
                     _framesProduced, frame.Width, frame.Height, frame.Format, frame.Timestamp);
@@ -1095,7 +1087,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
         // 周期性诊断（定位 dequeue 是否恒 TRY_AGAIN）。
         // Trace 级：解码线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
-        // 会周期性延迟解码出帧（卡顿根因之一），调高日志级别即可查看。
+        // 会周期性延迟解码出帧（卡顿诱因之一），调高日志级别即可查看。
         if ((_drainCalls % LogInterval) == 0)
             _logger.LogTrace("[ANDROID-VID] 诊断: 排空={Calls} dequeue成功={Deq} tryAgain={Try} 喂入={Fed} 累计产帧={Frames} pts回退={Reg} 重排缓冲={Hold} 校正={Fix} 待喂={Pend} 补喂={PostFed}/{PostCalls} 阻塞={Blk} 空洞={Gap}",
                 _drainCalls, _drainDequeued, _drainTryAgain, _inputQueued, _framesProduced, _ptsRegressions,
@@ -1159,9 +1151,9 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
             // 把帧渲进桥接 SurfaceTexture（render:true → 驱动等解码 fence，完成 GPU 内 YUV→RGB），
             // 后续 ConvertLatest 经 SurfaceTexture.updateTexImage 闩取。
             _lastPresentationTimeUs = info.PresentationTimeUs;
-            _logger.LogTrace("[ANDROID-AHB-DEC] ▶ ReleaseOutputBuffer(render) idx={Idx} pts={Pts}us", idx, info.PresentationTimeUs);
+            _logger.LogTrace("[ANDROID-AHB-DEC]  ReleaseOutputBuffer(render) idx={Idx} pts={Pts}us", idx, info.PresentationTimeUs);
             _codec.ReleaseOutputBuffer(idx, true);
-            _logger.LogTrace("[ANDROID-AHB-DEC] ✓ ReleaseOutputBuffer(render) 返回");
+            _logger.LogTrace("[ANDROID-AHB-DEC]  ReleaseOutputBuffer(render) 返回");
             _pendingSurfaceTextureFrame = true;
             break; // 一帧已入 SurfaceTexture，跳出交给 ConvertLatest
         }
@@ -1185,9 +1177,9 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// 恒与闩取帧对应（闩取时不可能已有更新帧渲入）。</summary>
     private VideoFrame? TryLatchSurfaceTextureFrame()
     {
-        _logger.LogTrace("[ANDROID-AHB-DEC] ▶ ConvertLatest（等待 GL 线程闩帧）");
+        _logger.LogTrace("[ANDROID-AHB-DEC]  ConvertLatest（等待 GL 线程闩帧）");
         nint ahb = _bridge!.ConvertLatest();
-        _logger.LogTrace("[ANDROID-AHB-DEC] ✓ ConvertLatest 返回 ahb={Ahb}", ahb);
+        _logger.LogTrace("[ANDROID-AHB-DEC]  ConvertLatest 返回 ahb={Ahb}", ahb);
         if (ahb == nint.Zero)
         {
             _logger.LogWarning("[ANDROID-AHB-DEC] ConvertLatest 返回 0（GL 异常态），保留待闩帧标志待下轮重试。");
@@ -1270,7 +1262,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         int uvPlaneBytes = uvRowBytes * ch;
         int totalBytes = fastNv12 ? ySize + uvPlaneBytes : ySize + 2 * cw * ch;
 
-        // ── 几何变化探测：与上一帧逐项比对，变化即打点（开播前 8 帧无条件打点作基线）──
+        // 几何变化探测：与上一帧逐项比对，变化即打点（开播前 8 帧无条件打点作基线）
         if (!_geoInit
             || vw != _geoVw || vh != _geoVh || cl != _geoCl || ct != _geoCt
             || yRowStride != _geoYRow || uvRowStride != _geoUvRow || uvPixelStride != _geoUvPix)
@@ -1295,7 +1287,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         var resource = new SoftwareFrameResource(vw, vh, outFmt, checked(totalBytes));
         Span<byte> dst = resource.Data.Span;
 
-        // ── 平面统计采样 ──
+        // 平面统计采样
         // 采样策略：开播前 8 帧全采（对齐「花屏窗口」），之后每 120 帧一采作稳态基线。
         // 判读：若开播期 U/V 均值·范围与稳态显著不同 ⇒ 解码器早期输出本身异常（渲染侧无责）；
         //       若两者一致 ⇒ 解码输出正常，问题在下游（时序/缓冲/上屏）。
@@ -1327,7 +1319,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
 
         // 缓冲上界诊断（仅首帧）：_extractRaw 被 Y/U/V 轮流复用，数组长度 = 三者最大容量。
         // 若 uCap/vCap 远小于 _extractRaw.Length，说明 UV 行按数组长度取上界会读到残留 Y 数据
-        // ——这正是画面下半色度错乱（块状破碎/色块错位）的成因。打印三值以便真机一锤定音。
+        // ——这正是画面下半色度错乱（块状破碎/色块错位）的成因。打印三值以便在设备上确认。
         if (diag)
         {
             int uCapDiag = uBuf.Capacity();
@@ -1361,7 +1353,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
                 int srcOff = (chromaRow0 + cy) * uvRowStride + chromaCol0 * 2;
                 int dstOff = uvDst + cy * uvRowBytes;
                 // 上界必须是本平面实际装载长度 uCap：_extractRaw 为 Y 平面分配时远大于 UV 容量，
-                // 按数组长度计算会让 UV 行越过有效边界读到残留 Y 像素（真机画面破碎根因）。
+                // 按数组长度计算会让 UV 行越过有效边界读到残留 Y 像素（画面破碎成因）。
                 int avail = uCap - srcOff;
                 int copy = avail >= uvRowBytes ? uvRowBytes : avail > 0 ? avail : 0;
                 // 越界检测：avail < 本行所需 ⇒ 该行尾部会读到残留数据（上一帧的 Y 像素），
@@ -1585,7 +1577,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// <param name="srcValid">本平面实际装载的有效字节数（= plane.Buffer.Capacity()）。
     /// <b>必须</b>用它而非 <c>src.Length</c> 做上界：源缓冲为 Y 平面分配时远大于 UV 容量，
     /// 若按 <c>src.Length</c> 计算可用量，UV 行会越过有效数据边界读到残留的 Y 像素，
-    /// 导致画面下半色度错乱（真机实证：大面积块状破碎、色块错位、拖影）。</param>
+    /// 导致画面下半色度错乱（大面积块状破碎、色块错位、拖影）。</param>
     private static void CopyRow(byte[] src, int srcOff, int count, Span<byte> dst, int dstOff, int srcValid)
     {
         if (srcOff < 0 || count <= 0) return;

@@ -90,7 +90,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         }
     }
 
-    // ── Windows：WGL_NV_DX_interop2（D3D11 共享句柄 → GL 纹理）──
+    // Windows：WGL_NV_DX_interop2（D3D11 共享句柄 → GL 纹理）
 
     /// <summary>关闭 DXGI 共享 NT 句柄（导入完成/失败后由生产者负责关闭，防内核句柄泄漏）。</summary>
     [LibraryImport("kernel32")]
@@ -190,8 +190,8 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
             _glContext.EnsureCreated();
 
             // 桥接 D3D11 设备：仅用于把解码侧共享句柄打开为纹理并与 GL 互操作，不参与呈现（呈现由 on-screen GL 上下文完成）。
-            // 🔴 2026-08-20 真机修复：此前 D3D11CreateDevice(DriverType.Hardware) 无适配器 → 默认落在主显示器 GPU（核显 AMD），
-            //    而 ffmpeg 解码设备是 FindPreferredAdapter 独显优先（NVIDIA）→ 跨 GPU 打开共享句柄 OpenSharedResource1 必失败。
+            // 关键：若 D3D11CreateDevice(DriverType.Hardware) 不指定适配器 → 默认落在主显示器 GPU，
+            //    而 ffmpeg 解码设备是 FindPreferredAdapter 独显优先 → 跨 GPU 打开共享句柄 OpenSharedResource1 必失败。
             //    改与解码器同源：FindPreferredAdapter + D3D11CreateDeviceOnAdapter（独显优先），保证桥接设备与解码设备同一 GPU。
             //    注意：此处不打开 WGL 互操作设备——WGL interop 句柄强关联「打开它的 GL 上下文」，必须在 on-screen 渲染上下文
             //    （OpenGLShaderPipeline.EnsureWglInteropDevice）上现场打开，否则在离屏 owner 上下文打开的 interop 句柄在 on-screen 上无法正确注册/lock。
@@ -275,7 +275,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         }
     }
 
-    // ── Linux：EGL_EXT_image_dma_buf_import（VAAPI dma_buf → GL 纹理）──
+    // Linux：EGL_EXT_image_dma_buf_import（VAAPI dma_buf → GL 纹理）
 
     private unsafe bool TryImportLinuxVaApi(GpuFrameImportSource source, out IGpuTextureResource? texture)
     {

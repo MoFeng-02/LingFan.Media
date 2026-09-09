@@ -78,9 +78,9 @@ public sealed class D3D11Nv12SharedHandleExporter : IDisposable
 
         // 自建可共享 NV12 纹理。NV12 视频格式对「共享纹理 MiscFlags/BindFlags 组合」极其敏感（驱动差异），
         // 故按可能性顺序运行时探测，取首个在 CreateTexture2D 与 CreateSharedHandle 两处均成功的组合：
-        //  ① SharedKeyedMutex|SharedNTHandle + ShaderResource：镜像已验证的 RGBA 零拷贝组合（仅 BindFlags RTV→SRV，NV12 不可渲染）。
-        //  ② 同 ① 但 BindFlags=0：兜底个别驱动拒绝 NV12 带任何绑定的情形。
-        //  ③ 仅 SharedNTHandle + ShaderResource：去 keyed mutex（Vulkan 不经 keyed mutex 同步），个别环境要求此组合（作末位兜底）。
+        //  (1) SharedKeyedMutex|SharedNTHandle + ShaderResource：镜像已验证的 RGBA 零拷贝组合（仅 BindFlags RTV→SRV，NV12 不可渲染）。
+        //  (2) 同 (1) 但 BindFlags=0：兜底个别驱动拒绝 NV12 带任何绑定的情形。
+        //  (3) 仅 SharedNTHandle + ShaderResource：去 keyed mutex（Vulkan 不经 keyed mutex 同步），个别环境要求此组合（作末位兜底）。
         var combos = new (uint Misc, uint Bind)[]
         {
             (D3D11Interop.RgbaTextureMiscFlags, D3D11Interop.BindShaderResource),

@@ -77,8 +77,8 @@ internal sealed class D3D11Renderer : IVideoRenderer
     /// </summary>
     // 真实「Present→上屏」延迟 = 端到端呈现延迟，非单纯刷新周期。
     // 仅用刷新周期 16.67ms 作阈值时，视频恒定晚（delta 为负）；
-    // 反推 D3D11 vsync 锁定 swapchain 的真实端到端延迟约 42ms（最坏 vsync 相位 16.67ms
-    // + Present()/消费者管线路径的延迟）。故阈值取 40ms：帧在 PTS 前 40ms 释放、经消费者管线
+    // D3D11 vsync 锁定 swapchain 的端到端延迟包含最坏 vsync 相位（16.67ms）
+    // + Present()/消费者管线路径的延迟。故阈值取 40ms：帧在 PTS 前 40ms 释放、经消费者管线
     // 后恰在 PTS 上屏，delta 收敛到约 0。非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 微调（VideoPipeline 叠加）。
     private TimeSpan _presentationLatency = TimeSpan.FromMilliseconds(40.0);
 
@@ -282,7 +282,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
             bool sizeMatches = (uint)frame.Width == backBufferDesc.Width &&
                                (uint)frame.Height == backBufferDesc.Height;
 
-            // 🔬 首帧一次性：把「源→目标」缩放比摊开。判定混叠的前置量——
+            //  首帧一次性：把「源→目标」缩放比摊开。判定混叠的前置量——
             //    平面纹理已开 MipLevels=0 + GenerateMips，Present 时 RegenerateMips() 重建 mip 链，
             //    着色器用 Sample（自动 LOD）走硬件三线性缩小；非整数多倍缩小时三线性显著优于纯双线性，
             //    但仍非完美（mip 预滤波会丢部分高频细节）。本日志仅供观察缩放比，摩尔纹已被 mipmap 大幅抑制。
@@ -349,7 +349,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
                         "D3D11 渲染器支持 SoftwareFrameResource 和 IGpuTextureResource。");
             }
 
-            // 🔬 诊断门控 LINGFAN_D3D11_DUMP=N：在 Present【之前】把已着色完成的 backbuffer 回读落盘。
+            //  诊断门控 LINGFAN_D3D11_DUMP=N：在 Present【之前】把已着色完成的 backbuffer 回读落盘。
             //    这是切开问题空间的决定性判据——
             //      backbuffer 干净 ⇒ 上传 + Shader 无辜，责任在呈现/合成侧（SwapChain/DComp/DWM/节奏）；
             //      backbuffer 脏   ⇒ 责任在上传/Shader 路径，与合成无关。
@@ -449,7 +449,7 @@ internal sealed class D3D11Renderer : IVideoRenderer
         return ValueTask.CompletedTask;
     }
 
-    // ── 内部方法（均由加锁的公开方法调用，自身不再加锁）──
+    // 内部方法（均由加锁的公开方法调用，自身不再加锁）
 
     /// <summary>
     /// 软件帧渲染路径：CPU 数据 → D3D11 Texture → CopyResource → BackBuffer。

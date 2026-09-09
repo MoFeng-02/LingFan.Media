@@ -48,7 +48,7 @@ public interface IRendererProfiler
 /// </remarks>
 internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererProfiler
 {
-    // ── 共享资源（工厂注入，不由本类释放）──
+    // 共享资源（工厂注入，不由本类释放）
     private readonly Instance _instance;
     private readonly PhysicalDevice _physicalDevice;
     private readonly Device _device;
@@ -63,7 +63,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     // 与 _shaderPipeline 同生命周期（Attach 创建 / ReleaseSessionResources 释放）。
     private VulkanNv12ToRgbaConverter? _nv12Converter;
 
-    // ── Session 级资源 ──
+    // Session 级资源
     private SurfaceKHR _surface;
     private SwapchainKHR _swapchain;
     private Image[] _swapchainImages = [];
@@ -87,7 +87,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     // 预分配 PresentInfo 数组，避免每帧 GC 分配
     private readonly PresentInfoKHR[] _presentInfoArr = [new PresentInfoKHR()];
 
-    // ── 暂存缓冲 ──
+    // 暂存缓冲
     private Buffer _stagingBuffer;
     private DeviceMemory _stagingMemory;
     private ulong _stagingBufferSize;
@@ -99,14 +99,14 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     // 默认 Uniform（信箱）——无畸变、留黑边，与 VideoView/Pipeline 默认一致。
     public AspectRatioMode ScaleMode { get; set; } = AspectRatioMode.Uniform;
 
-    // ── 缩放 blit 用暂存图像（软帧 1:1 不匹配时经此中转）──
+    // 缩放 blit 用暂存图像（软帧 1:1 不匹配时经此中转）
     private Image _stagingImage;
     private DeviceMemory _stagingImageMem;
     private uint _stagingImageW;
     private uint _stagingImageH;
     private Format _stagingImageFormat;
 
-    // ── 诊断计时（定位每帧开销归属，由诊断开关门控）──
+    // 诊断计时（定位每帧开销归属，由诊断开关门控）
     // 累加 CPU 转换耗时（UploadSoftwareFrame 全程）与 GPU 同步耗时（QueueWaitIdle 全程），
     // 收尾由探针读取打印，指导进一步优化方向（不改热路径逻辑）。
     private long _profConvertTicks;
@@ -150,7 +150,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         return Task.CompletedTask;
     }
 
-    // ═══════════════ Attach ═══════════════
+    // Attach
 
     /// <inheritdoc/>
     public void Attach(IRenderTarget target)
@@ -199,7 +199,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         }
     }
 
-    // ═══════════════ Present ═══════════════
+    // Present
 
     /// <inheritdoc/>
     public void Present(VideoFrame frame)
@@ -795,8 +795,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         else
         {
             // 尺寸不同（缩放）或格式不同（R/B 顺序 / UNORM↔sRGB 转换）→ Blit（Linear 过滤）
-            // 🔴 修复（2026-08-20）：此前直接 SrcOffsets=整源 → DstOffsets=整目标（拉伸填满），
-            // 未应用 ScaleMode（默认 Uniform 保比例）→ 竖屏视频(1080x1920)在横屏窗口(640x480)被拉变形。
+            // 修正：此前直接 SrcOffsets=整源 → DstOffsets=整目标（拉伸填满），
+            // 未应用 ScaleMode（默认 Uniform 保比例）→ 竖屏视频在横屏窗口被拉变形。
             // 与软帧路径（UploadSoftwareFrame 的 ComputeBlitRects）对齐：按 ScaleMode 计算源/目标矩形，
             // Uniform 时先清黑底留信箱边（Fill=拉伸满、Uniform=居中保比例黑边、UniformToFill=cover 裁剪）。
             ComputeBlitRects(srcW, srcH, (int)dstW, (int)dstH, ScaleMode,
@@ -844,7 +844,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         }
     }
 
-    // ═══════════════ Clear ═══════════════
+    // Clear
 
     /// <inheritdoc />
     public TimeSpan PresentationLatency => TimeSpan.Zero;
@@ -995,7 +995,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
         }
     }
 
-    // ═══════════════ Detach / Dispose ═══════════════
+    // Detach / Dispose
 
     /// <inheritdoc/>
     public void Detach()
@@ -1025,7 +1025,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     /// <inheritdoc/>
     public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
 
-    // ═══════════════ 内部辅助方法 ═══════════════
+    // 内部辅助方法
 
     // 获取进程模块句柄供 Win32SurfaceCreateInfoKHR.Hinstance 使用。
     // LibraryImport P/Invoke，NativeAOT 兼容（源生成 marshaller，直接 P/Invoke，无运行时反射式封送）。

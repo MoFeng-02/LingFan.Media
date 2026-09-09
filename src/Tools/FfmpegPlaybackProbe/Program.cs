@@ -116,7 +116,7 @@ internal static class Program
         if (!nativeOk)
         {
             Console.WriteLine();
-            Console.WriteLine("FFmpeg 原生库加载失败。排查方向：");
+            Console.WriteLine("FFmpeg 原生库加载失败。可能原因：");
             Console.WriteLine("  1) 目标机是否安装 Microsoft Visual C++ 2015-2022 Redistributable (x64)（vcruntime140.dll 等）；");
             Console.WriteLine("  2) ThirdParty/ffmpeg 共享 DLL 版本是否在 4.x–9.0 范围（avutil 56–61，本构建为 7.x/8.0 系列）；");
             Console.WriteLine("  3) FFmpegOptions.FFmpegLibraryPath 是否指向含上述 DLL 的目录。");

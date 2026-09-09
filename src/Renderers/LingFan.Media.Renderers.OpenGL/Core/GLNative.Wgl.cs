@@ -54,7 +54,7 @@ internal static unsafe partial class GLNative
     [LibraryImport("user32", EntryPoint = "ReleaseDC")]
     public static partial int ReleaseDC(nint hWnd, nint hDC);
 
-    // ── 离屏设备上下文（隐藏窗口）所需 user32 P/Invoke（AOT 合规：[LibraryImport] + EntryPoint="XxxW" + Utf16）──
+    // 离屏设备上下文（隐藏窗口）所需 user32 P/Invoke（AOT 合规：[LibraryImport] + EntryPoint="XxxW" + Utf16）
     // 模式移植自 OpenGLHeadfulPlaybackProbe（已验证）：WNDCLASSEXW 的 lpfnWndProc 以函数指针传入、字符串成员以 IntPtr 传入。
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct WNDCLASSEXW

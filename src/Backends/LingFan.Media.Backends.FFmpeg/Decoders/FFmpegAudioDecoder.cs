@@ -330,7 +330,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         return ValueTask.CompletedTask;
     }
 
-    // ── 辅助方法 ──
+    // 辅助方法
 
     /// <summary>从 AVFrame 创建 AudioFrame。</summary>
     /// <remarks>
@@ -433,7 +433,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         return frame;
     }
 
-    // ── 重采样 ──
+    // 重采样
 
     /// <summary>将已解码的源格式 AVFrame 重采样为目标格式（如需要）。</summary>
     /// <remarks>纯原生同步操作（swr_convert_frame），不引入异步。</remarks>

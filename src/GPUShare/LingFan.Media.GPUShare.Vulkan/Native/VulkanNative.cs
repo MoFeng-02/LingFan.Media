@@ -8,7 +8,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// 零反射 Vulkan 原生绑定层（替代 Silk.NET 的 <c>Vk</c> / <c>Khr*</c> 包装与 <c>SilkMarshal</c> 调用）。
 /// </summary>
 /// <remarks>
-/// <para><b>设计目标</b>：彻底消除 Silk.NET 绑定层的反射——不调用 <c>SilkMarshal.DelegateToPtr</c>（IL3050 根因）、
+/// <para><b>设计目标</b>：彻底消除 Silk.NET 绑定层的反射——不调用 <c>SilkMarshal.DelegateToPtr</c>（IL3050 的来源）、
 /// 不调用 <c>Silk.NET.Core.Loader</c>（IL3000/IL3002）、不使用 SharpGen 运行时 vtable 包装（IL2067/IL2072）。
 /// NativeAOT 下零 IL2xxx。</para>
 /// <para><b>机制</b>：仅两处顶层 <c>[LibraryImport("vulkan-1")]</c> 取得引导符号
@@ -31,7 +31,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// </remarks>
 public static unsafe partial class VulkanNative
 {
-    // ── 平台库名重定向：macOS/iOS（MoltenVK）上 Vulkan loader 原生库名非 vulkan-1 ──
+    // 平台库名重定向：macOS/iOS（MoltenVK）上 Vulkan loader 原生库名非 vulkan-1
     static VulkanNative()
     {
         NativeLibrary.SetDllImportResolver(typeof(VulkanNative).Assembly, ResolveVulkanLoader);
@@ -88,7 +88,7 @@ public static unsafe partial class VulkanNative
         return nint.Zero;
     }
 
-    // ── 引导符号：仅此两处顶层 P/Invoke（vkGetInstanceProcAddr / vkGetDeviceProcAddr）──
+    // 引导符号：仅此两处顶层 P/Invoke（vkGetInstanceProcAddr / vkGetDeviceProcAddr）
     // 其余函数指针全部经这两个引导符号，分别用「实例句柄」/「设备句柄」解析。
     [LibraryImport("vulkan-1", EntryPoint = "vkGetInstanceProcAddr", StringMarshalling = StringMarshalling.Utf8)]
     private static partial nint vkGetInstanceProcAddrRaw(nint instance, string name);
@@ -156,7 +156,7 @@ public static unsafe partial class VulkanNative
         ["vkGetDeviceImageSparseMemoryRequirements"] = "vkGetDeviceImageSparseMemoryRequirementsKHR",
     };
 
-    // ── 派发自适配（参照 FFmpeg 自绑定范式：候选探测→策略切换→绑定记录→幂等加锁）──
+    // 派发自适配（参照 FFmpeg 自绑定范式：候选探测→策略切换→绑定记录→幂等加锁）
     // 解析结果按（句柄, 函数名）记忆化；首次发现核心名提升函数被 loader/驱动拒绝而别名可解析时，
     // 切换为「别名优先」策略并记录绑定决策（此后跳过注定失败的核心名查询，一并消除 loader 的
     // invalid call 日志噪音）。
@@ -351,29 +351,29 @@ public static unsafe partial class VulkanNative
             _getPhysicalDeviceMemoryProperties = (delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceMemoryProperties*, void>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceMemoryProperties");
             _getPhysicalDeviceQueueFamilyProperties = (delegate* unmanaged[Stdcall]<PhysicalDevice, uint*, QueueFamilyProperties*, void>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceQueueFamilyProperties");
             _createDevice = (delegate* unmanaged[Stdcall]<PhysicalDevice, DeviceCreateInfo*, AllocationCallbacks*, Device*, Result>)vkGetInstanceProcAddr(h, "vkCreateDevice");
-            // ── KHR WSI 实例扩展（须实例已启用对应扩展）──
+            // KHR WSI 实例扩展（须实例已启用对应扩展）
             _createWin32SurfaceKHR = (delegate* unmanaged[Stdcall]<Instance, Win32SurfaceCreateInfoKHR*, AllocationCallbacks*, SurfaceKHR*, Result>)vkGetInstanceProcAddr(h, "vkCreateWin32SurfaceKHR");
             _createAndroidSurfaceKHR = (delegate* unmanaged[Stdcall]<Instance, AndroidSurfaceCreateInfoKHR*, AllocationCallbacks*, SurfaceKHR*, Result>)vkGetInstanceProcAddr(h, "vkCreateAndroidSurfaceKHR");
-            // ── VK_EXT_metal_surface（Apple / MoltenVK；Silk.NET 静态包装不含 vkCreateMetalSurfaceEXT，须运行时经 vkGetInstanceProcAddr 解析）──
+            // VK_EXT_metal_surface（Apple / MoltenVK；Silk.NET 静态包装不含 vkCreateMetalSurfaceEXT，须运行时经 vkGetInstanceProcAddr 解析）
             _createMetalSurfaceEXT = (delegate* unmanaged[Stdcall]<Instance, MetalSurfaceCreateInfoEXT*, AllocationCallbacks*, SurfaceKHR*, Result>)vkGetInstanceProcAddr(h, "vkCreateMetalSurfaceEXT");
-            // ── KHR WSI Linux 扩展（X11 / Wayland；须实例已启用对应扩展，未启用则为 null，调用方自检）──
+            // KHR WSI Linux 扩展（X11 / Wayland；须实例已启用对应扩展，未启用则为 null，调用方自检）
             _createXlibSurfaceKHR = (delegate* unmanaged[Stdcall]<Instance, XlibSurfaceCreateInfoKHR*, AllocationCallbacks*, SurfaceKHR*, Result>)vkGetInstanceProcAddr(h, "vkCreateXlibSurfaceKHR");
             _createWaylandSurfaceKHR = (delegate* unmanaged[Stdcall]<Instance, WaylandSurfaceCreateInfoKHR*, AllocationCallbacks*, SurfaceKHR*, Result>)vkGetInstanceProcAddr(h, "vkCreateWaylandSurfaceKHR");
             _destroySurfaceKHR = (delegate* unmanaged[Stdcall]<Instance, SurfaceKHR, AllocationCallbacks*, void>)vkGetInstanceProcAddr(h, "vkDestroySurfaceKHR");
             _getPhysicalDeviceSurfaceCapabilitiesKHR = (delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, SurfaceCapabilitiesKHR*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
             _getPhysicalDeviceSurfaceFormatsKHR = (delegate* unmanaged[Stdcall]<PhysicalDevice, SurfaceKHR, uint*, SurfaceFormatKHR*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceSurfaceFormatsKHR");
-            // ── 设备能力查询（UUID/LUID 对齐、设备扩展枚举）──
+            // 设备能力查询（UUID/LUID 对齐、设备扩展枚举）
             _getPhysicalDeviceProperties2 = (delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceProperties2*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceProperties2");
             // 实例级设备特性查询（Vulkan 1.1 core；首参 VkPhysicalDevice 须 vkGetInstanceProcAddr 解析）：
             // Android AHB 零拷贝须先经它查询 samplerYcbcrConversion 特性，仅在支持时才于设备创建处链入特性结构。
             _getPhysicalDeviceFeatures2 = (delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceFeatures2*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceFeatures2");
             _enumerateDeviceExtensionProperties = (delegate* unmanaged[Stdcall]<PhysicalDevice, byte*, uint*, ExtensionProperties*, Result>)vkGetInstanceProcAddr(h, "vkEnumerateDeviceExtensionProperties");
-            // ── 物理设备级视频能力查询（VK_KHR_video_queue 实例扩展函数，须经 vkGetInstanceProcAddr）──
+            // 物理设备级视频能力查询（VK_KHR_video_queue 实例扩展函数，须经 vkGetInstanceProcAddr）
             // 注意：vkGetPhysicalDeviceVideoCapabilitiesKHR 首参为 VkPhysicalDevice，属实例级函数；
             // 经 vkGetDeviceProcAddr 解析必返回 NULL（设备派发表不含物理设备级函数），此坑曾导致硬解初始化崩溃。
             _getPhysicalDeviceVideoCapabilitiesKHR = (delegate* unmanaged[Stdcall]<PhysicalDevice, VideoProfileInfoKHR*, VideoCapabilitiesKHR*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceVideoCapabilitiesKHR");
             // 实例级视频格式属性查询（VK_KHR_video_queue）：首参 VkPhysicalDevice，须 vkGetInstanceProcAddr 解析。
-            // 解码 DPB / 码流图带 VIDEO_DECODE_* usage 时，其 usage/flags 必须经本查询取返回值（VUID-06811 铁律），
+            // 解码 DPB / 码流图带 VIDEO_DECODE_* usage 时，其 usage/flags 必须经本查询取返回值（VUID-06811 规范要求），
             // 硬编码组合会被判"profile 无关"→ 解码静默 no-op → 全零 DPB 绿屏。
             _getPhysicalDeviceVideoFormatPropertiesKHR = (delegate* unmanaged[Stdcall]<PhysicalDevice, PhysicalDeviceVideoFormatInfoKHR*, uint*, VideoFormatPropertiesKHR*, Result>)vkGetInstanceProcAddr(h, "vkGetPhysicalDeviceVideoFormatPropertiesKHR");
             AssertInstance();
@@ -407,7 +407,7 @@ public static unsafe partial class VulkanNative
             _queueWaitIdle = (delegate* unmanaged[Stdcall]<Queue, Result>)vkGetDeviceProcAddr(h, "vkQueueWaitIdle");
             _createSemaphore = (delegate* unmanaged[Stdcall]<Device, SemaphoreCreateInfo*, AllocationCallbacks*, Semaphore*, Result>)vkGetDeviceProcAddr(h, "vkCreateSemaphore");
             _destroySemaphore = (delegate* unmanaged[Stdcall]<Device, Semaphore, AllocationCallbacks*, void>)vkGetDeviceProcAddr(h, "vkDestroySemaphore");
-            // ── Fence（no-airspace 共享表面源的有限超时 ping-pong，与 D3D11 的 16ms keyed mutex 超时对称）──
+            // Fence（no-airspace 共享表面源的有限超时 ping-pong，与 D3D11 的 16ms keyed mutex 超时对称）
             _createFence = (delegate* unmanaged[Stdcall]<Device, FenceCreateInfo*, AllocationCallbacks*, Fence*, Result>)vkGetDeviceProcAddr(h, "vkCreateFence");
             _destroyFence = (delegate* unmanaged[Stdcall]<Device, Fence, AllocationCallbacks*, void>)vkGetDeviceProcAddr(h, "vkDestroyFence");
             _waitForFences = (delegate* unmanaged[Stdcall]<Device, uint, Fence*, uint, ulong, Result>)vkGetDeviceProcAddr(h, "vkWaitForFences");
@@ -462,21 +462,21 @@ public static unsafe partial class VulkanNative
             _cmdCopyImage = (delegate* unmanaged[Stdcall]<CommandBuffer, Image, ImageLayout, Image, ImageLayout, uint, ImageCopy*, void>)vkGetDeviceProcAddr(h, "vkCmdCopyImage");
             _cmdBlitImage = (delegate* unmanaged[Stdcall]<CommandBuffer, Image, ImageLayout, Image, ImageLayout, uint, ImageBlit*, Filter, void>)vkGetDeviceProcAddr(h, "vkCmdBlitImage");
             _cmdClearColorImage = (delegate* unmanaged[Stdcall]<CommandBuffer, Image, ImageLayout, ClearColorValue*, uint, ImageSubresourceRange*, void>)vkGetDeviceProcAddr(h, "vkCmdClearColorImage");
-            // ── KHR swapchain 设备扩展（须设备已启用 VK_KHR_swapchain）──
+            // KHR swapchain 设备扩展（须设备已启用 VK_KHR_swapchain）
             _createSwapchainKHR = (delegate* unmanaged[Stdcall]<Device, SwapchainCreateInfoKHR*, AllocationCallbacks*, SwapchainKHR*, Result>)vkGetDeviceProcAddr(h, "vkCreateSwapchainKHR");
             _destroySwapchainKHR = (delegate* unmanaged[Stdcall]<Device, SwapchainKHR, AllocationCallbacks*, void>)vkGetDeviceProcAddr(h, "vkDestroySwapchainKHR");
             _getSwapchainImagesKHR = (delegate* unmanaged[Stdcall]<Device, SwapchainKHR, uint*, Image*, Result>)vkGetDeviceProcAddr(h, "vkGetSwapchainImagesKHR");
             _acquireNextImageKHR = (delegate* unmanaged[Stdcall]<Device, SwapchainKHR, ulong, Semaphore, Fence, uint*, Result>)vkGetDeviceProcAddr(h, "vkAcquireNextImageKHR");
             _queuePresentKHR = (delegate* unmanaged[Stdcall]<Queue, PresentInfoKHR*, Result>)vkGetDeviceProcAddr(h, "vkQueuePresentKHR");
-            // ── 外部内存/信号量导出（仅 no-airspace 共享表面源使用；未启用对应扩展时为 null，调用方自检）──
+            // 外部内存/信号量导出（仅 no-airspace 共享表面源使用；未启用对应扩展时为 null，调用方自检）
             _getMemoryWin32HandleKHR = (delegate* unmanaged[Stdcall]<Device, MemoryGetWin32HandleInfoKHR*, void*, Result>)vkGetDeviceProcAddr(h, "vkGetMemoryWin32HandleKHR");
             _getMemoryFdKHR = (delegate* unmanaged[Stdcall]<Device, MemoryGetFdInfoKHR*, int*, Result>)vkGetDeviceProcAddr(h, "vkGetMemoryFdKHR");
             _getMemoryFdPropertiesKHR = (delegate* unmanaged[Stdcall]<Device, ExternalMemoryHandleTypeFlags, int, MemoryFdPropertiesKHR*, Result>)vkGetDeviceProcAddr(h, "vkGetMemoryFdPropertiesKHR");
             _getSemaphoreWin32HandleKHR = (delegate* unmanaged[Stdcall]<Device, SemaphoreGetWin32HandleInfoKHR*, void*, Result>)vkGetDeviceProcAddr(h, "vkGetSemaphoreWin32HandleKHR");
             _getSemaphoreFdKHR = (delegate* unmanaged[Stdcall]<Device, SemaphoreGetFdInfoKHR*, int*, Result>)vkGetDeviceProcAddr(h, "vkGetSemaphoreFdKHR");
-            // ── VK_EXT_metal_objects（仅 Apple / MoltenVK；非 Apple 平台为 null，调用方自检）──
+            // VK_EXT_metal_objects（仅 Apple / MoltenVK；非 Apple 平台为 null，调用方自检）
             _exportMetalObjectsEXT = (delegate* unmanaged[Stdcall]<Device, ExportMetalObjectsInfoEXT*, void>)vkGetDeviceProcAddr(h, "vkExportMetalObjectsEXT");
-            // ── VK_ANDROID_external_memory_android_hardware_buffer + VK_KHR_sampler_ycbcr_conversion ──
+            // VK_ANDROID_external_memory_android_hardware_buffer + VK_KHR_sampler_ycbcr_conversion
             // Android AHB 零拷贝导入（MediaCodec 硬解帧 → Vulkan）。非 Android / 未启用扩展时为 null，调用方自检（TryImport 返回 false 回落软解）。
             // vkCreateSamplerYcbcrConversion 为 Vulkan 1.1 core（无后缀）；仅带 KHR 扩展的 1.0 设备上为 KHR 后缀——两个名字都尝试。
             _getAndroidHardwareBufferPropertiesANDROID = (delegate* unmanaged[Stdcall]<Device, nint, AndroidHardwareBufferPropertiesANDROID*, Result>)vkGetDeviceProcAddr(h, "vkGetAndroidHardwareBufferPropertiesANDROID");
@@ -563,7 +563,7 @@ public static unsafe partial class VulkanNative
         Check("vkCmdDraw", (nint)_cmdDraw);
     }
 
-    // ── 函数指针字段 ──
+    // 函数指针字段
     private static unsafe delegate* unmanaged[Stdcall]<InstanceCreateInfo*, AllocationCallbacks*, Instance*, Result> _createInstance;
     private static unsafe delegate* unmanaged[Stdcall]<Instance, AllocationCallbacks*, void> _destroyInstance;
     private static unsafe delegate* unmanaged[Stdcall]<Instance, uint*, PhysicalDevice*, Result> _enumeratePhysicalDevices;
@@ -668,7 +668,7 @@ public static unsafe partial class VulkanNative
     private static unsafe delegate* unmanaged[Stdcall]<Device, SamplerYcbcrConversionCreateInfo*, AllocationCallbacks*, SamplerYcbcrConversion*, Result> _createSamplerYcbcrConversion;
     private static unsafe delegate* unmanaged[Stdcall]<Device, SamplerYcbcrConversion, AllocationCallbacks*, void> _destroySamplerYcbcrConversion;
 
-    // ── 包装方法（签名对齐 Silk.NET Vk / Khr*，调用点仅改名）──
+    // 包装方法（签名对齐 Silk.NET Vk / Khr*，调用点仅改名）
 
     public static unsafe Result CreateInstance(ref InstanceCreateInfo pCreateInfo, AllocationCallbacks* pAllocator, out Instance pInstance)
     {
@@ -882,14 +882,14 @@ public static unsafe partial class VulkanNative
         _exportMetalObjectsEXT(device, pMetalObjectsInfo);
     }
 
-    // ── Android AHB 零拷贝导入（VK_ANDROID_external_memory_android_hardware_buffer + sampler YCbCr 转换）──
+    // Android AHB 零拷贝导入（VK_ANDROID_external_memory_android_hardware_buffer + sampler YCbCr 转换）
 
     /// <summary>是否已解析 <c>vkGetAndroidHardwareBufferPropertiesANDROID</c>（Android 且设备已启用 AHB 扩展时为真）。</summary>
     public static bool HasAndroidHardwareBufferProperties => _getAndroidHardwareBufferPropertiesANDROID != null;
 
     // samplerYcbcrConversion 特性是否在设备创建期启用（由渲染器工厂探测后经 InitDevice 传入）。
     // 【关键】函数指针可解析 ≠ 特性已启用：vkCreateSamplerYcbcrConversion 经核心名或 KHR 别名可解析（1.1 core），
-    // 但特性未启用时使用 YCbCr 采样器属规范违规 —— 驱动 UB 实测表现为 SIGBUS BUS_ADRALN（iQOO10/Adreno730）。
+    // 但特性未启用时使用 YCbCr 采样器属规范违规 —— 驱动未定义行为可致进程级原生崩溃（对齐错误）。
     private static bool _samplerYcbcrFeatureEnabled;
 
     /// <summary>samplerYcbcrConversion 是否可用：函数已解析<b>且</b>特性已在设备创建期启用（双判据）。</summary>
@@ -1111,7 +1111,7 @@ public static unsafe partial class VulkanNative
     public static unsafe void CmdClearColorImage(CommandBuffer commandBuffer, Image image, ImageLayout imageLayout, ClearColorValue* pColor, uint rangeCount, ImageSubresourceRange* pRanges)
         => _cmdClearColorImage(commandBuffer, image, imageLayout, pColor, rangeCount, pRanges);
 
-    // ── KHR WSI 扩展（数组重载以对齐 Silk.NET Khr* 调用点）──
+    // KHR WSI 扩展（数组重载以对齐 Silk.NET Khr* 调用点）
 
     public static unsafe Result CreateWin32SurfaceKHR(Instance instance, ref Win32SurfaceCreateInfoKHR pCreateInfo, AllocationCallbacks* pAllocator, out SurfaceKHR pSurface)
     {
@@ -1135,8 +1135,8 @@ public static unsafe partial class VulkanNative
         }
     }
 
-    // ── VK_EXT_metal_surface（Apple / MoltenVK）：Silk.NET 静态包装不含 vkCreateMetalSurfaceEXT，
-    //    经 vkGetInstanceProcAddr 运行时解析（见 InitInstance）。PLayer 指向宿主提供的 CAMetalLayer*。 ──
+    // VK_EXT_metal_surface（Apple / MoltenVK）：Silk.NET 静态包装不含 vkCreateMetalSurfaceEXT，
+    //    经 vkGetInstanceProcAddr 运行时解析（见 InitInstance）。PLayer 指向宿主提供的 CAMetalLayer*。
     public static unsafe Result CreateMetalSurfaceEXT(Instance instance, ref MetalSurfaceCreateInfoEXT pCreateInfo, AllocationCallbacks* pAllocator, out SurfaceKHR pSurface)
     {
         if (_createMetalSurfaceEXT == null)
@@ -1150,7 +1150,7 @@ public static unsafe partial class VulkanNative
         }
     }
 
-    // ── KHR WSI Linux 扩展（X11 / Wayland）──
+    // KHR WSI Linux 扩展（X11 / Wayland）
 
     public static unsafe Result CreateXlibSurfaceKHR(Instance instance, ref XlibSurfaceCreateInfoKHR pCreateInfo, AllocationCallbacks* pAllocator, out SurfaceKHR pSurface)
     {
@@ -1239,7 +1239,7 @@ public static unsafe partial class VulkanNative
             return _queuePresentKHR(queue, p);
     }
 
-    // ── 物理设备能力查询（UUID/LUID 对齐、设备扩展枚举）──
+    // 物理设备能力查询（UUID/LUID 对齐、设备扩展枚举）
 
     public static unsafe Result GetPhysicalDeviceProperties2(PhysicalDevice physicalDevice, PhysicalDeviceProperties2* pProperties2)
     {
@@ -1256,7 +1256,7 @@ public static unsafe partial class VulkanNative
             return _enumerateDeviceExtensionProperties(physicalDevice, pLayerName, p, pProperties);
     }
 
-    // ── 外部内存/信号量导出（no-airspace 共享表面源）──
+    // 外部内存/信号量导出（no-airspace 共享表面源）
 
     /// <summary>把 VkDeviceMemory 导出为 Windows HANDLE（外部内存 NT 句柄）。</summary>
     public static unsafe Result GetMemoryWin32HandleKHR(Device device, MemoryGetWin32HandleInfoKHR* pInfo, out nint handle)
@@ -1311,7 +1311,7 @@ public static unsafe partial class VulkanNative
         return r;
     }
 
-    // ── UTF-8 字符串 / 字符串数组 marshalling（替代 SilkMarshal.StringToPtr / StringArrayToPtr / Free）──
+    // UTF-8 字符串 / 字符串数组 marshalling（替代 SilkMarshal.StringToPtr / StringArrayToPtr / Free）
 
     /// <summary>把单个字符串编码为 NUL 终止的 UTF-8 字节序列，返回指针（调用方须用 <see cref="FreeStringPtr"/> 释放）。</summary>
     public static unsafe byte* StringToPtr(string s)

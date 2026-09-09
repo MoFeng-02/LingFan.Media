@@ -58,7 +58,7 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         return ps;
     }
 
-    // ── SPS 解析 ──
+    // SPS 解析
 
     private void ParseSps(ReadOnlySpan<byte> rbsp)
     {
@@ -80,13 +80,13 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         Sps.Flags.ConstraintSet5Flag = (uint)((constraintByte >> 2) & 1);
         Sps.SeqParameterSetId = (byte)spsId;
 
-        // 规范铁律（H.264 Annex A SPS RBSP 语法）：
+        // 规范要求（H.264 Annex A SPS RBSP 语法）：
         // chroma_format_idc / bit_depth_luma_minus8 / bit_depth_chroma_minus8 /
         // qpprime_y_zero_transform_bypass_flag / seq_scaling_matrix_present_flag 仅当 profile 属
         // 「high」档族（上列 profile_idc）时才出现在比特流；Baseline(66)/Main(77)/Extended(88) 等档位
         // 无这些字段，chroma 隐式 4:2:0（=1）。
         // 此前这些字段被无条件 ReadUe、且漏读 qpprime/seq_scaling 两比特 → 非 high 档整体偏移 2 个 ue(v)、
-        // high 档偏移 2 比特 → SPS 全乱 → 解码器无法解切片 → 静默吐全零 DPB（绿屏真因）。
+        // high 档偏移 2 比特 → SPS 全乱 → 解码器无法解切片 → 静默吐全零 DPB（绿屏成因）。
         bool highProfile = profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 244
                           || profileIdc == 44 || profileIdc == 83 || profileIdc == 86 || profileIdc == 118
                           || profileIdc == 128 || profileIdc == 138 || profileIdc == 139 || profileIdc == 134 || profileIdc == 135;
@@ -217,7 +217,7 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         }
     }
 
-    // ── PPS 解析 ──
+    // PPS 解析
 
     private void ParsePps(ReadOnlySpan<byte> rbsp)
     {
@@ -272,7 +272,7 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         }
     }
 
-    // ── scaling lists（SPS 与 PPS 共用） ──
+    // scaling lists（SPS 与 PPS 共用）
 
     /// <summary>
     /// 解析 seq/pic scaling lists，写入新建的 <see cref="StdVideoH264ScalingLists"/> 原生缓冲。
@@ -319,7 +319,7 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         pDst = sl;
     }
 
-    // ── 辅助：level_idc 映射 ──
+    // 辅助：level_idc 映射
 
     private static StdVideoH264LevelIdc MapLevel(byte levelIdc)
     {

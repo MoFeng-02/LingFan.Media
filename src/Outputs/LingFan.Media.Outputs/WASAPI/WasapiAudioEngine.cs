@@ -10,8 +10,8 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// </summary>
 /// <remarks>
 /// <para><b>解决的问题</b>：进程内首个 <c>IAudioClient.Initialize</c> 需付出一次性冷启动开销（约数秒，
-/// audiodg 冷启动，与共享/独占/事件驱动/轮询模式全部无关）。此前的 throwaway 预热
-/// （建一个临时客户端 → Initialize → Dispose）已被数据证伪：Dispose 后设备回冷，
+/// audiodg 冷启动，与共享/独占/事件驱动/轮询模式全部无关）。throwaway 预热
+/// （建一个临时客户端 → Initialize → Dispose）无效：Dispose 后设备回冷，
 /// 正式播放的客户端照样再付一次冷启动。<b>唯一有效的形态是让一个客户端持续存活</b>，
 /// 这正是本类的职责。</para>
 /// <para><b>分层依据（DI 设计原则）</b>：长期原生资源 → Infrastructure Singleton；Session 状态 → Transient。

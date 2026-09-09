@@ -64,7 +64,7 @@ public static class ServiceCollectionExtensions
         var options = new MediaOptions();
         configure?.Invoke(options);
 
-        // ── Infrastructure Lifetime（Singleton：无状态工厂 / 共享资源）──
+        // Infrastructure Lifetime（Singleton：无状态工厂 / 共享资源）
 
         // IHttpClientFactory：供 MediaStreamFactory 网络流连接池管理（防套接字耗尽）
         services.AddHttpClient();
@@ -118,7 +118,7 @@ public static class ServiceCollectionExtensions
         // IGpuDeviceContext 的注册位于 Renderers.D3D11 的 AddD3D11Renderer
         // （具体工厂依赖 Vortice，Extensions 层不引用渲染器模块，严守分层）。
 
-        // ── 配置 ──
+        // 配置
 
         // 注册 IOptions 服务（AddOptions 来自 Microsoft.Extensions.Options）
         services.AddOptions();
@@ -130,7 +130,7 @@ public static class ServiceCollectionExtensions
         // 此前 MediaPlayerOptions 仅在 Core 定义且从未注册，导致工厂始终走默认 1.0 —— 此处闭合该缺口。
         services.Configure<MediaPlayerOptions>(o => o.DefaultVolume = options.DefaultVolume);
 
-        // ── Session Lifetime（Transient：仅注册 IMediaPlayer，内部组件由 Factory 手动 new）──
+        // Session Lifetime（Transient：仅注册 IMediaPlayer，内部组件由 Factory 手动 new）
         services.AddTransient<IMediaPlayer>(sp =>
         {
             var factory = sp.GetRequiredService<IMediaPlayerFactory>();

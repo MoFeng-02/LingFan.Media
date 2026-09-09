@@ -82,7 +82,7 @@ internal sealed class SingleThreadTaskScheduler : TaskScheduler, IDisposable
             // 其最终 Release 必须先于此处执行**——否则那次 Release 会跳进已卸载/已失效的 vtable，
             // 造成原生访问违例，CLR 报 `Fatal error. Internal CLR error.`（原生堆损坏，确定性，非 flaky）。
             // 调用方通过 TryRunOnSchedulerThread(Async) 把 Marshal.Release 投递回本线程完成，
-            // 之后才允许发起 Shutdown 让本线程退出（见 MFDemuxer 两阶段关闭协议步骤③）。
+            // 之后才允许发起 Shutdown 让本线程退出（见 MFDemuxer 两阶段关闭协议步骤(3)）。
             if (coInitialized)
                 MFInterop.CoUninitialize();
 

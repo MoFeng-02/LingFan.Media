@@ -20,8 +20,8 @@
 	<!-- Vortice.Direct3D11 (= SharpGen.Runtime) 经反射构建 COM vtable，NativeAOT 下 trim 标注不完整会触发
 	     IL2067/IL2072（被 Directory.Build.props 的 TreatWarningsAsErrors 提升为 error）。该库本身 AOT 运行时兼容，
 	     属第三方标注缺陷，非本库问题。做法（Vortice + NativeAOT 已知配方）：
-	     ① 根留 SharpGen.Runtime / Vortice.*，防运行时反射读取 vtable 成员被裁掉（否则 MissingMethodException）；
-	     ② 抑制该第三方库的 trim 分析告警。本库自有 COM 互操作走手搓 vtable P/Invoke 且标注合规，不会触发 IL2xxx。 -->
+	     (1) 根留 SharpGen.Runtime / Vortice.*，防运行时反射读取 vtable 成员被裁掉（否则 MissingMethodException）；
+	     (2) 抑制该第三方库的 trim 分析告警。本库自有 COM 互操作走手搓 vtable P/Invoke 且标注合规，不会触发 IL2xxx。 -->
 	<ItemGroup>
 		<TrimmerRootAssembly Include="SharpGen.Runtime" />
 		<TrimmerRootAssembly Include="Vortice.Direct3D11" />

@@ -19,7 +19,7 @@ namespace LingFan.Media.Formats.Detection;
 /// </remarks>
 internal static class FormatSignature
 {
-    // ── MP4 ──
+    // MP4
 
     /// <summary>MP4 ftyp 盒子标识。</summary>
     private static readonly byte[] s_mp4Signature = "ftyp"u8.ToArray();
@@ -30,7 +30,7 @@ internal static class FormatSignature
     /// <summary>MP4 签名。</summary>
     internal static ReadOnlySpan<byte> Mp4Signature => s_mp4Signature;
 
-    // ── MKV / WebM（EBML）──
+    // MKV / WebM（EBML）
 
     /// <summary>EBML magic number（MKV 和 WebM 共享）。</summary>
     private static readonly byte[] s_ebmlSignature = [0x1A, 0x45, 0xDF, 0xA3];
@@ -41,7 +41,7 @@ internal static class FormatSignature
     /// <summary>EBML 签名。</summary>
     internal static ReadOnlySpan<byte> EbmlSignature => s_ebmlSignature;
 
-    // ── AVI ──
+    // AVI
 
     /// <summary>AVI RIFF 标识。</summary>
     private static readonly byte[] s_aviRiffSignature = "RIFF"u8.ToArray();
@@ -61,7 +61,7 @@ internal static class FormatSignature
     /// <summary>AVI 类型签名。</summary>
     internal static ReadOnlySpan<byte> AviTypeSignature => s_aviTypeSignature;
 
-    // ── MPEG-TS ──
+    // MPEG-TS
 
     /// <summary>MPEG-TS 同步字节。</summary>
     internal const byte TsSyncByte = 0x47;
@@ -69,7 +69,7 @@ internal static class FormatSignature
     /// <summary>MPEG-TS 包大小（188 字节）。</summary>
     internal const int TsPacketSize = 188;
 
-    // ── FLV ──
+    // FLV
 
     /// <summary>FLV 签名。</summary>
     private static readonly byte[] s_flvSignature = "FLV"u8.ToArray();
@@ -80,7 +80,7 @@ internal static class FormatSignature
     /// <summary>FLV 签名。</summary>
     internal static ReadOnlySpan<byte> FlvSignature => s_flvSignature;
 
-    // ── EBML DocType（区分 WebM 和 MKV）──
+    // EBML DocType（区分 WebM 和 MKV）
 
     /// <summary>EBML DocType 元素 ID（0x4282）。</summary>
     private static readonly byte[] s_docTypeElementId = [0x42, 0x82];

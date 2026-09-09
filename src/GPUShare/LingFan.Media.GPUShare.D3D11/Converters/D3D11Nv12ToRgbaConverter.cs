@@ -164,15 +164,15 @@ public sealed class D3D11Nv12ToRgbaConverter : IDisposable
                 $"创建视频处理器失败（遍历 RateConversionCapsCount={caps.RateConversionCapsCount} 全部失败）");
 
         // Blt 前置必需状态（所有参考实现 VLC/Chromium/MF 均在 Blt 前设置；缺失会使部分驱动在 Blt 报 E_INVALIDARG）：
-        // ① 流 0 帧格式 = 逐行扫描。
+        // (1) 流 0 帧格式 = 逐行扫描。
         D3D11Interop.VideoProcessorSetStreamFrameFormat(_videoContextPtr, _processorPtr, 0, 0); // D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE
-        // ② 输入流颜色空间：BT.709 + 演播室范围 16-235（NV12 YUV 视频标准）。
+        // (2) 输入流颜色空间：BT.709 + 演播室范围 16-235（NV12 YUV 视频标准）。
         D3D11Interop.VideoProcessorSetStreamColorSpace(_videoContextPtr, _processorPtr, 0,
             new D3D11VideoProcessorColorSpace { Value = 0x0C }); // Matrix=1(BT.709) | Nominal=1(16-235)
-        // ③ 输出颜色空间：全范围 RGB（BGRA 渲染目标）。
+        // (3) 输出颜色空间：全范围 RGB（BGRA 渲染目标）。
         D3D11Interop.VideoProcessorSetOutputColorSpace(_videoContextPtr, _processorPtr,
             new D3D11VideoProcessorColorSpace { Value = 0x10 }); // Nominal=2(0-255)
-        // ④ 源矩形 = 左上角帧尺寸区域：裁掉宏块对齐填充（如纹理 1088 宽、视频 1080 宽，
+        // (4) 源矩形 = 左上角帧尺寸区域：裁掉宏块对齐填充（如纹理 1088 宽、视频 1080 宽，
         //    右侧 8 列是垃圾填充，不裁会被缩进画面）。纹理无填充时矩形=整张纹理，等效默认值。
         D3D11Interop.VideoProcessorSetStreamSourceRect(_videoContextPtr, _processorPtr, 0, 1,
             new D3D11Rect { Left = 0, Top = 0, Right = frameWidth, Bottom = frameHeight });

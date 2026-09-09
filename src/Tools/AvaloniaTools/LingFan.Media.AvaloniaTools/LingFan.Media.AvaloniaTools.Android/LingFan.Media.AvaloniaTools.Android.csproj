@@ -16,12 +16,12 @@
 	</PropertyGroup>
 	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
 		<!-- ============================================================
-	       Release 启用完整 AOT（2026-08-29）
+	       Release 启用完整 AOT
 	       （注意：XML 注释内禁止出现连续双连字符，分隔线一律用 = 号）
-	       背景：此前 Release 未启用任何 AOT，运行期仍走 **Mono JIT**，
+	       背景：Release 未启用 AOT 时运行期走 **Mono JIT**，
 	       起播后需逐方法编译热代码（YUV→BGRA 转换、Image 平面提取），
-	       实测出现 7 秒帧率爬坡（18.5→22→26→30fps）；
-	       爬坡期解码产出跟不上视频帧率，帧 PTS 相对主音频时钟每秒落后约 370ms，
+	       实测出现数秒的帧率爬坡；
+	       爬坡期解码产出跟不上视频帧率，帧 PTS 相对主音频时钟持续落后，
 	       越过 MediaClock.DropThreshold(200ms) 后持续丢帧
 	       ——表现为「起播十余秒画面花/跳，之后才正常」。
 

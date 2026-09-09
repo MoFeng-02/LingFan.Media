@@ -19,7 +19,7 @@ namespace LingFan.Media.Platforms.Linux;
 /// </remarks>
 public sealed unsafe partial class EglInterop
 {
-    // ── EGL 常量（EGL/eglext.h：EGL_EXT_image_dma_buf_import）──
+    // EGL 常量（EGL/eglext.h：EGL_EXT_image_dma_buf_import）
     private const int EGL_NONE = 0x3038;
     private const int EGL_WIDTH = 0x3057;
     private const int EGL_HEIGHT = 0x3056;
@@ -32,10 +32,10 @@ public sealed unsafe partial class EglInterop
     /// <summary>DRM_FORMAT_ARGB8888（'AR24' little-endian fourcc）——BGRA 内存序，与解码器 BGRA32 输出对应。</summary>
     private const int DrmFormatArgb8888 = 0x34325241;
 
-    // ── GL 常量 ──
+    // GL 常量
     private const int GL_TEXTURE_2D = 0x0DE1;
 
-    // ── 扩展函数指针缓存（eglGetProcAddress 首次解析后缓存；EGL 规范保证进程内地址稳定）──
+    // 扩展函数指针缓存（eglGetProcAddress 首次解析后缓存；EGL 规范保证进程内地址稳定）
     private static delegate* unmanaged[Cdecl]<nint, nint, int, nint, int*, nint> _eglCreateImageKHR;
     private static delegate* unmanaged[Cdecl]<nint, nint, uint> _eglDestroyImageKHR;
     private static delegate* unmanaged[Cdecl]<int, nint, void> _glEGLImageTargetTexture2DOES;
@@ -136,7 +136,7 @@ public sealed unsafe partial class EglInterop
         _ = destroy(display, eglImage);
     }
 
-    // ── 扩展入口解析（首次调用缓存；同步原生调用）──
+    // 扩展入口解析（首次调用缓存；同步原生调用）
 
     private static delegate* unmanaged[Cdecl]<nint, nint, int, nint, int*, nint> GetEglCreateImage()
     {

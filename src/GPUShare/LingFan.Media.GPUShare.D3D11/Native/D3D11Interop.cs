@@ -13,16 +13,15 @@ namespace LingFan.Media.GPUShare.D3D11;
 /// 零 <c>[ComImport]</c>，是 NativeAOT 100% 友好的唯一 D3D11 互操作来源。</para>
 /// <para>只引用 <c>Abstractions</c> 与原生 <c>d3d11.dll</c> / <c>dxgi.dll</c>，可被仓内任意模块
 /// （解码后端、渲染器、UI 合成）被动引用而无需各自重写 COM vtable —— 写一次，多层引用。</para>
-/// <para>槽位与 IID 的权威值见 <c>.memory/模块注释/GPUShare.D3D11.槽位核对清单.md</c>。
-/// 宪法铁律：vtable 槽位不可手算、须运行时校准；手写 IID 逐字节核对；COM vtable 委托
+/// <para>槽位与 IID 的核对规则：vtable 槽位不可手算、须运行时校准；手写 IID 逐字节核对；COM vtable 委托
 /// 调用约定<b>必须</b> <see cref="CallingConvention.Winapi"/>（StdCall），绝不可用 ThisCall；
 /// 坏指针绝不 Release。</para>
 /// </remarks>
 public static unsafe partial class D3D11Interop
 {
-    // ─────────────────────────────────────────────────────────────────────────
+
     // IID（逐字节核对，勿改）
-    // ─────────────────────────────────────────────────────────────────────────
+
     public static readonly Guid IID_ID3D11Device = new("db6f6ddb-ac77-4e88-8253-819df9bbf140");
     public static readonly Guid IID_ID3D11DeviceContext = new("c0bfa96c-e089-44fb-8eaf-26f8796190da");
     public static readonly Guid IID_ID3D11DeviceChild = new("1841e5c8-16b0-489b-bcc8-44cfb0d5deae");
@@ -39,9 +38,9 @@ public static unsafe partial class D3D11Interop
     /// <summary>ID3D11InfoQueue 的 IID（调试层消息队列）。</summary>
     public static readonly Guid IID_ID3D11InfoQueue = new("1f9f3a8a-6d32-4ed9-9ab5-3423d4e0c1e7");
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // 常量
-    // ─────────────────────────────────────────────────────────────────────────
+
     private const uint DXGI_FORMAT_B8G8R8A8_UNORM = 87;
     private const uint D3D11_BIND_RENDER_TARGET = 0x20;
     private const uint D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX = 0x2;
@@ -67,8 +66,8 @@ public static unsafe partial class D3D11Interop
     public const uint RgbaTextureMiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
     /// <summary>NV12 共享纹理 MiscFlags：仅 SharedNTHandle（不含 SharedKeyedMutex）。
-    /// 原因：① NT 句柄共享无需 keyed mutex（keyed mutex 是 legacy MISC_SHARED 路径的同步原语）；
-    /// ② keyed mutex 与 NV12 视频格式组合会使 CreateSharedHandle 返回 DXGI_ERROR_INVALID_CALL。
+    /// 原因：(1) NT 句柄共享无需 keyed mutex（keyed mutex 是 legacy MISC_SHARED 路径的同步原语）；
+    /// (2) keyed mutex 与 NV12 视频格式组合会使 CreateSharedHandle 返回 DXGI_ERROR_INVALID_CALL。
     /// 该纹理仅用于 Vulkan 跨 API 经外部内存导入（Vulkan 侧不做 keyed mutex acquire）。</summary>
     public const uint Nv12TextureMiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
@@ -90,9 +89,9 @@ public static unsafe partial class D3D11Interop
     /// <summary>ShaderResource 绑定标志（NV12 等可采样但不可渲染格式；不可绑 RenderTarget 的格式用此）。</summary>
     public const uint BindShaderResource = 0x8;
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // 嵌套 vtable 读取器（绝对 0 基槽位）
-    // ─────────────────────────────────────────────────────────────────────────
+
     /// <summary>
     /// COM vtable 读取器：<c>comPtr → vtable 指针 → [slot * IntPtr.Size] = 方法指针</c>。
     /// <paramref name="slot"/> 一律为绝对 0 基槽位（0=QueryInterface, 1=AddRef, 2=Release）。
@@ -114,9 +113,9 @@ public static unsafe partial class D3D11Interop
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // vtable 委托原型（CallingConvention.Winapi = StdCall，绝不用 ThisCall）
-    // ─────────────────────────────────────────────────────────────────────────
+
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int PFN_QueryInterface(IntPtr self, ref Guid iid, out IntPtr ppvObject);
 
@@ -207,9 +206,9 @@ public static unsafe partial class D3D11Interop
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int PFN_GetDesc1(IntPtr self, IntPtr pDesc);
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // 平面导出函数（非 vtable）
-    // ─────────────────────────────────────────────────────────────────────────
+
     // 调用约定默认 Winapi（StdCall），与 COM ABI 一致；此处不显式写 CallingConvention 以
     // 免引入 Vortice 移除后不再传递引用的 System.Runtime.InteropServices 外观程序集。
     [LibraryImport("d3d11.dll", EntryPoint = "D3D11CreateDevice", SetLastError = false)]
@@ -229,9 +228,9 @@ public static unsafe partial class D3D11Interop
     [LibraryImport("kernel32.dll", EntryPoint = "VirtualQuery", SetLastError = true)]
     private static partial IntPtr VirtualQuery(IntPtr lpAddress, out MemoryBasicInformation lpBuffer, IntPtr dwLength);
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // 公开互操作原语
-    // ─────────────────────────────────────────────────────────────────────────
+
 
     /// <summary>QueryInterface：失败抛 <see cref="COMException"/>。</summary>
     public static IntPtr QueryInterface(IntPtr comPtr, Guid iid)
@@ -587,7 +586,7 @@ public static unsafe partial class D3D11Interop
 
     /// <summary>
     /// 查询设备所属 GPU 适配器的 vendor+描述（设备→IDXGIDevice(QI)→GetAdapter(槽7)→GetDesc1(槽10)）。
-    /// 用于铁证「设备实际落在哪张 GPU」（2026-08-19：疑 D3D11CreateDeviceOnAdapter 设备实际在核显）。
+    /// 用于确证「设备实际落在哪张 GPU」。
     /// </summary>
     public static (uint Vendor, string Description) GetDeviceAdapterInfo(IntPtr devicePtr)
     {
@@ -664,7 +663,7 @@ public static unsafe partial class D3D11Interop
     /// <summary>
     /// 枚举全部 DXGI 适配器，选择「独显优先」的首选适配器。
     /// 策略：跳过软件适配器（Microsoft Basic Render Driver），取 DedicatedVideoMemory 最大者
-    /// （独显 &gt;&gt; 集显；无独显时退化为显存最大的集显）。不绑定任何厂商/型号（2026-08-20 泛化）。
+    /// （独显 &gt;&gt; 集显；无独显时退化为显存最大的集显）。不绑定任何厂商/型号。
     /// 调用方负责 <see cref="Release"/>；无可用适配器返回 <see cref="IntPtr.Zero"/>（调用方回退默认路径）。
     /// </summary>
     public static IntPtr FindPreferredAdapter()
@@ -726,7 +725,7 @@ public static unsafe partial class D3D11Interop
     /// 布局（308 字节）：Description @0（WCHAR[128]，256B）→ VendorId @256（UINT）→ DeviceId @260 →
     /// SubSysId @264 → Revision @268 → DedicatedVideoMemory @272（SIZE_T，x64 8B）→
     /// DedicatedSystemMemory @280 → SharedSystemMemory @288 → AdapterLuid @296（8B）→ Flags @304（UINT）。
-    /// 注：VendorId 不在 @0——@0 是 WCHAR[128] 描述（2026-08-19 实锤修正）。
+    /// 注：VendorId 不在 @0——@0 是 WCHAR[128] 描述（此布局易误判，已按 ABI 核对）。
     /// </summary>
     private static (uint Vendor, string Description, ulong DedicatedVideoMemory, uint Flags) GetAdapterDesc1Info(IntPtr adapterPtr)
     {
@@ -749,9 +748,9 @@ public static unsafe partial class D3D11Interop
         return (vendor, desc, dedicatedMemory, flags);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // 运行时扫描校准（槽位错 → 立即可诊断失败，绝不带野指针继续调）
-    // ─────────────────────────────────────────────────────────────────────────
+
 
     /// <summary>
     /// 校准 device/context 的关键 vtable 槽位：DLL 归属（VirtualQuery）+ 良性调用烟测。
@@ -904,9 +903,9 @@ public static unsafe partial class D3D11Interop
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
+
 // 结构体字节布局（x64，LayoutKind.Sequential，Pack = 8）
-// ─────────────────────────────────────────────────────────────────────────
+
 
 /// <summary>DXGI_RATIONAL（8 字节）。</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 8)]

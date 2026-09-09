@@ -397,7 +397,7 @@ internal static class Program
         return overall ? 0 : 1;
     }
 
-    // ── 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用 ──
+    // 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用
 
     private sealed class CountingVideoRendererFactory : IVideoRendererFactory
     {
@@ -447,7 +447,7 @@ internal static class Program
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 
-    // ── 渲染目标：把 HWND 包装成 IRenderTarget ──
+    // 渲染目标：把 HWND 包装成 IRenderTarget
 
     private sealed class HwndRenderTarget : IRenderTarget
     {
@@ -462,7 +462,7 @@ internal static class Program
         public float Scale => 1f;
     }
 
-    // ── 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）──
+    // 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）
 
     private sealed class RenderWindow : IDisposable
     {
@@ -574,7 +574,7 @@ internal static class Program
             => NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    // ── 参数 / 资源解析辅助 ──
+    // 参数 / 资源解析辅助
 
     private static bool HasFlag(string[] args, params string[] flags)
     {

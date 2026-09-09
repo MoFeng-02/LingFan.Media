@@ -74,7 +74,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
     private readonly Dictionary<int, MediaPacket> _pendingPackets = new();
     private readonly HashSet<int> _exhaustedStreams = new();
 
-    // ── A 方案：SourceReader 自带硬解 + DXGI 出样（零拷贝直通）状态 ──
+    // A 方案：SourceReader 自带硬解 + DXGI 出样（零拷贝直通）状态
     // 命中时本 demuxer 变成「解封装 + 解码一体」：ReadSample 直接吐已解码帧
     // （GPU 纹理 → MediaPacket.DecodedFrameResource；退化时 NV12 CPU 字节 → Data+Width/Height/Stride），
     // 下游 MFVideoDecoder 退化为直通适配器，不再跑自己的 MFT。
@@ -84,7 +84,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
     private int _decodedVideoHeight;
     private int _decodedVideoStride;     // NV12 CPU 回落时的行跨度（<=0 表示按紧凑 width 处理）
     private bool _loggedVideoPathOnce;   // 首帧一次性诊断：真零拷贝 vs 半 DXVA 回落
-    // 路径①-A（IMF2DBuffer2）必须用**独立**闸门：半 DXVA 回落的 warning 会先把 _loggedVideoPathOnce
+    // 路径(1)-A（IMF2DBuffer2）必须用**独立**闸门：半 DXVA 回落的 warning 会先把 _loggedVideoPathOnce
     //    置位，若共用则「Lock2D 治本成功」的日志永远打不出来 —— 表现为「代码在跑但看不见证据」，
     //    极易让人以为改动未生效。诊断闸门与它守护的分支必须一一对应。
     private bool _loggedVideo2DPathOnce; // 首帧一次性诊断：IMF2DBuffer2 真值 pitch 紧凑化路径
@@ -230,7 +230,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 _mfStartupAcquired = true;
             }
 
-            // ── A 方案：把 IMFDXGIDeviceManager 挂到 SourceReader 的创建属性上 ──
+            // A 方案：把 IMFDXGIDeviceManager 挂到 SourceReader 的创建属性上
             // SourceReader 拿到管理器后会自行完成「选硬件 MFT → 发 MFT_MESSAGE_SET_D3D_MANAGER →
             // 分配 DXGI 输出表面池」的全套编排（这正是直连 MFT 时会静默回落软件的那一段）。
             // 失败语义：任何一步不成都返回 IntPtr.Zero，等价改造前的「无属性」行为 ⇒ 压缩裸流 + MFVideoDecoder 自解码。
@@ -349,7 +349,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
 
         try
         {
-            // ① MF_SOURCE_READER_D3D_MANAGER：IUnknown 属性，必须用 SetUnknown（slotIndex 24，mfobjects.h vtable 实物核验）
+            // (1) MF_SOURCE_READER_D3D_MANAGER：IUnknown 属性，必须用 SetUnknown（slotIndex 24，mfobjects.h vtable 实物核验）
             var setUnknown = MfVTable.Get<IMFAttributes_SetUnknown>(attrs, 24);
             Guid d3dKey = MFConstants.MF_SOURCE_READER_D3D_MANAGER;
             int hr = setUnknown(attrs, ref d3dKey, manager);
@@ -360,7 +360,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 return IntPtr.Zero;
             }
 
-            // ② MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS=1：不开则只用软件 MFT，挂了管理器也拿不到 DXGI 表面
+            // (2) MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS=1：不开则只用软件 MFT，挂了管理器也拿不到 DXGI 表面
             var setUInt32 = MfVTable.Get<IMFAttributes_SetUINT32>(attrs, 18);
             Guid hwKey = MFConstants.MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS;
             hr = setUInt32(attrs, ref hwKey, 1);
@@ -370,7 +370,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 _logger.LogWarning("[MF-D3D] SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS) 失败 HRESULT=0x{HR:X8}，继续尝试", hr);
             }
 
-            // ③ MF_SOURCE_READER_DISABLE_DXVA=0：默认即 0，显式写入表达意图（防某些环境的策略默认值反转）
+            // (3) MF_SOURCE_READER_DISABLE_DXVA=0：默认即 0，显式写入表达意图（防某些环境的策略默认值反转）
             Guid disableDxvaKey = MFConstants.MF_SOURCE_READER_DISABLE_DXVA;
             setUInt32(attrs, ref disableDxvaKey, 0);
 
@@ -400,10 +400,10 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// 要求此时<b>直接查证拓扑</b>而非继续猜。<c>IMFSourceReaderEx::GetTransformForStream</c>
     /// 是唯一能看穿 SourceReader 黑盒的官方接口。</para>
     /// <para><b>三种判决</b>：
-    /// ① 链上出现 <c>MFT_CATEGORY_VIDEO_PROCESSOR</c> ⇒ SourceReader 偷插了 VP 做转换，
+    /// (1) 链上出现 <c>MFT_CATEGORY_VIDEO_PROCESSOR</c> ⇒ SourceReader 偷插了 VP 做转换，
     ///    它会把 DXGI 表面拉回系统内存 —— 零拷贝头号杀手，须调整输出类型协商避免触发；
-    /// ② 解码 MFT 的 <c>MF_SA_D3D11_AWARE</c>=0 ⇒ SourceReader 选中的是纯软件 MFT，D3D 管理器根本无处可用；
-    /// ③ 解码 MFT aware=1 但 <c>PROVIDES_SAMPLES</c>=0 ⇒ MFT 没进 DXVA 分配模式
+    /// (2) 解码 MFT 的 <c>MF_SA_D3D11_AWARE</c>=0 ⇒ SourceReader 选中的是纯软件 MFT，D3D 管理器根本无处可用；
+    /// (3) 解码 MFT aware=1 但 <c>PROVIDES_SAMPLES</c>=0 ⇒ MFT 没进 DXVA 分配模式
     ///    （即收到了 SET_D3D_MANAGER 却拒绝/回落），问题在驱动或 profile 协商。</para>
     /// <para>纯诊断、零副作用：只读属性、不发消息、不改类型。任何一步失败都只记 Debug 后静默返回，
     /// 绝不影响播放（诊断代码永远不该成为故障源）。所有 COM 引用 COM 配对释放。</para>
@@ -445,8 +445,8 @@ internal sealed class MFDemuxer : IMediaDemuxer
                     if (category == MFConstants.MFT_CATEGORY_VIDEO_PROCESSOR)
                         sawVideoProcessor = true;
 
-                    // ① MF_SA_D3D11_AWARE：该 MFT 是否具备 D3D11 视频解码能力（GetAttributes = 绝对槽 8 → slotIndex 5）
-                    //    ② 同时取 MFT 身份（友好名 / HARDWARE_URL / CLSID）——区分「厂商硬件 MFT」与「微软软件 MFT」。
+                    // (1) MF_SA_D3D11_AWARE：该 MFT 是否具备 D3D11 视频解码能力（GetAttributes = 绝对槽 8 → slotIndex 5）
+                    //    (2) 同时取 MFT 身份（友好名 / HARDWARE_URL / CLSID）——区分「厂商硬件 MFT」与「微软软件 MFT」。
                     string awareText = "属性不可读";
                     string identityText = "身份不可读";
                     if (MfVTable.Get<IMFTransform_GetAttributes>(transform, 5)(transform, out IntPtr mftAttrs) >= 0
@@ -483,7 +483,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                         finally { Marshal.Release(mftAttrs); }
                     }
 
-                    // ② PROVIDES_SAMPLES：MFT 是否自分配输出 sample —— DXVA 纹理输出的必要条件
+                    // (2) PROVIDES_SAMPLES：MFT 是否自分配输出 sample —— DXVA 纹理输出的必要条件
                     //    （GetOutputStreamInfo = 绝对槽 7 → slotIndex 4）
                     string allocText = "输出流信息不可读";
                     if (MfVTable.Get<IMFTransform_GetOutputStreamInfo>(transform, 4)(transform, 0, out MftOutputStreamInfo info) >= 0)
@@ -747,7 +747,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
         // 自此 samplePtr 持有一份引用，所有退出路径（含异常）恰好释放一次。
         try
         {
-            // ── A 方案：该流已协商为 NV12 解码输出 ⇒ 走「已解码直通」打包（优先 GPU 纹理零拷贝）──
+            // A 方案：该流已协商为 NV12 解码输出 ⇒ 走「已解码直通」打包（优先 GPU 纹理零拷贝）
             // 只有 TryConfigureVideoStreamToNv12 成功的那一条视频流会命中；其余流（音频 PCM、
             // 未协商成功的视频压缩裸流）继续走下方通用字节拷贝路径，行为与改造前一致。
             if (_decodedVideoStreamIndex >= 0 && actualStreamIndex == _decodedVideoStreamIndex)
@@ -841,12 +841,12 @@ internal sealed class MFDemuxer : IMediaDemuxer
     /// <param name="sampleTimeTicks">ReadSample 回填的样本时间（100ns）。</param>
     /// <returns>直通包；提取失败返回 <see langword="null"/>（按流 tick 处理，交由上层重试）。</returns>
     /// <remarks>
-    /// <para><b>路径①（目标）</b>：<c>GetBufferByIndex(0)</c> → QI <c>IMFDXGIBuffer</c> → <c>ID3D11Texture2D</c>
+    /// <para><b>路径(1)（目标）</b>：<c>GetBufferByIndex(0)</c> → QI <c>IMFDXGIBuffer</c> → <c>ID3D11Texture2D</c>
     /// ⇒ 帧全程留在显存，<see cref="MediaPacket.DecodedFrameResource"/> 承载纹理所有权，
     /// 一路交到 <c>D3D11Renderer.PresentGpuTexture</c> 做 <c>CopySubresourceRegion</c> 上屏。真·零拷贝。</para>
     /// <para><b>绝不能</b>用 <c>ConvertToContiguousBuffer</c> 取 DXVA buffer：其契约就是「合并并读回连续系统内存」，
     /// 永远返回 CPU buffer，用它做零拷贝在原理上注定失败。</para>
-    /// <para><b>路径②（回落）</b>：样本不是 DXGI buffer（=「半 DXVA」：驱动内部把帧读回了系统内存）时，
+    /// <para><b>路径(2)（回落）</b>：样本不是 DXGI buffer（=「半 DXVA」：驱动内部把帧读回了系统内存）时，
     /// 走 <c>ConvertToContiguousBuffer</c> 取 NV12 字节，配 <c>Width/Height/Stride</c> 交给下游直通成 <c>VideoFrame</c>。
     /// 仍比改造前好——至少省掉了 MFVideoDecoder 的第二次 MFT 解码。</para>
     /// <para><b>诊断</b>：首帧一次性打印命中的是哪条路径 + 失败 HRESULT，避免逐帧刷屏又不至于静默失效。</para>
@@ -876,7 +876,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
             return null;
         }
 
-        // ── 路径①：DXGI 纹理零拷贝（GetBufferByIndex = 绝对槽 40 → slotIndex 37）──
+        // 路径(1)：DXGI 纹理零拷贝（GetBufferByIndex = 绝对槽 40 → slotIndex 37）
         int hr = MfVTable.Get<IMFSample_GetBufferByIndex>(samplePtr, 37)(samplePtr, 0, out IntPtr rawBuffer);
         if (hr >= 0 && rawBuffer != IntPtr.Zero)
         {
@@ -907,13 +907,13 @@ internal sealed class MFDemuxer : IMediaDemuxer
                         "驱动内部把帧读回了系统内存。回落 NV12 CPU 直通（仍省掉一次 MFT 解码）。", exHr);
                 }
 
-                // ── 路径①-A：IMF2DBuffer2 真值行跨度紧凑化（半 DXVA 治本）────────────
+                // 路径(1)-A：IMF2DBuffer2 真值行跨度紧凑化（半 DXVA 治本）
                 //   IMFDXGIBuffer 失败后，MS H264 MFT 内部把帧读回 Direct3DSurface9-backed 2D 内存，
                 //   实际 pitch 是 16 字节对齐（典型 1080→1088）。ConvertToContiguousBuffer 把整段当 1D 摊平，
                 //   但 IMFMediaBuffer.GetCurrentLength 返回的是 MFT 内部 allocate 的整段长度（含尾部对齐 padding），
                 //   反推 stride/codedH 必错 → 紧凑拷贝时 UV 平面偏移错位 → 画面下半段色度错行/横纹。
                 //   治本：QI IMF2DBuffer2，Lock2D 取真值 pitch + scanline0，逐行拷成紧凑布局。
-                //   若 Lock2D 失败（极少见：旧版 MFT 不实现 2D 路径），再走路径② ConvertToContiguousBuffer 兜底。
+                //   若 Lock2D 失败（极少见：旧版 MFT 不实现 2D 路径），再走路径(2) ConvertToContiguousBuffer 兜底。
                 int hr2d = Marshal.QueryInterface(rawBuffer, in MFConstants.IID_IMF2DBuffer2, out IntPtr b2d);
                 if (hr2d >= 0 && b2d != IntPtr.Zero)
                 {
@@ -935,7 +935,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                                     {
                                         _loggedVideo2DPathOnce = true;
                                         _logger.LogWarning(
-                                            "[MF-D3D] IMF2DBuffer2.Lock2D 返回 pitch={P} < display={W}，布局异常 ⇒ 丢帧、走路径②兜底",
+                                            "[MF-D3D] IMF2DBuffer2.Lock2D 返回 pitch={P} < display={W}，布局异常 ⇒ 丢帧、走路径(2)兜底",
                                             pitch, width);
                                     }
                                 }
@@ -969,7 +969,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                                             pitch % 16 == 0 ? 16 : 1;
                                         _logger.LogInformation(
                                             "[MF-D3D] 半 DXVA 治本：IMF2DBuffer2.Lock2D 拿到真值 pitch={P}（display={W}，驱动行距对齐≈{Align}B，填充 {Pad}B/行）" +
-                                            " → 逐行拷成紧凑 {Total}B，路径② ConvertToContiguousBuffer 跳过（治本，不再依赖 curLen 反推）。" +
+                                            " → 逐行拷成紧凑 {Total}B，路径(2) ConvertToContiguousBuffer 跳过（治本，不再依赖 curLen 反推）。" +
                                             "pitch 带 GPU 对齐痕迹 ⇒ 硬解确已发生，仅最后一步被读回系统内存",
                                             pitch, width, alignGuess, pitch - width, dstLen);
                                     }
@@ -990,7 +990,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                         {
                             _loggedVideo2DPathOnce = true;
                             _logger.LogWarning(
-                                "[MF-D3D] IMF2DBuffer2 QI 成功但 Lock2D 失败 hr=0x{HR:X8} scanline0={Sl} pitch={P} → 路径②兜底",
+                                "[MF-D3D] IMF2DBuffer2 QI 成功但 Lock2D 失败 hr=0x{HR:X8} scanline0={Sl} pitch={P} → 路径(2)兜底",
                                 hrLock, scanline0, rawPitch);
                         }
                     }
@@ -1011,7 +1011,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
             _logger.LogWarning("[MF-D3D] GetBufferByIndex(0) 失败 HRESULT=0x{HR:X8}，回落 ConvertToContiguousBuffer", hr);
         }
 
-        // ── 路径②：NV12 CPU 直通（ConvertToContiguousBuffer = 绝对槽 41 → slotIndex 38）──
+        // 路径(2)：NV12 CPU 直通（ConvertToContiguousBuffer = 绝对槽 41 → slotIndex 38）
         hr = MfVTable.Get<IMFSample_ConvertToContiguousBuffer>(samplePtr, 38)(samplePtr, out IntPtr bufferPtr);
         if (hr < 0 || bufferPtr == IntPtr.Zero)
         {
@@ -1149,12 +1149,12 @@ internal sealed class MFDemuxer : IMediaDemuxer
         CloseSync();
     }
 
-    // ── 两阶段关闭协议 ──
-    // ① BeginClose 关闸 → ② WaitDrain 排空在途原生调用 → ③【在专用 COM 单元线程上】释放 COM 指针
-    // → ④ 之后才 Shutdown 调度器（放行 CoUninitialize）→ ⑤ 托管收尾。任一环节失败即有意泄漏。
+    // 两阶段关闭协议
+    // (1) BeginClose 关闸 → (2) WaitDrain 排空在途原生调用 → (3)【在专用 COM 单元线程上】释放 COM 指针
+    // → (4) 之后才 Shutdown 调度器（放行 CoUninitialize）→ (5) 托管收尾。任一环节失败即有意泄漏。
     //
-    // 步骤顺序原则（**勿把 ② 与 ④ 换回来**）：
-    //    旧顺序为「① → Shutdown 调度器 → WaitDrain → Release」，即**先让专用线程退出**（其 Loop 的 finally
+    // 步骤顺序原则（**勿把 (2) 与 (4) 换回来**）：
+    //    旧顺序为「(1) → Shutdown 调度器 → WaitDrain → Release」，即**先让专用线程退出**（其 Loop 的 finally
     //    执行 CoUninitialize）**再在关闭线程上 Marshal.Release**。而 _sourceReader 是 OpenCore 在专用线程上
     //    经 MFCreateSourceReaderFromURL 创建的：CoUninitialize 会关闭该线程的 COM 库、卸载它加载的 in-proc
     //    server（mfreadwrite/mfplat 等），并在它是最后一个 MTA 成员时拆除整个 MTA。此后那次 Release 跳进
@@ -1176,7 +1176,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
         {
             _readerGate.BeginClose();
 
-            // ② 排空在途原生调用。**此时专用线程仍存活、COM 单元完整**（这正是它必须先于 Shutdown 的原因）。
+            // (2) 排空在途原生调用。**此时专用线程仍存活、COM 单元完整**（这正是它必须先于 Shutdown 的原因）。
             if (!_readerGate.WaitDrain(MediaPipelineTimeouts.NativeDrain))
             {
                 LeakNativeResources("在途原生调用未在期限内排空", schedulerExited: false);
@@ -1198,19 +1198,19 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 return;
             }
 
-            // ③ COM 单元不变量：把 Release 投递回创建它的专用单元线程，必须在该线程 CoUninitialize 之前完成。
+            // (3) COM 单元不变量：把 Release 投递回创建它的专用单元线程，必须在该线程 CoUninitialize 之前完成。
             if (!scheduler.TryRunOnSchedulerThread(ReleaseComObjectsOnOwnerThread, MediaPipelineTimeouts.NativeDrain))
             {
                 LeakNativeResources("无法在专用 COM 单元线程上完成释放", schedulerExited: false);
                 return;
             }
 
-            // ④ COM 指针已释放，现在才放行专用线程退出（其 finally 将执行 CoUninitialize）。
+            // (4) COM 指针已释放，现在才放行专用线程退出（其 finally 将执行 CoUninitialize）。
             bool schedulerExited = scheduler.Shutdown(MediaPipelineTimeouts.SchedulerJoin);
             if (!schedulerExited)
                 _logger.LogWarning("MFDemuxer 专用读取线程未在期限内退出；COM 指针已安全释放，仅线程与队列延迟回收。");
 
-            ReleaseManagedState(); // ⑤
+            ReleaseManagedState(); // (5)
         }
         finally { _opened = false; }
     }
@@ -1229,7 +1229,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
         {
             _readerGate.BeginClose();
 
-            // ②
+            // (2)
             if (!await _readerGate.WaitDrainAsync(MediaPipelineTimeouts.NativeDrain).ConfigureAwait(false))
             {
                 LeakNativeResources("在途原生调用未在期限内排空", schedulerExited: false);
@@ -1249,7 +1249,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 return;
             }
 
-            // ③ COM 单元不变量
+            // (3) COM 单元不变量
             if (!await scheduler.TryRunOnSchedulerThreadAsync(
                     ReleaseComObjectsOnOwnerThread, MediaPipelineTimeouts.NativeDrain).ConfigureAwait(false))
             {
@@ -1257,18 +1257,18 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 return;
             }
 
-            // ④
+            // (4)
             bool schedulerExited = await scheduler.ShutdownAsync(MediaPipelineTimeouts.SchedulerJoin).ConfigureAwait(false);
             if (!schedulerExited)
                 _logger.LogWarning("MFDemuxer 专用读取线程未在期限内退出；COM 指针已安全释放，仅线程与队列延迟回收。");
 
-            ReleaseManagedState(); // ⑤
+            ReleaseManagedState(); // (5)
         }
         finally { _opened = false; }
     }
 
     /// <summary>
-    /// 协议步骤③：释放原生 COM 资源。<b>必须且只能在创建它们的专用单元线程上执行</b>（COM 单元不变量）。
+    /// 协议步骤(3)：释放原生 COM 资源。<b>必须且只能在创建它们的专用单元线程上执行</b>（COM 单元不变量）。
     /// </summary>
     /// <remarks>
     /// 前置：gate 已排空（独占）——不存在任何其它线程处于闸内，故本方法可独占访问 <c>_sourceReader</c>。
@@ -1304,7 +1304,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
         }
     }
 
-    /// <summary>协议步骤⑤：纯托管收尾，无单元亲和要求，可在任意线程执行。</summary>
+    /// <summary>协议步骤(5)：纯托管收尾，无单元亲和要求，可在任意线程执行。</summary>
     private void ReleaseManagedState()
     {
         // 释放尚未投递的 lookahead 数据包（MediaPacket 独立拥有托管副本，Dispose 兜底，防泄漏）
@@ -1338,7 +1338,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
         // 拆单元等于把保护对象连根拔起。线程为后台线程，进程退出时由 OS 回收，泄漏有界。
     }
 
-    // ── 辅助方法 ──
+    // 辅助方法
 
     /// <summary>
     /// 从 IMediaStream 提取 URL（文件路径或网络 URL）。
@@ -1410,7 +1410,7 @@ internal sealed class MFDemuxer : IMediaDemuxer
                 if (vcodec == VideoCodec.Unknown)
                     _logger.LogWarning("[OPEN-DIAG] 未识别视频子类型 {Subtype} → 标记 Unknown（后端仅支持 H264/H265；AV1/VP9/MPEG 等需扩 codec 路由）", subtype);
 
-                // ── A 方案：把该视频流协商为 NV12【解码后】输出 ──
+                // A 方案：把该视频流协商为 NV12【解码后】输出
                 // 仅在创建期成功挂上 D3D 管理器时才尝试；成功后 SourceReader 会自行加载硬件解码 MFT
                 // 并在共享 D3D11 设备上分配输出表面 ⇒ ReadSample 直出可 QI 成 IMFDXGIBuffer 的样本。
                 // 必须在构造 MediaTrack **之前**完成：VideoTrackInfo 为 init-only，尺寸须一次性写定

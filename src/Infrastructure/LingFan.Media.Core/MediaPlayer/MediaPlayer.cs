@@ -472,8 +472,8 @@ public sealed class MediaPlayer : IMediaPlayer
                 //      （VideoPipeline/AudioPipeline 的 Start 已支持从排干态重启）。
                 await SeekAsync(TimeSpan.Zero);
                 // 重播（Ended→Playing）主时钟武装归零：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），
-                // _startStopwatch 持续累计（数值不随重播归零）；而重播视频门控（MediaPipelineHost.StartAsync 第③步 SignalAudioReady）
-                // 早于音频 Start（第⑤步），若不在此解除武装，预滚动/门控窗口内同步器读到的主时钟是上一遍的陈旧值，
+                // _startStopwatch 持续累计（数值不随重播归零）；而重播视频门控（MediaPipelineHost.StartAsync 第(3)步 SignalAudioReady）
+                // 早于音频 Start（第(5)步），若不在此解除武装，预滚动/门控窗口内同步器读到的主时钟是上一遍的陈旧值，
                 // 会把 PTS=0 重播首帧判为「落后过多 → Drop」，画面冻结较长时间才切入。此处解除武装后，该窗口主时钟恒为 0，
                 // 首帧立即呈现；音频 Start（CaptureStartAnchor）会重新武装。
                 _audioOutput?.ResetPlaybackClock();

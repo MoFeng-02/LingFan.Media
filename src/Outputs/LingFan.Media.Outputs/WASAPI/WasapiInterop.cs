@@ -45,7 +45,7 @@ public enum AudioClientCategory
 
 internal static partial class WasapiInterop
 {
-    // ── 常量 ──
+    // 常量
 
     /// <summary>COINIT_MULTITHREADED：多线程单元，COM 对象可跨线程访问。</summary>
     public const uint COINIT_MULTITHREADED = 0x0;
@@ -139,7 +139,7 @@ internal static partial class WasapiInterop
     /// <summary>100ns 单位（WASAPI 时间戳基准）。</summary>
     public const long ReftimesPerSec = 10_000_000;
 
-    // ── GUID ──
+    // GUID
 
     public static readonly Guid CLSID_MMDeviceEnumerator =
         new("BCDE0395-E52F-467C-8E3D-C4579291692E");
@@ -180,7 +180,7 @@ internal static partial class WasapiInterop
     public static readonly Guid KSDATAFORMAT_SUBTYPE_PCM =
         new("00000001-0000-0010-8000-00aa00389b71");
 
-    // ── P/Invoke ──
+    // P/Invoke
 
     // PreserveSig=true（默认）——必须保留HRESULT返回值，
     // 因为 RPC_E_CHANGED_MODE 是失败HRESULT但需要特殊处理（不抛异常而是跳过CoUninitialize），
@@ -230,7 +230,7 @@ internal struct WAVEFORMATEXTENSIBLE
     public Guid SubFormat;
 }
 
-// ── COM vtable 调用（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）──
+// COM vtable 调用（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）
 // WASAPI 接口 vtable 布局：IUnknown(0=QueryInterface, 1=AddRef, 2=Release) + 接口方法(3+)
 // 每个委托首个参数为 COM 对象指针（this），调用时由 ComVTable.Get 从 vtable 槽位读取函数指针。
 // 所有 HRESULT 均 PreserveSig 返回，由调用方用 Marshal.ThrowExceptionForHR 处理（与原始 [ComImport] 行为一致）。

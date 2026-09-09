@@ -19,9 +19,9 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// 检测三类确定性违规并抛出<b>可诊断</b>的 <see cref="InteropViolationException"/>（精确指名道姓），
 /// 把静默的堆损坏变成「当场在违规点崩溃」——这正是把滞后症状变成精确凶手的关键：</para>
 /// <list type="bullet">
-/// <item>① <b>重复 Release（double-free）</b>：对同一地址执行第二次 <c>Marshal.Release</c>。
+/// <item>(1) <b>重复 Release（double-free）</b>：对同一地址执行第二次 <c>Marshal.Release</c>。
 /// 由 <see cref="OnAlloc"/> 在重新分配时清除该地址的陈旧「已释放」标记，杜绝 LFH 地址复用导致的误报，故判定严谨。</item>
-/// <item>② <b>未 Lock 即 Unlock / 重复 Unlock</b>（COM 配对同构违规）：按每缓冲 Lock 深度校验，确定性可判。</item>
+/// <item>(2) <b>未 Lock 即 Unlock / 重复 Unlock</b>（COM 配对同构违规）：按每缓冲 Lock 深度校验，确定性可判。</item>
 /// </list>
 /// <para><b>关于 use-after-free（UAF）</b>：朴素「已释放地址集合」判定会因 Windows LFH 堆地址复用
 /// 产生<b>误报</b>（新分配恰好复用已释放地址），且对「悬垂引用指向被复用地址」反而<b>漏报</b>，故 tracer 不在
@@ -82,7 +82,7 @@ internal static class InteropTrace
         e.Hr = hr;
     }
 
-    // ───────────────────────── 公开接口 ─────────────────────────
+    // 公开接口
 
     /// <summary>在 <see cref="MfVTable.Get"/> 入口调用：仅记录（post-mortem 用）。
     /// 不在此时做「已释放地址集合」UAF 判定——LFH 堆地址复用会使该判定误报，且对真 UAF 反而漏报；
@@ -163,14 +163,14 @@ internal static class InteropTrace
     /// <summary>仅记录型 Hook（WASAPI GetBuffer/ReleaseBuffer、Vulkan/D3D11 Map/Unmap 等接口各异处）。</summary>
     public static void Note(Op kind, IntPtr ptr, string site, int hr = 0) => Append(kind, ptr, site, hr);
 
-    // ───────────────────────── 错误抛出 ─────────────────────────
+    // 错误抛出
 
     private static void Throw(string msg, string site, IntPtr ptr) =>
         throw new InteropViolationException(
             $"[InteropTrace] {msg}；调用点={site}；指针=0x{ptr:X}。" +
             $"这是原生堆损坏类的【可诊断前兆】（非滞后症状），据此定位即可。");
 
-    // ───────────────────────── Post-mortem ─────────────────────────
+    // Post-mortem
 
     /// <summary>把环形缓冲最近若干条写入临时文件，供崩溃后 post-mortem 比对（正常退出/关闭时调用）。</summary>
     public static void Dump(string? path = null)
@@ -186,7 +186,7 @@ internal static class InteropTrace
                 int idx = ((start - i) % CAP + CAP) % CAP;
                 ref Entry e = ref _ring[idx];
                 if (e.Site is null) continue;
-                char mark = i == 0 ? '▶' : ' ';
+                char mark = i == 0 ? '>' : ' ';
                 sb.AppendLine($"{mark} +{Stopwatch.GetElapsedTime(e.Ts).TotalMilliseconds:F1}ms " +
                               $"tid={e.Tid} {e.Kind} ptr=0x{e.Ptr:X} {e.Site} hr=0x{e.Hr:X8}");
             }

@@ -204,9 +204,9 @@ public sealed class LibVlcInstance : IDisposable
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
+
     // 原生库定位：规则驱动 + 有界递归（Windows / macOS / Linux / Android / iOS 通用）
-    // ─────────────────────────────────────────────────────────────
+
 
     /// <summary>返回按评分降序排列的候选清单（评分 = 架构匹配 + 含 libvlccore + 含 plugins）。</summary>
     private static List<(string Path, int Score)> LocateNativeCandidates()
@@ -302,7 +302,7 @@ public sealed class LibVlcInstance : IDisposable
         return null;
     }
 
-    // ─── 当前进程架构识别（用于跨平台 RID 匹配） ───
+    // 当前进程架构识别（用于跨平台 RID 匹配）
 
     /// <summary>当前进程的架构 token：x64 / x86 / arm64 / arm（<see cref="RuntimeInformation.OSArchitecture"/>）。</summary>
     private static string ArchToken => RuntimeInformation.OSArchitecture switch

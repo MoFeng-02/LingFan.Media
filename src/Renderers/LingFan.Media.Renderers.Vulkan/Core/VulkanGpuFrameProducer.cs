@@ -43,7 +43,7 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
     private CommandBuffer _cmdBuffer;         // 默认 Handle==0：未创建
     private uint _graphicsQueueFamily = uint.MaxValue;
 
-    // ── RGBA GPU→CPU 回读（Android Tier2：Skia 合成路径消费 GPU 帧）──
+    // RGBA GPU→CPU 回读（Android Tier2：Skia 合成路径消费 GPU 帧）
     // 独立命令池/命令缓冲/栅栏/staging buffer：与解码线程的 YCbCr/NV12 转换命令资源完全隔离。
     // 提交共用同一图形队列 —— VkQueue 非线程安全（vkQueueSubmit/QueueWaitIdle 须宿主同步），
     // 故与转换路径共享 _queueGate 串行化提交段（两段均为毫秒级，30fps 下无争用压力）。
@@ -68,7 +68,7 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
     /// 预检导入能力（解码器据此决定是否启用对应零拷贝路径，如 Android Tier2 的 ImageReader Surface configure）。
     /// Android AHB 双判据：VK_ANDROID_external_memory_android_hardware_buffer 扩展已启用（函数可解析）
     /// <b>且</b> samplerYcbcrConversion 特性已在设备创建期启用（HasSamplerYcbcrConversion 双判据——
-    /// 特性未启用时 YCbCr 采样属规范违规，驱动 UB 实测 SIGBUS，绝不可走）。
+    /// 特性未启用时 YCbCr 采样属规范违规，驱动未定义行为可致进程级原生崩溃，绝不可走）。
     /// </summary>
     public bool IsImportSupported(GpuFrameImportKind kind) => kind switch
     {
@@ -233,9 +233,9 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
         {
             // 3) dedicated 内存导入：AHB 导入强制 dedicated（VkMemoryDedicatedAllocateInfo 挂 ImportAndroidHardwareBufferInfoANDROID
             //    的 pNext），allocationSize/memoryTypeBits 以属性查询为权威（规范 VUID，勿用 image memory requirements）。
-            // 【SIGBUS 根因】Buffer 字段承载 AHardwareBuffer* 的【值】——必须赋源指针本身（对齐 Windows 路径
-            //   TryImportWin32 的 Handle = source.Handle）。此前误写 &ahbHandle 传的是栈局部变量地址，驱动
-            //   vkAllocateMemory 导入时把栈地址当 AHardwareBuffer 解引用其引用计数 → BUS_ADRALN SIGBUS（真机实证）。
+            // 【关键】Buffer 字段承载 AHardwareBuffer* 的【值】——必须赋源指针本身（对齐 Windows 路径
+            //   TryImportWin32 的 Handle = source.Handle）。若误写 &ahbHandle 传的是栈局部变量地址，驱动
+            //   vkAllocateMemory 导入时会把栈地址当 AHardwareBuffer 解引用其引用计数 → 对齐错误的原生崩溃。
             var dedicated = new MemoryDedicatedAllocateInfo
             {
                 SType = StructureType.MemoryDedicatedAllocateInfo,
@@ -245,9 +245,9 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
             {
                 SType = StructureType.ImportAndroidHardwareBufferInfoAndroid,
                 // Buffer 字段类型 nint*（Silk.NET 把 struct AHardwareBuffer 的指针置为 nint*）。
-                // 【SIGBUS 根因】应存 AHardwareBuffer* 的【值】= (nint*)source.Handle（bitcast AHB 指针本身）；
-                // 此前误传 &ahbHandle（指向局部变量）→ 驱动把那栈地址当 AHardwareBuffer 解引用引用计数 →
-                // BUS_ADRALN。对齐 Windows 路径 Handle=source.Handle 传值的语义。
+                // 【关键】应存 AHardwareBuffer* 的【值】= (nint*)source.Handle（bitcast AHB 指针本身）；
+                // 若误传 &ahbHandle（指向局部变量）→ 驱动把那栈地址当 AHardwareBuffer 解引用引用计数 →
+                // 原生崩溃。对齐 Windows 路径 Handle=source.Handle 传值的语义。
                 Buffer = (nint*)source.Handle,
                 PNext = &dedicated,
             };

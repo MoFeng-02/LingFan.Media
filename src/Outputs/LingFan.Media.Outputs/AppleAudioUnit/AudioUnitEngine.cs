@@ -30,7 +30,7 @@ internal sealed unsafe partial class AudioUnitEngine : IDisposable
 {
     private const string AudioToolboxLibrary = "/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox";
 
-    // ── AudioUnit 常量（AudioToolbox/AUComponent.h，FourCC）──
+    // AudioUnit 常量（AudioToolbox/AUComponent.h，FourCC）
     /// <summary>kAudioUnitSubType_DefaultOutput（'def '，macOS 默认输出设备）。</summary>
     internal const uint SubTypeDefaultOutput = 0x64656620;
     /// <summary>kAudioUnitSubType_RemoteIO（'rioc'，iOS 音频硬件 I/O）。</summary>
@@ -388,7 +388,7 @@ internal sealed unsafe partial class AudioUnitEngine : IDisposable
         _audioUnit = IntPtr.Zero;
     }
 
-    // ── AudioToolbox 结构体（Sequential，匹配 CoreAudioTypes.h / AUComponent.h 布局）──
+    // AudioToolbox 结构体（Sequential，匹配 CoreAudioTypes.h / AUComponent.h 布局）
 
     [StructLayout(LayoutKind.Sequential)]
     private struct AudioComponentDescription
@@ -436,7 +436,7 @@ internal sealed unsafe partial class AudioUnitEngine : IDisposable
         public AudioBuffer Buffer0; // 变长数组首元素（后续元素经指针步进访问）
     }
 
-    // ── AudioToolbox P/Invoke（AudioComponent + AudioUnit v2 API，macOS/iOS 同路径）──
+    // AudioToolbox P/Invoke（AudioComponent + AudioUnit v2 API，macOS/iOS 同路径）
 
     [LibraryImport(AudioToolboxLibrary)]
     private static partial IntPtr AudioComponentFindNext(IntPtr inComponent, ref AudioComponentDescription inDesc);

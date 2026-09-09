@@ -13,7 +13,7 @@ namespace LingFan.Media.Backends.VLCNative.Interop;
 /// </remarks>
 public static partial class LibVlcNative
 {
-    // ── 实例 / 版本 ──
+    // 实例 / 版本
 
     [LibraryImport("libvlc")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -35,7 +35,7 @@ public static partial class LibVlcNative
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial void libvlc_free(IntPtr ptr);
 
-    // ── Media ──
+    // Media
 
     [LibraryImport("libvlc", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -91,7 +91,7 @@ public static partial class LibVlcNative
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial void libvlc_media_release(nint p_media);
 
-    // ── MediaPlayer ──
+    // MediaPlayer
 
     [LibraryImport("libvlc")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -125,7 +125,7 @@ public static partial class LibVlcNative
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial nint libvlc_media_player_event_manager(nint p_mediaplayer);
 
-    // ── 回调注册（参数均为函数指针 nint）──
+    // 回调注册（参数均为函数指针 nint）
 
     [LibraryImport("libvlc")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -144,7 +144,7 @@ public static partial class LibVlcNative
     public static partial void libvlc_audio_set_callbacks(
         nint mp, nint play_cb, nint pause_cb, nint resume_cb, nint flush_cb, nint drain_cb, nint opaque);
 
-    // ── 事件 ──
+    // 事件
 
     [LibraryImport("libvlc")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

@@ -90,7 +90,7 @@ public sealed partial class VaApiInterop : IVaApiExport
         uint flags,
         ref VADRMPRIMESurfaceDescriptor descriptor);
 
-    // ── libva 原生结构（VADRMPRIMESurfaceDescriptor，va/va_drm.h）──
+    // libva 原生结构（VADRMPRIMESurfaceDescriptor，va/va_drm.h）
     // 固定大小内联数组经 [InlineArray] 表达，使整体成为 blittable 布局（与 libva C 逐字节一致）；
     // [LibraryImport] 源生成器对 blittable 结构按指针直传、零封送（AOT 友好，无 SYSLIB1051）。
 

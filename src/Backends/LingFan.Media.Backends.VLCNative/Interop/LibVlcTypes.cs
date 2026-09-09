@@ -16,7 +16,7 @@ namespace LingFan.Media.Backends.VLCNative.Interop;
 /// </remarks>
 public static class LibVlcTypes
 {
-    // ── 视频回调 ──
+    // 视频回调
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate uint VideoFormatCb(IntPtr opaque, IntPtr chroma, IntPtr width, IntPtr height, IntPtr pitches, IntPtr lines);
@@ -33,7 +33,7 @@ public static class LibVlcTypes
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void VideoDisplayCb(IntPtr opaque, IntPtr picture);
 
-    // ── 音频回调 ──
+    // 音频回调
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate int AudioSetupCb(IntPtr opaque, IntPtr format, IntPtr rate, IntPtr channels);
@@ -56,7 +56,7 @@ public static class LibVlcTypes
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void AudioDrainCb(IntPtr data);
 
-    // ── imem 自定义源回调 ──
+    // imem 自定义源回调
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate int MediaOpenCb(IntPtr opaque, IntPtr datap, IntPtr sizep);
@@ -71,12 +71,12 @@ public static class LibVlcTypes
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void MediaCloseCb(IntPtr opaque);
 
-    // ── 事件回调 ──
+    // 事件回调
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void EventCb(IntPtr args, IntPtr user_data);
 
-    // ── 结构体（只读头部稳定字段）──
+    // 结构体（只读头部稳定字段）
 
     [StructLayout(LayoutKind.Sequential)]
     public struct LibvlcMediaTrackT
@@ -112,7 +112,7 @@ public static class LibVlcTypes
         // 尾部 i_orientation/i_projection/pose/i_multiview 跨版本增减 → 不声明
     }
 
-    // ── 常量 ──
+    // 常量
 
     // libvlc_track_type_t：audio=0 / video=1 / text=2 / unknown=-1（回调式后端据此区分轨道）。
     public const int TrackTypeUnknown = -1;

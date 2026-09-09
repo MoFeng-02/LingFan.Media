@@ -353,9 +353,9 @@ internal sealed unsafe class VulkanShaderPipeline : IDisposable
         }
     }
 
-    // ═════════════════════════════════════════════════════════════════
+
     // 着色器加载 / 管线创建
-    // ═════════════════════════════════════════════════════════════════
+
 
     private void CreateRenderPassAndPipeline(Format format)
     {
@@ -874,9 +874,9 @@ internal sealed unsafe class VulkanShaderPipeline : IDisposable
             throw new InvalidOperationException($"vkAllocateDescriptorSets 失败: {result}");
     }
 
-    // ═════════════════════════════════════════════════════════════════
+
     // SwapChain ImageView / Framebuffer
-    // ═════════════════════════════════════════════════════════════════
+
 
     private void CreateImageViewsAndFramebuffers()
     {
@@ -945,9 +945,9 @@ internal sealed unsafe class VulkanShaderPipeline : IDisposable
         if (_renderPass.Handle != 0) { VulkanNative.DestroyRenderPass(_device, _renderPass, null); _renderPass = default; }
     }
 
-    // ═════════════════════════════════════════════════════════════════
+
     // 帧平面上传
-    // ═════════════════════════════════════════════════════════════════
+
 
     private void EnsurePlaneImages(int width, int height, PixelFormat format)
     {
@@ -1222,9 +1222,9 @@ internal sealed unsafe class VulkanShaderPipeline : IDisposable
         VulkanNative.UpdateDescriptorSets(_device, 3, writes, 0, null);
     }
 
-    // ═════════════════════════════════════════════════════════════════
+
     // 辅助
-    // ═════════════════════════════════════════════════════════════════
+
 
     private void TransitionImageLayout(
         CommandBuffer cmd, Image image,

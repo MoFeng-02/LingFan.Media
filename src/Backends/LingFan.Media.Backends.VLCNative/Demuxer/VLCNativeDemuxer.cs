@@ -166,7 +166,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
 
         nint instance = _backend.Instance.Handle;
 
-        // ── 地址式打开优先（location 打开比 imem 内存源更可靠）──
+        // 地址式打开优先（location 打开比 imem 内存源更可靠）
         string? location = stream.Location;
         if (!string.IsNullOrEmpty(location))
         {
@@ -402,7 +402,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         Close();
     }
 
-    // ── VLC 视频回调（按值指针参数，自行 Marshal）──
+    // VLC 视频回调（按值指针参数，自行 Marshal）
 
     private uint OnVideoFormat(IntPtr opaque, IntPtr chroma, IntPtr width, IntPtr height, IntPtr pitches, IntPtr lines)
     {
@@ -484,7 +484,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     // display 回调：帧已在 OnVideoUnlock 交付通道，此处无需动作（勿在 VLC 回调线程上 sleep）。
     private void OnVideoDisplay(IntPtr opaque, IntPtr picture) { }
 
-    // ── VLC 音频回调 ──
+    // VLC 音频回调
 
     private int OnAudioSetup(IntPtr opaque, IntPtr format, IntPtr rate, IntPtr channels)
     {
@@ -510,8 +510,8 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     // 选择性出队：仅丢弃音频包，保留视频包（flush 时音频需清空，视频帧保留）。
     private void OnAudioFlush(IntPtr data, long pts)
     {
-        // 诊断（定位剩余音频间隙根因）：正常播放中途若触发，说明 VLC 主动丢弃已解码音频，
-        // 会清空抖动缓冲与通道内音频、造成真实断音。若重跑仍见间隙且此日志在起播阶段出现，则根因是 VLC flush 而非节流。
+        // 诊断（定位剩余音频间隙的原因）：正常播放中途若触发，说明 VLC 主动丢弃已解码音频，
+        // 会清空抖动缓冲与通道内音频、造成真实断音。若重跑仍见间隙且此日志在起播阶段出现，则原因是 VLC flush 而非节流。
         int cleared = 0;
         while (_audioJitter.TryDequeue(out var stale)) { stale.Dispose(); cleared++; }
         if (cleared > 0)
@@ -612,7 +612,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         }
     }
 
-    // ── 辅助方法 ──
+    // 辅助方法
 
     /// <summary>
     /// 播放后重取轨道元数据。

@@ -66,7 +66,7 @@ internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit
     /// <c>TryStartPreroll</c> 每次早退 ⇒ 设备只能等缓冲写满后由 <c>EnsureDeviceStarted</c> 兜底 Start
     /// （日志「设备缓冲已满但引擎从未启动，已强制 Start」）。
     /// 此前针对 <c>WasapiRenderLoop.BeginStreamingAsync</c> 的修复因此全部作用在<b>死代码路径</b>上。
-    /// <b>教训</b>：带默认实现的接口成员，在包装/委托类里漏转发是静默失效，不会报错——
+    /// <b>注意</b>：带默认实现的接口成员，在包装/委托类里漏转发是静默失效，不会报错——
     /// 新增此类成员时必须同步检查所有 <c>IAudioOutput</c> 实现的转发完整性。
     /// </remarks>
     public ValueTask BeginStreamingAsync(CancellationToken ct) => _loop.BeginStreamingAsync(ct);

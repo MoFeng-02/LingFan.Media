@@ -11,7 +11,7 @@ namespace LingFan.Media.Abstractions;
 /// <para>语义为"优先硬件加速"（PreferHardware），而非"强制"：本策略只决定硬解是否应被尝试；
 /// 是否真能走硬解取决于运行时是否有可用 GPU 设备上下文，且硬解失败时必须优雅回落软解（既有保证）。
 /// 用户显式关闭硬件加速的意图始终优先——策略不会覆盖 <see cref="MediaPlayerOptions.EnableHardwareAcceleration"/> 的 false。</para>
-/// <para>纯静态、无反射、无分配，符合 AOT 零警告铁律。</para>
+/// <para>纯静态、无反射、无分配，符合 AOT 零警告要求。</para>
 /// </remarks>
 public static class DecodePreferencePolicy
 {

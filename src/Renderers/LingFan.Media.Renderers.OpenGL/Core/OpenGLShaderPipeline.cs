@@ -23,7 +23,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// </remarks>
 internal sealed unsafe class OpenGLShaderPipeline : IDisposable
 {
-    // ── GL 常量（桌面 GL 3.3 core）──
+    // GL 常量（桌面 GL 3.3 core）
     private const int GlTexture2D = 0x0DE1;
     private const int GlRgba8 = 0x8058;
     private const int GlRgb8 = 0x8051;
@@ -143,13 +143,13 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
     private int _nvUUV;
     private int _nvUSwap;
 
-    // ── 帧纹理缓存（0=Y/RGB，1=U/UV，2=V）──
+    // 帧纹理缓存（0=Y/RGB，1=U/UV，2=V）
     private readonly uint[] _planeTextures = new uint[3];
     private int _cachedWidth;
     private int _cachedHeight;
     private PixelFormat _cachedFormat = (PixelFormat)(-1);
 
-    // ── WGL_NV_DX_interop2 每绘制上下文缓存 ──
+    // WGL_NV_DX_interop2 每绘制上下文缓存
     // 由 on-screen GL 上下文打开，与该上下文同生同死；绘制时现场 register/lock/draw/unlock/unregister，
     // 避免 owner 离屏上下文与 on-screen 上下文对同一 WGL 互操作对象的跨上下文歧义。
     private ID3D11Device? _wglBridgeDevice;
@@ -170,7 +170,7 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
         PixelFormat.YUV420P or PixelFormat.YUV422P or PixelFormat.YUV444P or
         PixelFormat.NV12 or PixelFormat.NV21;
 
-    // ── 初始化 ──
+    // 初始化
 
     /// <summary>延迟初始化 GL 资源（VAO / VBO / Shader 程序）。
     /// 必须在 GL 上下文 current 时调用——由 <see cref="OpenGLRenderer.Present"/> 在渲染线程绑定上下文后触发，
@@ -281,7 +281,7 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
         return program;
     }
 
-    // ── 纹理管理 ──
+    // 纹理管理
 
     private void EnsureTextures(int width, int height, PixelFormat format)
     {
@@ -436,7 +436,7 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
         }
     }
 
-    // ── 对外呈现 ──
+    // 对外呈现
 
     /// <summary>用 Shader 路径将软件帧呈现到当前 GL 帧缓冲（不交换缓冲，由调用方 SwapBuffers）。</summary>
     internal void Present(SoftwareFrameResource sw, int dstWidth, int dstHeight, AspectRatioMode mode)

@@ -118,8 +118,8 @@ internal static class Program
                 {
                     nv12Count++;
 
-                    // ── STRIDE 自检（首帧一次）──────────────────────────────────
-                    // ── 行间错位检测（SKEW-CHK）：眼睛无关的客观检测 ──────────────
+                    // STRIDE 自检（首帧一次）
+                    // 行间错位检测（SKEW-CHK）：眼睛无关的客观检测
                     // 原理：自然图像相邻两行内容高度相关，把下一行水平平移 d 去匹配上一行，
                     //       最佳 d 必然是 0。若解码时用错了源 stride（假定 A，实际 S），
                     //       则解出来的图像每往下一行就整体平移 d = A - S 像素、并每 S 像素回绕一次
@@ -159,7 +159,7 @@ internal static class Program
                         if (skMode == 0 && skZero * 2 >= skRows)
                             Console.WriteLine("           => 行对齐正常，解码布局无错位 ⇒ stride 假定成立，花屏不在解码器");
                         else
-                            Console.WriteLine($"           => ★恒定错位 {skMode} px/行 ⇒ 真实源 stride = 假定stride - ({skMode})，解码器 stride 假定错误★");
+                            Console.WriteLine($"           => 恒定错位 {skMode} px/行 ⇒ 真实源 stride = 假定stride - ({skMode})，解码器 stride 假定错误");
                     }
 
                     // 采样保留：整片 NV12 常驻会吃数 GB，这里只留均匀分布的若干张做视觉证据。

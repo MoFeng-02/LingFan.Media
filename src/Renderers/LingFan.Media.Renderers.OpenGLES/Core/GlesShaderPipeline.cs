@@ -25,7 +25,7 @@ namespace LingFan.Media.Renderers.OpenGLES;
 /// </remarks>
 internal sealed unsafe class GlesShaderPipeline : IDisposable
 {
-    // ── GL 常量（GLES 3.0 core，与桌面 GL 同源 Khronos 枚举值）──
+    // GL 常量（GLES 3.0 core，与桌面 GL 同源 Khronos 枚举值）
     private const int GlTexture2D = 0x0DE1;
     private const int GlRgba8 = 0x8058;
     private const int GlRgb8 = 0x8051;
@@ -149,7 +149,7 @@ internal sealed unsafe class GlesShaderPipeline : IDisposable
     private int _nvUUV;
     private int _nvUSwap;
 
-    // ── 帧纹理缓存（0=Y/RGB，1=U/UV，2=V）──
+    // 帧纹理缓存（0=Y/RGB，1=U/UV，2=V）
     private readonly uint[] _planeTextures = new uint[3];
     private int _cachedWidth;
     private int _cachedHeight;
@@ -170,7 +170,7 @@ internal sealed unsafe class GlesShaderPipeline : IDisposable
         PixelFormat.YUV420P or PixelFormat.YUV422P or PixelFormat.YUV444P or
         PixelFormat.NV12 or PixelFormat.NV21;
 
-    // ── 初始化 ──
+    // 初始化
 
     /// <summary>延迟初始化 GLES 资源（VAO / VBO / Shader 程序）。
     /// 必须在 GLES 上下文 current 时调用——由 <see cref="OpenGLESRenderer.Present"/> 在渲染线程绑定上下文后触发，
@@ -300,7 +300,7 @@ internal sealed unsafe class GlesShaderPipeline : IDisposable
         return program;
     }
 
-    // ── 纹理管理 ──
+    // 纹理管理
 
     private void EnsureTextures(int width, int height, PixelFormat format)
     {
@@ -455,7 +455,7 @@ internal sealed unsafe class GlesShaderPipeline : IDisposable
         }
     }
 
-    // ── 对外呈现 ──
+    // 对外呈现
 
     /// <summary>用 Shader 路径将软件帧呈现到当前 GLES 帧缓冲（不交换缓冲，由调用方 SwapBuffers）。</summary>
     internal void Present(SoftwareFrameResource sw, int dstWidth, int dstHeight, AspectRatioMode mode)

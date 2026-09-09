@@ -9,7 +9,7 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// GLES 桥接 SurfaceTexture → GPU 内 YUV→RGBA 落 AHardwareBuffer，渲染侧零拷贝。产帧稳定，
 /// 显示侧经 Vulkan AHB 导入 / Skia 直绘承接。</item>
 /// </list>
-/// 桥接不可用时回落 ①（绝不 c2 软解 + ByteBuffer——那是 numClientBuffers 僵死档）。
+/// 桥接不可用时回落第 1 档（绝不 c2 软解 + ByteBuffer——那是 numClientBuffers 僵死档）。
 /// </summary>
 /// <remarks>
 /// 开关可由宿主在播放前置 <c>true</c>，或经环境变量 <c>LFM_ANDROID_ZERO_COPY=1</c> 启用

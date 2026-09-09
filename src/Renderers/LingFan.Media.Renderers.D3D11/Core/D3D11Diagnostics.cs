@@ -28,7 +28,7 @@ namespace LingFan.Media.Renderers.D3D11;
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 internal static partial class D3D11Diagnostics
 {
-    // ── 环境变量门控（进程内只读一次）──
+    // 环境变量门控（进程内只读一次）
 
     /// <summary>=1 时跳过 DirectComposition，强制 HWND SwapChain（用于二分合成层责任）。</summary>
     internal static readonly bool ForceHwnd =
@@ -62,7 +62,7 @@ internal static partial class D3D11Diagnostics
         return uint.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint v) ? v : fallback;
     }
 
-    // ── 线程归属判定（DirectComposition 要求视觉树操作与窗口线程一致）──
+    // 线程归属判定（DirectComposition 要求视觉树操作与窗口线程一致）
 
     [LibraryImport("user32.dll")]
     private static partial uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr lpdwProcessId);
@@ -74,7 +74,7 @@ internal static partial class D3D11Diagnostics
     internal static (uint WindowThread, uint CurrentThread) InspectThreadAffinity(IntPtr hwnd)
         => (GetWindowThreadProcessId(hwnd, IntPtr.Zero), GetCurrentThreadId());
 
-    // ── BackBuffer 回读 ──
+    // BackBuffer 回读
 
     /// <summary>
     /// 把 backbuffer 回读到 CPU 并落 32bpp BMP，同时算出<b>眼睛无关</b>的客观指标。
@@ -142,7 +142,7 @@ internal static partial class D3D11Diagnostics
 
         string verdict = skew == 0
             ? "行对齐正常"
-            : $"★行错位 d={skew}★";
+            : $"行错位 d={skew}";
 
         return $"#{index} {w}x{h} luma均值={mean:F1} 标准差={std:F2} | " +
                $"行间最佳位移 d={skew}（{agree}/{total} 行一致）SAD比={ratio:F4} => {verdict} | {path}" +

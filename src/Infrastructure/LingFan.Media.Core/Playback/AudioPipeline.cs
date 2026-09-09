@@ -157,7 +157,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             _cts = new CancellationTokenSource();
         }
 
-        // 治本①（起播静默窗）：非恢复播放走 preroll —— WASAPI 内部 Stop→Reset 并 arm，
+        // 治本(1)（起播静默窗）：非恢复播放走 preroll —— WASAPI 内部 Stop→Reset 并 arm，
         // 提交循环写满设备缓冲后自动 Start，引擎抓取真实数据而非静音 → 起播无静默窗。
         // 恢复播放（Pause→Resume）走旧路径立即 Resume。
         bool resuming = _isResuming;
@@ -339,7 +339,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     // 前瞻窗口（预解码帧数）：让提交阶段能成批提交，折叠逐帧 STA 跨线程往返的固定开销（修复听感卡顿/掉速）。
     private const int PrerollFrames = 16;
 
-    // (b)① 架构补短：小量子连续提交。
+    // (b)(1) 架构补短：小量子连续提交。
     // 旧逻辑一次性把 _sampleQueue 全部帧灌入设备（单批阻塞可达数百毫秒），管线离场解码时 submittedSamples
     // 冻结、主时钟平滑前进 → 诊断仪误报"音频间隙/stall"。改为每次最多提交 ~MaxSubmitChunkMs 的音频，
     // 使渲染线程的 submittedSamples 连续推进（解决假 stall），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时）。
@@ -370,7 +370,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     continue;
                 }
 
-                // 1. 提交阶段：小量子连续提交（(b)① 架构补短）
+                // 1. 提交阶段：小量子连续提交（(b)(1) 架构补短）
                 //    每次最多提交 ~MaxSubmitChunkMs 的音频，使渲染线程的 submittedSamples 连续推进
                 //    （解决诊断仪"假 stall"），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时、抗 decode 抖动）。
                 if (_sampleQueue.Count > 0)

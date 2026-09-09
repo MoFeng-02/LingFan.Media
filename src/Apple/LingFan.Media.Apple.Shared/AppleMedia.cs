@@ -15,7 +15,7 @@ namespace LingFan.Media.Apple.Shared;
 /// </remarks>
 public static unsafe partial class AppleRuntime
 {
-    // ── CMTime：CoreMedia 有理数时间（value/timescale = 秒）──
+    // CMTime：CoreMedia 有理数时间（value/timescale = 秒）
     // [StructLayout(Sequential)]：value(int64) + timescale(int32) + flags(uint32) + epoch(int64) = 24 字节。
     [StructLayout(LayoutKind.Sequential)]
     public struct CMTime
@@ -106,7 +106,7 @@ public static unsafe partial class AppleRuntime
     public const uint kVTDecodeFrame_EnableAsynchronousDecompression = 0x00000400u;
     public const int kCVPixelBufferLock_ReadOnly = 0x00000001;
 
-    // ── CoreFoundation：分配器 ──
+    // CoreFoundation：分配器
 
     [LibraryImport("CoreFoundation", EntryPoint = "CFAllocatorGetDefault")]
     public static partial nint CFAllocatorGetDefault();
@@ -145,7 +145,7 @@ public static unsafe partial class AppleRuntime
     [LibraryImport("CoreFoundation", EntryPoint = "CFArrayGetValueAtIndex")]
     public static partial nint CFArrayGetValueAtIndex(nint array, nint index);
 
-    // ── CoreMedia ──
+    // CoreMedia
 
     [LibraryImport("CoreMedia", EntryPoint = "CMSampleBufferGetDataBuffer")]
     public static partial nint CMSampleBufferGetDataBuffer(nint sbuf);
@@ -210,7 +210,7 @@ public static unsafe partial class AppleRuntime
         nint allocator, nuint parameterSetCount, nint parameterSetPointers, nint parameterSetSizes,
         int nalUnitHeaderLength, nint extensions, out nint formatDescriptionOut);
 
-    // ── CoreVideo ──
+    // CoreVideo
 
     [LibraryImport("CoreVideo", EntryPoint = "CVPixelBufferLockBaseAddress")]
     public static partial int CVPixelBufferLockBaseAddress(nint pixelBuffer, nuint lockFlags);
@@ -248,7 +248,7 @@ public static unsafe partial class AppleRuntime
     [LibraryImport("CoreVideo", EntryPoint = "CVPixelBufferGetIOSurface")]
     public static partial nint CVPixelBufferGetIOSurface(nint pixelBuffer);
 
-    // ── VideoToolbox ──
+    // VideoToolbox
 
     [LibraryImport("VideoToolbox", EntryPoint = "VTDecompressionSessionCreate")]
     public static partial int VTDecompressionSessionCreate(
@@ -265,7 +265,7 @@ public static unsafe partial class AppleRuntime
     [LibraryImport("VideoToolbox", EntryPoint = "VTDecompressionSessionInvalidate")]
     public static partial void VTDecompressionSessionInvalidate(nint session);
 
-    // ── AudioToolbox（音频解码器）──
+    // AudioToolbox（音频解码器）
 
     // AudioStreamBasicDescription：40 字节（mSampleRate f64 + 5×u32 + mReserved u32）。
     [StructLayout(LayoutKind.Sequential)]

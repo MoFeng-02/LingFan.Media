@@ -68,7 +68,7 @@ public sealed class RenderContext : IGpuDeviceContext
         GraphicsQueueFamilyIndex = graphicsQueueFamilyIndex;
     }
 
-    // ── IGpuDeviceContext 实现（接口契约，无真实 I/O）──
+    // IGpuDeviceContext 实现（接口契约，无真实 I/O）
 
     /// <inheritdoc/>
     GPUApiType IGpuDeviceContext.ApiType => GpuApiType;

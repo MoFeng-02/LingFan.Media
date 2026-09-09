@@ -221,7 +221,7 @@ internal static class Program
             // 以 CountingVideoRendererFactory 装饰器包裹注册为 IVideoRendererFactory。
             // 关键：生产者(IGpuFrameProducer)与 on-screen 渲染器必须共享【同一】OpenGLOffscreenDeviceContext
             // （GL 共享组所有者），零拷贝导入的 GL 纹理才对渲染器可见。若此处另 new 一个 OpenGLRendererFactory，
-            // 会产生第二个离屏上下文 → ① RegisterClassExW 同名类重复注册报 1410；② 两个 GL 共享组互不连通 → 黑屏。
+            // 会产生第二个离屏上下文 → (1) RegisterClassExW 同名类重复注册报 1410；(2) 两个 GL 共享组互不连通 → 黑屏。
             // 故此处经 DI 单例解析同一工厂，仅用装饰器加计数（countingFactory 引用在 BuildServiceProvider 后取出）。
             builder.Services.AddSingleton<IVideoRendererFactory>(sp =>
             {
@@ -527,7 +527,7 @@ internal static class Program
         return overall ? 0 : 1;
     }
 
-    // ── VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH ──
+    // VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH
 
     /// <summary>定位原生 libvlc 目录（libvlc.dll 所在目录）：优先探针自带分发的 NuGet 原生包，其次系统已安装的 VLC。</summary>
     private static string? LocateLibVlc()
@@ -614,7 +614,7 @@ internal static class Program
         return null;
     }
 
-    // ── 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用 ──
+    // 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用
 
     private sealed class CountingVideoRendererFactory : IVideoRendererFactory
     {
@@ -667,7 +667,7 @@ internal static class Program
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 
-    // ── 渲染目标：把 HWND 包装成 IRenderTarget（Window 类型） ──
+    // 渲染目标：把 HWND 包装成 IRenderTarget（Window 类型）
 
     private sealed class HwndRenderTarget : IRenderTarget
     {
@@ -682,7 +682,7 @@ internal static class Program
         public float Scale => 1f;
     }
 
-    // ── 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）──
+    // 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）
 
     private sealed class RenderWindow : IDisposable
     {
@@ -802,7 +802,7 @@ internal static class Program
             => NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    // ── 参数 / 资源解析辅助 ──
+    // 参数 / 资源解析辅助
 
     private static bool HasFlag(string[] args, params string[] flags)
     {
@@ -1028,7 +1028,7 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
-    // ── DPI / 客户区几何诊断（判定「DWM 是否在 GL 之外又拉伸了一层」）──
+    // DPI / 客户区几何诊断（判定「DWM 是否在 GL 之外又拉伸了一层」）
 
     /// <summary>取窗口客户区矩形（物理像素，前提是进程 DPI-aware；否则返回被虚拟化的逻辑像素）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "GetClientRect", SetLastError = true)]
@@ -1039,7 +1039,7 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll", EntryPoint = "GetDpiForWindow")]
     public static partial uint GetDpiForWindow(IntPtr hWnd);
 
-    // ── 自注册窗口类（黑底，替代 "Static" 系统类的白色背景，消除启动白屏）──
+    // 自注册窗口类（黑底，替代 "Static" 系统类的白色背景，消除启动白屏）
 
     /// <summary>注册窗口类（WNDCLASSEXW），返回类 atom（0=失败，GetLastPInvokeError 取原因）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "RegisterClassExW", SetLastError = true)]

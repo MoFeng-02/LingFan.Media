@@ -35,7 +35,7 @@ public sealed class WasapiOptions
     /// <para>新增。控制 WASAPI 设备初始化时使用的采样格式。</para>
     /// <para>null（默认）：共享模式使用 GetMixFormat 获取设备原生格式；独占模式优先尝试 F32。</para>
     /// <para>指定格式：尝试以指定格式初始化设备，若不支持则回退到设备原生格式。</para>
-    /// <para>当帧格式与设备格式匹配时，Submit 零转换直拷（O9 多格式直出）。</para>
+    /// <para>当帧格式与设备格式匹配时，Submit 零转换直拷（多格式直出）。</para>
     /// </remarks>
     public SampleFormat? PreferredSampleFormat { get; set; } = null;
 
@@ -50,12 +50,11 @@ public sealed class WasapiOptions
     /// <summary>音频会话分类（IAudioClient2.SetClientProperties）首选值。默认 <see cref="AudioClientCategory.Movie"/>。
     /// 仅在 <see cref="EnableBackgroundCapableSession"/> 为 <c>true</c> 时生效（该开关默认关闭）。</summary>
     /// <remarks>
-    /// <para>O10。需在 IAudioClient.Initialize 之前通过 IAudioClient2 设置；不支持 IAudioClient2 的旧系统自动跳过。</para>
+    /// <para>需在 IAudioClient.Initialize 之前通过 IAudioClient2 设置；不支持 IAudioClient2 的旧系统自动跳过。</para>
     /// <para>设置失败（负 HRESULT）时自动降级到同族候选（BackgroundCapableMedia → Movie → Media），全部失败则静默跳过。</para>
-    /// <para>任意分类值都触发<c>原生访问违规</c>的现象，
-    /// 真因是 <c>TrySetSessionCategory</c> 的 vtable 槽位算错一格（slotIndex 12 = 绝对槽 15 = <c>IsOffloadCapable</c>，
-    /// 它比 SetClientProperties 多一个 <c>BOOL*</c> 出参，误调导致向未初始化寄存器指向的野地址写入）。
-    /// 修正为 slotIndex 13（绝对槽 16）后，独立官方 COM 探针九个分类全部 <c>S_OK</c>。</para>
+    /// <para>防回归：若 vtable 槽位算错一格（误调 <c>IsOffloadCapable</c>，它比 SetClientProperties 多一个
+    /// <c>BOOL*</c> 出参），会向未初始化寄存器指向的野地址写入 → <c>原生访问违规</c>。正确槽位为 slotIndex 13（绝对槽 16），
+    /// 修正后各分类调用均 <c>S_OK</c>。</para>
     /// </remarks>
     public AudioClientCategory SessionCategory { get; set; } = AudioClientCategory.Movie;
 
@@ -64,12 +63,8 @@ public sealed class WasapiOptions
     /// <para>用途：把会话标记为媒体类，供音量混合器与电源策略参考；在确实会挂起后台会话的系统上可作为规避手段。</para>
     /// <para>失败保护：QI 拿不到 IAudioClient2 时静默跳过；某分类返回负 HRESULT 时降级试下一个候选；全部失败仅记 Warning，
     /// 不影响后续 <c>Initialize</c>。</para>
-    /// <para>定案（两条独立结论，勿混淆）：</para>
-    /// <para>① <b>调用路径的 bug 已修</b>：此前任意分类都触发<c>原生访问违规</c>，真因是 vtable 槽位算错一格
-    /// （误调 <c>IsOffloadCapable</c>，它多一个 <c>BOOL*</c> 出参 ⇒ 向未初始化寄存器指向的野地址写入）。
-    /// 修正为 slotIndex 13（绝对槽 16）后调用本身合法，独立官方 COM 探针九个分类全部 <c>S_OK</c>。</para>
-    /// <para>② <b>但默认仍为 false</b>：启用它的原始动机是「防止 OS 挂起后台会话」，而该前提<b>并未被证实</b>
-    /// （诊断探针的停滞判定在欠供给场景下恒不触发，属无效判定）；且默认启用后出现回归——
+    /// <para>默认保持 <c>false</c> 的依据：启用它的动机「防止 OS 挂起后台会话」<b>未被证实</b>
+    /// （诊断探针的停滞判定在欠供给场景下恒不触发，属无效判定）；且默认启用曾出现回归——
     /// <b>长时间静音后才出声</b>。在动机未证实而副作用确凿的情况下，按「不引入未经验证的默认行为」原则保持 opt-in。</para>
     /// <para>修改默认值后务必先做 <c>dotnet clean</c> + 全量重建再跑测试。</para>
     /// </remarks>

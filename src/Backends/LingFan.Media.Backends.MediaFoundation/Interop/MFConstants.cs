@@ -131,7 +131,7 @@ internal static class MFConstants
     // 运行时验证：CoCreateInstance + 全 vtable 槽位 S_OK。误写 ...8009-456E31185733（错误 GUID），勿回退）
     internal static readonly Guid IID_IMFTransform = new(0xbf94c121, 0x5b05, 0x4e6f, 0x80, 0x00, 0xba, 0x59, 0x89, 0x61, 0x41, 0x4d);
 
-    // ── DXVA 零拷贝所需 IID 与消息常量 ──
+    // DXVA 零拷贝所需 IID 与消息常量
     // IMFDXGIDeviceManager（dxva2api.h 权威值 {AEC1CAF6-EE55-44FC-BC6A-E049C3F6D664}）
     internal static readonly Guid IID_IMFDXGIDeviceManager = new(0xaec1caf6, 0xee55, 0x44fc, 0xbc, 0x6a, 0xe0, 0x49, 0xc3, 0xf6, 0xd6, 0x64);
     // IMFDXGIBuffer（dxva2api.h 权威值 {D8AD0F58-EE55-4E44-AB48-5F6EA27FFB15}）
@@ -151,7 +151,7 @@ internal static class MFConstants
     // IMF2DBuffer（mfobjects.h 权威值 {7DC9D5F9-9ED9-44EC-9BBF-0600BB589F56}）
     internal static readonly Guid IID_IMF2DBuffer = new(0x7dc9d5f9, 0x9ed9, 0x44ec, 0x9b, 0xbf, 0x06, 0x00, 0xbb, 0x58, 0x9f, 0x56);
 
-    // ── SourceReader 内部 MFT 链取证（零拷贝失效成因定位）────────────────────────
+    // SourceReader 内部 MFT 链取证（零拷贝失效成因定位）
     // IMFSourceReaderEx（mfreadwrite.h:644 MIDL_INTERFACE 权威值 {7B981CF0-560E-4116-9875-B099895F23D7}）
     // 唯一能看穿 SourceReader「黑盒」的接口：GetTransformForStream 可枚举它为某条流实际插入的 MFT 链。
     //    S_OK≠被接受：设了 D3D_MANAGER 且全部返回 S_OK，
@@ -179,7 +179,7 @@ internal static class MFConstants
     //    但 A 方案的 NV12 CPU 回落要靠它算行跨度，写错会直接花屏，故必须修。
     internal static readonly Guid MF_MT_DEFAULT_STRIDE = new(0x644b4e48, 0x1e02, 0x4516, 0xb0, 0xeb, 0xc0, 0x1c, 0xa9, 0xd4, 0x9a, 0xc6);
 
-    // ── H264 DXVA 设备能力真值探测（决定性判据：区分「半 DXVA 读回」与「真 DXGI 零拷贝」）──
+    // H264 DXVA 设备能力真值探测（决定性判据：区分「半 DXVA 读回」与「真 DXGI 零拷贝」）
     // ID3D11VideoDevice（d3d11.h:13727 MIDL_INTERFACE 权威值 {10EC4D5B-975A-4689-B9E4-D0AAC30FE333}）
     // 历史误记的 1F010207-... 是 ID3D11VideoContext，非 VideoDevice——务必以 SDK 实物为准。
     internal static readonly Guid IID_ID3D11VideoDevice = new(0x10ec4d5b, 0x975a, 0x4689, 0xb9, 0xe4, 0xd0, 0xaa, 0xc3, 0x0f, 0xe3, 0x33);
@@ -215,8 +215,7 @@ internal static class MFConstants
     // MFT 设置类型标志
     internal const int MFT_SET_TYPE_TEST_ONLY = 0x00000001;
 
-    // ══════════════════════════════════════════════════════════════════════════════════
-    // ── SourceReader 自带硬解 + DXGI 出样（A 方案：官方验证的 MF 零拷贝正路）所需属性键 ──
+    // SourceReader 自带硬解 + DXGI 出样（A 方案：官方验证的 MF 零拷贝正路）所需属性键
     //
     // 背景：直连 MFT（MFTEnumEx → ActivateObject → SET_D3D_MANAGER → ProcessInput/Output）在部分
     // GPU/驱动组合上会在内部 CreateVideoDecoder 阶段静默回落软件解码 —— MFT 仍报 PROVIDES_SAMPLES=True，
@@ -227,7 +226,6 @@ internal static class MFConstants
     //
     // 全部 GUID 已逐字节比对 SDK 头文件实物：
     //    （行号见各条注释）。手写 GUID 一律以 SDK 头文件为准，勿凭记忆猜测。
-    // ══════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>MF_SOURCE_READER_D3D_MANAGER {EC822DA2-E1E9-4B29-A0D8-563C719F5269}（mfreadwrite.h:290）。
     /// IUnknown 属性：把 <c>IMFDXGIDeviceManager*</c> 交给 SourceReader，令其内部解码 MFT 在该 D3D11 设备上

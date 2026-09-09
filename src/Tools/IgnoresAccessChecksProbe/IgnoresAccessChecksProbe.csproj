@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- 探针专用：验证 IgnoresAccessChecksTo 在 PublishAot 下的可用性，不代表库项目宪法放宽 -->
+    <!-- 探针专用：验证 IgnoresAccessChecksTo 在 PublishAot 下的可用性，仅限本探针使用 -->
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- 直接引用本地 NuGet 缓存里的 Avalonia 12.1.1 组件（探针不进解决方案分发物） -->

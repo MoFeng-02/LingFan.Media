@@ -29,7 +29,7 @@ public sealed class MediaPacket : IDisposable
     /// <summary>是否关键帧。</summary>
     public bool KeyFrame { get; }
 
-    // ── 已解码（直通）packet 的真实帧参数 ──
+    // 已解码（直通）packet 的真实帧参数
     // 仅 VLC 等"解封装+解码一体"的直通后端会把已解码数据放入 MediaPacket，
     // 此时这些字段携带真实帧格式/尺寸；压缩 packet（FFmpeg/MF）保持默认 0/default，不参与解包。
     /// <summary>解码帧宽度（仅直通 packet 有意义，压缩 packet 为 0）。</summary>

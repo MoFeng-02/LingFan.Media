@@ -27,7 +27,7 @@ namespace LingFan.Media.Renderers.D3D11.Shaders;
 /// </remarks>
 internal sealed class D3D11ShaderPipeline : IDisposable
 {
-    // ── HLSL 源（内嵌常量；VS 全屏三角形 + 4 个 PS 入口）──
+    // HLSL 源（内嵌常量；VS 全屏三角形 + 4 个 PS 入口）
     private const string HlslSource = """
         // Fullscreen triangle: SV_VertexID in {0,1,2} -> oversized triangle covering screen (no vertex buffer)
         struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
@@ -136,14 +136,14 @@ internal sealed class D3D11ShaderPipeline : IDisposable
     private bool _shadersReady;
     private bool _disposed;
 
-    // ── 帧纹理缓存（尺寸/格式变化时重建；平面 0=Y/RGB，1=U/UV，2=V）──
+    // 帧纹理缓存（尺寸/格式变化时重建；平面 0=Y/RGB，1=U/UV，2=V）
     private readonly ID3D11Texture2D?[] _planeTextures = new ID3D11Texture2D?[3];
     private readonly ID3D11ShaderResourceView?[] _planeSrvs = new ID3D11ShaderResourceView?[3];
     private int _cachedWidth;
     private int _cachedHeight;
     private PixelFormat _cachedFormat = (PixelFormat)(-1);
 
-    // ── GPU 纹理缓存──
+    // GPU 纹理缓存
     private ID3D11Texture2D? _gpuStagingTexture;
     private int _gpuCachedWidth;
     private int _gpuCachedHeight;
@@ -481,7 +481,7 @@ internal sealed class D3D11ShaderPipeline : IDisposable
         _shadersReady = false;
     }
 
-    // ── 内部实现（均在渲染器锁内执行）──
+    // 内部实现（均在渲染器锁内执行）
 
     /// <summary>编译并创建全部 Shader 与采样器（懒加载，仅首次；同步原生编译）。</summary>
     private void EnsureShaders()

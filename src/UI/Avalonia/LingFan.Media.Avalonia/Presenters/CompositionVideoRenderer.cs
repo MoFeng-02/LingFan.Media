@@ -68,8 +68,8 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
 
     // 运行期健康：连续无法呈现达到阈值即触发 Unhealthy → 宿主（VideoView）拉黑本工厂并回退 Skia，
     // 确保 Composition 永不静默空白（Attach 成功但运行期持续出不了画时有兜底）。
-    // 阈值取 10（30fps 下约 0.33s）：主时钟是音频驱动，回退越晚音画起点错位越大——真机曾因
-    // 导入失败连吃 30 帧（约 1s）后画面才出现，被感知为「音频比画面先出约 1 秒」。
+    // 阈值取 10（30fps 下约 0.33s）：主时钟是音频驱动，回退越晚音画起点错位越大——
+    // 导入失败若连续多帧才恢复，会被感知为「音频比画面先出」。
     private int _consecutiveSkips;
     private bool _unhealthyFired;
     private const int SkipThreshold = 10;
@@ -239,7 +239,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                         t.Contains("android", StringComparison.OrdinalIgnoreCase));
                 if (ht is null || !interop.SupportedImageHandleTypes.Contains(ht))
                 {
-                    // 静默跳过是零拷贝排查最大的盲区：合成器句柄类型为空集时（典型：Android 跑在
+                    // 静默跳过是零拷贝回退定位的最大盲区：合成器句柄类型为空集时（典型：Android 跑在
                     // EGL 后端 —— Avalonia 的 GL 后端不实现外部图像导入，SupportedImageHandleTypes 为 []），
                     // 每个工厂都会走到这里而不留任何痕迹，最终只看到一句笼统的「无可用工厂」。
                     // 必须逐工厂打点：句柄类型 + 映射结果 + 合成器实际支持列表，一眼看出是后端选错还是映射缺项。
@@ -413,7 +413,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             return;
         }
 
-        // ① 管线线程：把解码帧 GPU 内容渲染进独立的共享 D3D11 纹理（keyed mutex 握手）。
+        // (1) 管线线程：把解码帧 GPU 内容渲染进独立的共享 D3D11 纹理（keyed mutex 握手）。
         //    必须在 frame 仍存活时（本线程，Emit 的 ReturnFrame 之前）完成——共享纹理内容被固化拷贝，
         //    与解码帧纹理解耦，故后续封送到 UI 线程导入时 frame 是否已释放均安全。
         //    共享 D3D11 设备已开启多线程保护，跨线程调用安全。
@@ -423,7 +423,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             return;
         }
 
-        // ② 导入 + 上屏必须在 UI 线程（Compositor 拥有者）：Avalonia 的 ImportImage /
+        // (2) 导入 + 上屏必须在 UI 线程（Compositor 拥有者）：Avalonia 的 ImportImage /
         //    UpdateWithKeyedMutexAsync / Visual 属性全部要求 UI 线程，否则抛 VerifyAccess 异常
         //    （之前在管线线程直接调用即暴露为「连续 30 帧无法呈现 → 回退 Skia」）。
         //    desc 为值类型，拷贝后跨线程安全传递到 UI 线程。
@@ -526,7 +526,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                     : _drawingSurface.UpdateWithKeyedMutexAsync(
                         imported, (uint)_source.ConsumerAcquireKey, (uint)_source.ConsumerReleaseKey);
 
-            // 治根（Android 真机教训）：上屏任务必须被健康监控观测。原实现把 _lastPresent 存入即弃、
+            // 上屏任务必须被健康监控观测。原实现把 _lastPresent 存入即弃、
             // 无条件 NoteSuccess()，导致「写入共享纹理成功但合成器从未采样 / 导入失效」被误判为成功，
             // 连续成功计数永不归零 → Unhealthy 永不触发 → 永不回退 Skia → 永久空白且无任何日志。
             // 现改为：任务成功完成才记成功；任务失败/取消记一次跳过，连续达阈值即触发回退。
@@ -535,9 +535,9 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             {
                 if (t.IsFaulted || t.IsCanceled)
                 {
-                    // 数据先行：上屏任务真实异常此前被静默吞掉（仅计一次跳过 → 30 次触发回退），
+                    // 上屏任务真实异常此前被静默吞掉（仅计一次跳过 → 30 次触发回退），
                     // 导致「UpdateAsync 为何失败」完全不可见。此处把 AggregateException 展开记录，
-                    // 真机 run 的 3.txt 即可看到 Android 合成器对导入 AHB/OPAQUE_FD 图像的真实拒绝原因。
+                    // 即可看到 Android 合成器对导入 AHB/OPAQUE_FD 图像的真实拒绝原因。
                     if (t.Exception is { } ex)
                         _logger.LogError(ex, "CompositionVideoRenderer UpdateAsync 上屏失败（帧跳过，累计将触发回退）。HandleType={HandleType} Version={Version}",
                             _handleType, _lastVersion);
@@ -598,7 +598,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             // 【必须透传】OPAQUE_FD 不携带内存元数据，Avalonia 的
             // VulkanExternalObjectsFeature.ImportedImage.CreateMemory 会拿这两个值与它自己
             // vkGetImageMemoryRequirements(导入图像) 的结果做严格相等校验，不符即抛
-            // "Invalid memory size"（真机实证：漏传 → 每帧导入失败 → 整段播放不出画）。
+            // "Invalid memory size"（漏传 → 每帧导入失败 → 整段播放不出画）。
             // MemorySize 必须是生产者侧 vkGetImageMemoryRequirements().size（含驱动 tile/对齐扩容），
             // 不是 w*h*4；MemoryOffset 恒为 0。
             MemorySize = desc.MemorySize,
@@ -633,8 +633,8 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
 
     /// <summary>
     /// 确保导入图像可用，处理两类重建场景：
-    /// ① 共享纹理重建（生产者 <see cref="SharedGpuSurfaceDescriptor.Version"/> 变化）→ 丢弃旧导入，按新句柄/尺寸重导；
-    /// ② 合成器 GPU 上下文重建（Android 初始化期 RenderInterface 被重建）→ 旧 interop 在创建时捕获的 Context 快照
+    /// (1) 共享纹理重建（生产者 <see cref="SharedGpuSurfaceDescriptor.Version"/> 变化）→ 丢弃旧导入，按新句柄/尺寸重导；
+    /// (2) 合成器 GPU 上下文重建（Android 初始化期 RenderInterface 被重建）→ 旧 interop 在创建时捕获的 Context 快照
     ///    与当前 <c>compositor.Server.RenderInterface.Value</c> 不再是同一实例，其导入图像
     ///    <c>IsUsable</c> 永久 false、<c>UpdateAsync</c> 抛 <see cref="PlatformGraphicsContextLostException"/>。
     ///    此时须重新 <c>TryGetCompositionGpuInterop()</c>（其构造函数会重新捕获当前 RenderInterface.Value 作为新 Context），
@@ -645,7 +645,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
     /// <returns>导入图像就绪可用返回 <see langword="true"/>；不可用（应跳过本帧或回退）返回 <see langword="false"/>。</returns>
     private async Task<bool> EnsureInteropAndImportAsync(SharedGpuSurfaceDescriptor desc)
     {
-        // ② 合成器上下文重建：重拉 interop 以刷新 Context 快照，并强制下方重导旧导入。
+        // (2) 合成器上下文重建：重拉 interop 以刷新 Context 快照，并强制下方重导旧导入。
         if (_interopStale || _interop is null)
         {
             _interopStale = false;
@@ -682,7 +682,7 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
             _signalSem = null;
         }
 
-        // ① 共享纹理重建或强制重导：按当前句柄/尺寸导入。
+        // (1) 共享纹理重建或强制重导：按当前句柄/尺寸导入。
         if (_imported is null || _lastVersion != desc.Version)
         {
             _imported?.DisposeAsync();

@@ -33,7 +33,7 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// </remarks>
 internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfaceSource
 {
-    // ── 信号量握手键（Semaphores 模型不使用 keyed mutex，恒为 0）──
+    // 信号量握手键（Semaphores 模型不使用 keyed mutex，恒为 0）
     private const ulong UnusedKey = 0;
     // 生产者等待消费方归还表面的有限超时（纳秒，与 D3D11 的 16ms AcquireSync 超时对称）。
     private const ulong WriteWaitTimeoutNs = 16_000_000;
@@ -71,8 +71,8 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
 
     // 可外部导出离屏图像（尺寸变化时重建；_version 随之递增）。
     // Android 双缓冲（2 槽轮换写入/交付）：Skia Ganesh 对【同一 VkImage 句柄】的包装会命中纹理缓存、
-    // 内容永不更新（真机实证：管线 985 帧全部呈现、渲染回调 30fps 活跃，屏幕永远定格第一次采样内容）；
-    // 每帧换一个 VkImage 交付即绕开缓存。非 Android 走合成器 OPAQUE_FD 导入 + version 重建机制，单槽即可。
+    // 内容不更新（管线持续出帧而屏幕定格首次采样内容）；每帧换一个 VkImage 交付即绕开缓存。
+    // 非 Android 走合成器 OPAQUE_FD 导入 + version 重建机制，单槽即可。
     private readonly Image[] _sharedImages = new Image[2];
     private readonly DeviceMemory[] _sharedMemories = new DeviceMemory[2];
     private readonly ImageView[] _sharedImageViews = new ImageView[2];
@@ -87,7 +87,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private ulong _version;
     /// <summary>当前交付槽位的共享离屏外部内存真实分配字节数（= vkGetImageMemoryRequirements().size）。
     /// 随 <see cref="SharedGpuSurfaceDescriptor"/> 交合成器：Avalonia 导入 OPAQUE_FD 时以此与自身
-    /// 计算的内存需求做严格相等校验，不符即抛 "Invalid memory size"（真机实证：留 0 必不出画）。
+    /// 计算的内存需求做严格相等校验，不符即抛 "Invalid memory size"（留 0 时导入校验必失败、不出画）。
     /// 注意不是 w*h*4 —— 驱动按 tile/对齐会扩到更大值，只能以 vkGetImageMemoryRequirements 为准。</summary>
     private ulong _sharedMemorySize => _sharedMemorySizes[_sharedActive];
 
@@ -97,7 +97,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private ImageCreateFlags _sharedFlags;
 
 
-    // ── 写入停摆看门狗 ──
+    // 写入停摆看门狗
     // TryWriteFrame 只在管线线程串行执行。此处仅记录「当前阶段 + 进入时刻」，由独立定时器在
     // 写入久未返回时告警，用于定位卡死在哪个原生调用；正常播放期间零日志输出。
     private long _writeSeq;
@@ -151,20 +151,20 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
 
     private bool _disposed;
 
-    // 出帧路径区分（零拷贝 vs 软帧上传）：一次性公告 + 周期计数，供真机日志区分帧来源与转移口。
+    // 出帧路径区分（零拷贝 vs 软帧上传）：一次性公告 + 周期计数，供运行日志区分帧来源与转移口。
     private long _writtenFrames;
     private bool _announcedZeroCopy;
     private bool _announcedSoft;
     private const int FrameLogInterval = 30;
 
-    // ── Android 共享离屏：与 Linux 走完全相同的 OPAQUE_FD 导出路径 ──
-    // 治根结论（本轮联网核实 + 2.txt 实证）：Android Vulkan（Mali/Adreno 等）完全支持
+    // Android 共享离屏：与 Linux 走完全相同的 OPAQUE_FD 导出路径
+    // Android Vulkan（Mali/Adreno 等）完全支持
     // VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT，可经 vkGetMemoryFdKHR 导出 dma_buf fd 交合成器
     // VulkanOpaquePosixFileDescriptor 导入上屏。AHB 句柄类型仅是「额外支持」而非 OPAQUE_FD 的替代品。
-    // 此前数轮误入「自分配 AHardwareBuffer + 反向解析 GraphicBuffer/native_handle_t 的 C++ 内存布局抠 fd」
-    // 的脆弱死路（android_native_base_t 版本/厂商布局不兼容、AHardwareBuffer 与 GraphicBuffer 无继承契约，
-    // 硬编码偏移读到错误 magic → 2.txt:473 `读得 0xFCDF8028，期望 0x6E4AA411` → 优雅回退 Skia、Android 不出画）。
-    // 现删除整条 AHB 自分配+结构反向解析代码，Android 直接复用 Linux 已验证可用的 ExportMemoryAllocateInfo(OPAQUE_FD)
+    // 防回归：不要走「自分配 AHardwareBuffer + 反向解析 GraphicBuffer/native_handle_t 的 C++ 内存布局抠 fd」
+    // 的脆弱路线（android_native_base_t 版本/厂商布局不兼容、AHardwareBuffer 与 GraphicBuffer 无继承契约，
+    // 硬编码偏移会读到错误 magic → 优雅回退 Skia、Android 不出画）。
+    // Android 直接复用 Linux 已验证可用的 ExportMemoryAllocateInfo(OPAQUE_FD)
     // + vkGetMemoryFdKHR 写法（版本/厂商无关、AOT 安全、零 P/Invoke 到 libandroid.so）。
 
     /// <summary>
@@ -228,13 +228,13 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             }
             else
             {
-                // Android（同 device Skia 直绘，R2/M2 2026-09-02）：宿主（Avalonia Android 入口）已把自建
+                // Android（同 device Skia 直绘）：宿主（Avalonia Android 入口）已把自建
                 // VkDevice 注入本工厂（UseExternalDevice），UI 层的 Skia GPU 上下文与本源共用<b>同一 device、
                 // 同一图形队列</b>（device 仅启用单一队列族）。故共享表面改为交付原生 VkImage
                 // （VulkanNativeImage），消费方直接包装采样绘制——零外部内存导出/导入、零 fd、零 dedicated。
                 // 旧 OPAQUE_FD 路径（fd 导出交 Avalonia 合成器 ImportImage）在 Adreno 上存在 dedicated
                 // 导入死结（不挂 dedicated ⇒ 生产侧 BindImageMemory ErrorInvalidExternalHandle；挂 ⇒ 消费侧
-                // vkAllocateMemory INITIALIZATION_FAILED），已判死不再回头。
+                // vkAllocateMemory INITIALIZATION_FAILED），已弃用不再回头。
                 // 同步：无需 keyed mutex / 信号量——生产与消费共用同一 VkQueue，同队列提交天然按提交序串行；
                 // 交付前生产者以 fence 等待拷贝完成，且末屏障使写入对后续采样可见（详见 CopyToSharedImage）。
                 _handleKind = SharedGpuHandleKind.VulkanNativeImage;
@@ -333,12 +333,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             w = ahb.Width;
             h = ahb.Height;
 
-            // Android RGBA 直采样捷径（0 队列提交）：导入图像直接交 Skia 采样，废除我方 ①转换+②拷贝
-            // 双提交。真机实证（2026-09-04 drawop2）：我方提交与 Skia 帧提交共用同一 VkQueue，逐帧
-            // AHB 导入+双提交在 Adreno 上以 ~1/2000 频率随机触发 vkQueueSubmit
-            // ErrorInitializationFailed（规范外错误码），同秒殃及 Skia 提交 → Avalonia 渲染循环死亡
-            // → 画面永久定格（[DRAW-OP] 心跳与 ② 失败同秒消失，而同线程管线侧照常跑完 985 帧）。
-            // 导入是纯 CPU 调用（无队列命令），-3 从此无我方触发源。失败或 YCbCr 外部格式 → 落回旧转换路径。
+            // Android RGBA 直采样捷径（0 队列提交）：导入图像直接交 Skia 采样，不再由本源做转换+拷贝
+            // 双提交。防回归：我方提交与 Skia 帧提交共用同一 VkQueue 时，逐帧 AHB 导入+双提交在 Adreno 上
+            // 会以极低频率随机触发 vkQueueSubmit ErrorInitializationFailed（规范外错误码），并殃及同队列的
+            // Skia 提交 → Avalonia 渲染循环停摆 → 画面永久定格。
+            // 导入是纯 CPU 调用（无队列命令），不产生该错误触发源。失败或 YCbCr 外部格式 → 落回旧转换路径。
             if (_isAndroid && TryBuildAhbDirectDescriptor(ahb, w, h, frame.RotationDegrees, out descriptor))
                 return true;
 
@@ -374,7 +373,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         if (!recorded)
             return false;
 
-        // Android AHB 零拷贝路径已在 TryRecordAhbConversion 内部分步自提交（隔离 Mali DEVICE_LOST 真因），
+        // Android AHB 零拷贝路径已在 TryRecordAhbConversion 内部分步自提交（隔离 Mali DEVICE_LOST 发生步），
         // 命令缓冲不归公共提交段管理，跳过 EndCommandBuffer/QueueSubmit/WaitForFences，直接导出描述符。
         if (!_ahbSelfSubmitted)
         {
@@ -434,11 +433,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             }
         }
 
-        // ── 0拷贝帧出参 / 转移口：将本帧共享离屏表面的外部内存句柄 + 版本 + 同步模型打包交合成器 ──
+        // 0拷贝帧出参 / 转移口：将本帧共享离屏表面的外部内存句柄 + 版本 + 同步模型打包交合成器
         // 此处即「帧转移不拷贝」的交付点：调用方（合成器）仅持 SharedGpuSurfaceDescriptor，不感知源像素布局。
         // 零拷贝 = 本描述符携带外部内存句柄（fd / HANDLE / IOSurface），而非像素副本；软帧同样经此口交付。
         // 【兜底】绝不允许带着 MemorySize=0 交付 —— Avalonia 导入 OPAQUE_FD 时以此做严格相等校验，
-        // 0 必然抛 "Invalid memory size"（真机实证：连续 27 帧导入失败 → 30 帧后整链回退 Skia）。
+        // 0 必然抛 "Invalid memory size"、导入连续失败 → 整链回退 Skia 不出画。
         // 正常路径已在分配点记录；此处现查只是防御，代价一次 vkGetImageMemoryRequirements（纳秒级）。
         if (_sharedMemorySize == 0)
         {
@@ -446,11 +445,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             VulkanNative.GetImageMemoryRequirements(_device, _sharedImages[_sharedActive], &fallbackReq);
             _sharedMemorySizes[_sharedActive] = fallbackReq.Size;
             _logger.LogWarning(
-                "[VULKAN-SHARED] MemorySize 在分配点未记录，交付前现查兜底={Size}（应排查分配点为何漏记）。",
+                "[VULKAN-SHARED] MemorySize 在分配点未记录，交付前现查兜底={Size}（应检查分配点为何漏记）。",
                 fallbackReq.Size);
         }
         // Trace 级：呈现线程为实时线程，周期性 Information 写 logcat（双 provider）可达数十 ms，
-        // 会周期性阻塞 Present（卡顿根因之一），调高日志级别即可查看。
+        // 会周期性阻塞 Present（卡顿诱因之一），调高日志级别即可查看。
         if ((_writtenFrames % FrameLogInterval) == 0)
             _logger.LogTrace(
                 "[VULKAN-SHARED] 转移口 帧#{N} 路径={Path} 出参Kind={Kind} version={Ver} sync={Sync} {W}x{H} mem={Mem} usage=0x{Usage:X} flags=0x{Flags:X}",
@@ -657,7 +656,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     }
 
 
-    // ── 命令资源（命令池 + 命令缓冲 + 每帧 Fence）──
+    // 命令资源（命令池 + 命令缓冲 + 每帧 Fence）
     private void CreateCommandResources()
     {
         CommandPoolCreateInfo poolInfo = new()
@@ -689,7 +688,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             throw new InvalidOperationException($"vkCreateFence（共享表面源）失败: {result}");
     }
 
-    // ── 信号量对（导出 + 握手初始化）──
+    // 信号量对（导出 + 握手初始化）
     private void CreateSemaphores()
     {
         if (_isApple)
@@ -814,7 +813,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             // vkCmdCopyImage 拷入（TRANSFER_DST_BIT），合成器经 OPAQUE_FD 导入后作为采样纹理上屏。
             // Usage 与 Flags 必须与宿主合成器（Avalonia VulkanImageBase）逐位一致：
             // vkGetImageMemoryRequirements 是 image 创建参数的函数，Usage/Flags 不同会让
-            // 驱动（实测 Adreno 650）给出不同 size，而 Avalonia 导入时按其自身 requirements
+            // 驱动（部分 Adreno 型号实测）给出不同 size，而 Avalonia 导入时按其自身 requirements
             // 对 MemorySize 做严格相等校验，不符即抛"Invalid memory size"→ 每帧导入失败。
             // 对齐值取自 Avalonia 12.1.1 反汇编：UsageFlags=0x17(TransferSrc|TransferDst|Sampled|
             // ColorAttachment)、Flags=MUTABLE_FORMAT。
@@ -833,10 +832,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
             throw new InvalidOperationException($"vkCreateImage（共享表面离屏）失败: {result}");
 
         // 内存分配：ExportMemoryAllocateInfo(OpaqueWin32/OpaqueFd) 导出 + dedicated 分配。
-        // dedicated **必须挂**（Adreno 650 真机实证，勿删）：不挂时普通 Vulkan 图像 + OPAQUE_FD
-        // 导出内存连 vkBindImageMemory 都过不去，报 vkBindImageMemory 失败: ErrorInvalidExternalHandle
-        // （Attach 自检阶段即整链回退 Skia）。宿主合成器（Avalonia ImportedImage.CreateMemory）也以
-        // dedicated 语义导入，规范上两侧必须匹配。
+        // dedicated **必须挂**：不挂时普通 Vulkan 图像 + OPAQUE_FD 导出内存连 vkBindImageMemory 都过不去，
+        // 报 vkBindImageMemory 失败: ErrorInvalidExternalHandle（Attach 自检阶段即整链回退 Skia）。
+        // 宿主合成器（Avalonia ImportedImage.CreateMemory）也以 dedicated 语义导入，规范上两侧必须匹配。
         // Android（VulkanNativeImage）：平面内存即可，无导出/dedicated 约束。
         MemoryRequirements memReq;
         VulkanNative.GetImageMemoryRequirements(_device, img, &memReq);
@@ -871,16 +869,16 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         // 记录本次分配的真实字节数（= vkGetImageMemoryRequirements().size），随描述符交给合成器。
         // 【为什么必须填】Avalonia 的 VulkanExternalObjectsFeature.ImportedImage.CreateMemory 会拿
         // properties.MemorySize 与它自己 vkGetImageMemoryRequirements(导入图像).size 做**严格相等**校验，
-        // 不等即抛 "Invalid memory size"（真机实证：留 0 → 每帧导入失败 → 不出画）。OPAQUE_FD 不携带
+        // 不等即抛 "Invalid memory size"（留 0 → 每帧导入失败 → 不出画）。OPAQUE_FD 不携带
         // 内存元数据，此值只能由生产者如实上报。注意：不是 w*h*4 —— 驱动会按 tile/对齐扩到更大。
         _sharedMemorySizes[slot] = memReq.Size;
 
         // 导出内存句柄（交合成器）：
         //  - Windows：HANDLE（OpaqueWin32）。
         //  - Android/Linux：vkGetMemoryFdKHR 导出 opaque fd（dma_buf）——两条路径完全同代码。
-        //    （旧 Android 曾经 AHB 承载：vkGetMemoryAndroidHardwareBufferANDROID 取回 AHardwareBuffer
-        //    再抽 dma_buf fd。已废弃：AHB 兼容约束的 requirements 与宿主按普通 OPAQUE_FD 建图算出的
-        //    不一致，严格相等校验必失败，真机实证 1080x1920 全部 Invalid memory size。）
+        //    （防回归：不要改回 AHB 承载（vkGetMemoryAndroidHardwareBufferANDROID 取回 AHardwareBuffer
+        //    再抽 dma_buf fd）——AHB 兼容约束的 requirements 与宿主按普通 OPAQUE_FD 建图算出的
+        //    不一致，严格相等校验必失败，导入全部被拒、不出画。）
         if (_isWindows)
         {
             MemoryGetWin32HandleInfoKHR getInfo = new()

@@ -41,7 +41,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         _logger = logger;
     }
 
-    // ── OpenSL ES 常量（NDK OpenSLES.h）──
+    // OpenSL ES 常量（NDK OpenSLES.h）
     private const int SL_RESULT_SUCCESS = 0;
     private const uint SL_BOOLEAN_FALSE = 0; // SLboolean = SLuint32（32 位，OpenSLES.h:73）
     private const uint SL_BOOLEAN_TRUE = 1;
@@ -79,7 +79,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
 
     // 在途缓冲深度：设备 BufferQueue 水库 = MaxInFlightBuffers × 单缓冲时长。8 × 46.4ms ≈ 372ms
     // ——吸收音频解码阶段的零提交窗口（16 包 × DequeueOutput 5ms 轮询 + JNI ≈ 80~150ms）与
-    // CPU 调度抖动，消除周期性欠载（音频咔哒 + 主时钟停走 = 帧卡顿根因）。深度翻倍仅增加
+    // CPU 调度抖动，消除周期性欠载（音频咔哒 + 主时钟停走 = 帧卡顿成因）。深度翻倍仅增加
     // ~186ms 常驻内存与等量呈现延迟，对 A/V 同步无影响（视频按 master 呈现）。
     private const int MaxInFlightBuffers = 8;
 
@@ -106,17 +106,17 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private GCHandle _thisHandle;
     private BufferQueueCallback? _bqCallback; // 保持存活，防止 GC
 
-    // ── 主时钟记账（ExoPlayer AudioSink 范式：消费帧数 + 首帧媒体 PTS 锚点）──
-    // SLPlayItf::GetPosition 在部分厂商设备（vivo/Qualcomm 实测）返回半冻结值：间歇推进 ≥20ms 后
+    // 主时钟记账（ExoPlayer AudioSink 范式：消费帧数 + 首帧媒体 PTS 锚点）
+    // SLPlayItf::GetPosition 在部分厂商设备上返回半冻结值：间歇小幅推进后
     // 长时间停滞 → 主时钟推进速率 ≪ 墙钟 → 视频帧永远差"临门一脚"无法呈现；且停摆看门狗
-    // （推进<20ms 判停摆）被间歇推进欺骗 → 全链路冻结（画面停首帧、音频照常播完）。
+    // （推进过小判停摆）被间歇推进欺骗 → 全链路冻结（画面停首帧、音频照常播完）。
     // 改为自身记账（等价 AudioTrack.playbackHeadPosition + 锚点）：设备无关、确定单调 1× 实时，
     // 暂停自然冻结、欠载自然停摆——这正是主时钟需要的全部性质。
     private long _framesConsumed;                    // 已播完的采样数（Interlocked）
     private long _anchorMediaTicks = long.MinValue;  // 首个提交帧的媒体 PTS（哨兵=尚未提交）
     private readonly ConcurrentQueue<int> _inFlightSamples = new(); // 与 _inFlightBuffers 严格同序的每缓冲采样数
 
-    // ── 记账时钟平滑插值：消费步进随缓冲完成回调发生（阶梯信号），视频呈现时刻若直接消费
+    // 记账时钟平滑插值：消费步进随缓冲完成回调发生（阶梯信号），视频呈现时刻若直接消费
     // 该阶梯值，会被量化到回调边界（±一个缓冲时长），呈现节拍随之抖动。插值 = 步进值 +
     // 距最近一次步进的真实流逝（1× 实时），并封顶一个缓冲时长：欠载/回调停摆时时钟冻结在
     // "已播完 + 至多一个在途缓冲"，绝不越过实际可闻位置漂移。暂停期间插值关闭。
@@ -157,7 +157,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void BufferQueueCallback(IntPtr bq, IntPtr context);
 
-    // ── libOpenSLES P/Invoke ──
+    // libOpenSLES P/Invoke
     [LibraryImport("libOpenSLES.so")]
     private static partial int slCreateEngine(out IntPtr pEngine, uint numOptions, IntPtr pEngineOptions, uint numInterfaces, IntPtr pInterfaces, IntPtr pInterfaceRequired);
 
@@ -541,7 +541,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     /// <inheritdoc/>
     /// <remarks>
     /// 主时钟 = 首帧媒体 PTS 锚点 + 已消费采样数/采样率（消费记账，等价 AudioTrack.playbackHeadPosition）。
-    /// 不读 SLPlayItf::GetPosition——该 API 在部分厂商设备（vivo/Qualcomm 实测）返回半冻结值，
+    /// 不读 SLPlayItf::GetPosition——该 API 在部分厂商设备上返回半冻结值，
     /// 曾致主时钟推进 ≪ 墙钟 → 视频帧永久 Wait、画面冻结而音频照常（详见字段区注释）。
     /// 记账时钟的性质：消费严格 1× 实时（单调）、暂停自然冻结、欠载自然停摆——主时钟所需全部性质。
     /// 步进值经 1× 实时插值平滑（封顶一个缓冲时长，见字段区注释），消除呈现时刻的阶梯量化；
@@ -699,7 +699,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         obj = IntPtr.Zero;
     }
 
-    // ── NDK 结构体（Sequential，匹配 NDK OpenSLES.h 布局）──
+    // NDK 结构体（Sequential，匹配 NDK OpenSLES.h 布局）
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SLDataLocatorAndroidSimpleBufferQueue

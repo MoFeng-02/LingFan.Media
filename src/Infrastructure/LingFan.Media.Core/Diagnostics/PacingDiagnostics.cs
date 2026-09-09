@@ -167,7 +167,7 @@ internal sealed class ClockJumpRecorder
             string verdict = _backward == 0
                 ? "时钟单调"
                 : backPct > 20.0
-                    ? $"★时钟频繁回退（{backPct:F1}%）⇒ 画面回退/停顿的直接来源★"
+                    ? $"时钟频繁回退（{backPct:F1}%）⇒ 画面回退/停顿的直接来源"
                     : $"时钟偶发回退（{backPct:F1}%）";
 
             string mode = ClockTuning.SmoothSync
@@ -186,7 +186,7 @@ internal sealed class ClockJumpRecorder
                 double burstPct = 100.0 * _gapBurst / _gapCount;
                 double gapMean = _sumGap / _gapCount;
                 string burstVerdict = burstPct > 50.0
-                    ? "★批内突发确认：时钟被整批预支★"
+                    ? "批内突发确认：时钟被整批预支"
                     : burstPct > 10.0
                         ? "部分突发"
                         : "提交节奏均匀（背压主导）";
@@ -337,7 +337,7 @@ internal sealed class PresentPacingRecorder
             // 窗口内一次 Present 都没有 —— 这本身就是"画面冻结"的直接证据
             report =
                 $"present={_presentCount} 本窗口 Present=0 | Wait自旋={waits} Drop={drops} | {sleepText} " +
-                $"=> ★画面冻结（{(drops > waits ? "帧被丢弃：时钟超前于视频" : "帧在等待：时钟落后于视频")}）★";
+                $"=> 画面冻结（{(drops > waits ? "帧被丢弃：时钟超前于视频" : "帧在等待：时钟落后于视频")}）";
         }
         else
         {
@@ -350,9 +350,9 @@ internal sealed class PresentPacingRecorder
             double errRms = Math.Sqrt(Math.Max(0, _winSumErrSq / _winCount - errMean * errMean));
 
             string verdict = _winPtsBackward > 0
-                ? $"★PTS 倒退 {_winPtsBackward} 次 = 真实乱序★"
+                ? $"PTS 倒退 {_winPtsBackward} 次 = 真实乱序"
                 : std > mean * 0.35
-                    ? $"★节奏抖动严重（标准差/均值={std / mean:P0}）★"
+                    ? $"节奏抖动严重（标准差/均值={std / mean:P0}）"
                     : std > mean * 0.18
                         ? "节奏抖动偏大"
                         : "节奏平稳";
@@ -360,7 +360,7 @@ internal sealed class PresentPacingRecorder
             // 解码解耦判据：队列深度均值 > 0 即证明呈现侧永不被饿死（前帧已在缓冲中）。
             string decodeText = avgQueue > 0.5
                 ? $"队列深度均值={avgQueue:F1}(解码已解耦)"
-                : $"队列深度均值={avgQueue:F1}(★仍贴空：解码可能仍饿死呈现★)";
+                : $"队列深度均值={avgQueue:F1}(仍贴空：解码可能仍饿死呈现)";
 
             report =
                 $"present={_presentCount} 窗口={_winCount} | 墙钟间隔 均值={mean:F1}ms 标准差={std:F1}ms " +

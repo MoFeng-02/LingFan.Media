@@ -413,7 +413,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         Close();
     }
 
-    // ── AVIO 回调（同步边界：C 函数指针签名强制同步）──
+    // AVIO 回调（同步边界：C 函数指针签名强制同步）
 
     /// <summary>
     /// AVIO 读取回调。同步边界：C 函数指针签名强制同步。
@@ -481,7 +481,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         }
     }
 
-    // ── 辅助方法 ──
+    // 辅助方法
 
     /// <summary>获取流的时间基（转换为秒的 double）。</summary>
     private static unsafe double GetTimeBase(AVFormatContext* fmtCtx, int streamIndex)
@@ -686,7 +686,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         }
     }
 
-    // ── 编解码器映射（FFmpeg → LingFan）──
+    // 编解码器映射（FFmpeg → LingFan）
 
     private static VideoCodec MapVideoCodecFromFFmpeg(AVCodecID codecId) => codecId switch
     {

@@ -59,7 +59,7 @@ internal static class Program
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "[HH:mm:ss.fff] "; })
             .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
 
-        // 🔑 跨平台三人组：ffmpeg 解码 + 无头 NoOp 渲染 + 静音输出。全部 net10.0，Linux 可直接运行。
+        //  跨平台三人组：ffmpeg 解码 + 无头 NoOp 渲染 + 静音输出。全部 net10.0，Linux 可直接运行。
         services.AddLingFanMedia()
                 .AddFFmpeg(o =>
                 {

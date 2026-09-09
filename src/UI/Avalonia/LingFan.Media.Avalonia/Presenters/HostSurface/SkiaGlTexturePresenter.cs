@@ -52,7 +52,7 @@ public sealed class SkiaGlTexturePresenter : IHostSurfacePresenter
         // GlTexture 语义：描述符 NativeImage 承载 EGLImageKHR 句柄（display 级共享）。
         // 在当前（宿主渲染）上下文内创建纹理并导入 EGLImage——普通 GL_TEXTURE_2D，可被 Skia 直采；
         // 绘制后释放：先图像/后端纹理包装，纹理对象名经 GL 延迟删除语义保活已记录命令。
-        // display 对表探针（一次性）：与生产者日志的「生产者 EGLDisplay」比对——不同值即跨 display 导入失败根因。
+        // display 对表探针（一次性）：与生产者日志的「生产者 EGLDisplay」比对——不同值即说明跨 display 导入会失败。
         if (!_displayProbeLogged)
         {
             _displayProbeLogged = true;

@@ -48,7 +48,7 @@ public static class AndroidExtensions
         // 注册工厂（集合注册 TryAddEnumerable：支持多后端并存、按 DI 注册顺序参与运行时回退）
         // 【必须类型化注册】工厂委托形式 Singleton<IVideoDecoderFactory>(sp => ...) 会被 TryAddEnumerable
         // 拒绝：委托类型 Func<IServiceProvider, IVideoDecoderFactory> 的返回类型与服务类型相同 →
-        // 「indistinguishable」ArgumentException，启动即崩（真机 crash.txt 实证）。
+        // 「indistinguishable」ArgumentException，启动即崩（实测）。
         // 类型化注册同样与注册顺序无关：构造解析发生在播放期（GetServices 物化），那时各后端已注册。
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IMediaDemuxerFactory, AndroidDemuxerFactory>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IVideoDecoderFactory, AndroidVideoDecoderFactory>());

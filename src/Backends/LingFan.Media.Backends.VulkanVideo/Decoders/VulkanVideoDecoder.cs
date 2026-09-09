@@ -97,7 +97,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         _options = options;
     }
 
-    // ── IVideoDecoder ──
+    // IVideoDecoder
 
     public void Initialize(VideoCodec codec, VideoSettings settings)
     {
@@ -227,7 +227,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         return ValueTask.CompletedTask;
     }
 
-    // ── 会话建立 ──
+    // 会话建立
 
     private void CreateVideoSession(VideoSettings settings)
     {
@@ -252,12 +252,12 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         profile.ChromaBitDepth = VideoComponentBitDepthFlagsKHR.Depth8BitKhr;
 
         // 3) 能力查询
-        // ── 规范 VU 硬约束（khronos/lunarg 官方 VU，不可省略）──
+        // 规范 VU 硬约束（khronos/lunarg 官方 VU，不可省略）
         // VUID-vkGetPhysicalDeviceVideoCapabilitiesKHR-pVideoProfile-07184：
         //   当 videoCodecOperation 为 VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR 时，
         //   pCapabilities 的 pNext 链【必须】含 VkVideoDecodeH264CapabilitiesKHR。
         // VUID-...-07183：任何 decode 操作时，pNext 链【必须】含 VkVideoDecodeCapabilitiesKHR。
-        // 缺失则驱动/验证层返回 VK_ERROR_INITIALIZATION_FAILED（此前真机崩溃根因）。
+        // 缺失则驱动/验证层返回 VK_ERROR_INITIALIZATION_FAILED（此前崩溃的直接原因）。
         // 结构体在栈帧存活至本次调用返回，取地址安全。
         VideoDecodeH264CapabilitiesKHR h264Caps;
         h264Caps.SType = StructureType.VideoDecodeH264CapabilitiesKhr;
@@ -375,8 +375,8 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         // 规范 VU 04782（VK_KHR_video_decode_h264）：本创建信息须为 SPS/PPS 预留容量，
         // maxStdSpsCount / maxStdPpsCount 必须 >= pParametersAddInfo 中实际条数（此处各 1）。
         // 漏设则默认 0 → 驱动静默丢弃 SPS/PPS（CreateVideoSessionParametersKHR 仍返回 Success），
-        // 解码器无任何参数集 → 静默产出全零 NV12 DPB → 恒绿（绿屏根因，此前被"验证层未加载"假象掩盖）。
-        // 字段名经反射实证的 Silk.NET 2.23.0 拼写为 MaxStdSpscount / MaxStdPpscount（末位 c 小写）。
+        // 解码器无任何参数集 → 静默产出全零 NV12 DPB → 恒绿（绿屏成因）。
+        // 字段名经反射确认的 Silk.NET 2.23.0 拼写为 MaxStdSpscount / MaxStdPpscount（末位 c 小写）。
         h264Params.MaxStdSpscount = 1;
         h264Params.MaxStdPpscount = 1;
 
@@ -489,7 +489,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         for (int i = 0; i < _maxDpbSlots; i++) _slotEmpty[i] = true;
 
         // 单一 arrayed DPB 图像：所有 DPB 槽 = 同一图像的不同 array layer。
-        // 规范铁律（VK_KHR_video_decode_h264 + 本机 profile 不支持 SEPARATE_REFERENCE_IMAGES）：
+        // 规范要求（VK_KHR_video_decode_h264 + 本机 profile 不支持 SEPARATE_REFERENCE_IMAGES）：
         // 参考槽必须引用同一图像的不同层（VUID-07244）；每槽独立图像会被验证层拒收 → 解码静默 no-op → 全零 DPB 绿屏。
         bool crossFamily = _videoQueueFamilyIndex != uint.MaxValue
                            && _graphicsQueueFamilyIndex != uint.MaxValue
@@ -515,8 +515,8 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         profileList.ProfileCount = 1;
         profileList.PProfiles = &profile;
 
-        // ── DPB 图像 usage/flags：按 Khronos Vulkan-Video-Samples 权威范式 ──
-        // 关键铁律：视频格式属性查询的「返回值」只能用来确认 format/tiling 支持，
+        // DPB 图像 usage/flags：按 Khronos Vulkan-Video-Samples 权威范式
+        // 关键约束：视频格式属性查询的「返回值」只能用来确认 format/tiling 支持，
         // 绝不可把返回的 imageUsageFlags/imageCreateFlags 直接回填给 vkCreateImage——
         // 本机驱动对 decode profile 返回 0xFC07（含 VIDEO_ENCODE_* 位），直接采用会要求
         // VK_KHR_video_encode_queue 扩展 → VUID-usage-parameter/04816/06811 → 图像判"profile 无关"
@@ -747,7 +747,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         return fallback;
     }
 
-    // ── 解码核心 ──
+    // 解码核心
 
     private VideoFrame? DecodeCore(MediaPacket packet)
     {
@@ -775,9 +775,9 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         }
 
         // 首个 slice：sliceOffsets 已指向 NAL 头（起始码已被 BuildBitstream 剥离），直接取 NAL 头与 RBSP。
-        // 规范铁律（VK_KHR_video_decode_h264 §42.11.1）：pSliceOffsets 须指向「slice header 起点」（即 NAL 头字节），
+        // 规范要求（VK_KHR_video_decode_h264 42.11.1 节）：pSliceOffsets 须指向「slice header 起点」（即 NAL 头字节），
         // 比特流缓冲绝不可含起始码前缀（00 00 01）——含起始码会让解码器把起始码首字节当 NAL 头读成 type=0
-        // （未定义 NAL）→ 静默丢弃全部切片 → DPB 全零 NV12 → 恒绿（绿屏真因）。
+        // （未定义 NAL）→ 静默丢弃全部切片 → DPB 全零 NV12 → 恒绿（绿屏成因）。
         int nalHeaderOff = sliceOffsets[0];
         byte nalHeader = bitstream[nalHeaderOff];
         byte nalRefIdc = (byte)((nalHeader >> 5) & 0x3);
@@ -913,11 +913,11 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
             FillRefSlot(ref beginSlots[i], _references[i], ref beginResources[i], &beginDpbInfos[i]);
         }
 
-        // 规范铁律（VK_KHR_video_queue + 官方 H.264 解码样板）：本版 VkVideoBeginCodingInfoKHR
+        // 规范要求（VK_KHR_video_queue + 官方 H.264 解码样板）：本版 VkVideoBeginCodingInfoKHR
         // 无 pSetupReferenceSlot 字段，setup 槽须出现在 pReferenceSlots 中，但须以 slotIndex=-1 标记
         // （表示该图本帧作为重建目标、尚未关联 DPB 槽，由解码命令随后关联）。若用真实输出槽索引
         // （+值）则驱动误判该空槽为“已激活参考”→ 首帧（无参考）即触发 VU、驱动静默拒绝写入 DPB
-        // → 恒全零 NV12 → (0,135,0) 绿屏（绿屏真因）。
+        // → 恒全零 NV12 → (0,135,0) 绿屏（绿屏成因）。
         // 故专为本 begin 作用域构造槽数组：active refs 用真实索引，setup 条目 slotIndex=-1（复用同一图与参考信息）。
         var beginSlotsForBegin = stackalloc VideoReferenceSlotInfoKHR[beginCount];
         for (int i = 0; i < _references.Count; i++)
@@ -957,10 +957,10 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
 
         VideoDecodeInfoKHR decodeInfo;
         decodeInfo.SType = StructureType.VideoDecodeInfoKhr;
-        // 规范铁律（VK_KHR_video_decode_h264）：解码命令的 H.264 图片信息
+        // 规范要求（VK_KHR_video_decode_h264）：解码命令的 H.264 图片信息
         // （pStdPictureInfo / SliceCount / pSliceOffsets——即真正要解码的切片）必须挂在
         // VkVideoDecodeInfoKHR.PNext 链上。VkVideoDecodeInfoKHR 无对应内嵌字段，PNext=null 时
-        // vkCmdDecodeVideoKHR 收不到任何切片偏移与图片参数 → 静默产出全零 DPB → 恒绿（绿屏根因）。
+        // vkCmdDecodeVideoKHR 收不到任何切片偏移与图片参数 → 静默产出全零 DPB → 恒绿（绿屏成因）。
         decodeInfo.PNext = Unsafe.AsPointer(ref h264PicInfo);
         decodeInfo.Flags = 0;
         decodeInfo.SrcBuffer = _bitstreamBuf;
@@ -1055,10 +1055,10 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         ref VideoPictureResourceInfoKHR resource, VideoDecodeH264DpbSlotInfoKHR* pDpbSlotInfo)
     {
         slot.SType = StructureType.VideoReferenceSlotInfoKhr;
-        // 规范铁律（VK_KHR_video_decode_h264 4.5/4.9 节）：setup 槽（重建帧）与 active 参考槽的
+        // 规范要求（VK_KHR_video_decode_h264 4.5/4.9 节）：setup 槽（重建帧）与 active 参考槽的
         // VkVideoReferenceSlotInfoKHR 必须经 pNext 链 VkVideoDecodeH264DpbSlotInfoKHR 携带
         // StdVideoDecodeH264ReferenceInfo；Silk.NET 2.23.0 的 VideoReferenceSlotInfoKHR 无 PStdReferenceInfo 直接字段。
-        // pNext 链缺失时解码器对重建帧无参考信息 → 静默不落盘 → 全零 DPB → 恒绿（绿屏根因）。
+        // pNext 链缺失时解码器对重建帧无参考信息 → 静默不落盘 → 全零 DPB → 恒绿（绿屏成因）。
         slot.PNext = (void*)pDpbSlotInfo;
         slot.SlotIndex = slotIndex;
         slot.PPictureResource = (VideoPictureResourceInfoKHR*)Unsafe.AsPointer(ref resource);
@@ -1127,7 +1127,7 @@ internal sealed unsafe class VulkanVideoDecoder : IVideoDecoder
         }
     }
 
-    // ── DPB 槽状态 ──
+    // DPB 槽状态
 
     private sealed class DpbSlot
     {

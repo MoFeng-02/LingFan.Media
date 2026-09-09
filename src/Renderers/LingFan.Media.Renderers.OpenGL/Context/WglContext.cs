@@ -174,7 +174,7 @@ internal sealed unsafe class WglContext : IGlContext
         _hwnd = nint.Zero;
     }
 
-    // ── 工厂级离屏 GL 上下文（隐藏窗口）──
+    // 工厂级离屏 GL 上下文（隐藏窗口）
     // 类过程委托须保活，否则被 GC 后 lpfnWndProc 悬空 ⇒ 野调用崩溃（同 OpenGLHeadfulPlaybackProbe）。
     private static WndProcDelegate? _offscreenWndProcKeepAlive;
 

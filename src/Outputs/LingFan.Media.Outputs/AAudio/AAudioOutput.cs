@@ -29,7 +29,7 @@ namespace LingFan.Media.Outputs.AAudio;
 [SupportedOSPlatform("Android")]
 internal sealed unsafe partial class AAudioOutput : IAudioOutput
 {
-    // ── AAudio 常量（NDK AAudio.h）──
+    // AAudio 常量（NDK AAudio.h）
     private const int AAUDIO_OK = 0;
     private const int AAUDIO_FORMAT_PCM_I16 = 1;
     private const int AAUDIO_DIRECTION_OUTPUT = 0;
@@ -268,7 +268,7 @@ internal sealed unsafe partial class AAudioOutput : IAudioOutput
             throw new PlatformNotSupportedException("AAudio 输出仅支持 Android（API 27+）。");
     }
 
-    // ── NDK P/Invoke（libaaudio.so，AAudio.h）──
+    // NDK P/Invoke（libaaudio.so，AAudio.h）
 
     [LibraryImport("libaaudio.so")]
     private static partial int AAudio_createStreamBuilder(out IntPtr builder);

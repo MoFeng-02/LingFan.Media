@@ -13,7 +13,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// </summary>
 /// <remarks>
 /// <para><b>存在意义</b>：Adreno 驱动对「外部格式（YUV）AHB + YCbCr 转换采样」的原生绘制会空指针解引用
-/// （SIGSEGV fault addr 0x0），而 Mali 上能过——与 OPAQUE_FD 导出的厂商分歧同一性质。绕开之法是不让
+/// （进程级原生崩溃），而 Mali 上能过——与 OPAQUE_FD 导出的厂商分歧同一性质。绕开之法是不让
 /// 解码侧产出 YUV AHB，而是令其产出 <b>RGBA AHB</b>，本转换器按普通 RGBA 纹理采样上屏，彻底避开崩溃。</para>
 /// <para><b>与 VulkanYcbcrToRgbaConverter 的区别</b>：无 externalFormat、无 <c>VkSamplerYcbcrConversion</c>、
 /// 描述符用<b>可变</b>采样器（写入 <c>DescriptorImageInfo.Sampler</c>），规避部分驱动对 immutable sampler
@@ -39,8 +39,7 @@ public sealed unsafe class VulkanRgbaToRgbaConverter : IDisposable
     private Format _pipelineTargetFormat = (Format)0;
 
     // 帧缓冲缓存：须<b>存活至引用它的命令缓冲执行完毕</b>。记录后立即销毁会让命令缓冲悬挂引用
-    // 已释放对象，Adreno 在 vkEndCommandBuffer 收拢时解引用它 → SIGSEGV fault addr 0x0
-    // （tombstone #01 qglinternal::vkEndCommandBuffer，真机实证 2026-09-03）。
+    // 已释放对象，Adreno 在 vkEndCommandBuffer 收拢时解引用它 → 进程级原生崩溃（空指针解引用）。
     // 按（目标视图, 尺寸）惰性复用；管线/RenderPass 重建或 Dispose 时释放。
     private Framebuffer _framebuffer;
     private ImageView _framebufferView;
@@ -117,7 +116,7 @@ public sealed unsafe class VulkanRgbaToRgbaConverter : IDisposable
             throw new InvalidOperationException("管线尚未创建（须先调用 EnsurePipeline）。");
 
         // 帧缓冲须与命令缓冲同生命周期：缓存复用（目标视图/尺寸变化时重建），
-        // 绝不在记录后立即销毁（见字段注释的悬挂引用实证）。
+        // 绝不在记录后立即销毁（悬挂引用会导致命令缓冲解引用已释放对象，见字段注释）。
         if (_framebuffer.Handle == 0 || _framebufferView.Handle != targetView.Handle
             || _framebufferW != width || _framebufferH != height)
         {

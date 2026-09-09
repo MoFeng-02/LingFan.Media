@@ -25,7 +25,8 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// <item>OpenGL 之前"不注册"的判断是<b>错的</b>：GL 上下文虽仍由渲染器实例在 <see cref="OpenGLRenderer.Attach"/> 按窗口建立 on-screen 上下文，
 /// 但工厂层面现已维护一个<b>离屏 GL 上下文单例</b>（<see cref="OpenGLRendererFactory.DeviceContext"/>，实现 <see cref="IGpuDeviceContext"/>）作为共享组所有者。
 /// 解码后端在 decode-init 阶段即可经此接口获取 OpenGL 设备句柄，on-screen 上下文以共享组接入 → 解码侧 GL 纹理对渲染器可见，零拷贝链路与 D3D11/Vulkan 完全同源。</item>
-/// <item>不注册 <see cref="IGpuDeviceContext"/> 才会发出<b>虚假未就绪信号</b>：解码后端拿不到设备句柄 → 只能软解回退（宪法禁止的"假绿，S_OK≠被接受"）。
+/// <item>不注册 <see cref="IGpuDeviceContext"/> 才会发出<b>虚假未就绪信号</b>：解码后端拿不到设备句柄 → 只能软解回退
+/// （能力未自报即成功属"假绿"，S_OK 不等于被接受）。
 /// 故此处与 D3D11/Vulkan 一致，以工厂级离屏设备上下文派生注册。</item>
 /// <item>注：<see cref="ISharedGpuSurfaceSourceFactory"/>（Avalonia 无空域合成导入路径）属 UI 合成层范围，待 OpenGL 有头合成接入时再按 D3D11/Vulkan 同构补充，
 /// 不在此过早挂空能力。</item>

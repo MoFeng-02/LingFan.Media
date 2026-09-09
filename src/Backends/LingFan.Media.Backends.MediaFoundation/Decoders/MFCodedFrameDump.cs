@@ -66,13 +66,13 @@ internal static class MFCodedFrameDump
         {
             Directory.CreateDirectory(OutDir);
 
-            // ── 1. 落盘：coded 全帧（彩色 + 纯 Y 灰度），均为 1:1 不缩放 ──────────────
+            // 1. 落盘：coded 全帧（彩色 + 纯 Y 灰度），均为 1:1 不缩放
             string colorPath = Path.Combine(OutDir, $"coded_{codedW}x{codedH}_color.bmp");
             string yPath = Path.Combine(OutDir, $"coded_{codedW}x{codedH}_yplane.bmp");
             WriteNv12AsBmp(src, codedW, codedH, colorPath, grayscaleOnly: false);
             WriteNv12AsBmp(src, codedW, codedH, yPath, grayscaleOnly: true);
 
-            // ── 2. 边缘填充检测（眼睛无关）───────────────────────────────────────
+            // 2. 边缘填充检测（眼睛无关）
             var y = src[..(codedW * codedH)];
             int leftEdge = FindLeftContentEdge(y, codedW, codedH);
             int rightPad = FindRightPadWidth(y, codedW, codedH);
@@ -82,7 +82,7 @@ internal static class MFCodedFrameDump
             int contentW = codedW - rightPad - leftEdge;
             int contentH = codedH - botPad - topEdge;
 
-            // ── 3. 判定：检测出的内容边界 vs 当前采用的 offset ────────────────────
+            // 3. 判定：检测出的内容边界 vs 当前采用的 offset
             string verdictX = leftEdge == offX
                 ? $"一致（起裁列 {offX} 正确）"
                 : $"不一致：检测内容自第 {leftEdge} 列起，当前从第 {offX} 列起裁 ⇒ 画面平移 {offX - leftEdge} 列";
@@ -103,7 +103,7 @@ internal static class MFCodedFrameDump
                 codedW, codedH, leftEdge, rightPad, topEdge, botPad, contentW, contentH,
                 verdictX, verdictY, verdictSize, colorPath, yPath);
 
-            // ── 4. 边缘列差值明细（供人工复核，防止"填充恰好差值为0"的误判）────────
+            // 4. 边缘列差值明细（供人工复核，防止"填充恰好差值为0"的误判）
             logger.LogInformation("[CODED-EDGE] {Detail}", BuildEdgeDetail(y, codedW, codedH));
         }
         catch (Exception ex)
@@ -112,7 +112,7 @@ internal static class MFCodedFrameDump
         }
     }
 
-    // ────────────────────── 边缘填充检测 ──────────────────────
+    // 边缘填充检测
 
     /// <summary>列 x 与列 x+1 的平均绝对差（对全部行采样）。</summary>
     private static double ColumnDiff(ReadOnlySpan<byte> y, int w, int h, int x)
@@ -208,7 +208,7 @@ internal static class MFCodedFrameDump
         return sb.ToString();
     }
 
-    // ────────────────────── BMP 落盘 ──────────────────────
+    // BMP 落盘
 
     /// <summary>把 NV12 写成 32bpp BGRA 的 BMP（自上而下，负高度）。</summary>
     private static void WriteNv12AsBmp(ReadOnlySpan<byte> nv12, int w, int h, string path, bool grayscaleOnly)

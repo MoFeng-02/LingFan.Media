@@ -17,7 +17,7 @@ namespace LingFan.Media.Backends.MediaCodec;
 /// </remarks>
 internal static class AndroidCodecMaps
 {
-    // ── MIME → 枚举 ──
+    // MIME → 枚举
 
     public static VideoCodec MimeToVideoCodec(string mime)
     {
@@ -54,7 +54,7 @@ internal static class AndroidCodecMaps
         return TrackType.Subtitle; // 未知按字幕（不安全，但至少可被列举）
     }
 
-    // ── 枚举 → MIME ──
+    // 枚举 → MIME
 
     public static string? VideoCodecToMime(VideoCodec codec) => codec switch
     {
@@ -79,7 +79,7 @@ internal static class AndroidCodecMaps
         _ => null
     };
 
-    // ── 容器格式（从 file format mime 推断）──
+    // 容器格式（从 file format mime 推断）
 
     public static ContainerFormat MimeToContainerFormat(string? mime)
     {
@@ -93,7 +93,7 @@ internal static class AndroidCodecMaps
         return ContainerFormat.Unknown;
     }
 
-    // ── 色彩空间 NDK 值 → LingFan 枚举（YUV→RGB 矩阵选择）──
+    // 色彩空间 NDK 值 → LingFan 枚举（YUV→RGB 矩阵选择）
 
     /// <summary>将 AOSP key-color-standard 的 int 值映射到 <see cref="ColorStandard"/>。</summary>
     public static ColorStandard ColorStandardFromNdk(int value) => value switch
@@ -123,7 +123,7 @@ internal static class AndroidCodecMaps
         _ => ColorTransfer.Unspecified,
     };
 
-    // ── pcm-encoding → 采样格式（音频解码输出）──
+    // pcm-encoding → 采样格式（音频解码输出）
 
     /// <summary>将 AOSP pcm-encoding 值映射到 LingFan <see cref="SampleFormat"/>；不支持返回 null。</summary>
     /// <remarks>
@@ -153,7 +153,7 @@ internal static class AndroidCodecMaps
         _ => 0
     };
 
-    // ── H264 SPS 尺寸解析（解码器需显式 width/height，但容器声明尺寸可能与 SPS 不符）──
+    // H264 SPS 尺寸解析（解码器需显式 width/height，但容器声明尺寸可能与 SPS 不符）
 
     /// <summary>
     /// 从 H264 的 csd-0（SPS/PPS）中定位 SPS NAL 并解析编码尺寸；解析失败返回 false。

@@ -81,7 +81,7 @@ public sealed class MfDxgiDeviceManagerProvider : IDisposable
 
             try
             {
-                // ① 取 D3D11 设备（延迟创建；无头由 MfGpuDeviceContext 自备，有头复用渲染器设备 ⇒ 同设备才零拷贝）
+                // (1) 取 D3D11 设备（延迟创建；无头由 MfGpuDeviceContext 自备，有头复用渲染器设备 ⇒ 同设备才零拷贝）
                 IntPtr device = _gpuContext.DeviceHandle;
                 if (device == IntPtr.Zero)
                 {
@@ -89,11 +89,11 @@ public sealed class MfDxgiDeviceManagerProvider : IDisposable
                     return IntPtr.Zero;
                 }
 
-                // ② 多线程保护（DXVA 共享设备硬性要求；不支持只告警，不阻断）
+                // (2) 多线程保护（DXVA 共享设备硬性要求；不支持只告警，不阻断）
                 if (!MfDxvaInterop.TryEnableMultithreadProtection(device))
                     _logger.LogWarning("[MF-D3D] D3D11 设备不支持 ID3D10Multithread，未开启多线程保护（DXVA 下存在竞态风险）");
 
-                // ③ 创建 DXGI 设备管理器
+                // (3) 创建 DXGI 设备管理器
                 int hr = MfDxvaInterop.MFCreateDXGIDeviceManager(out _resetToken, out IntPtr manager);
                 if (hr < 0 || manager == IntPtr.Zero)
                 {
@@ -101,7 +101,7 @@ public sealed class MfDxgiDeviceManagerProvider : IDisposable
                     return IntPtr.Zero;
                 }
 
-                // ④ 绑定设备：ResetDevice 在绝对槽 7 ⇒ MfVTable slotIndex = 4
+                // (4) 绑定设备：ResetDevice 在绝对槽 7 ⇒ MfVTable slotIndex = 4
                 //    （vtable: CloseDeviceHandle=3, GetVideoService=4, LockDevice=5, OpenDeviceHandle=6,
                 //      ResetDevice=7, TestDevice=8, UnlockDevice=9；以 SDK mfobjects.h 为权威，勿手算）
                 var resetDevice = MfVTable.Get<MfDxvaInterop.IMFDXGIDeviceManager_ResetDevice>(manager, 4);
@@ -113,7 +113,7 @@ public sealed class MfDxgiDeviceManagerProvider : IDisposable
                     return IntPtr.Zero;
                 }
 
-                // ⑤ 决定性验证：S_OK ≠ 被接受。从管理器内部取回解码器实际会用的视频设备并复测能力，
+                // (5) 决定性验证：S_OK ≠ 被接受。从管理器内部取回解码器实际会用的视频设备并复测能力，
                 //    区分「绑定真正生效」与「ResetDevice 静默失败（token 不匹配 / 设备缺 VIDEO_SUPPORT）」。
                 string? diag = MfDxvaInterop.ProbeManagerBoundDevice(manager, MFConstants.D3D11_DECODER_PROFILE_H264_VLD_NOFGT);
                 if (diag != null) _logger.LogInformation("{Diag}", diag);

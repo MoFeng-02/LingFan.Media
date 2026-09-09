@@ -87,7 +87,7 @@ internal static class Program
     private static async Task<int> RunAsync(string[] args)
     {
         // --probe-gpus：枚举全部 DXGI 适配器，逐 GPU 查 VideoProcessor 的 NV12/YUY2/BGRA 支持
-        //（诊断 AMD 核显 VP 不支持 NV12 的根因；N 卡独显对照）。
+        //（诊断 AMD 核显视频配置不支持 NV12 的原因；N 卡独显对照）。
         if (HasFlag(args, "--probe-gpus"))
         {
             ProbeGpuVideoProcessorSupport();
@@ -277,7 +277,7 @@ internal static class Program
             if (rendererArg == "vulkan")
             {
                 var vulkanFactory = new VulkanRendererFactory(loggerFactory);
-                // 🔴 Vulkan 渲染器默认独显优先（NVIDIA），与 ffmpeg 自有 D3D11 设备（NVIDIA 适配器优先）
+                // Vulkan 渲染器默认独显优先（NVIDIA），与 ffmpeg 自有 D3D11 设备（NVIDIA 适配器优先）
                 // 同 GPU，共享句柄导入成立；不设 AlignToD3D11DefaultAdapter（那是对齐核显，会破坏零拷贝）。
                 countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir);
                 builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
@@ -619,7 +619,7 @@ internal static class Program
         return overall ? 0 : 1;
     }
 
-    // ── VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH ──
+    // VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH
 
     /// <summary>定位原生 libvlc 目录（libvlc.dll 所在目录）：优先探针自带分发的 NuGet 原生包，其次系统已安装的 VLC。</summary>
     private static string? LocateLibVlc()
@@ -706,7 +706,7 @@ internal static class Program
         return null;
     }
 
-    // ── 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用 ──
+    // 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用
 
     private sealed class CountingVideoRendererFactory : IVideoRendererFactory
     {
@@ -760,7 +760,7 @@ internal static class Program
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 
-    // ── 渲染目标：把 HWND 包装成 IRenderTarget（Window 类型） ──
+    // 渲染目标：把 HWND 包装成 IRenderTarget（Window 类型）
 
     private sealed class HwndRenderTarget : IRenderTarget
     {
@@ -775,7 +775,7 @@ internal static class Program
         public float Scale => 1f;
     }
 
-    // ── 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）──
+    // 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）
 
     private sealed class RenderWindow : IDisposable
     {
@@ -895,7 +895,7 @@ internal static class Program
             => NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    // ── 参数 / 资源解析辅助 ──
+    // 参数 / 资源解析辅助
 
     private static bool HasFlag(string[] args, params string[] flags)
     {
@@ -1213,7 +1213,7 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
-    // ── DPI / 客户区几何诊断（判定「DWM 是否在 D3D11 之外又拉伸了一层」）──
+    // DPI / 客户区几何诊断（判定「DWM 是否在 D3D11 之外又拉伸了一层」）
 
     /// <summary>取窗口客户区矩形（物理像素，前提是进程 DPI-aware；否则返回被虚拟化的逻辑像素）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "GetClientRect", SetLastError = true)]
@@ -1224,7 +1224,7 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll", EntryPoint = "GetDpiForWindow")]
     public static partial uint GetDpiForWindow(IntPtr hWnd);
 
-    // ── 自注册窗口类（黑底，替代 "Static" 系统类的白色背景，消除启动白屏）──
+    // 自注册窗口类（黑底，替代 "Static" 系统类的白色背景，消除启动白屏）
 
     /// <summary>注册窗口类（WNDCLASSEXW），返回类 atom（0=失败，GetLastPInvokeError 取原因）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "RegisterClassExW", SetLastError = true)]

@@ -348,7 +348,7 @@ internal sealed unsafe class AppleAudioDecoder : IAudioDecoder
             throw new InvalidOperationException("AppleAudioDecoder 尚未 Initialize。");
     }
 
-    // ── AAC AudioSpecificConfig（ISO/IEC 14496-3 §1.6.2.1）解析 ──
+    // AAC AudioSpecificConfig（ISO/IEC 14496-3 §1.6.2.1）解析
     private static readonly int[] AacSampleRates =
         { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350 };
 
@@ -381,7 +381,7 @@ internal sealed unsafe class AppleAudioDecoder : IAudioDecoder
         return sampleRate > 0 && channels > 0;
     }
 
-    // ── MP3 帧头（MPEG1 Layer III 为主）解析，用于懒回填 Output* ──
+    // MP3 帧头（MPEG1 Layer III 为主）解析，用于懒回填 Output*
     private static bool TryParseMp3FrameHeader(ReadOnlyMemory<byte> data, out int sampleRate, out int channels)
     {
         sampleRate = 0;

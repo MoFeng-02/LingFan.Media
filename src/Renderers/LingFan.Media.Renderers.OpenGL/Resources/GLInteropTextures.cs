@@ -284,12 +284,12 @@ public sealed unsafe class GLEglDmaBufTexture : IFrameResource, IGpuTextureResou
     int IGpuTextureResource.SubresourceIndex => _subresourceIndex;
 
     /// <inheritdoc/>
-    /// <exception cref="NotSupportedException">解码侧 VAAPI→EGL 导入为未来端点（见零拷贝架构铁律），
+    /// <exception cref="NotSupportedException">解码侧 VAAPI→EGL 导入为未来端点（见零拷贝架构约束），
     /// 当前调用方（解码器）尚不产出 <see cref="GpuFrameImportKind.LinuxDmaBufFd"/>，本类不会被实例化；
     /// 故 CPU 回读为显式未支持路径，非静默假绿。</exception>
     public GpuTextureReadback ReadbackToCpu()
         => throw new NotSupportedException(
-            "GLEglDmaBufTexture.ReadbackToCpu 为未来端点：解码侧 VAAPI→EGL 导入尚未启用（见零拷贝架构铁律）。");
+            "GLEglDmaBufTexture.ReadbackToCpu 为未来端点：解码侧 VAAPI→EGL 导入尚未启用（见零拷贝架构约束）。");
 
     /// <inheritdoc/>
     public void Dispose()

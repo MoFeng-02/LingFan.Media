@@ -183,7 +183,7 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
         return ValueTask.CompletedTask;
     }
 
-    // ── 辅助方法 ──
+    // 辅助方法
 
     /// <summary>从 AVSubtitle 创建 SubtitleFrame（文本字幕路径）。</summary>
     private static unsafe SubtitleFrame? CreateSubtitleFrameFromAVSubtitle(AVSubtitle* avSub)

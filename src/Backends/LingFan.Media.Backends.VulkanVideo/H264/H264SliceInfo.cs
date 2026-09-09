@@ -15,7 +15,7 @@ namespace LingFan.Media.Backends.VulkanVideo.H264;
 /// 的 slice NAL 序列——每个 slice 的 NAL 头字节（如 IDR=0x65、非 IDR=0x41）须直接位于缓冲起点，
 /// <see cref="VideoDecodeInfoKHR.PSliceOffsets"/> 指向各 slice 的「slice header 起点」（即 NAL 头字节）。
 /// 起始码是 Annex-B 帧封装细节、非 NAL 单元的一部分；若保留起始码，解码器会把起始码首字节误读为 NAL 头
-/// （type=0 未定义 NAL）→ 静默丢弃全部切片 → DPB 全零 NV12 → 恒绿（绿屏根因）。</para>
+/// （type=0 未定义 NAL）→ 静默丢弃全部切片 → DPB 全零 NV12 → 恒绿（绿屏成因）。</para>
 /// <para>本方法去除 avcC 长度前缀 / Annex-B 起始码后，直接拼接 NAL 单元（NAL 头 + RBSP，emulation prevention 字节保留——
 /// 硬件解码器自行处理），并为每个 slice 记录「指向 NAL 头」的对齐偏移。</para>
 /// <para>本类同时支持 avcC 长度前缀包（<paramref name="nalLengthSize"/> &gt; 0）与 Annex-B 起始码包（= 0）。</para>

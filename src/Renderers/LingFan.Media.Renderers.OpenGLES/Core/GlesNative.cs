@@ -26,7 +26,7 @@ namespace LingFan.Media.Renderers.OpenGLES;
 /// </remarks>
 internal static unsafe partial class GlesNative
 {
-    // ── 中性库名重定向：GLES(Android) / EGL(Linux+Android) ──
+    // 中性库名重定向：GLES(Android) / EGL(Linux+Android)
     static GlesNative()
     {
         NativeLibrary.SetDllImportResolver(typeof(GlesNative).Assembly, ResolveGlesLoader);
@@ -57,7 +57,7 @@ internal static unsafe partial class GlesNative
         return nint.Zero;
     }
 
-    // ── EGL 引导符号（仅 Android 调用；EGL 句柄类型按 ABI 映射为 nint，EGLint 用 int）──
+    // EGL 引导符号（仅 Android 调用；EGL 句柄类型按 ABI 映射为 nint，EGLint 用 int）
 
     [LibraryImport("EGL", EntryPoint = "eglBindAPI")]
     public static partial int eglBindAPI(uint api);
@@ -95,7 +95,7 @@ internal static unsafe partial class GlesNative
     [LibraryImport("EGL", EntryPoint = "eglTerminate")]
     public static partial int eglTerminate(nint display);
 
-    // ── GLES 1.1 基线 + 现代函数（glCreateShader / glGenVertexArrays 等 GLES 2.0+/3.0 core 直接由 libGLESv2 导出，加载期解析）──
+    // GLES 1.1 基线 + 现代函数（glCreateShader / glGenVertexArrays 等 GLES 2.0+/3.0 core 直接由 libGLESv2 导出，加载期解析）
 
     [LibraryImport("GLES", EntryPoint = "glClear")]
     public static partial void glClear(uint mask);
@@ -151,7 +151,7 @@ internal static unsafe partial class GlesNative
     [LibraryImport("GLES", EntryPoint = "glDrawArrays")]
     public static partial void glDrawArrays(uint mode, int first, int count);
 
-    // ── GLES 现代函数（着色器 / VBO / VAO；GLES 2.0+/3.0 core 直接导出，加载期解析）──
+    // GLES 现代函数（着色器 / VBO / VAO；GLES 2.0+/3.0 core 直接导出，加载期解析）
 
     [LibraryImport("GLES", EntryPoint = "glActiveTexture")]
     public static partial void glActiveTexture(uint texture);

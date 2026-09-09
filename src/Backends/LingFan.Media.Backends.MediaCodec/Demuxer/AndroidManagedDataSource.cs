@@ -10,7 +10,7 @@ namespace LingFan.Media.Backends.MediaCodec.Demuxer;
 /// <para>相比手写的 NDK <c>AMediaDataSource</c>（<c>[UnmanagedCallersOnly]</c> 回调）：
 /// 本类型走 net-android 托管 Java 绑定（标准 <c>android.media.MediaDataSource</c>），
 /// 由框架经 JNI 回调，规避 Android 12+ CFI 系统库对原始函数指针的 <c>__cfi_check_fail</c> SIGTRAP。
-/// 若真机仍遇 SIGTRAP，回退方案为「<c>Location == null</c> 时抛 <see cref="PlatformNotSupportedException"/>」。</para>
+/// 若设备上仍遇 SIGTRAP，回退方案为「<c>Location == null</c> 时抛 <see cref="PlatformNotSupportedException"/>」。</para>
 /// <para><b>生命周期</b>：<see cref="Close"/> 按 Android 语义仅告知消费方不再需要数据（解除阻塞中的读），
 /// <b>不释放</b> 底层 <see cref="IMediaStream"/>——流归 <see cref="AndroidDemuxer"/> 所有，由其释放。</para>
 /// <para><b>线程安全</b>：框架可能多线程调用 <see cref="ReadAt"/>，故锁串行化对 <see cref="IMediaStream"/> 的访问。</para>

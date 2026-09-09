@@ -186,7 +186,7 @@ public class FormatDetector : IFormatDetector
     /// <returns>匹配到的容器格式，或 <see cref="ContainerFormat.Unknown"/>。</returns>
     private static ContainerFormat DetectFormat(ReadOnlySpan<byte> data)
     {
-        // ── MP4: "ftyp" at offset 4 ──
+        // MP4: "ftyp" at offset 4
         if (data.Length >= FormatSignature.Mp4Offset + FormatSignature.Mp4Signature.Length &&
             data.Slice(FormatSignature.Mp4Offset, FormatSignature.Mp4Signature.Length)
                 .SequenceEqual(FormatSignature.Mp4Signature))
@@ -194,7 +194,7 @@ public class FormatDetector : IFormatDetector
             return ContainerFormat.MP4;
         }
 
-        // ── AVI: "RIFF" at offset 0 + "AVI " at offset 8 ──
+        // AVI: "RIFF" at offset 0 + "AVI " at offset 8
         if (data.Length >= FormatSignature.AviTypeOffset + FormatSignature.AviTypeSignature.Length &&
             data.Slice(FormatSignature.AviRiffOffset, FormatSignature.AviRiffSignature.Length)
                 .SequenceEqual(FormatSignature.AviRiffSignature) &&
@@ -204,7 +204,7 @@ public class FormatDetector : IFormatDetector
             return ContainerFormat.AVI;
         }
 
-        // ── FLV: "FLV" at offset 0 ──
+        // FLV: "FLV" at offset 0
         if (data.Length >= FormatSignature.FlvOffset + FormatSignature.FlvSignature.Length &&
             data.Slice(FormatSignature.FlvOffset, FormatSignature.FlvSignature.Length)
                 .SequenceEqual(FormatSignature.FlvSignature))
@@ -212,7 +212,7 @@ public class FormatDetector : IFormatDetector
             return ContainerFormat.FLV;
         }
 
-        // ── MKV / WebM: EBML magic at offset 0 ──
+        // MKV / WebM: EBML magic at offset 0
         if (data.Length >= FormatSignature.EbmlOffset + FormatSignature.EbmlSignature.Length &&
             data.Slice(FormatSignature.EbmlOffset, FormatSignature.EbmlSignature.Length)
                 .SequenceEqual(FormatSignature.EbmlSignature))
@@ -220,7 +220,7 @@ public class FormatDetector : IFormatDetector
             return ParseEbmlDocType(data);
         }
 
-        // ── MPEG-TS: sync byte 0x47 every 188 bytes ──
+        // MPEG-TS: sync byte 0x47 every 188 bytes
         if (IsMpegTs(data))
         {
             return ContainerFormat.TS;

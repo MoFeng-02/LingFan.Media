@@ -62,8 +62,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // OpenAsync 阶段就已暖好包队列，视频首帧与音频同刻出现；但**重播**路径下
     // SeekAsync 会先 Stop 再重启 demuxer 读取线程、并 Reset 解码器，视频首帧要较长时间才产出，
     // 而音频设备（= 主时钟源 GetPlaybackPositionDirect）已在 0ms 起跑 →
-    //   ① 起始一小段时间内的帧全部被 Synchronizer 判 Drop；
-    //   ② 这段空窗内屏幕停在「上一次播放的末帧」，随后突跳到视频首个可呈现位置
+    //   (1) 起始一小段时间内的帧全部被 Synchronizer 判 Drop；
+    //   (2) 这段空窗内屏幕停在「上一次播放的末帧」，随后突跳到视频首个可呈现位置
     //   ⇒ 用户感知为「第二次播放先卡一下再继续」。
     // 修复：启动编排改为「视频先起 → 等预滚动 → 再启动音频设备 → 放行视频呈现」，
     // 把首帧预热**吸收在 PlayAsync 内部**（主时钟尚未起跑，不计入播放时间线），
@@ -74,15 +74,14 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private TaskCompletionSource<bool>? _firstFramePresentedTcs;  // 音频编排等待点（Start 重建）
     // 预滚动帧数下限：等帧队列预热到该深度再启动音频设备（吸收重播的重定位+解码开销）。
     //
-    // 【2026-08-29 真机实证修正】旧值固定 2 帧**过浅**：起播瞬间队列仅 2 帧，而前向缓冲目标
-    // TargetDepth=6；呈现一开跑立刻吃光这 2 帧，解码产出（1080x1920 约 30ms/帧，启动期更慢）
+    // 【实测修正】旧值固定 2 帧**过浅**：起播瞬间队列仅 2 帧，而前向缓冲目标
+    // TargetDepth=6；呈现一开跑立刻吃光这 2 帧，解码产出（启动期偏慢）
     // 来不及补，队列迅速见底 → 呈现线程空等（Thread.Sleep(1)）+ 帧 PTS 落后被判 Drop。
-    // 真机表现：起播后十余秒内「队列」在 0/1/2 之间反复横跳、丢帧集中爆发（前 11 秒丢 39 帧），
-    // 画面呈现「花/跳/不连贯」；待解码器与 JIT 预热完成、队列稳定在 6~8 后才恢复正常
-    // ——与用户「放到十几秒后画面才恢复正常」完全一致。
+    // 表现：起播后一段时间内「队列」在 0/1/2 之间反复横跳、丢帧集中爆发，
+    // 画面呈现「花/跳/不连贯」；待解码器与 JIT 预热完成、队列稳定后才恢复正常。
     //
     // 修正：预滚动深度与前向缓冲目标对齐（= TargetDepth），让起播瞬间队列就是满的，
-    // 具备抵抗启动期产出波动的余量。代价仅约 (TargetDepth−2)×帧间隔 ≈ 130ms 起播延迟，
+    // 具备抵抗启动期产出波动的余量。代价为约 (TargetDepth−2)×帧间隔 的起播延迟，
     // 换来启动期不再掉帧——远优于「前十几秒画面异常」。
     private static readonly int VideoPrerollFrames = TargetDepth;
     // 预滚动等待上限：超时即放行启动音频，宁可轻微不同步也绝不卡住播放（解码异常/无视频帧时兜底）。
@@ -98,9 +97,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private TimeSpan _stallWatchMaster;
     private bool _stallWatchAnchored;
 
-    // ── 主时钟可见性（快照日志）：同步类问题的第一现场。此前主时钟从未被观测，
-    // 排障只能靠间接推断（教训：vivo 上 SLPlayItf::GetPosition 半冻结导致全链路冻结，
-    // 连打三轮补丁才定位）。快照让「主时钟是否 1× 推进」一眼可见。
+    // 主时钟可见性（快照日志）：同步类问题的第一现场。此前主时钟从未被观测，
+    // 排障只能靠间接推断（部分厂商设备的 GetPosition 半冻结问题曾因此难以定位）。
+    // 快照让「主时钟是否 1× 推进」一眼可见。
     private long _pacingSnapshotQpc;
     // 每帧 Present 耗时实测（快照上报均值）：定位呈现侧瓶颈（GC 抢占/渲染慢）的直接证据，
     // 取代间接推断。正常应 <10ms；若 ≈1000ms 级则是呈现线程被抢占（GC 风暴/优先级）。
@@ -109,10 +108,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private int _presentedCount;
     // 快照窗口内的呈现帧数。**必须**独立于 _presentedCount（后者是播放以来累计值）：
     // [SYNC] 快照 的「呈现均耗时」= 窗口内耗时总和 / **窗口内帧数**。此前误把累计帧数当分母，
-    // 平均值被系统性低估（真机实证：真实 ~52ms/帧 显示成 4.8ms），直接导致瓶颈被误判到别处。
+    // 平均值被系统性低估，直接导致瓶颈被误判到别处。
     private int _presentedInWindow;
     private long _droppedFrames;
-    // ── 呈现节拍指标（快照上报）：帧间隔与迟到量。呈现节拍抖动（迟到呈现⇒画面重复一拍）
+    // 呈现节拍指标（快照上报）：帧间隔与迟到量。呈现节拍抖动（迟到呈现⇒画面重复一拍）
     // 不进丢帧计数——缺少本组指标时，此类卡顿在 [SYNC] 快照中完全不可见。
     // 仅呈现线程读写（快照日志同线程），无需 Interlocked。
     private long _lastPresentQpc;
@@ -122,13 +121,13 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private double _lateMaxMs;
     // 迟到判定阈值：超过即计入迟到（自旋收口精度 + 调度抖动的合理余量）。
     private const double LatePresentThresholdMs = 4.0;
-    // 呈现段尖峰告警阈值：sink 链单帧超过即限频告警（正常 ≈2ms，告警即归因线索）。
+    // 呈现段尖峰告警阈值：sink 链单帧超过即限频告警（正常 ≈2ms，告警即定位线索）。
     private const double SinkSpikeLogThresholdMs = 15.0;
     // 等待过调告警阈值：醒点越过墙钟年线超过即限频告警（抢占/睡眠过冲的直接观测）。
     private const double WaitOvershootLogThresholdMs = 15.0;
     private long _lastOvershootLogQpc; // 过调告警节流（呈现线程）
 
-    // ── 快照发布（呈现线程 → 看门狗线程）──
+    // 快照发布（呈现线程 → 看门狗线程）
     // [SYNC] 快照的日志写入（Console/Debug 双 provider → logcat/调试器）在部分设备上单次
     // 可达数十 ms；周期性落在呈现线程会制造它自己所度量的迟到帧。故窗口统计由呈现线程
     // 发布（纯内存引用替换，零 I/O），由冻结看门狗线程代为输出。
@@ -144,7 +143,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private long _lastSpikeLogQpc;         // 呈现段尖峰告警节流（呈现线程）
     private int _lastGcGen0, _lastGcGen1, _lastGcGen2; // GC 代际计数基线（呈现线程，窗口差值）
     // 主时钟速率对表：窗口内 master 增量 / 墙钟增量（两者都用精确 Stopwatch 测量）。
-    // 比值 ≈1.0 = 音频时钟健康；持续 <1 = 音频记账时钟慢（卡顿根因在音频侧）。
+    // 比值 ≈1.0 = 音频时钟健康；持续 <1 = 音频记账时钟慢（卡顿出在音频侧）。
     private double _lastPublishMaster;
     private long _lastPublishWallQpc;
     private bool _hasLastPublish;
@@ -162,7 +161,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private long _lastSyncDiagTicks;
     private int _presentCount;
 
-    // ── 冻结看门狗（独立诊断线程，2026-09-03 AHB 零拷贝冻结排查）──
+    // 冻结看门狗（独立诊断线程）
     // 呈现循环的全部等待点（首帧门控/WaitUntilDue/空队列自旋）均有打卡或自带看门狗；
     // 若整条管线静默（无 [SYNC] 快照、无停摆日志），即卡死在某个不打日志的调用里。
     // 本看门狗在管线线程之外每 2s 输出：循环心跳年龄 / 主时钟 / 队列 / sink 在途深度——
@@ -173,7 +172,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     private long _sinkExitQpc;
     private int _sinkInFlight;
 
-    // ── 双线程阶段码（冻结看门狗配套）──
+    // 双线程阶段码（冻结看门狗配套）
     // 心跳只证明「线程不在循环入口」，阶段码进一步证明「卡在循环内哪一步」：
     // 两个循环各自的阻塞调用（native 解码 / sink 链 / 帧归还）在心跳停更后由阶段码定位。
     private long _decodeHeartbeatQpc;
@@ -252,7 +251,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     private void ReturnFrame(VideoFrame frame)
     {
-        // 泄漏对账（诊断期，Trace 级）：ReturnFrame 调用计数。AHB 泄漏排查用——
+        // 泄漏对账（诊断期，Trace 级）：ReturnFrame 调用计数。帧资源泄漏定位用——
         // 若 [RET-COUNT] 与已呈数同步增长而 [AHB-LEAK] live 仍涨，则断点在池 reset 之后（池未执行 reset）。
         int ret = System.Threading.Interlocked.Increment(ref _returnCount);
         if ((ret % 128) == 1)
@@ -376,7 +375,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     double sinkIdleSec = System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _sinkExitQpc)).TotalSeconds;
                     double decodeIdleSec = System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _decodeHeartbeatQpc)).TotalSeconds;
                     // 呈/解线程存活状态：心跳停更既可能是卡死也可能是线程已自然退出（EOS 收尾），
-                    // 不加此列会把「已退出」误诊为「死锁」（真机实证教训）。
+                    // 不加此列会把「已退出」误诊为「死锁」（实测结论）。
                     string alive = $"呈线程={(IsRunning ? "运行" : "已退出")} 解线程={(_decodeTask?.IsCompleted == true ? "已退出" : "运行")}";
                     // 异常升级：任一心跳停更超 1s（且对应线程仍标注运行中）时以 Warning 级输出，
                     // 使「卡死在某个不打日志的调用里」的场景在默认日志级别下可见；

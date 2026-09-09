@@ -590,7 +590,7 @@ internal static class Program
         return overall ? 0 : 1;
     }
 
-    // ── 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用 ──
+    // 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用
 
     private sealed class CountingVideoRendererFactory : IVideoRendererFactory
     {
@@ -646,7 +646,7 @@ internal static class Program
         public string? GetInnerProfile() => _inner is IRendererProfiler p ? p.GetProfile() : null;
     }
 
-    // ── 渲染目标：把 HWND 包装成 IRenderTarget（Window 类型） ──
+    // 渲染目标：把 HWND 包装成 IRenderTarget（Window 类型）
 
     private sealed class HwndRenderTarget : IRenderTarget
     {
@@ -661,7 +661,7 @@ internal static class Program
         public float Scale => 1f;
     }
 
-    // ── 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）──
+    // 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）
 
     private sealed class RenderWindow : IDisposable
     {
@@ -781,7 +781,7 @@ internal static class Program
             => NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    // ── 参数 / 资源解析辅助 ──
+    // 参数 / 资源解析辅助
 
     private static bool HasFlag(string[] args, params string[] flags)
     {
@@ -823,7 +823,7 @@ internal static class Program
         return null;
     }
 
-    // ── 零拷贝跨 GPU 对齐：取默认 D3D11 适配器 LUID ──
+    // 零拷贝跨 GPU 对齐：取默认 D3D11 适配器 LUID
     // 以与 ffmpeg 零拷贝分支完全相同的 D3D11CreateDevice(DriverType.Hardware) 创建一次性设备，
     // 经 IDXGIDevice 查其所属适配器，返回 LUID（8 字节）。该 LUID 即 D3D11VA 共享纹理所在 GPU，
     // 用于对齐 Vulkan 物理设备选择（跨 GPU/厂商导入 D3D11 共享句柄会被驱动拒绝）。
@@ -858,7 +858,7 @@ internal static class Program
         }
     }
 
-    // ── VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH ──
+    // VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH
     // 复制自 VlcHeadfulPlaybackProbe，使本探针可独立定位 libvlc（不依赖 D3D11 渲染探针）。
 
     /// <summary>定位原生 libvlc 目录（libvlc.dll 所在目录）：优先探针自带分发的 NuGet 原生包，其次系统已安装的 VLC。</summary>
@@ -1138,7 +1138,7 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
-    // ── DPI / 客户区几何诊断（判定「DWM 是否在 D3D11 之外又拉伸了一层」）──
+    // DPI / 客户区几何诊断（判定「DWM 是否在 D3D11 之外又拉伸了一层」）
 
     /// <summary>取窗口客户区矩形（物理像素，前提是进程 DPI-aware；否则返回被虚拟化的逻辑像素）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "GetClientRect", SetLastError = true)]
@@ -1149,7 +1149,7 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll", EntryPoint = "GetDpiForWindow")]
     public static partial uint GetDpiForWindow(IntPtr hWnd);
 
-    // ── 自注册窗口类（黑底，替代 "Static" 系统类的白色背景，消除启动白屏）──
+    // 自注册窗口类（黑底，替代 "Static" 系统类的白色背景，消除启动白屏）
 
     /// <summary>注册窗口类（WNDCLASSEXW），返回类 atom（0=失败，GetLastPInvokeError 取原因）。</summary>
     [LibraryImport("user32.dll", EntryPoint = "RegisterClassExW", SetLastError = true)]

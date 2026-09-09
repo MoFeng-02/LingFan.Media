@@ -15,7 +15,7 @@ namespace LingFan.Media.Backends.FFmpeg.Interop;
 ///   <item>加载后调用 avutil_version() 做版本门禁（仅支持 4.x–9.0，avutil 56–61），不支持版本快速失败。</item>
 ///   <item>加载后做<b>结构体镜像运行时自测</b>（VerifyStructLayout）：分配真实原生结构体，用 av_opt 在多个深度写哨兵再经镜像读回，
 ///        整体校验布局一致性。任一已加载版本（含 4.x）只要镜像与真实库不符即 fail-fast 报出具体字段，而非静默内存损坏。
-///        这是结构体偏移跨主版本敏感的根因防护。</item>
+///        这是针对结构体偏移跨主版本敏感的布局损坏防护。</item>
 ///   <item>iOS 静态链接（libavcodec.a 等链入 App 主镜像）兜底：动态 .dylib 探测全失败后，加载 App 可执行文件主镜像复用其符号。</item>
 ///   <item>Android 额外命名形态兜底（libavcodec-61.so 等），与无版本 libavcodec.so 并列尝试。</item>
 /// </list>
@@ -167,7 +167,7 @@ internal static partial class FF
     }
 
     /// <summary>
-    /// 根因防护：FFmpeg 头文件中的 <c>static inline</c> 函数（如 av_q2d/av_inv_q/av_make_q/av_cmp_q/av_gcd）
+    /// 布局损坏防护：FFmpeg 头文件中的 <c>static inline</c> 函数（如 av_q2d/av_inv_q/av_make_q/av_cmp_q/av_gcd）
     /// 不导出到 DLL 符号表，若被误以 <c>[LibraryImport]</c> 声明，只有运行到该调用才会抛
     /// <see cref="EntryPointNotFoundException"/>（且栈很深、难定位）。这里在加载期一次性校验关键导出符号在其【应属库】中确实存在，
     /// 任一缺失立即 fail-fast 并明确提示；同时顺带发现「FFmpeg 原生库装残 / 版本错配」的部署问题。
@@ -200,12 +200,12 @@ internal static partial class FF
         if (missing.Count != 0)
             throw new InvalidOperationException(
                 "FFmpeg 原生库缺失以下导出符号：" + string.Join(", ", missing) +
-                "。可能原因：① 该函数是 FFmpeg 头文件中的 static inline（不导出），被误以 [LibraryImport] 声明——请改托管实现；" +
-                "② 原生库版本错配或部署残缺（缺少对应组件 DLL）。");
+                "。可能原因：(1) 该函数是 FFmpeg 头文件中的 static inline（不导出），被误以 [LibraryImport] 声明——请改托管实现；" +
+                "(2) 原生库版本错配或部署残缺（缺少对应组件 DLL）。");
     }
 
     /// <summary>
-    /// 根因防护：结构体镜像偏移跨 FFmpeg 主版本敏感（hw_device_ctx 等中段字段在 4.x 与 9.0 间可能不同）。
+    /// 布局损坏防护：结构体镜像偏移跨 FFmpeg 主版本敏感（hw_device_ctx 等中段字段在 4.x 与 9.0 间可能不同）。
     /// 这里在加载期分配真实原生结构体，用 av_opt 在多个深度写哨兵、再经镜像读回，整体校验布局一致性。
     /// 任一已加载版本（含 4.x）只要镜像与真实库不符，立即 fail-fast 报出具体字段，而非静默内存损坏。
     /// </summary>

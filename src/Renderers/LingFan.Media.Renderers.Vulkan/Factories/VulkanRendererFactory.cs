@@ -35,7 +35,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     private Device _device;
     private Queue _queue;
 
-    // ── 外部共享 device（治根BA）：宿主注入后 EnsureDeviceCreated 直接采用，不自建 ──
+    // 外部共享 device：宿主注入后 EnsureDeviceCreated 直接采用，不自建
     private Instance _externalInstance;
     private PhysicalDevice _externalPhysicalDevice;
     private Device _externalDevice;
@@ -115,7 +115,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         }
     }
 
-    // ── no-airspace 共享表面源（VulkanSharedSurfaceSource）访问共享 Vulkan 资源的内部入口 ──
+    // no-airspace 共享表面源（VulkanSharedSurfaceSource）访问共享 Vulkan 资源的内部入口
     // 仅同程序集（Vulkan 模块）可见：源经工厂构造，直接复用本工厂的 VkInstance/Device/Queue，
     // 严守「各 Renderer 管好自身（无头/有头/无空域）」架构原则，不跨界泄露给其它层。
     internal Instance SharedInstance => _instance;
@@ -123,9 +123,9 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
     internal Device SharedDevice => _device;
 
     /// <summary>
-    /// 注入宿主共享的 Vulkan device（治根BA）。注入后 <see cref="EnsureDeviceCreated"/> 不再自建
+    /// 注入宿主共享的 Vulkan device。注入后 <see cref="EnsureDeviceCreated"/> 不再自建
     /// instance/device，直接复用外部句柄（仅重新解析函数表），从而与宿主处于同一 device ——
-    /// 共享表面源的 dma_buf fd 导入从「跨实例」变为「同 device」，根治 Adreno 跨实例导入缺陷。
+    /// 共享表面源的 dma_buf fd 导入从「跨实例」变为「同 device」，规避 Adreno 跨实例导入缺陷。
     /// 必须在首次使用渲染器（EnsureDeviceCreated 触发）之前调用。
     /// </summary>
     public void UseExternalDevice(nint instance, nint physicalDevice, nint device, uint graphicsQueueFamilyIndex)
@@ -188,11 +188,11 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         {
             if (_deviceReady) return;
 
-            // ── 外部 device 分支（治根BA，2026-09-02）：宿主注入共享 device 时直接采用 ──
+            // 外部 device 分支：宿主注入共享 device 时直接采用
             // 背景：Android 上宿主（Avalonia）与我们曾各建一套 VkInstance/VkDevice，共享表面源的
             // dma_buf fd 从 Device B 导入到 Avalonia 的 Device A = **跨实例导入**，Adreno 对此实现
             // 有缺陷（vkAllocateMemory 报 INITIALIZATION_FAILED，参数全对齐仍失败）。
-            // 统一为同一 device 后 fd 导入变成同 device（驱动内部路径），根治跨实例缺陷。
+            // 统一为同一 device 后 fd 导入变成同 device（驱动内部路径），规避跨实例缺陷。
             // 方式：仅拿外部句柄重新解析函数表（InitInstance/InitDevice），不自建、不销毁外部资源。
             if (_externalDevice.Handle != 0 && _externalInstance.Handle != 0)
             {
@@ -267,7 +267,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
 
             try
             {
-                // ── 创建 VkInstance ──
+                // 创建 VkInstance
                 var extensions = GetPlatformExtensions();
                 nint extPtr = VulkanNative.StringArrayToPtr(extensions);
 
@@ -285,7 +285,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     PpEnabledExtensionNames = (byte**)extPtr,
                 };
 
-                // ── 诊断：显式启用 Vulkan 验证层（仅当 LF_VULKAN_VALIDATION=1）──
+                // 诊断：显式启用 Vulkan 验证层（仅当 LF_VULKAN_VALIDATION=1）
                 // 比依赖 loader 的 VK_INSTANCE_LAYERS 环境变量可靠（本机 loader 未注入该层，
                 // 导致此前"零 VUID"为假象）。显式加入启用层列表，loader 必加载，
                 // 验证层默认将 VUID 报告到 stderr，供绿屏等硬解 bug 收口。默认不启用、零影响。
@@ -321,7 +321,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 // 实例已创建（且已启用 WSI 扩展）→ 解析实例级函数 + KHR 实例扩展
                 VulkanNative.InitInstance(instance);
 
-                // ── 枚举物理设备 ──
+                // 枚举物理设备
                 uint physCount = 0;
                 // 检查 EnumeratePhysicalDevices 返回值
                 Result enumResult = VulkanNative.EnumeratePhysicalDevices(instance, ref physCount, null);
@@ -354,7 +354,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     }
                 }
 
-                // ── 选择物理设备——不再盲取 physDevices[0] ──
+                // 选择物理设备——不再盲取 physDevices[0]
                 // 硬条件：具备图形队列族；偏好序：独显 > 集显 > 虚拟 GPU > 其他。
                 // 注：Present 能力查询需要 Surface，而工厂在无 Surface 阶段创建共享设备，
                 // 故此处以图形队列族为硬条件；实际 Present 兼容性由 CreateSurface 后的
@@ -413,7 +413,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 if (queueFamilyIndex == uint.MaxValue)
                     throw new InvalidOperationException("未找到具备图形队列族的 Vulkan 物理设备。");
 
-                // ── 创建逻辑设备 ──
+                // 创建逻辑设备
                 // 设备扩展：基础 VK_KHR_swapchain + 按平台/可用性过滤的外部内存/信号量导出扩展
                 // （no-airspace 共享表面源需要；VK_KHR_external_memory/semaphore 在 Vulkan 1.1 已 core，
                 // 但其 win32/fd 变体是独立扩展，必须逐一确认可用，否则 vkCreateDevice 整失败）。
@@ -441,7 +441,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     bool probeSupported = probeResult == Result.Success && probe.SamplerYcbcrConversion;
 
                     // 规范兜底：samplerYcbcrConversion 自 Vulkan 1.1 起为核心<b>必选</b>特性——
-                    // apiVersion ≥ 1.1 的设备报告不支持属驱动/探测假阴性（iQOO10 Adreno730 Vulkan1.3 实测：
+                    // apiVersion ≥ 1.1 的设备报告不支持属驱动/探测假阴性（部分 Adreno 设备实测：
                     // Features2 探测返回 false，与其 1.3 核心地位矛盾）。此时按规范直接启用：
                     // 1.1+ 一致性驱动必接受；极端非一致性驱动拒建设备 → 工厂抛异常 → 渲染回退链落 Skia，
                     // 与探测不支持时行为等价（不会更糟）。
@@ -539,7 +539,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 // 诊断：确认 OPAQUE_FD 零拷贝导出链路所需扩展状态。
                 // Android Adreno 若实例级 external_memory_capabilities 缺失、或设备级 external_memory_fd
                 // 未启用，vkBindImageMemory(OPAQUE_FD) 会报 ErrorInvalidExternalHandle，整条导出塌掉回退 Skia。
-                // 下次真机运行据此判定根因（Fd=false→设备级扩展未进列表；Caps=false→实例级未启用）。
+                // 下次设备运行据此判定（Fd=false→设备级扩展未进列表；Caps=false→实例级未启用）。
                 _logger.LogInformation(
                     "Vulkan 共享设备扩展核对 [OPAQUE_FD 链路]：实例 external_memory_capabilities={Caps}，" +
                     "external_semaphore_capabilities={SemCaps}；设备 external_memory_fd={Fd}，" +
@@ -558,7 +558,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     VulkanNative.GetDeviceQueue(device, _videoQueueFamilyIndex, videoQueueIndex, out _videoQueue);
                 }
 
-                // ── 填充所选物理设备身份（供 no-airspace 共享表面源「同 GPU 对齐」）──
+                // 填充所选物理设备身份（供 no-airspace 共享表面源「同 GPU 对齐」）
                 // vkGetPhysicalDeviceProperties2 + pNext=PhysicalDeviceIDProperties 取 deviceUUID(16) / deviceLUID(8)。
                 // 这些字段是稀疏固定的（多 GPU 机器上合成器与主 GPU 的身份必须一致才能跨设备导入）。
                 PhysicalDeviceIDProperties idProps = new()
@@ -595,12 +595,12 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 bool hasMetalObjects = Array.IndexOf(devExts, "VK_EXT_metal_objects") >= 0;
                 _metalObjectsSharingEnabled = hasMetalObjects;
 
-                // ── KHR WSI 扩展由 VulkanNative 三阶段零反射解析
+                // KHR WSI 扩展由 VulkanNative 三阶段零反射解析
                 //    （InitInstance 解析实例级 / WSI 实例扩展，InitDevice 解析设备级 / WSI 设备扩展），
                 //    无需像 Silk.NET 那样用 TryGetInstanceExtension/TryGetDeviceExtension 加载扩展对象；
-                //    运行时 CreateSurface/CreateSwapchain 直接调用 VulkanNative。 ──
+                //    运行时 CreateSurface/CreateSwapchain 直接调用 VulkanNative。
 
-                // ── 查询设备能力 ──
+                // 查询设备能力
                 PhysicalDeviceProperties props;
                 VulkanNative.GetPhysicalDeviceProperties(physicalDevice, &props);
                 // deviceName 是 256 字节 null-terminated UTF-8 数组——
@@ -873,7 +873,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         // 条件式过滤——缺失则静默跳过，不会令 vkCreateInstance 因 ErrorExtensionNotPresent 整体失败。
         // 注：真正的 VU 硬约束在 VulkanVideoDecoder.CreateVideoSession 能力查询处——
         // pCapabilities 的 pNext 链必须挂 VkVideoDecodeCapabilitiesKHR + VkVideoDecodeH264CapabilitiesKHR
-        // （VU 07183/07184），缺失则返回 VK_ERROR_INITIALIZATION_FAILED（此前真机崩溃根因）。
+        // （VU 07183/07184），缺失则返回 VK_ERROR_INITIALIZATION_FAILED（此前崩溃的直接原因）。
         AddIfAvailable("VK_KHR_video_queue");
         return exts.ToArray();
     }

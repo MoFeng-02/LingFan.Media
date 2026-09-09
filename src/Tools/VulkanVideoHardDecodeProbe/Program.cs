@@ -467,7 +467,7 @@ internal static class Program
         return overall ? 0 : 1;
     }
 
-    // ── 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用 ──
+    // 计数装饰器：包裹真实 IVideoRenderer，统计 Present 调用
 
     private sealed class CountingVideoRendererFactory : IVideoRendererFactory
     {
@@ -523,7 +523,7 @@ internal static class Program
         public string? GetInnerProfile() => _inner is IRendererProfiler p ? p.GetProfile() : null;
     }
 
-    // ── 渲染目标：把 HWND 包装成 IRenderTarget（Window 类型） ──
+    // 渲染目标：把 HWND 包装成 IRenderTarget（Window 类型）
 
     private sealed class HwndRenderTarget : IRenderTarget
     {
@@ -538,7 +538,7 @@ internal static class Program
         public float Scale => 1f;
     }
 
-    // ── 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）──
+    // 真实窗口（专用 STA 线程 + 消息泵）；[LibraryImport] 重写（AOT 合规）
 
     private sealed class RenderWindow : IDisposable
     {
@@ -657,7 +657,7 @@ internal static class Program
             => NativeMethods.DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    // ── 参数 / 资源解析辅助 ──
+    // 参数 / 资源解析辅助
 
     private static bool HasFlag(string[] args, params string[] flags)
     {
@@ -829,7 +829,7 @@ internal static class FrameDumper
         if (pct < 1.0)
             Console.WriteLine($"  [HEADFUL-SAVE]   → DPB 内容疑似为空（解码静默失败 / 起始码 / SPS / 参考帧配置问题）");
         else if (meanR == 0 && meanG == 135 && meanB == 0)
-            // 均值(0,135,0) = YuvToRgb(0,0,0) = NV12 全零 → 解码器一个像素都没写进去（绿屏真因，非显示/采样路径问题）
+            // 均值(0,135,0) = YuvToRgb(0,0,0) = NV12 全零 → 解码器一个像素都没写进去（绿屏成因，非显示/采样路径问题）
             Console.WriteLine($"  [HEADFUL-SAVE]   → DPB 仍为全零 NV12（均值(0,135,0)=YUV(0,0,0)），解码未写入真实像素");
         else
             Console.WriteLine($"  [HEADFUL-SAVE]   → DPB 含真实像素（解码有输出），绿屏在显示/采样/布局路径");

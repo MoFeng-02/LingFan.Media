@@ -21,7 +21,7 @@ namespace LingFan.Media.Platforms.Windows;
 [SupportedOSPlatform("windows")]
 public sealed partial class DirectCompositionInterop : IDisposable
 {
-    // ── COM vtable 委托（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）──
+    // COM vtable 委托（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）
     // DirectComposition 接口 vtable 布局：IUnknown(0=QueryInterface, 1=AddRef, 2=Release) + 接口方法(3+)。
     // 委托首个参数为 COM 对象指针（this）；DCompVTable.Get 从绝对 vtable 槽位（3 + slotIndex）取函数指针。
     // 仅声明实际被调用的方法；槽位按 Windows SDK dcomp.h 真实顺序排列。
@@ -56,7 +56,7 @@ public sealed partial class DirectCompositionInterop : IDisposable
         }
     }
 
-    // ── P/Invoke ──
+    // P/Invoke
 
     private static readonly Guid IID_IDCompositionDevice = new("C37EA93A-E7AA-450D-B16F-9746CB0406F3");
 
@@ -66,7 +66,7 @@ public sealed partial class DirectCompositionInterop : IDisposable
         in Guid iid,
         out IntPtr dcompositionDevice);
 
-    // ── 状态（COM 对象以原始指针持有，释放用 Marshal.Release）──
+    // 状态（COM 对象以原始指针持有，释放用 Marshal.Release）
 
     private IntPtr _device;   // IDCompositionDevice*
     private IntPtr _visual;   // IDCompositionVisual*

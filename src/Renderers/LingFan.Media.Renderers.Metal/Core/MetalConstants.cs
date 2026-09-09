@@ -9,21 +9,21 @@ namespace LingFan.Media.Renderers.Metal;
 /// </remarks>
 internal static class MetalConstants
 {
-    // ── MTLPixelFormat（部分）──
+    // MTLPixelFormat（部分）
     public const nuint R8Unorm = 10;
     public const nuint RG8Unorm = 30;
     public const nuint RGBA8Unorm = 70;
     public const nuint BGRA8Unorm = 80;
 
-    // ── MTLLoadAction ──
+    // MTLLoadAction
     public const nuint LoadActionClear = 2;
 
-    // ── MTLStoreAction ──
+    // MTLStoreAction
     public const nuint StoreActionStore = 1;
 
-    // ── MTLPrimitiveType ──
+    // MTLPrimitiveType
     public const nuint PrimitiveTypeTriangleStrip = 4;
 
-    // ── MTLResourceOptions（共享存储，CPU/GPU 均可访问）──
+    // MTLResourceOptions（共享存储，CPU/GPU 均可访问）
     public const nuint ResourceStorageModeShared = 0;
 }

@@ -44,7 +44,7 @@ public sealed class FallbackMediaPlayer : IMediaPlayer
             catch { /* 吞掉清理异常，避免掩盖本次 Open 意图 */ }
         }
 
-        // ── 格式记忆：Open 前轻量探测 (容器, 视频编码)，用于提前命中格式级缓存，跳过已知坏后端 ──
+        // 格式记忆：Open 前轻量探测 (容器, 视频编码)，用于提前命中格式级缓存，跳过已知坏后端
         // 仅本地文件做探测（网络流不预先建连、且探测会浪费一次 HTTP；不可 Seek 流探测器自行返回 Unknown）。
         // 探测失败或编码未知均无害：退回全试回退，且成功后仍会写入真实格式 key。
         ContainerFormat detectedContainer = ContainerFormat.Unknown;
@@ -68,7 +68,7 @@ public sealed class FallbackMediaPlayer : IMediaPlayer
         if (backends.Count == 0)
             throw new MediaBackendUnsupportedException(key);
 
-        // ── 决定回退起点（公平、无硬编码）──
+        // 决定回退起点（公平、无硬编码）
         // 优先：格式级记忆（同 (容器, 视频编码) 上次回退成功命中的后端）—避免每次同格式重走回退；
         // 其次：文件级记忆（同一文件上次命中的后端）；
         // 兜底：从 0 顺序试。三种都会环绕尝试其余后端，确保记忆失效时仍能回退。

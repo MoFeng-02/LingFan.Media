@@ -19,7 +19,7 @@ namespace LingFan.Media.Renderers.D3D11.DirectComposition;
 [SupportedOSPlatform("windows")]
 internal sealed partial class D3D11CompositionInterop : IDisposable
 {
-    // ── COM vtable 委托（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）──
+    // COM vtable 委托（AOT 兼容：纯 P/Invoke + 委托封送，不使用 [ComImport]/RCW）
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionDevice_Commit(IntPtr self);
 

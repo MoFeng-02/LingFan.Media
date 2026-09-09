@@ -43,11 +43,10 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// <remarks>
     /// <b>为何不能沿用双缓冲 ping-pong</b>：位图 <c>Lock()</c> 与像素拷贝必须留在 <c>_gate</c> 之外
     /// （<c>Lock()</c> 在 Android 上会等 GPU/合成器完成上一帧，被 vsync 节流，实测可达数十 ms；
-    /// 留在锁内会让管线线程阻塞等 vsync，真机实证呈现耗时 35~45ms/帧、仅 ~20fps）。
+    /// 留在锁内会让管线线程阻塞等 vsync，呈现耗时显著抬高、帧率明显下降）。
     /// 但只有两块缓冲时，锁外的拷贝期间管线线程足足可以写满两帧 ——
     /// <b>Present #(n+2) 写的正是 Render #n 还在读的那一块</b>，于是半帧被覆写，画面花屏。
-    /// 真机日志佐证：<c>[FP-PRESENT] seq=5 stg=…4C5562FF</c> 与
-    /// <c>[FP-RENDER] seq=5 snap=…4B5461FF</c> 同址不同值（B/G/R 各差 1），即渲染线程读到的
+    /// 日志佐证：同一帧序号的写入指纹与渲染指纹同址不同值（相邻字节各差 1），即渲染线程读到的
     /// 已不是本帧写入的内容。
     /// <para>归还式所有权把缓冲的生命周期与「拷贝是否结束」绑定：渲染线程未归还前，
     /// Present 在结构上不可能拿到它。多缓冲（3+1）确保管线线程领先渲染线程时也只是丢帧，
@@ -84,8 +83,8 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     // 分体计时（仅诊断，不影响算法）：累计 YUV→BGRA 转换耗时，周期报平均，定位卡顿瓶颈。
     private int _convertSamples;
     private long _convertTicks;
-    // 转换性能采样间隔。原为 64，但真机实测呈现帧率极低（1080x1920 CPU 软渲 ≈1fps，
-    // 整段播放仅呈现 20 余帧）→ 64 帧阈值永远达不到，诊断形同虚设。降到 8，使早期即可
+    // 转换性能采样间隔。原为 64，但呈现帧率极低的场景（CPU 软渲）下 64 帧阈值永远达不到，
+    // 诊断形同虚设。降到 8，使早期即可
     // 拿到 YUV→BGRA 真实耗时（用于区分「转换慢」vs「等时钟/等队列」）。
     private const int ConvertLogInterval = 8;
     // 位图 Lock+拷贝耗时诊断（区分「像素转换慢」与「位图上传/等 vsync 慢」）。
@@ -114,15 +113,15 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
     /// <summary>指纹采样节流：前 6 帧全采（覆盖「开播花屏期」），之后每 60 帧一采。</summary>
     private static bool FpDue(int seq) => seq < 6 || (seq % 60) == 0;
 
-    // ── 帧水印诊断 ─────────────────────────────────────────────────────────────
+    // 帧水印诊断
     // 用途：把「帧序号 + 色标条 + 竖条纹」直接烧进 staging 左上角，肉眼截屏即可判定花屏归属：
     //   · 序号连续递增      ⇒ 时序正常，问题在**像素内容本身**
     //   · 序号回跳/重复/跳号 ⇒ 时序错乱（丢帧、乱序、缓冲轮转）
     //   · 色标条偏色        ⇒ YUV→RGB 矩阵或色彩区间错误
     //   · 竖条纹变斜/错位   ⇒ 行距（stride）处理错误
-    // 排查完成后务必改回 false —— 水印会遮挡画面且每帧多写约 30 万像素。
+    // 诊断开关默认关闭 —— 水印会遮挡画面且每帧多写大量像素。
     // static readonly 而非 const：调用点保留完整分支（false 时运行时跳过），避免 const 折叠
-    // 产生 CS0162 不可达代码（TreatWarningsAsErrors 下即编译错误），重开排查只改这一处。
+    // 产生 CS0162 不可达代码（TreatWarningsAsErrors 下即编译错误），重开诊断只改这一处。
     private static readonly bool FrameWatermark = false;
     private int _presentSeq;
 
@@ -284,8 +283,8 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
                 lock (_gate)
                 {
                     // 【先判定、后转换】上一帧还没被渲染线程取走时，本帧转换完几乎必然被顶掉
-                    // （真机：未渲染被顶掉 18~43 次 / 每 30 次渲染，即一半以上帧从未上过屏，
-                    //  而每次转换实测约 26ms，全白花在管线线程上，还会挤压解码喂入的节拍）。
+                    // （实测大量帧未渲染即被顶掉，即一半以上帧从未上过屏，
+                    //  而每次转换耗时可观，全白花在管线线程上，还会挤压解码喂入的节拍）。
                     // 与其转换再丢弃，不如直接跳过本帧、留住已经转换好的那一帧：
                     // 视觉效果等价（反正两帧里只有一帧会上屏，最多相差一个帧距的延迟），
                     // 但能省下整次 YUV→BGRA。超过保鲜窗口则强制刷新，避免渲染线程卡住时定格。
@@ -344,7 +343,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
 
                     // 转换完成后才把缓冲交给渲染线程；渲染线程拷贝完毕后才会归还 _free。
                     // 若上一帧还没被取走（渲染线程落后），直接回收复用 —— 等价于丢帧（跳一帧），
-                    // 但绝不会覆写渲染线程正在读取的缓冲，而这正是旧双缓冲半帧撕裂的根因。
+                    // 但绝不会覆写渲染线程正在读取的缓冲，而这正是旧双缓冲半帧撕裂的成因。
                     if (_pending is not null)
                     {
                         _framesOverwritten++;
@@ -466,11 +465,11 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
         long gap = _lastRenderTs == 0 ? 0 : nowTs - _lastRenderTs;
         _lastRenderTs = nowTs;
 
-        // ── 阶段 1（临界区，必须极短）──────────────────────────────────────────────
+        // 阶段 1（临界区，必须极短）
         // 仅做「取走待渲染帧」。绝不在锁内调用 WriteableBitmap.Lock()：
         // 它在 Android 上会等待 GPU/合成器完成上一帧（被 vsync 节流，实测数十 ms），
-        // 一旦留在锁内，管线线程的 Present 就会阻塞等 vsync —— 真机实证呈现耗时 35~45ms/帧、
-        // 仅 ~20fps（≈60Hz/3，每 3 个 vsync 才出一帧），瓶颈正源于此。
+        // 一旦留在锁内，管线线程的 Present 就会阻塞等 vsync —— 呈现耗时会大幅抬高、
+        // 帧率显著下降（≈60Hz/3，每 3 个 vsync 才出一帧），瓶颈正源于此。
         byte[]? snapshot = null;
         int sw = 0, sh = 0;
         lock (_gate)
@@ -486,7 +485,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
             }
         }
 
-        // ── 阶段 2（锁外）────────────────────────────────────────────────────────
+        // 阶段 2（锁外）
         // 位图创建、Lock、像素拷贝均在此完成。此时 Present 不受阻塞，可继续写后续帧到
         // _free 提供的其它缓冲。（渲染线程独占 snapshot，Present 结构上取不到它，故无需加锁。）
         if (snapshot is not null)
@@ -510,7 +509,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
                     // staging 为紧凑 BGRA（stride = w*4）；位图 RowBytes 由平台/后端决定，
                     // 可能含对齐填充而**不等于** w*4。必须按行拷贝、各自按自身 stride 步进：
                     // 整块拷贝会让每行累积错位（第 n 行偏 n×(RowBytes−w×4) 字节），
-                    // 表现为画面块状破碎、色块错位、拖影（真机实证的破碎根因）。
+                    // 表现为画面块状破碎、色块错位、拖影（此类破碎的成因）。
                     int srcStride = sw * 4;
                     int dstStride = locked.RowBytes;
 
@@ -607,7 +606,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
             // 导致 DrawImage 再按 DPI 缩放一次 → 实际绘制放大 scale 倍、只显示左上角局部（溢出）。
             var destRect = CalculateDestRect(_bitmapW, _bitmapH, _targetW, _targetH, AspectRatioMode);
 
-            // 一次性诊断（溢出排查）：目标区/位图/目标矩形/模式/scale。destRect 必须落在
+            // 一次性诊断（溢出定位）：目标区/位图/目标矩形/模式/scale。destRect 必须落在
             // [0,0,_targetW,_targetH] 内（Uniform 模式数学上不溢出）。
             if (!_destRectLogged)
             {
@@ -735,7 +734,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
         }
     }
 
-    // ── YUV → BGRA 转换（BT.601 全范围 JFIF 矩阵，预计算 LUT）──
+    // YUV → BGRA 转换（BT.601 全范围 JFIF 矩阵，预计算 LUT）
 
     private static readonly short[] Rv = BuildYuvLut(d => 1.402f * d);
     private static readonly short[] Gu = BuildYuvLut(d => -0.344136f * d);
@@ -787,7 +786,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
         int vOff = ySize + chromaW * chromaH;
         int uvOff = ySize;
 
-        // 一次性诊断：打 UV 前 8 字节 + Y 前 2 字节 + sw.Stride + sw.Format，定位花屏根因。
+        // 一次性诊断：打 UV 前 8 字节 + Y 前 2 字节 + sw.Stride + sw.Format，定位花屏成因。
         if (!_diagOnce)
         {
             _diagOnce = true;
@@ -834,8 +833,8 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
         }
 
         // 【性能关键】内层热循环：裸指针（消除 Span 边界检查）+ 每像素对步进（U/V 共享一次读取）
-        // + 指针递增写。真机实测（vivo iQOO10 / Mono Debug）：旧实现 Span 逐像素索引在
-        // 1080x1920 每帧 ~1800ms（画面 1fps）；指针化 + 双像素步进为其数分之一，Release JIT 下更低。
+        // + 指针递增写。实测：Span 逐像素索引在高分辨率下每帧耗时达秒级（画面近乎定格）；
+        // 指针化 + 双像素步进为数量级改善，Release JIT 下更低。
         // CPU 逐像素转换终究是 Tier0 兜底路径；1080p+ 的正解是 Tier2 硬解硬渲（GPU 采样 YUV）。
         var srcSpan = sw.Data.Span;
         fixed (byte* srcBase = srcSpan)
@@ -854,7 +853,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
                 byte* uRow = uPlane + (nuint)(cRow * chromaW);
                 byte* vRow = vPlane + (nuint)(cRow * chromaW);
                 byte* uvRow = uvPlane + (nuint)(cRow * srcStride);
-                // 【治根AC：色度垂直双线性上采样】消除 NV12 4:2:0 在 y 方向的"水平边"色度块。
+                // 【色度垂直双线性上采样】消除 NV12 4:2:0 在 y 方向的"水平边"色度块。
                 // y 奇数时 cRow0 != cRow1，U/V = (uvRow0 + uvRow1) / 2；y 偶数走最近邻（uvRow1 = uvRow0）。
                 // 水平方向仍为 2:1 共享（每 2 个 Y 像素 1 个 UV 对）——完整消除需水平+垂直双线性，
                 // 但垂直一维插值已消除 2x2 方格的"水平边"（3x 缩放下从 6x6 方格→6x3 横条，视觉改善明显）。
@@ -874,7 +873,7 @@ public sealed class SkiaVideoPresenter : IVideoPresenter
                     int cu, cv;
                     if (isNv)
                     {
-                        // 【治根AD：水平+垂直完整双线性色度上采样】
+                        // 【水平+垂直完整双线性色度上采样】
                         // 取 4 邻 UV 像素对：(cRow0, cCol0), (cRow0, cCol1), (cRow1, cCol0), (cRow1, cCol1)
                         // x 偶数 + y 偶数：U = U00 (最近邻)
                         // x 奇数 + y 偶数：U = (U00 + U01) / 2

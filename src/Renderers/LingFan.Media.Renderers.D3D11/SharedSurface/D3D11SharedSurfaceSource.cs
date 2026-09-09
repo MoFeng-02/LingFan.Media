@@ -32,7 +32,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// </remarks>
 internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
 {
-    // ── keyed mutex 键（恒等关系，与官方样例握手一一对应）──
+    // keyed mutex 键（恒等关系，与官方样例握手一一对应）
     // 生产者取锁键 = 消费者释放键 = 0；生产者释放键 = 消费者取锁键 = 1。
     private const ulong ProducerAcquireKey = 0;
     private const ulong ProducerReleaseKey = 1;

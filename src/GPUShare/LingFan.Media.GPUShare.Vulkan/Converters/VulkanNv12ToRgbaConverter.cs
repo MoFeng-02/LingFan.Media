@@ -14,7 +14,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// </summary>
 /// <remarks>
 /// <para><b>零拷贝语义</b>：仅对 NV12 源建两个平面视图（PLANE_0→R8 Y、PLANE_1→R8G8 UV）绑定描述符，
-/// 着色器在 GPU 内完成 YUV→RGB，无任何 CPU 回读（符合「YUV→RGB 永在 GPU 片元着色器」宪法铁律）。</para>
+/// 着色器在 GPU 内完成 YUV→RGB，无任何 CPU 回读（YUV→RGB 一律在 GPU 片元着色器内完成）。</para>
 /// <para><b>复用</b>：Vulkan 硬解路径的渲染器在 Present 时调用 <see cref="Convert"/>，把解码 DPB 的 NV12 图像转 RGBA；
 /// <see cref="VulkanGpuFrameProducer"/> 导入 NV12 外部纹理后亦可调本转换器产出 RGBA 资源——单一 NV12→RGBA 归宿，
 /// 渲染器保持 RGBA-only（与 GPUShare.D3D11.D3D11Nv12ToRgbaConverter 对称）。</para>
@@ -255,7 +255,7 @@ public sealed unsafe class VulkanNv12ToRgbaConverter : IDisposable
         ReleaseRgbaTarget();
     }
 
-    // ── 管线 / 渲染目标构建 ──
+    // 管线 / 渲染目标构建
 
     private void EnsurePipeline(Format targetFormat)
     {

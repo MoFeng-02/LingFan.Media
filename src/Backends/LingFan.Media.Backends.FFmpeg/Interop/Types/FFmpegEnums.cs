@@ -28,7 +28,7 @@ internal enum AVPixelFormat
     AV_PIX_FMT_GRAY16BE = 29,
     AV_PIX_FMT_GRAY16LE = 30,
     AV_PIX_FMT_YUV440P = 31,
-    // 数值严格对齐 libavutil/pixfmt.h（FFmpeg 8.1 头文件权威解析；另经运行时 format=171 实证 D3D11）。
+    // 数值严格对齐 libavutil/pixfmt.h（FFmpeg 8.1 头文件权威解析）。
     // 跨 FFmpeg 4.x–9.0（avutil 56–61）ABI 稳定，既有枚举值不随版本变更。
     AV_PIX_FMT_VAAPI = 44,
     AV_PIX_FMT_YUV420P10LE = 62,

@@ -13,8 +13,8 @@ namespace LingFan.Media.Renderers.Metal;
 /// → 配置 CAMetalLayer（pixelFormat=BGRA8Unorm / opaque / drawableSize）→ <c>newCommandQueue</c>。</para>
 /// <para>每帧上屏：<see cref="NextDrawable"/> 取得当前可绘制层与其纹理（作为渲染目标），由
 /// <see cref="MetalShaderPipeline"/> 完成渲染后提交 <c>presentDrawable:</c> + <c>commit</c>。</para>
-/// <para><b>无头域渲染</b>：macOS/iOS 上屏走 CAMetalLayer + CoreAnimation（来自总记忆：Apple 无空域=CAMetalLayer），
-/// 本上下文不提供离屏设备上下文（GPU 纹理零拷贝属 C 线未来增强，故不注册 <see cref="LingFan.Media.Abstractions.IGpuDeviceContext"/>）。</para>
+/// <para><b>无头域渲染</b>：macOS/iOS 无空域合成走 CAMetalLayer + CoreAnimation，
+/// 本上下文不提供离屏设备上下文（GPU 纹理零拷贝属未来增强，故不注册 <see cref="LingFan.Media.Abstractions.IGpuDeviceContext"/>）。</para>
     /// <para><b>所有权</b>：device 来源有二——复用宿主图层既有 device（本层另 <see cref="AppleRuntime.objc_retain"/> 取 +1）或回退 <c>MTLCreateSystemDefaultDevice</c>（本层所有 +1）；
     /// queue(来自 newCommandQueue) 均按 Cocoa 规则返回 +1（本层所有）。二者均在 <see cref="Dispose"/> 中 <see cref="AppleRuntime.objc_release"/> 一次即平衡（无需额外 retain）；
     /// layer 为宿主借入对象，经 <see cref="AppleRuntime.objc_retain"/> 取得本层 +1，<see cref="Dispose"/> 释放。CAMetalLayer 同时被宿主视图（NSView/UIView）强引用，释放仅解除本层引用。</para>

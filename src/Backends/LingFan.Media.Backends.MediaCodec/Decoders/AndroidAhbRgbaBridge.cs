@@ -18,26 +18,26 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// 以「普通 RGBA 纹理」经 RGBA→RGBA blit 采样上屏（Adreno 兼容、不崩）。
 /// </summary>
 /// <remarks>
-/// <para><b>为何绕开 YCbCr 采样</b>：Adreno 650（Android 12 实测）对「MediaCodec 产出的 YUV AHB + Vulkan
-/// <c>VkSamplerYcbcrConversion</c> 采样」报 <c>formatFeatures=0x8FF081</c>（缺
-/// <c>VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_BIT</c>），驱动走未定义行为 → <c>SIGSEGV fault addr 0x0</c>。
+/// <para><b>为何绕开 YCbCr 采样</b>：Adreno（Android 12 实测）对「MediaCodec 产出的 YUV AHB + Vulkan
+/// <c>VkSamplerYcbcrConversion</c> 采样」报缺
+/// <c>VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_BIT</c>，驱动走未定义行为 → 进程级原生崩溃。
 /// 业界零拷贝范式（ExoPlayer / Chromium）从不让 Vulkan 直接 YCbCr 采样 AHB，而是让 GL 在 GPU 内做
 /// YUV→RGB 再产 RGBA AHB；本桥接即此范式：MediaCodec→SurfaceTexture(OES 外部纹理)→GL 渲染进 RGBA AHB→Vulkan。</para>
 /// <para><b>零 CPU 像素拷贝</b>：从解码到上屏全程 GPU；AHB 为唯一跨 API 媒介（解码侧 GL 写、渲染侧 Vulkan 读）。</para>
-/// <para><b>EGL 上下文归属（治根T · 本类最关键契约）</b>：EGL 规范要求一个上下文同一时刻只被一个线程持有。
-/// 本类自第十一轮实证起改为 <b>专用常驻 GL 线程</b>独占该 EGL 上下文：<see cref="Initialize"/> 在 GL 线程上
+/// <para><b>EGL 上下文归属（本类最关键契约）</b>：EGL 规范要求一个上下文同一时刻只被一个线程持有。
+/// 本类改为 <b>专用常驻 GL 线程</b>独占该 EGL 上下文：<see cref="Initialize"/> 在 GL 线程上
 /// 建上下文并<b>永不释放</b>；<see cref="ConvertLatest"/> 仅把「闩帧+渲染进 AHB」工作经 GL 线程串行化执行、
-/// 调用方线程阻塞等结果。上下文永不离其 owner 线程 → 彻底消除此前「调用线程随 .NET 续体迁移导致上下文跨线程
-/// make/break 竞态、Adreno 每线程 GL 状态未就绪即原生空指针」的崩溃（首帧崩/二帧成的非确定性 SIGSEGV）。</para>
+/// 调用方线程阻塞等结果。上下文永不离其 owner 线程 → 彻底消除「调用线程随 .NET 续体迁移导致上下文跨线程
+/// make/break 竞态、Adreno 每线程 GL 状态未就绪即原生空指针」的非确定性崩溃。</para>
 /// <para><b>绑定来源</b>：EGL/GLES 经 <c>[LibraryImport]</c> 直连 <c>libEGL.so</c> / <c>libGLESv2.so</c>（Android 裸库名，
 /// 与 Renderers.OpenGLES 的 <c>GlesNative</c> 同范式）；AHardwareBuffer 经 <c>libandroid.so</c>。属图形底层原语
-/// （非媒体 API），AOT 源生成、零反射；符合 2026-08-22 架构裁定（Android 后端媒体 API 走托管绑定，
+/// （非媒体 API），AOT 源生成、零反射（Android 后端媒体 API 走托管绑定，
 /// 仅图形原语例外，与解码器既有 <c>AHardwareBuffer_fromHardwareBuffer</c> carve-out 一致）。</para>
 /// <para><b>DIP</b>：本类仅依赖 Abstractions + GPUShare.Android（跨 GPU API 中立帧 DTO），不反向引用任何 Renderer，依赖倒置合规。</para>
 /// </remarks>
 internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
 {
-    // ── EGL 常量 ──
+    // EGL 常量
     private const nint EglNoContext = 0;
     private const nint EglDefaultDisplay = 0;
     private const int EglOpenglEsApi = 0x30A0;
@@ -57,7 +57,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private const int EglNativeBufferAndroid = 0x3140;       // EGL_NATIVE_BUFFER_ANDROID
     private const int EglImagePreservedKhr = 0x30D2;
 
-    // ── GLES 常量 ──
+    // GLES 常量
     private const uint GlTextureExternalOes = 0x8D65;
     private const uint GlFramebuffer = 0x8D40;
     private const uint GlColorAttachment0 = 0x8CE0;
@@ -81,7 +81,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private const uint GlFloat = 0x1406;
     private const uint GlTriangleStrip = 0x0005;
 
-    // ── AHardwareBuffer 常量 ──
+    // AHardwareBuffer 常量
     private const uint AhbFormatR8G8B8A8Unorm = 1; // AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM
     private const ulong AhbUsageGpuSampledImage = 1UL << 8;
     private const ulong AhbUsageGpuFramebuffer = 1UL << 9;
@@ -90,7 +90,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private readonly int _width;
     private readonly int _height;
 
-    // EGL/GLES 对象全部在专用 GL 线程上创建并使用，永不在其他线程触碰（治根T）。
+    // EGL/GLES 对象全部在专用 GL 线程上创建并使用，永不在其他线程触碰。
     private nint _eglDisplay;
     private nint _eglContext;
     private nint _eglSurface;
@@ -110,10 +110,9 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private uint _scratchTex;      // 每帧重绑 EGLImage（AHB）的 GL 纹理
     private uint _fbo;            // FBO（附着 scratchTex）
 
-    // ⚠️ AHB 环形缓冲池已在 direct7 实验后回退（每帧 allocate+一次性 EGLImage 是本机 Adreno
-    // 唯一稳定形态）：EGLImage 与 Vulkan import 并存/同 AHB 二次 CreateImage 均触发驱动故障
-    //（0x300C 循环失败 / 直采导入失败+旧路径崩溃）。直采架构下我方 0 次 vkQueueSubmit，
-    // gralloc churn 已无 -3 暴露面，池化收益不抵驱动兼容代价。
+    // AHB 环形缓冲池已回退（实测每帧 allocate+一次性 EGLImage 是本机 Adreno 唯一稳定形态）：
+    // EGLImage 与 Vulkan import 并存/同 AHB 二次 CreateImage 均触发驱动故障。
+    // 直采架构下我方 0 次 vkQueueSubmit，gralloc churn 已无错误码暴露面，池化收益不抵驱动兼容代价。
 
     // 扩展函数（运行时经 eglGetProcAddress 解析，AOT 友好 delegate*）。
     private delegate* unmanaged[Cdecl]<nint, nint> _eglGetNativeClientBufferAndroid = null;
@@ -121,7 +120,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private delegate* unmanaged[Cdecl]<nint, nint, uint> _eglDestroyImageKhr = null;
     private delegate* unmanaged[Cdecl]<uint, nint, void> _glEglImageTargetTexture2Does = null;
 
-    // ── 治根T：专用 GL 线程与跨线程产帧队列 ──
+    // 专用 GL 线程与跨线程产帧队列
     private Thread? _glThread;
     private readonly ManualResetEvent _initDone = new(false);   // GL 线程建上下文完成后置位
     private readonly ManualResetEvent _workSignal = new(false); // 有产帧/停止请求时唤醒 GL 线程
@@ -154,7 +153,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     /// <summary>
     /// 启动专用 GL 线程并在其上建立 EGL/GLES 上下文、OES 纹理、SurfaceTexture 与渲染管线；失败抛
     /// <see cref="NotSupportedException"/>（调用方据此回退 ByteBuffer CPU 路径）。
-    /// 关键：GL 线程建完上下文后<b>常驻持有、永不释放</b>（治根T），所有 GL 工作仅在该线程执行。
+    /// 关键：GL 线程建完上下文后<b>常驻持有、永不释放</b>，所有 GL 工作仅在该线程执行。
     /// </summary>
     public void Initialize()
     {
@@ -319,14 +318,14 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         GlGenFramebuffers(1, &fb);
         _fbo = fb;
 
-        // 上下文保持 current：GL 线程常驻持有，不在此释放（治根T）。
+        // 上下文保持 current：GL 线程常驻持有，不在此释放。
     }
 
     /// <summary>在 GL 线程上闩取最新帧并渲染进 RGBA AHardwareBuffer。上下文此时已 current（建上下文后从未释放），
     /// 故此处<b>不做</b> eglMakeCurrent / 不做 finally 释放上下文——仅失败路径清理本帧的 AHB / EGLImage 资源。</summary>
     private nint ProduceFrameOnThisThread()
     {
-        _logger?.LogTrace("[ANDROID-AHB-TRACE] ①GL线程产帧（托管线程={Tid}）", Environment.CurrentManagedThreadId);
+        _logger?.LogTrace("[ANDROID-AHB-TRACE] S1GL线程产帧（托管线程={Tid}）", Environment.CurrentManagedThreadId);
 
         // 1) 分配 RGBA AHB（GPU 采样 + 帧缓冲写）。
         AHardwareBufferDesc desc = new()
@@ -342,14 +341,14 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         bool ok = false;
         try
         {
-            // ①b 前置打卡：若冻结日志停在 ①b 而 ④ 缺失，即 AHardwareBufferAllocate（gralloc）阻塞铁证。
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ①b进入 AHardwareBufferAllocate（托管线程={Tid}）", Environment.CurrentManagedThreadId);
+            // S1b 前置打卡：若冻结日志停在 S1b 而 S4 缺失，即阻塞发生在 AHardwareBufferAllocate（gralloc）。
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S1b进入 AHardwareBufferAllocate（托管线程={Tid}）", Environment.CurrentManagedThreadId);
             if (AHardwareBufferAllocate(&desc, &ahb) != 0 || ahb == nint.Zero)
             {
                 _logger?.LogWarning("[ANDROID-AHB] AHardwareBuffer_allocate(RGBA8) 失败。");
                 return nint.Zero;
             }
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ④AHB 分配成功 ahb=0x{Ahb} 托管线程={Tid}", (ulong)ahb, Environment.CurrentManagedThreadId);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S4AHB 分配成功 ahb=0x{Ahb} 托管线程={Tid}", (ulong)ahb, Environment.CurrentManagedThreadId);
 
             // 2) AHB → EGLClientBuffer → EGLImage。
             nint clientBuf = _eglGetNativeClientBufferAndroid(ahb);
@@ -358,7 +357,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                 _logger?.LogWarning("[ANDROID-AHB] eglGetNativeClientBufferANDROID 失败。");
                 return nint.Zero;
             }
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑤eglGetNativeClientBuffer 成功 clientBuf=0x{Cb}", (ulong)clientBuf);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S5eglGetNativeClientBuffer 成功 clientBuf=0x{Cb}", (ulong)clientBuf);
             int[] imgAttrs = { EglImagePreservedKhr, 1, EglNone };
             fixed (int* ia = imgAttrs)
                 eglImage = _eglCreateImageKhr(_eglDisplay, EglNoContext, (uint)EglNativeBufferAndroid, clientBuf, (nint)ia);
@@ -367,7 +366,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                 _logger?.LogWarning("[ANDROID-AHB] eglCreateImageKHR(AHB) 失败 0x{EglErr:X8}。", (ulong)EglGetError());
                 return nint.Zero;
             }
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑥eglCreateImageKHR 成功 eglImage=0x{Img}", (ulong)eglImage);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S6eglCreateImageKHR 成功 eglImage=0x{Img}", (ulong)eglImage);
 
             // 3) 把 EGLImage 绑到复用纹理，再附到 FBO。
             GlBindTexture(GlTexture2D, _scratchTex);
@@ -379,16 +378,16 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
             GlBindFramebuffer(GlFramebuffer, _fbo);
             GlFramebufferTexture2D(GlFramebuffer, GlColorAttachment0, GlTexture2D, _scratchTex, 0);
             uint glErrTex = GlGetError();
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑦纹理/FBO 绑定完成 glErr=0x{GlErr:X8}", glErrTex);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S7纹理/FBO 绑定完成 glErr=0x{GlErr:X8}", glErrTex);
             if (GlCheckFramebufferStatus(GlFramebuffer) != GlFramebufferComplete)
             {
                 _logger?.LogWarning("[ANDROID-AHB] FBO 不完整（AHB→GL 纹理绑定失败），GL 错误=0x{GlErr:X8}。", (uint)GlGetError());
                 return nint.Zero;
             }
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑧FBO 完整");
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S8FBO 完整");
 
             // 4) 闩帧：updateTexImage 阻塞等解码 fence，把最新帧写入 _oesTex（OES 外部纹理，驱动已完成 YUV→RGB）。
-            // 契约：拥有该纹理的 EGL 上下文（本 GL 线程）必须 current —— 治根T 保证恒满足，无跨线程问题。
+            // 契约：拥有该纹理的 EGL 上下文（本 GL 线程）必须 current —— 专用 GL 线程契约保证恒满足，无跨线程问题。
             try
             {
                 _surfaceTexture!.UpdateTexImage();
@@ -398,7 +397,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                 _logger?.LogWarning(ex, "[ANDROID-AHB] SurfaceTexture.updateTexImage 失败。");
                 return nint.Zero;
             }
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑨updateTexImage 成功");
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S9updateTexImage 成功");
             float[] mtx = new float[16];
             _surfaceTexture.GetTransformMatrix(mtx);
 
@@ -419,15 +418,15 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
             GlVertexAttribPointer((uint)_aUvLoc, 2, GlFloat, 0, 16, (nint)8);
             GlDrawArrays(GlTriangleStrip, 0, 4);
             uint glErrDraw = GlGetError();
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑩GlDrawArrays 完成 glErr=0x{GlErr:X8}", glErrDraw);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S10GlDrawArrays 完成 glErr=0x{GlErr:X8}", glErrDraw);
             GlBindBuffer(GlArrayBuffer, 0);
             GlFinish(); // 保证 AHB 写入对后续 Vulkan 导入可见（跨 API 同步）。
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑪glFinish 完成");
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S11glFinish 完成");
 
             // 6) EGLImage 仅渲染期需要，销毁（AHB 内容已落盘，引用仍由帧资源持有）。
             _eglDestroyImageKhr(_eglDisplay, eglImage);
             eglImage = nint.Zero;
-            _logger?.LogTrace("[ANDROID-AHB-TRACE] ⑫eglDestroyImageKHR 完成，准备返回 ahb=0x{Ahb}", (ulong)ahb);
+            _logger?.LogTrace("[ANDROID-AHB-TRACE] S12eglDestroyImageKHR 完成，准备返回 ahb=0x{Ahb}", (ulong)ahb);
 
             _logger?.LogTrace("[ANDROID-AHB] 帧渲染进 RGBA AHB 完成 {W}x{H}", _width, _height);
             ok = true;
@@ -444,7 +443,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         }
     }
 
-    // ── 私有：shader 管线 ──
+    // 私有：shader 管线
     private void BuildProgram()
     {
         uint vs = CompileShader(GlVertexShader, VertexSource);
@@ -526,7 +525,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         _glEglImageTargetTexture2Does = (delegate* unmanaged[Cdecl]<uint, nint, void>)p;
     }
 
-    // ⚠️ GLSL 铁律：#version 必须是源码绝对第一行（列 0、无前导空白），否则驱动忽略→默认按 ES 1.00 编译，
+    // GLSL 硬性要求：#version 必须是源码绝对第一行（列 0、无前导空白），否则驱动忽略→默认按 ES 1.00 编译，
     // 导致 gl_VertexIndex undeclared、samplerExternalOES 扩展名错配。故用字符串拼接而非原始字面量（后者会残留缩进空格）。
     // 采用 Android 最稳的 GLES 2.0 / ES 1.00 范式（ExoPlayer/Grafika 同款）：全屏 quad 走顶点属性，不依赖 gl_VertexIndex（GLES3-only）。
     // 省略 #version 即默认 ES 1.00；samplerExternalOES 在 ES 1.00 下用 GL_OES_EGL_image_external 扩展（非 _essl3）。
@@ -538,7 +537,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
       + "void main() {\n"
       + "    vUV = (uTexTransform * vec4(aUV, 0.0, 1.0)).xy;\n"
       // aPos 已是 NDC [-1,1]（VBO 注释同款），直传 gl_Position。
-      // 误写 aPos*2.0-1.0 会把 quad 放大 3 倍 → 可见区只剩中央 1/3 裁切放大（真机截图实证）。
+      // 误写 aPos*2.0-1.0 会把 quad 放大 3 倍 → 可见区只剩中央 1/3 裁切放大（实测）。
       + "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
       + "}\n";
 
@@ -594,7 +593,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         _logger?.LogInformation("[ANDROID-AHB] GL 线程已销毁上下文并退出。");
     }
 
-    // ── AHardwareBuffer 描述结构（与 NDK AHardwareBuffer_Desc 二进制兼容）──
+    // AHardwareBuffer 描述结构（与 NDK AHardwareBuffer_Desc 二进制兼容）
     [StructLayout(LayoutKind.Sequential)]
     private struct AHardwareBufferDesc
     {
@@ -608,7 +607,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         public uint Rfu1;
     }
 
-    // ── EGL core（libEGL.so，Android 裸库）──
+    // EGL core（libEGL.so，Android 裸库）
     [LibraryImport("libEGL.so", EntryPoint = "eglGetDisplay")]
     private static partial nint EglGetDisplay(nint displayId);
 
@@ -648,7 +647,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     [LibraryImport("libEGL.so", EntryPoint = "eglGetError")]
     private static partial uint EglGetError();
 
-    // ── GLES core（libGLESv2.so）──
+    // GLES core（libGLESv2.so）
     [LibraryImport("libGLESv2.so", EntryPoint = "glGetError")]
     private static partial uint GlGetError();
 
@@ -754,7 +753,7 @@ internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     [LibraryImport("libGLESv2.so", EntryPoint = "glDeleteProgram")]
     private static partial void GlDeleteProgram(uint program);
 
-    // ── AHardwareBuffer（libandroid.so）──
+    // AHardwareBuffer（libandroid.so）
     [LibraryImport("libandroid.so", EntryPoint = "AHardwareBuffer_allocate")]
     private static partial int AHardwareBufferAllocate(AHardwareBufferDesc* desc, nint* outBuffer);
 
