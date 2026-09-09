@@ -100,7 +100,7 @@ internal static class MFConstants
 
     // MFT 枚举分类 GUID（MFTEnum 动态发现注册的解码 MFT，避免硬编码 CLSID 在未注册 / HEVC 可选的系统上失败）
     // mfapi.h 权威值 {d6c02d4b-6833-45b4-971a-05a4b04bab91}；运行时验证：此 GUID 枚举 H264 → count=1（CLSID_MSH264DecoderMFT）。
-    // 误写 9EA2FB4D-...（错误 GUID，枚举恒 count=0 → "无注册 MFT"假象），勿回退。
+    // 早期误写过错误 GUID（枚举恒 count=0 → "无注册 MFT"假象），勿回退。
     internal static readonly Guid MFT_CATEGORY_VIDEO_DECODER = new(0xd6c02d4b, 0x6833, 0x45b4, 0x97, 0x1a, 0x05, 0xa4, 0xb0, 0x4b, 0xab, 0x91);
 
     // MFTEnumEx 枚举标志（mfapi.h:2018-2029 权威值；旧 MFTEnum 的 Flags 仍保留 0）。
@@ -128,7 +128,7 @@ internal static class MFConstants
     internal static readonly Guid MFT_ENUM_HARDWARE_URL_Attribute = new(0x2fb866ac, 0xb078, 0x4942, 0xab, 0x6c, 0x00, 0x3d, 0x05, 0xcd, 0xa6, 0x74);
 
     // IMFTransform IID（mftransform.h 权威值 {bf94c121-5b05-4e6f-8000-ba598961414d}；
-    // 运行时验证：CoCreateInstance + 全 vtable 槽位 S_OK。误写 ...8009-456E31185733（错误 GUID），勿回退）
+    // 运行时验证：CoCreateInstance + 全 vtable 槽位 S_OK。早期误写过错误 GUID，勿回退。
     internal static readonly Guid IID_IMFTransform = new(0xbf94c121, 0x5b05, 0x4e6f, 0x80, 0x00, 0xba, 0x59, 0x89, 0x61, 0x41, 0x4d);
 
     // DXVA 零拷贝所需 IID 与消息常量
