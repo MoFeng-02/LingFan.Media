@@ -9,8 +9,9 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <para>职责：替代 <see cref="VulkanRenderer"/> 中软帧 YUV 格式的 CPU 逐像素转换，
 /// 将 NV12/NV21/YUV420P/YUV422P/YUV444P 的 Y/U/V 平面上传到 GPU 纹理后由 Shader 采样转换，
 /// CPU 仅搬运原始平面数据（1080p NV12 约 3MB），彻底消除 CPU 转换瓶颈。</para>
-/// <para>着色器源用 GLSL 预编译为 SPIR-V（<c>glslang -V</c>），由构建期 MSBuild 目标
-/// 经 <c>generate-shader-bytes.ps1</c> 转成 <c>EmbeddedShaders</c> 类的 <see langword="byte"/>[] 字面量
+/// <para>着色器源（唯一真源 <c>Targets/Vulkan/Shaders/</c>）用 GLSL 预编译为 SPIR-V（<c>glslang -V</c>），由构建期 MSBuild 目标
+/// （共享 <c>Targets/Vulkan/VulkanShaderBytes.targets</c>，跨平台内联任务）转成 <c>EmbeddedShaders</c> 类的
+/// <see langword="byte"/>[] 字面量
 /// 编译进程序集（见 <c>Shaders.g.cs</c>，位于 obj 中间目录，不进源码树）；
 /// NativeAOT 下无运行时编译、无 <see cref="System.Reflection.Assembly"/> 资源访问，trim/AOT 绝对安全。</para>
 /// <para>异步策略：全部同步原生调用（无 I/O await），与 <see cref="VulkanRenderer.Present"/> 的 sync-only 分类一致。</para>
