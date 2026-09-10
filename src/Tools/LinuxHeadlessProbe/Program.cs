@@ -3,10 +3,12 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 using System.Threading;
+using System.Runtime.InteropServices;
 using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Consumers;
 using LingFan.Media.Extensions;
+using LingFan.Media.Outputs.OpenAL;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -39,7 +41,15 @@ internal static class Program
         // ffmpeg 原生库目录：优先 env LF_FFMPEG_LIB，否则应用目录（配合 LD_LIBRARY_PATH）。
         string ffmpegLib = Environment.GetEnvironmentVariable("LF_FFMPEG_LIB") ?? AppContext.BaseDirectory;
 
-        Console.WriteLine("=== LingFan.Media Linux 无头探针（ffmpeg 解码 + 无头 NoOp 渲染 + 静音）===");
+        // 音频输出选择：--audio openal（默认，真实出声，经 libopenal → Pulse/ALSA）/ silent（仅数据出餐）。
+        // OpenAL 原生库缺失时自动回落静音（Ubuntu: sudo apt install libopenal1）。
+        string audioMode = (ParseOption(args, "--audio") ?? "openal").ToLowerInvariant();
+        bool openalAvailable = audioMode != "silent" &&
+            (NativeLibrary.TryLoad("libopenal.so.1", out _) || NativeLibrary.TryLoad("libopenal.so", out _));
+        if (audioMode != "silent" && !openalAvailable)
+            Console.WriteLine("[提示] libopenal 未找到（Ubuntu: sudo apt install libopenal1），本次回落静音输出。");
+
+        Console.WriteLine("=== LingFan.Media Linux 无头探针（ffmpeg 解码 + 无头 NoOp 渲染 + 音频 openal/silent）===");
         if (!File.Exists(file))
         {
             Console.WriteLine($"找不到媒体文件：{file}（用 --file 指定绝对路径）");
@@ -49,7 +59,7 @@ internal static class Program
         Console.WriteLine($"ffmpeg 库目录 : {ffmpegLib}");
         Console.WriteLine($"硬解/零拷贝   : {(useHw ? "请求(--hw)；Linux 解码侧 VAAPI 为 Phase 2 桩，当前回落软解并打印告警" : "关（软解软渲）")}");
         Console.WriteLine($"渲染器        : NoOp 无头（视频帧经事件出餐，不建 GPU 设备）");
-        Console.WriteLine($"音频输出      : 静音（仅数据出餐）");
+        Console.WriteLine($"音频输出      : {(openalAvailable ? "OpenAL（真实出声；--audio silent 关闭）" : "静音（仅数据出餐）")}");
         Console.WriteLine($"日志级别      : {(verbose ? "Debug" : "Information")}");
         Console.WriteLine($"帧落盘        : {(saveFrames > 0 ? $"每 {saveFrames} 帧 -> {saveDir}" : "关闭（加 --save-frames N 开启，均匀抽帧成 PNG 判读解码正确性）")}");
         Console.WriteLine();
@@ -59,15 +69,18 @@ internal static class Program
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "[HH:mm:ss.fff] "; })
             .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
 
-        //  跨平台三人组：ffmpeg 解码 + 无头 NoOp 渲染 + 静音输出。全部 net10.0，Linux 可直接运行。
-        services.AddLingFanMedia()
+        //  跨平台：ffmpeg 解码 + 无头 NoOp 渲染 + 音频输出（openal 真实出声 / silent 数据出餐）。
+        var mediaBuilder = services.AddLingFanMedia()
                 .AddFFmpeg(o =>
                 {
                     o.FFmpegLibraryPath = ffmpegLib;
                     o.HardwareAcceleration = useHw;
                 })
-                .AddHeadlessRenderer()
-                .AddSilentAudioOutput();
+                .AddHeadlessRenderer();
+        if (openalAvailable)
+            mediaBuilder.AddOpenALOutput();
+        else
+            mediaBuilder.AddSilentAudioOutput();
 
         await using var sp = services.BuildServiceProvider();
         var player = sp.GetRequiredService<IMediaPlayer>();

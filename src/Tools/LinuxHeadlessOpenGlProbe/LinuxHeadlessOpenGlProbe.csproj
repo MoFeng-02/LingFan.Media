@@ -30,6 +30,8 @@
     <ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
     <!-- Linux VAAPI 零拷贝导出（IVaApiExport → VaApiInterop）：仅 Linux 调用，注册后请求硬解即启用真实零拷贝硬解。 -->
     <ProjectReference Include="..\..\Platforms\LingFan.Media.Platforms\LingFan.Media.Platforms.csproj" />
+    <!-- 音频输出（openal 真实出声 / silent 数据出餐，由 audio 参数选择） -->
+    <ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,4 +39,23 @@
     <None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- ffmpeg 原生库（Linux）：与 LinuxHeadlessProbe 同款契约复制（avio.h/extradata 分配器契约修复后的
+       标准部署块）。复制 lib/*.so* 全部名字层级：无版本名供默认探测、带 soname 名供依赖链；
+       BtbN 构建自带 DT_RUNPATH=$ORIGIN，bin 内依赖闭环。默认取 n8.1（avutil 60，与自绑定
+       结构镜像校准版本一致）；改用其他构建时调整通配符。 -->
+  <ItemGroup Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*n8.1*linux64*\lib\*.so*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopyFFmpegNativeLinux" AfterTargets="Build;Publish" Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+    <ItemGroup>
+      <FFmpegSo Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*n8.1*linux64*\lib\*.so*" />
+    </ItemGroup>
+    <Message Condition="'@(FFmpegSo)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*n8.1*linux64*/lib/*.so*，请在 Linux 侧解包 ThirdParty/ffmpeg/ffmpeg-n8.1-latest-linux64-lgpl-shared-8.1.tar.xz，或设置环境变量 LF_FFMPEG_LIB 指向已解包的 lib 目录。" Importance="high" />
+  </Target>
+
+  <ItemGroup Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+    <!-- libva 2.24 随 bin 部署：Ubuntu 24.04 系统 libva 2.20 缺 vaMapBuffer2（ffmpeg VAAPI 路径需要 ≥2.21）；
+         RUNPATH=$ORIGIN 使 ffmpeg 的 DT_NEEDED 优先绑定 bin 内副本。真实文件副本（非符号链接）。 -->
+    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\va\lib\libva*.so.*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

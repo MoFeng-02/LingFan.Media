@@ -128,6 +128,12 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
     {
         ArgumentNullException.ThrowIfNull(frame);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // 惰性初始化（与 WasapiRenderLoop 同契约）：FFmpeg/AAC 等场景 OpenAsync 时刻采样率未知
+        // （OutputSampleRate=0，见 MediaPlayer.OpenAsync 的显式初始化守卫），首个真实帧携带
+        // 采样率/声道数，在此按真实值打开设备。未惰性打开会导致 Submit 无背压秒失败 →
+        // 音频管线以解码速度空跑 → 主时钟冲到流末 → 视频帧整段判落后丢弃。
+        if (_readyForInit && !_initialized)
+            Initialize(frame.SampleRate, frame.Channels);
         if (!_initialized || _source == 0)
             throw new InvalidOperationException("OpenAL 输出尚未初始化，无法提交音频帧。");
         if (frame.Channels != _channels)

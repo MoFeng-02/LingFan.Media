@@ -45,6 +45,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
     private bool _gpuImportMode;
     // Linux VAAPI 硬件解码导出（真实零拷贝路径）：IVaApiExport 由 Platforms.Linux 注册（依赖倒置，后端不引用 Platforms）。
     private IVaApiExport? _vaApiExport;
+    // VAAPI 零拷贝会话级锁定：首次导出/导入失败即置位（环境不支持导入），后续帧直接 CPU 传输。
+    // 环境级能力而非时间线状态，Reset() 重建不复位。
+    private bool _vaZeroCopyUnavailable;
     private nint _vaDisplay; // VAAPI VADisplay（VA Surface → dma_buf 导出所需）
     // D3D11VA NV12 硬解帧 → RGBA32 的 GPU 转换器（位于中性互操作模块 LingFan.Media.GPUShare.D3D11）。
     // 仅 GPU 零拷贝路径（Windows）使用；其持有的共享设备包装不 Dispose（见转换器注释）。
@@ -1476,6 +1479,9 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         AVFrame* sw = FF.av_frame_alloc();
         if (sw == null)
             throw new InvalidOperationException("av_frame_alloc 失败（GPU 零拷贝回落 CPU）");
+        // av_hwframe_transfer_data 不拷贝时间戳（dst 为裸分配帧）——必须手动透传源帧 pts，
+        // 否则回落帧 pts=0 → 全部被判落后丢弃 → 呈现冻结（GL --hw 回落路径实测）。
+        sw->pts = avFrame->pts;
         try
         {
             int ret = FF.av_hwframe_transfer_data(sw, avFrame, 0);
@@ -1590,7 +1596,10 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         var frameOwner = new SafeAVFrameHandle((nint)clone);
         try
         {
-            if (_vaApiExport.TryExportSurfaceToDmaBuf(_vaDisplay, surfaceId, out var desc) && desc is not null
+            // VAAPI 零拷贝会话级锁定：首次导出/导入失败即判定「本环境零拷贝不可用」（如 Xvfb/llvmpipe
+            // 无法导入 GPU dma_buf），后续帧直接 CPU 传输——逐帧重试导出+导入只空耗并刷屏。
+            if (!_vaZeroCopyUnavailable
+                && _vaApiExport.TryExportSurfaceToDmaBuf(_vaDisplay, surfaceId, out var desc) && desc is not null
                 && _gpuProducer is not null)
             {
                 var source = new GpuFrameImportSource
@@ -1616,11 +1625,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                     System.Threading.Interlocked.Increment(ref _gpuZeroCopyFrames);
                     return frame;
                 }
-                _logger.LogWarning("VAAPI dma_buf 导入未接受（S_OK≠被接受），本帧回落 CPU 传输。");
+                _vaZeroCopyUnavailable = true;
+                _logger.LogWarning("VAAPI dma_buf 导入未接受（S_OK≠被接受），本次会话回落 CPU 传输（零拷贝已锁定关闭）。");
             }
-            else
+            else if (!_vaZeroCopyUnavailable)
             {
-                _logger.LogWarning("VAAPI 表面导出 dma_buf 失败，本帧回落 CPU 传输。");
+                _vaZeroCopyUnavailable = true;
+                _logger.LogWarning("VAAPI 表面导出 dma_buf 失败，本次会话回落 CPU 传输（零拷贝已锁定关闭）。");
             }
 
             // 回落 CPU 传输（硬解帧 → CPU 像素帧）；TransferHardwareFrameToCpu 内部计入 CPU 拷贝。
@@ -1628,7 +1639,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "VAAPI 零拷贝导出/导入异常，本帧回落 CPU 传输。");
+            _vaZeroCopyUnavailable = true;
+            _logger.LogWarning(ex, "VAAPI 零拷贝导出/导入异常，本次会话回落 CPU 传输（零拷贝已锁定关闭）。");
             return TransferHardwareFrameToCpu(clone);
         }
         finally

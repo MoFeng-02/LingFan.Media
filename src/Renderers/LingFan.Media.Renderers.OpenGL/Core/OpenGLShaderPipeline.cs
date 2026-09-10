@@ -50,6 +50,7 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
     private const int GlLinkStatus = 0x8B82;
     private const int GlFloat = 0x1406;
     private const int GlArrayBuffer = 0x8892;
+    private const uint GlVersion = 0x1F02;
     private const int GlStaticDraw = 0x88E4;
 
     private const string VertexShaderSource = """
@@ -172,16 +173,41 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
 
     // 初始化
 
+    // 主时钟外的上下文类型：GLES 上下文（GL_VERSION 以 "OpenGL ES" 开头）使用 GLSL ES 3.00 着色器变体。
+    // Mesa GLES-only 栈（Xvfb/部分板卡 GPU）不提供桌面 GLSL 330，写死 330 core 会直接编译失败。
+    private bool _isGles;
+
     /// <summary>延迟初始化 GL 资源（VAO / VBO / Shader 程序）。
     /// 必须在 GL 上下文 current 时调用——由 <see cref="OpenGLRenderer.Present"/> 在渲染线程绑定上下文后触发，
     /// 仅首次执行。</summary>
     private void EnsureInitialized()
     {
         if (_initialized) return;
+        nint verPtr = GLNative.glGetString(GlVersion);
+        string glVersion = Marshal.PtrToStringUTF8(verPtr) ?? string.Empty;
+        _isGles = glVersion.StartsWith("OpenGL ES", StringComparison.OrdinalIgnoreCase);
+        if (_isGles)
+            _logger?.LogInformation(
+                "OpenGL ES 上下文检测到（{Version}），Shader 使用 GLSL ES 3.00 变体。", glVersion);
         InitializeQuad();
         CompilePrograms();
         _initialized = true;
         _logger?.LogDebug("OpenGL Shader 管线 GL 资源初始化完成（VAO/VBO/3 套 Shader 程序）。");
+    }
+
+    /// <summary>按上下文类型改写着色器源：桌面 GL 原样；GLES 上下文换用 GLSL ES 3.00
+    /// （版本行替换 + fragment 阶段补 <c>precision highp float;</c>——GLSL ES 3.00 的 fragment
+    /// 必须显式声明 float 精度）。其余语法（in/out、layout location、texture()、swizzle）两方言同构。</summary>
+    private string AdaptShaderSource(string src, bool fragment)
+    {
+        if (!_isGles) return src;
+        string es = src.Replace("#version 330 core", "#version 300 es");
+        if (fragment)
+        {
+            int versionLineEnd = es.IndexOf('\n');
+            es = es.Insert(versionLineEnd + 1, "precision highp float;\n");
+        }
+        return es;
     }
 
     private void InitializeQuad()
@@ -209,12 +235,12 @@ internal sealed unsafe class OpenGLShaderPipeline : IDisposable
 
     private void CompilePrograms()
     {
-        uint vs = CompileShader(GlVertexShader, VertexShaderSource);
+        uint vs = CompileShader(GlVertexShader, AdaptShaderSource(VertexShaderSource, fragment: false));
         try
         {
-            uint fsRgb = CompileShader(GlFragmentShader, RgbFragmentSource);
-            uint fsYuv = CompileShader(GlFragmentShader, YuvFragmentSource);
-            uint fsNv = CompileShader(GlFragmentShader, NvFragmentSource);
+            uint fsRgb = CompileShader(GlFragmentShader, AdaptShaderSource(RgbFragmentSource, fragment: true));
+            uint fsYuv = CompileShader(GlFragmentShader, AdaptShaderSource(YuvFragmentSource, fragment: true));
+            uint fsNv = CompileShader(GlFragmentShader, AdaptShaderSource(NvFragmentSource, fragment: true));
 
             _rgbProgram = LinkProgram(vs, fsRgb, out _rgbUTex, out _rgbUIsBgra, "uTex", "uIsBgra");
             _yuvProgram = LinkProgram(vs, fsYuv, out _yuvUY, out _yuvUU, "uY", "uU");

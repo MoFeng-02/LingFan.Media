@@ -659,6 +659,9 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
             _deviceReady = true;
 
             _logger.LogDebug("Vulkan 设备已创建（共享 Singleton）：{DeviceName}", devName);
+            // 原生死亡定位踪迹（stderr 直写，DECODER-DISPOSE 同款）：Linux 首接线轮次用于圈定
+            // 卡死/崩溃发生在工厂、渲染器构造还是 Attach 链；设备名同时确认 lavapipe/硬件 ICD。
+            Console.Error.WriteLine($"[VULKAN-INIT] 共享设备创建完成：{devName}");
         }
     }
 

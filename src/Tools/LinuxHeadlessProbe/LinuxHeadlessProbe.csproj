@@ -20,12 +20,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 跨平台后端/渲染/消费链：ffmpeg 解码 + 无头 NoOp 渲染 + 静音输出。
-         全部 net10.0，可在 Linux/WSL2 直接 dotnet run / dotnet publish -r linux-x64。 -->
+    <!-- 跨平台后端/渲染/消费链：ffmpeg 解码 + 无头 NoOp 渲染 + 音频输出（openal 真实出声 / silent 数据出餐，由 audio 参数选择）。 -->
     <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -57,4 +57,9 @@
     <Message Condition="'@(FFmpegSo)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*n8.1*linux64*/lib/*.so*，请在 Linux 侧解包 ThirdParty/ffmpeg/ffmpeg-n8.1-latest-linux64-lgpl-shared-8.1.tar.xz，或设置环境变量 LF_FFMPEG_LIB 指向已解包的 lib 目录。" Importance="high" />
   </Target>
 
+  <ItemGroup Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+    <!-- libva 2.24 随 bin 部署：Ubuntu 24.04 系统 libva 2.20 缺 vaMapBuffer2（ffmpeg VAAPI 路径需要 ≥2.21）；
+         RUNPATH=$ORIGIN 使 ffmpeg 的 DT_NEEDED 优先绑定 bin 内副本。真实文件副本（非符号链接）。 -->
+    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\va\lib\libva*.so.*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

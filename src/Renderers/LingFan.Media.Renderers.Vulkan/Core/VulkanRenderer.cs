@@ -185,14 +185,22 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             {
                 _targetWidth = (uint)target.Width;
                 _targetHeight = (uint)target.Height;
+                // 原生死亡定位踪迹（stderr 直写，DECODER-DISPOSE 同款）：Attach 链五阶段，
+                // 卡死/崩溃时最后一条阶段行即定位点。
+                Console.Error.WriteLine("[VULKAN-ATTACH] → CreateSurface");
                 CreateSurface(target);
+                Console.Error.WriteLine("[VULKAN-ATTACH] → CreateSwapchain");
                 CreateSwapchain((uint)target.Width, (uint)target.Height);
+                Console.Error.WriteLine("[VULKAN-ATTACH] → CreateShaderPipeline");
                 CreateShaderPipeline();
+                Console.Error.WriteLine("[VULKAN-ATTACH] → CommandPool");
                 CreateCommandPoolAndBuffer();
                 // NV12→RGBA 转换器：与 Shader 管线同生命周期；Present 时把硬解 DPB 的 NV12 图像转 RGBA。
                 _nv12Converter = new VulkanNv12ToRgbaConverter(_device, _physicalDevice, _logger);
+                Console.Error.WriteLine("[VULKAN-ATTACH] → Semaphores");
                 CreateSemaphores();
                 _attached = true;
+                Console.Error.WriteLine("[VULKAN-ATTACH] Attach 完成");
                 _logger.LogDebug("Vulkan 渲染器已附加：{W}x{H}", target.Width, target.Height);
             }
             catch { ReleaseSessionResources(); throw; }
@@ -1088,23 +1096,29 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             if (target.NativeHandle is X11WindowHandle x11)
             {
                 nint dpy = x11.Display;
+                Console.Error.WriteLine(
+                    $"[VULKAN-ATTACH] CreateXlibSurfaceKHR：instance=0x{_instance.Handle:X} dpy=0x{dpy:X} window=0x{x11.Window:X}");
+                // 字段语义：规范 Display* dpy —— Silk.NET 以 IntPtr* 表示「指针值字段」，
+                // 必须把 Display 指针值直填进字段。此前 &dpy 填入栈地址，ICD 解引用栈地址当
+                // Display* → XCB 层 NULL 解引用（segfault at 0 in libX11-xcb，三轮复现）。
                 var info = new XlibSurfaceCreateInfoKHR
                 {
                     SType = StructureType.XlibSurfaceCreateInfoKhr,
-                    Dpy = &dpy,
+                    Dpy = (nint*)dpy,
                     Window = x11.Window,
                 };
                 result = VulkanNative.CreateXlibSurfaceKHR(_instance, ref info, null, out surfArr[0]);
             }
             else if (target.NativeHandle is WaylandWindowHandle wl)
             {
+                // 同 Xlib：wl_display* / wl_surface* 指针值直填（勿取局部变量地址）。
                 nint disp = wl.Display;
                 nint surf = wl.Surface;
                 var info = new WaylandSurfaceCreateInfoKHR
                 {
                     SType = StructureType.WaylandSurfaceCreateInfoKhr,
-                    Display = &disp,
-                    Surface = &surf,
+                    Display = (nint*)disp,
+                    Surface = (nint*)surf,
                 };
                 result = VulkanNative.CreateWaylandSurfaceKHR(_instance, ref info, null, out surfArr[0]);
             }

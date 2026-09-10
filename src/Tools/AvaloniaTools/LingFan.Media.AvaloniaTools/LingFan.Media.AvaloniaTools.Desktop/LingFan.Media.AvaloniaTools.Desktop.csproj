@@ -49,6 +49,21 @@
 		<Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
 	</Target>
 
+	<!-- 原生 ffmpeg 共享库（Linux）：与三个 Linux 探针同款契约复制（extradata/AVIO 分配器契约修复后的
+       标准部署块）。lib/*.so* 全部名字层级：带 soname 名供加载器版本化探测与依赖链，无版本名供兜底探测；
+       BtbN 构建自带 DT_RUNPATH=$ORIGIN，bin 内依赖闭环。源：ThirdParty/ffmpeg/*n8.1*linux64*/lib（深 5 个 ..）。
+       仅 Linux 构建触发；默认取 n8.1（avutil 60，与自绑定结构镜像校准版本一致）。 -->
+	<ItemGroup Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\ffmpeg\*n8.1*linux64*\lib\*.so*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
+	<Target Name="CopyFFmpegNativeLinux" AfterTargets="Build;Publish" Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+		<ItemGroup>
+			<FFmpegSoLinux Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\ffmpeg\*n8.1*linux64*\lib\*.so*" />
+		</ItemGroup>
+		<Message Condition="'@(FFmpegSoLinux)' != ''" Text="[FFMPEG-LINUX] 已复制 @(FFmpegSoLinux-&gt;Count()) 个 ffmpeg .so 到输出/发布目录" Importance="high" />
+		<Message Condition="'@(FFmpegSoLinux)' == ''" Text="[FFMPEG-LINUX] 未找到 ThirdParty/ffmpeg/*n8.1*linux64*/lib/*.so*，请在 Linux 侧解包 ThirdParty/ffmpeg/ffmpeg-n8.1-latest-linux64-lgpl-shared-8.1.tar.xz，或设置环境变量 LF_FFMPEG_LIB 指向已解包的 lib 目录。" Importance="high" />
+	</Target>
+
 	<!-- 原生 MoltenVK 库随 dotnet run / publish 一并复制进输出目录（仅 macOS/iOS / MoltenVK 平台）：
        VulkanNative 在 Apple 上经 NativeLibrary.SetDllImportResolver 把顶层 vulkan-1 重定向到
        libvulkan.1.dylib / libMoltenVK.dylib；这些库由 MoltenVK SDK 提供、不在系统 loader 路径，
@@ -72,10 +87,9 @@
 		<Message Condition="'@(MoltenVKDylib)' == ''" Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
 		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\moltenvk\*\lib\*.dylib" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 	</Target>
-	<Target Name="CopyMoltenVKNative" AfterTargets="Build;Publish" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-		<Copy SourceFiles="@(MoltenVKDylib)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(MoltenVKDylib)' != ''" />
-		<Copy SourceFiles="@(MoltenVKDylib)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(MoltenVKDylib)' != '' AND '$(PublishDir)' != ''" />
-		<Message Condition="'@(MoltenVKDylib)' != ''" Text="[MOLTENVK] 已复制 @(MoltenVKDylib-&gt;Count()) 个 MoltenVK 原生 dylib 到输出/发布目录" Importance="high" />
-		<Message Condition="'@(MoltenVKDylib)' == ''" Text="[MOLTENVK] 未找到 ThirdParty/moltenvk/*/lib/*.dylib，Apple 构建须先放置合规的 MoltenVK SDK（libMoltenVK.dylib）到该路径，否则运行期 DllNotFoundException。" Importance="high" />
-	</Target>
+	<ItemGroup Condition="'$([MSBuild]::IsOSPlatform(Linux))'">
+		<!-- libva 2.24 随 bin 部署：Ubuntu 24.04 系统 libva 2.20 缺 vaMapBuffer2（ffmpeg VAAPI 路径需要 ≥2.21）；
+         RUNPATH=$ORIGIN 使 ffmpeg 的 DT_NEEDED 优先绑定 bin 内副本。真实文件副本（非符号链接）。 -->
+		<None Include="$(MSBuildProjectDirectory)\..\..\..\..\..\ThirdParty\va\lib\libva*.so.*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+	</ItemGroup>
 </Project>

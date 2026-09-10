@@ -73,6 +73,8 @@ internal static partial class FF
 
     private static void LoadNativeLibraries(string? baseDir)
     {
+        PreloadLinuxVaLibraries(baseDir);   // Linux：libva（VAAPI）解析——系统优先，bin 平级，递归扫描兜底（见方法注释）
+
         foreach (var rel in Releases)
         {
             int MajorOf(string simple) => simple switch
@@ -116,9 +118,110 @@ internal static partial class FF
         if (OperatingSystem.IsIOS() && TryLoadStaticMainImage())
             return;
 
+        // 兜底：递归扫描应用目录树（任意布局：平级 / ffmpeg/ 等子目录）——按文件名解析组件、
+        // 同组件取版本最高者，依赖闭包序绝对路径加载并登记句柄；成功则版本门禁/导出/镜像自检照常把关。
+        if (!string.IsNullOrEmpty(baseDir) && TryLoadByRecursiveScan(baseDir))
+            return;
+
         throw new InvalidOperationException(
             "未能加载 FFmpeg 原生库（avutil/avcodec/avformat/swscale/swresample）。" +
             "请确认原生 DLL 已部署到运行目录或 FFmpegLibraryPath 所指目录。");
+    }
+
+    /// <summary>
+    /// Linux libva（VAAPI）解析：①系统库若已提供 vaMapBuffer2（libva ≥2.21）直接复用（不遮蔽发行版）；
+    /// ②应用目录树解析 bin 内副本：平级优先，其次递归扫描任意子目录（同组件取版本最高者）。
+    /// 绝对路径预载后，同 soname 的后续 dlopen 复用本副本（不依赖 DT_RUNPATH——glibc 的 dlopen
+    /// 不消费 ffmpeg 库的 RUNPATH，BtbN 构建的 VAAPI 蹦床会因此命中系统旧版并 assert 崩溃）。
+    /// </summary>
+    private static void PreloadLinuxVaLibraries(string? baseDir)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrEmpty(baseDir))
+            return;
+
+        if (NativeLibrary.TryLoad("libva.so.2", out var systemVa))
+        {
+            if (NativeLibrary.TryGetExport(systemVa, "vaMapBuffer2", out _))
+                return;   // 系统库可用：不预载任何副本
+            NativeLibrary.Free(systemVa);   // 系统库过旧：归还探针引用
+        }
+
+        foreach (var simple in new[] { "libva", "libva-drm" })
+        {
+            string? path = ResolveBundledLibrary(baseDir, simple);
+            if (path != null)
+                NativeLibrary.TryLoad(path, out _);   // best-effort：缺文件/加载失败不阻断
+        }
+    }
+
+    /// <summary>在应用目录树内解析组件库：bin 平级优先，其次递归扫描任意子目录；同组件取版本最高者。</summary>
+    private static string? ResolveBundledLibrary(string baseDir, string simple)
+    {
+        try
+        {
+            string flat = Path.Combine(baseDir, $"lib{simple}.so.2");
+            if (File.Exists(flat))
+                return flat;
+
+            string? best = null;
+            ulong bestRank = 0;
+            foreach (var f in Directory.EnumerateFiles(baseDir, $"lib{simple}.so*", SearchOption.AllDirectories))
+            {
+                ulong rank = VersionRank(Path.GetFileName(f));
+                if (rank >= bestRank) { best = f; bestRank = rank; }
+            }
+            return best;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>兜底：递归扫描应用目录树加载 FFmpeg 组件（任意布局：平级 / ffmpeg/ 等子目录）。
+    /// 按文件名解析组件（libavutil.so.60.26.102 → avutil），同组件取版本最高者，
+    /// 依赖闭包序绝对路径加载并登记句柄；全组件齐备返回 true（版本门禁/导出/镜像自检照常把关）。</summary>
+    private static bool TryLoadByRecursiveScan(string? baseDir)
+    {
+        if (string.IsNullOrEmpty(baseDir) || !Directory.Exists(baseDir)) return false;
+        try
+        {
+            var best = new Dictionary<string, (string Path, ulong Rank)>(StringComparer.Ordinal);
+            foreach (var file in Directory.EnumerateFiles(baseDir, "lib*.so*", SearchOption.AllDirectories))
+            {
+                var name = Path.GetFileName(file);
+                var m = System.Text.RegularExpressions.Regex.Match(name, @"^lib([a-z]+)\.so");
+                if (!m.Success) continue;
+                string comp = m.Groups[1].Value;
+                ulong rank = VersionRank(name);
+                if (!best.TryGetValue(comp, out var cur) || rank > cur.Rank)
+                    best[comp] = (file, rank);
+            }
+
+            var loaded = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
+            foreach (var simple in CoreComponents)
+            {
+                if (!best.TryGetValue(simple, out var c) || !NativeLibrary.TryLoad(c.Path, out var h))
+                {
+                    foreach (var kv in loaded) NativeLibrary.Free(kv.Value);
+                    return false;
+                }
+                loaded[simple] = h;
+            }
+
+            foreach (var kv in loaded) _handles[kv.Key] = kv.Value;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>按文件名版本段计算可比序数（libavutil.so.60.26.102 → 60/26/102 三段加权）。</summary>
+    private static ulong VersionRank(string fileName)
+    {
+        int i = fileName.IndexOf(".so.", StringComparison.Ordinal);
+        if (i < 0) return 0;
+        string[] seg = fileName.Substring(i + 4).Split('.');
+        ulong v = 0;
+        for (int k = 0; k < 3; k++)
+            v = (v << 10) | (uint)(k < seg.Length && ulong.TryParse(seg[k], out var n) ? n & 0x3FF : 0ul);
+        return v;
     }
 
     private static bool TryLoadVersioned(string? baseDir, string simple, int major, out IntPtr handle)
