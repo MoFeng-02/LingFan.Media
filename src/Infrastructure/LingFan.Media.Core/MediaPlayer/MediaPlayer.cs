@@ -636,46 +636,105 @@ public sealed class MediaPlayer : IMediaPlayer
 
         _positionTimer?.Dispose();
 
-        // 11 步释放，每步独立 try-catch 不中断
+        // 11 步释放，每步独立 try-catch 不中断。
+        // 逐步耗时观测：退出缓慢（秒级）问题的定位手段——静默步骤（5~11）的耗时从此可见，
+        // 任一步骤 >300ms 立即告警点名，收尾输出全明细（与 [SYNC]/[FREEZE] 诊断风格一致）。
+        long disposeStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        var stepTimings = new List<string>(13);
+
+        void LogStepTiming(string step, long startQpc)
+        {
+            double ms = System.Diagnostics.Stopwatch.GetElapsedTime(startQpc).TotalMilliseconds;
+            stepTimings.Add($"{step}={ms:F0}ms");
+            Console.Error.WriteLine($"[DISPOSE] ← {step} 完成 {ms:F0}ms");
+            if (ms > 300)
+                _logger.LogWarning(
+                    "[DISPOSE] 步骤 {Step} 耗时 {Ms:F0}ms（>300ms，退出缓慢的定位线索）", step, ms);
+        }
+
+        // stderr 直写（不经日志队列）：步骤内若发生原生死亡，最后一条"→ 进入"行即崩溃步骤。
+        void StepEnter(string step) =>
+            Console.Error.WriteLine($"[DISPOSE] → {step}");
 
         // 1. 停管线线程 (cts.Cancel + join 5s 超时)
+        long stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("停管线");
         await Step_StopPipelinesAsync();
+        LogStepTiming("停管线", stepQpc);
 
         // 2. 清空帧队列 (归还到 FramePool)
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("清队列");
         Step_ClearFrameQueues();
+        LogStepTiming("清队列", stepQpc);
 
         // 3. 刷新解码器 (FlushAsync 取剩余帧并 Dispose)
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("刷解码器");
         await Step_FlushDecodersAsync();
+        LogStepTiming("刷解码器", stepQpc);
 
         // 4. 释放解码器
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("释放解码器");
         Step_DisposeDecoders();
+        LogStepTiming("释放解码器", stepQpc);
 
         // 5. 释放渲染器 (Detach + 释放 SwapChain + GPU Flush)
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("渲染器");
         Step_DisposeRenderer();
+        LogStepTiming("渲染器", stepQpc);
 
         // 6. 释放音频输出
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("音频输出");
         Step_DisposeAudioOutput();
+        LogStepTiming("音频输出", stepQpc);
 
         // 7. 释放帧对象池（所有帧已归还）
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("帧池");
         Step_DisposeFramePools();
+        LogStepTiming("帧池", stepQpc);
 
         // 8. 清空 BufferManager
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("缓冲");
         Step_ClearBufferManager();
+        LogStepTiming("缓冲", stepQpc);
 
         // 9. 关闭 Demuxer
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("Demuxer");
         await Step_CloseDemuxerAsync();
+        LogStepTiming("Demuxer", stepQpc);
 
         // 10. 关闭 MediaStream
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("流");
         Step_CloseStream();
+        LogStepTiming("流", stepQpc);
 
         // 11. 重置 Clock
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("时钟");
         Step_ResetClock();
+        LogStepTiming("时钟", stepQpc);
 
         // 12. 关闭 Session
+        stepQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        StepEnter("会话");
         await Step_CloseSessionAsync();
+        LogStepTiming("会话", stepQpc);
 
         // 13. 归还高精度定时器（与 PlayAsync 配对，避免整机定时器泄漏）
         ReleaseHighPrecisionTimer();
+
+        var totalMs = System.Diagnostics.Stopwatch.GetElapsedTime(disposeStart).TotalMilliseconds;
+        var detail = string.Join(" ", stepTimings);
+        _logger.LogInformation("[DISPOSE] 释放完成：总 {Total:F0}ms ｜ {Detail}", totalMs, detail);
+        Console.Error.WriteLine($"[DISPOSE] 释放完成：总 {totalMs:F0}ms ｜ {detail}");
     }
 
     /// <inheritdoc />

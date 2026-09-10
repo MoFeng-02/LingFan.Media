@@ -346,6 +346,13 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         _presentMsAccum = 0;
         _lastPresentMs = 0;
         _masterClockStalled = false;
+        // 起播保持按次启动重建：首播与重播统一「等主时钟起跑再推进」，消除重播音频设备
+        // 重启窗口的同款前导-冻结。停摆看门狗锚点必须一并重锚——跨次启动的旧锚点会让
+        // waitedMs 携带上一轮的累计值，保持预算在重播第一帧就误超时直落降级。
+        _masterClockEverAdvanced = false;
+        _stallWatchAnchored = false;
+        _stallWatchQpc = 0;
+        _stallWatchMaster = default;
 
         // 重新创建 CTS（如果旧的已取消）
         if (_cts.IsCancellationRequested)
@@ -1239,10 +1246,11 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     continue;
                 }
 
-                if (!_masterClockStalled)
+                if (_firstFramePresented && !_masterClockStalled)
                 {
                     // 起播保持：门控放行后音频设备仍在启动（设计内时序，master 冻结 ≠ 停摆）。
-                    // 年线随当前 master 滑行重算 → 本帧等到 master 追上 PTS 才呈现，不前导不冻结；
+                    // 首帧海报【不】参与保持（其 Wait 时 _firstFramePresented 尚未置位，直接走
+                    // 正常等待立即上屏）——WaitForFirstFramePresentedAsync 才能及时返回，窗口不黑屏。
                     // 音频启动失败且时钟无任何推进时由保持预算兜底降级，保底出帧。
                     if (waitedMs > StartupClockHoldTimeoutMs)
                     {

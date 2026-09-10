@@ -533,22 +533,29 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
     /// <summary>
     /// 将编解码器私有配置写入 <c>ctx->extradata</c>（含 64 字节零填充，符合 ffmpeg 要求）。
-    /// 缓冲由本类以 <see cref="Marshal"/> 持有，<see cref="Dispose"/> 时释放。
     /// </summary>
+    /// <remarks>
+    /// <para>缓冲必须用 <c>av_malloc</c> 分配：<c>avcodec_free_context</c> 经
+    /// <c>av_freep(&amp;avctx->extradata)</c> 释放，须与分配器匹配。此前用
+    /// <see cref="Marshal.AllocHGlobal"/> + <see cref="Marshal.FreeHGlobal"/> 的组合在退出时
+    /// 双重释放（先 HGlobal 释放、av_freep 再释放）且分配器错配 → 原生访问违例。</para>
+    /// <para>重播重建 BSF 时先经 <c>av_free</c> 释放旧缓冲（同分配器）。</para>
+    /// </remarks>
     private unsafe void SetExtradata(AVCodecContext* ctx, ReadOnlyMemory<byte> cfg)
     {
         int size = cfg.Length;
         if (size <= 0)
             return;
         int padded = size + 64;
-        IntPtr buf = Marshal.AllocHGlobal(padded);
-        Span<byte> span = new((void*)buf, padded);
-        cfg.Span.CopyTo(span);
-        span[size..].Clear();
+        byte* buf = (byte*)FF.av_malloc((UIntPtr)padded);
+        if (buf == null)
+            return;
+        cfg.Span.CopyTo(new Span<byte>(buf, size));
+        new Span<byte>(buf + size, 64).Clear();
         if (_extradataBuffer != IntPtr.Zero)
-            Marshal.FreeHGlobal(_extradataBuffer);   // 重播重建 BSF 时先释放旧缓冲，避免泄漏
-        _extradataBuffer = buf;
-        ctx->extradata = (byte*)buf;
+            FF.av_free((void*)_extradataBuffer);   // 重播重建 BSF 时先释放旧缓冲，避免泄漏
+        _extradataBuffer = (IntPtr)buf;
+        ctx->extradata = buf;
         ctx->extradata_size = size;
     }
 
@@ -857,12 +864,19 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         // 一路丢帧直到下一个真关键帧 → 视频冻结较长时间。
         // 成因：硬件解码器内部参考帧/序列状态在 EOF 后未干净复位。
         // 唯一稳妥修复=关闭旧 AVCodecContext 并完整重建（同 Initialize 路径，复用原 settings）。
-        // 引用计数配对（不泄漏共享 D3D11 设备）：先 Dispose 旧 _hwDeviceCtx（av_buffer_unref 释放时
-        //   ffmpeg 内部 Release 掉 InitializeD3D11VA 时对共享设备加的 2 个引用），再 avcodec_free_context，
-        //   最后 Initialize 重新 AddRef + 重建 hw_device_ctx。旧解码器仍被在途帧(D3D11HardwareFrameResource
-        //   持有的 av_frame_clone 引用)保活的纹理，待那些帧归还池后由 ffmpeg 引用计数自动释放，安全。
+        // 引用计数配对（不泄漏共享 D3D11 设备）：与 Dispose 同序——avcodec_free_context 先行
+        //   （其内部完成 hwaccel uninit / hw_frames_ctx 释放 / extradata 释放，全程设备存活），
+        //   随后 Dispose 旧 _hwDeviceCtx 归还自身引用销毁设备，最后 Initialize 重新 AddRef + 重建。
+        //   旧解码器仍被在途帧(D3D11HardwareFrameResource 持有的 av_frame_clone 引用)保活的纹理，
+        //   待那些帧归还池后由 ffmpeg 引用计数自动释放，安全。
+        //   ⚠ avcodec_free_context 会 av_freep(&avctx->extradata)——其后必须清 _extradataBuffer，
+        //   否则 Initialize→SetExtradata 的"先释放旧缓冲"对已释放指针二次 av_free（重播原生死亡）。
         try
         {
+            _codecContextHandle.Dispose();
+            _codecContextHandle = null;
+            _initialized = false;
+            _extradataBuffer = IntPtr.Zero;
             _hwDeviceCtx?.Dispose();
             _hwDeviceCtx = null;
             if (_bsfContext != null)
@@ -871,9 +885,6 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                 _bsfContext = null;
                 FF.av_bsf_free(&local);
             }
-            _codecContextHandle.Dispose();
-            _codecContextHandle = null;
-            _initialized = false;
 
             // 复用原 settings 完整重建（重新分配 ctx + 挂共享 D3D11 设备 + 重建 BSF/extradata + open）
             Initialize(_lastCodec, _lastSettings!);
@@ -907,12 +918,15 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
                     IsHardwareAccelerated && _gpuZeroCopyFrames > 0 ? "是" : "否(全程 CPU 帧)");
         }
 
+        // 原生死亡定位踪迹（stderr 直写不丢行，[demux-trace] 同款）：释放链任一原生调用
+        // 崩溃时，最后一条踪迹即崩溃子阶段（硬解路径涉及 hw_device_ctx/视频处理器/共享设备引用）。
+        Console.Error.WriteLine("[DECODER-DISPOSE] 开始");
         ClearPendingQueues();
-        _hwDeviceCtx?.Dispose();
-        _hwDeviceCtx = null;
+        Console.Error.WriteLine("[DECODER-DISPOSE] 待决队列已清");
         // 释放 NV12→RGBA 转换器（仅释放其内部 QI 的视频设备/上下文与处理器；共享设备包装不 Dispose）。
         _nv12ToRgbaConverter?.Dispose();
         _nv12ToRgbaConverter = null;
+        Console.Error.WriteLine("[DECODER-DISPOSE] NV12转换器已释放");
         // 释放 ffmpeg 自有 D3D11 设备（与 Initialize 中创建配对）。转换器包装不 Dispose 该设备，
         // 故此处必须显式释放，否则 D3D11 设备泄漏。渲染器共享设备由渲染器工厂持有，此处不 Dispose。
         _vaOwnedContext?.Dispose();
@@ -922,6 +936,7 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         _vaDeviceHandle = IntPtr.Zero;
         _vaContextHandle = IntPtr.Zero;
         _vaDisplay = nint.Zero;
+        Console.Error.WriteLine("[DECODER-DISPOSE] 自有D3D11设备已释放");
         // 先释放比特流过滤器（其内部 par_in->extradata 由 ffmpeg 分配器管理）
         if (_bsfContext != null)
         {
@@ -929,15 +944,21 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             FF.av_bsf_free(&local);
             _bsfContext = null;
         }
-        // 再释放本类持有的 extradata 缓冲（ctx->extradata 已被解码器读取，先于 codec context 释放安全）
-        if (_extradataBuffer != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(_extradataBuffer);
-            _extradataBuffer = IntPtr.Zero;
-        }
+        // extradata 缓冲已改由 av_malloc 分配并挂入 ctx->extradata，avcodec_free_context 的
+        // av_freep(&avctx->extradata) 会释放——此处仅清引用，绝不可再释放（双重释放 → 退出 AV）。
+        _extradataBuffer = IntPtr.Zero;
+        Console.Error.WriteLine("[DECODER-DISPOSE] bsf/extradata 已释放");
+        // avcodec_free_context 先行：其内部完成 hwaccel uninit、hw_frames_ctx（纹理池）释放与
+        // ctx->hw_device_ctx 引用归还，全程要求设备仍存活。自身持有的 hw_device_ctx 引用必须
+        // 最后归还，设备在全部原生使用结束后才经本次 unref 销毁——先归还自身引用会让设备
+        // 销毁时机交叠进 avcodec_free_context 的内部释放链（D3D11VA 退出路径原生死亡定位点）。
         _codecContextHandle?.Dispose();
         _codecContextHandle = null;
         _initialized = false;
+        Console.Error.WriteLine("[DECODER-DISPOSE] codec context 已释放");
+        _hwDeviceCtx?.Dispose();
+        _hwDeviceCtx = null;
+        Console.Error.WriteLine("[DECODER-DISPOSE] hw_device_ctx 已释放（Dispose 完成）");
     }
 
     /// <inheritdoc/>

@@ -14,6 +14,9 @@ internal static partial class FF
     internal static unsafe partial void* av_malloc(UIntPtr size);
 
     [LibraryImport(LibAvutil)]
+    internal static unsafe partial void av_free(void* ptr);
+
+    [LibraryImport(LibAvutil)]
     internal static unsafe partial AVBufferRef* av_buffer_ref(AVBufferRef* buf);
 
     [LibraryImport(LibAvutil)]

@@ -598,7 +598,10 @@ internal static class Program
                                   $"(state重启={replayStateOk}, 二次呈现≈{replayPresentDelta}{(doVideo ? "" : "[无视频跳过计数]")})");
             }
 
+            // 退出慢定位：Console 直写（不经日志队列，进程快速退出也不丢行）。
+            var exitStopwatch = System.Diagnostics.Stopwatch.StartNew();
             await player.StopAsync(CancellationToken.None);
+            Console.WriteLine($"[HEADFUL-EXIT] StopAsync={exitStopwatch.ElapsedMilliseconds}ms");
         }
         catch (Exception ex)
         {
@@ -607,8 +610,12 @@ internal static class Program
         }
         finally
         {
+            var disposeStopwatch = System.Diagnostics.Stopwatch.StartNew();
             try { await player.DisposeAsync(); } catch { }
+            Console.WriteLine($"[HEADFUL-EXIT] DisposeAsync={disposeStopwatch.ElapsedMilliseconds}ms（逐步明细见 [DISPOSE] 行）");
+            var winStopwatch = System.Diagnostics.Stopwatch.StartNew();
             try { win?.Dispose(); } catch { }
+            Console.WriteLine($"[HEADFUL-EXIT] 窗口销毁={winStopwatch.ElapsedMilliseconds}ms");
         }
 
         bool overall = videoPass && audioPass && replayPass && (!hwMode || backendArg != "ffmpeg" || gpuServed > 0);

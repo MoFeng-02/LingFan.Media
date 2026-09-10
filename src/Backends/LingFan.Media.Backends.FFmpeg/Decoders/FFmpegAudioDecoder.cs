@@ -30,7 +30,7 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
     private SafeAVCodecContextHandle? _codecContextHandle;
     private IFramePool<AudioFrame>? _framePool;
     private SafeSwrContextHandle? _swrContext;
-    private IntPtr _extradataBuffer;          // ctx->extradata 原生缓冲（含 64B padding），本类拥有，Dispose 释放
+    private IntPtr _extradataBuffer;          // ctx->extradata 原生缓冲（含 64B padding，av_malloc 分配），由 avcodec_free_context 释放
 
     // 流时间基：解码帧 pts 以「流 time_base」为单位。demuxer 透传，用于建立 ctx->pkt_timebase 并做时间戳换算。
     // 解码后 ctx->time_base 常为 0，直接换算会使音频帧时间戳全 0（主时钟 SyncTo(0) 钉死、pos 不前进）。
@@ -164,20 +164,25 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
 
     /// <summary>
     /// 将编解码器私有配置写入 <c>ctx->extradata</c>（含 64 字节零填充，符合 ffmpeg 要求）。
-    /// 缓冲由本类以 <see cref="Marshal"/> 持有，<see cref="Dispose"/> 时释放。
     /// </summary>
+    /// <remarks>
+    /// <para>缓冲必须用 <c>av_malloc</c> 分配：<c>avcodec_free_context</c> 经
+    /// <c>av_freep(&amp;avctx->extradata)</c> 释放，须与分配器匹配（与视频解码器同款修正——
+    /// <see cref="Marshal.AllocHGlobal"/> 组合会在退出时双重释放 + 分配器错配 → 原生访问违例）。</para>
+    /// </remarks>
     private unsafe void ApplyCodecConfiguration(AVCodecContext* ctx, ReadOnlyMemory<byte> cfg)
     {
         int size = cfg.Length;
         if (size <= 0)
             return;
         int padded = size + 64;
-        IntPtr buf = Marshal.AllocHGlobal(padded);
-        Span<byte> span = new((void*)buf, padded);
-        cfg.Span.CopyTo(span);
-        span[size..].Clear();
-        _extradataBuffer = buf;
-        ctx->extradata = (byte*)buf;
+        byte* buf = (byte*)FF.av_malloc((UIntPtr)padded);
+        if (buf == null)
+            return;
+        cfg.Span.CopyTo(new Span<byte>(buf, size));
+        new Span<byte>(buf + size, 64).Clear();
+        _extradataBuffer = (IntPtr)buf;
+        ctx->extradata = buf;
         ctx->extradata_size = size;
     }
 
@@ -313,11 +318,9 @@ internal sealed class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAware<AudioF
         _disposed = true;
         _swrContext?.Dispose();
         _swrContext = null;
-        if (_extradataBuffer != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(_extradataBuffer);
-            _extradataBuffer = IntPtr.Zero;
-        }
+        // extradata 由 av_malloc 分配并挂入 ctx->extradata，avcodec_free_context 的
+        // av_freep(&avctx->extradata) 会释放——此处仅清引用，绝不可再释放（双重释放 → 退出 AV）。
+        _extradataBuffer = IntPtr.Zero;
         _codecContextHandle?.Dispose();
         _codecContextHandle = null;
         _initialized = false;

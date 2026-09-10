@@ -136,15 +136,19 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
             if (!useFileProtocol)
             {
-                // 1. 分配 AVIO 缓冲区和上下文
-                _avioBuffer = Marshal.AllocHGlobal(AvioBufferSize);
-                if (_avioBuffer == IntPtr.Zero)
-                    throw new InvalidOperationException("AllocHGlobal 失败：AVIO 缓冲区");
+                // 1. 分配 AVIO 缓冲区和上下文。
+                //    缓冲必须以 av_malloc 分配（avio.h 契约：libavformat 可能经 av_realloc 替换缓冲、
+                //    avio_closep 内部以 av_free 归还当前 buffer）——AllocHGlobal 组合在 find_stream_info
+                //    的 seekback 重分配路径上会堆损坏。
+                byte* avioBuf = (byte*)FF.av_malloc((UIntPtr)AvioBufferSize);
+                if (avioBuf == null)
+                    throw new InvalidOperationException("av_malloc 失败：AVIO 缓冲区");
+                _avioBuffer = (IntPtr)avioBuf;
 
                 // 委托实例已作为字段保持引用，回调通过实例方法访问 _stream
                 Dbg("avio_alloc_context 之前");
                 AVIOContext* avioCtx = FF.avio_alloc_context(
-                    (byte*)_avioBuffer, AvioBufferSize,
+                    avioBuf, AvioBufferSize,
                     0, // write_flag = 0 (read-only)
                     null, // opaque
                     _readDelegate,
@@ -656,23 +660,22 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     }
 
     /// <summary>清理 AVIO 资源。</summary>
+    /// <remarks>
+    /// 缓冲以 av_malloc 分配（avio.h 契约），所有权在读期间移交 libavformat（其可能经
+    /// av_realloc 替换缓冲），由 avio_closep 内部的 av_freep(&amp;s->buffer) 统一归还——
+    /// 调用方不得再释放。此前"置空 buffer + FreeHGlobal"的规避在 ffmpeg 替换过缓冲时会
+    /// 泄漏新缓冲，且分配器与契约不符。
+    /// </remarks>
     private unsafe void CleanupAVIO()
     {
         if (_avioContext != IntPtr.Zero)
         {
             AVIOContext* avioCtx = (AVIOContext*)_avioContext;
-            // 先将 buffer 置空防止 avio_closep 释放本类自行管理的 buffer
-            avioCtx->buffer = null;
-            avioCtx->buffer_size = 0;
             FF.avio_closep(&avioCtx);
             _avioContext = IntPtr.Zero;
         }
 
-        if (_avioBuffer != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(_avioBuffer);
-            _avioBuffer = IntPtr.Zero;
-        }
+        _avioBuffer = IntPtr.Zero;
     }
 
     /// <summary>将 FFmpeg 错误码转换为可读字符串。</summary>
