@@ -57,6 +57,13 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
     private long _submittedFrames;
     private long _consumedFrames;
 
+    // 主时钟 1× 实时插值（对齐 OpenSlesOutput 同款范式）：_consumedFrames 仅在 Submit 线程背压排空时
+    // 步进（缓冲 ~46ms 一阶），直接读值即 46ms 台阶——视频呈现随主时钟台阶"一闪一闪"。
+    // 步进锚点 + 单缓冲封顶插值消除阶梯量化；暂停/欠载时封顶使时钟自然冻结，单调性不受影响。
+    private long _lastStepQpc;
+    private int _lastStepBufferFrames;
+    private volatile bool _clockRunning;
+
     /// <inheritdoc/>
     public Task InitializeAsync(CancellationToken ct = default)
     {
@@ -194,7 +201,9 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
         if (state != OpenALInterop.AL_PLAYING)
         {
             OpenALInterop.alSourcePlay(_source);
+            Console.Error.WriteLine($"[OPENAL-TRACE] alSourcePlay（此前 state=0x{state:X}）");
         }
+        _clockRunning = true;
     }
 
     /// <summary>
@@ -233,6 +242,7 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
 
     /// <summary>
     /// 出队指定数量已消费缓冲，计入 _consumedFrames 并删除。FIFO 与 _pending 顺序一致。
+    /// 消费步进落锚（QPC）供 GetPlaybackPosition 做步进间 1× 实时插值。
     /// </summary>
     private void DrainProcessedBuffers(int count)
     {
@@ -243,14 +253,19 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
             OpenALInterop.alSourceUnqueueBuffers(_source, count, p);
         }
 
+        bool stepped = false;
         for (int i = 0; i < count; i++)
         {
             if (_pending.Count == 0) break;
             var qb = _pending.Dequeue();
             _consumedFrames += qb.Frames;
+            _lastStepBufferFrames = qb.Frames;
+            stepped = true;
             uint b = qb.Buffer;
             OpenALInterop.alDeleteBuffers(1, &b);
         }
+        if (stepped)
+            Volatile.Write(ref _lastStepQpc, System.Diagnostics.Stopwatch.GetTimestamp());
     }
 
     /// <summary>将 S32/F32 PCM 归一到交错 S16（OpenAL core 通用格式）。</summary>
@@ -282,6 +297,8 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _source == 0) return;
         OpenALInterop.alSourcePause(_source);
+        _clockRunning = false; // 暂停期间关闭时钟插值（记账值随消费停摆自然冻结）
+        Console.Error.WriteLine("[OPENAL-TRACE] Pause");
     }
 
     /// <inheritdoc/>
@@ -290,6 +307,10 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized || _source == 0) return;
         OpenALInterop.alSourcePlay(_source);
+        // 重新武装插值：步进锚点重置为当前时刻，避免恢复瞬间读到暂停期累积的陈旧流逝（封顶虽兜底，重置更精确）。
+        _clockRunning = true;
+        Volatile.Write(ref _lastStepQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+        Console.Error.WriteLine("[OPENAL-TRACE] Resume");
     }
 
     /// <inheritdoc/>
@@ -299,6 +320,7 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
         if (!_initialized || _source == 0) return;
 
         OpenALInterop.alSourceStop(_source);
+        Console.Error.WriteLine("[OPENAL-TRACE] Flush");
 
         // 出队并删除所有在途缓冲
         OpenALInterop.alGetSourcei(_source, OpenALInterop.AL_BUFFERS_QUEUED, out int queued);
@@ -309,15 +331,40 @@ internal sealed unsafe class OpenALOutput : IAudioOutput
 
         _submittedFrames = 0;
         _consumedFrames = 0;
+        // 步进锚点重置：清空后旧锚点携带的流逝不再有意义
+        _clockRunning = false;
+        Volatile.Write(ref _lastStepQpc, 0);
+        _lastStepBufferFrames = 0;
         // 源保留，下次 Submit 重新播放
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 主时钟 = 已消费帧数/采样率（消费记账，见 Submit 背压）。步进值经 1× 实时插值平滑
+    /// （封顶一个缓冲时长，欠载/暂停时自然冻结），消除 ~46ms 阶梯量化——视频呈现节拍的
+    /// "一闪一闪"直接来源于此阶梯。seqlock 式一致性读对齐 OpenSlesOutput 同款模式。
+    /// </remarks>
     public TimeSpan GetPlaybackPosition()
     {
         if (!_initialized || _sampleRate <= 0) return TimeSpan.Zero;
-        long consumed = _consumedFrames;
-        return consumed <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds((double)consumed / _sampleRate);
+        // seqlock 式一致性读：consumed 与 stepQpc 必须来自同一次步进（写序=先 consumed 后 stepQpc）。
+        long stepQpcFirst = Volatile.Read(ref _lastStepQpc);
+        long consumed = Interlocked.Read(ref _consumedFrames);
+        long stepQpc = Volatile.Read(ref _lastStepQpc);
+        if (stepQpc != stepQpcFirst)
+        {
+            consumed = Interlocked.Read(ref _consumedFrames);
+            stepQpc = stepQpcFirst;
+        }
+        long consumedTicks = (long)(consumed * (double)TimeSpan.TicksPerSecond / _sampleRate);
+        int bufferFrames = _lastStepBufferFrames;
+        if (!_clockRunning || stepQpc == 0 || bufferFrames <= 0)
+            return TimeSpan.FromTicks(consumedTicks); // 未步进/暂停：退回纯记账值
+        // 插值：距最近一次步进的真实流逝，封顶一个缓冲时长（欠载/停摆时不越过在途音频）。
+        double elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(stepQpc).TotalMilliseconds;
+        double capMs = bufferFrames * 1000.0 / _sampleRate;
+        double interpMs = Math.Clamp(elapsedMs, 0, capMs);
+        return TimeSpan.FromTicks(consumedTicks + (long)(interpMs * TimeSpan.TicksPerMillisecond));
     }
 
     /// <inheritdoc/>

@@ -109,6 +109,11 @@ public sealed unsafe class OpenGLOffscreenDeviceContext : IGpuDeviceContext, IDi
             if (pName != nint.Zero)
                 name = Marshal.PtrToStringAnsi(pName) ?? "Unknown";
 
+            // 原始版本串：GlVersionQuery 解析失败时 GlMajor/GlMinor 保持默认 3.3（假象），原始串是唯一真值。
+            nint pVersion = GLNative.glGetString(GLNative.GlVersionConst);
+            string version = pVersion != nint.Zero ? Marshal.PtrToStringAnsi(pVersion) ?? "Unknown" : "Unknown";
+            _logger?.LogInformation("[OPENGL-DEVICE] 离屏 GL 版本串：{Version}", version);
+
             // GL 3.3 core 无计算着色器（GL 4.3+）；硬解支持属未来 interop 范围，此处保守填 false。
             return new GpuDeviceCapabilities(name, 0, 0, maxTex, false, false, -1);
         }

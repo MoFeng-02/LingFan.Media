@@ -111,15 +111,20 @@ internal sealed unsafe class EglContext : IGlContext
         return ctx;
     }
 
-    private void CreateOnDisplay(nint window, nint shareContext, int major, int minor)
+    /// <summary>
+    /// 选择 EGL config：桌面平台首选 WINDOW|PBUFFER 位；设备显示（EGL_EXT_platform_device）无窗口系统，
+    /// WINDOW_BIT config 不存在且 eglChooseConfig 以"0 个匹配 + 无错误"返回——此时降级 PBUFFER-only
+    /// （窗口呈现经 CreateOnDisplay 的 pbuffer 回退路径）。
+    /// </summary>
+    private static unsafe nint ChooseConfigWithWindowPbufferFallback(nint display, uint renderableType, ILogger? logger)
     {
-        if (GLNative.eglBindAPI(EglOpenglApi) == 0)
-            throw new InvalidOperationException("EGL：eglBindAPI(EGL_OPENGL_API) 失败（无法绑定桌面 GL）。");
+        nint config = nint.Zero;
+        int numConfig = 0;
 
-        int[] configAttribs =
+        int[] windowAttribs =
         {
             (int)EglSurfaceType, (int)(EglWindowBit | EglPbufferBit),
-            (int)EglRenderableType, (int)EglOpenglBit,
+            (int)EglRenderableType, (int)renderableType,
             (int)EglRedSize, 8,
             (int)EglGreenSize, 8,
             (int)EglBlueSize, 8,
@@ -128,13 +133,43 @@ internal sealed unsafe class EglContext : IGlContext
             (int)EglStencilSize, 8,
             (int)EglNone,
         };
-        nint config = nint.Zero;
-        int numConfig = 0;
-        fixed (int* a = configAttribs)
+        fixed (int* a = windowAttribs)
         {
-            if (GLNative.eglChooseConfig(_display, a, &config, 1, &numConfig) == 0 || numConfig == 0)
-                throw new InvalidOperationException($"EGL：eglChooseConfig 失败（0x{GLNative.eglGetError():X8}）。");
+            if (GLNative.eglChooseConfig(display, a, &config, 1, &numConfig) != 0 && numConfig > 0)
+                return config;
         }
+
+        int[] pbufferAttribs =
+        {
+            (int)EglSurfaceType, (int)EglPbufferBit,
+            (int)EglRenderableType, (int)renderableType,
+            (int)EglRedSize, 8,
+            (int)EglGreenSize, 8,
+            (int)EglBlueSize, 8,
+            (int)EglAlphaSize, 8,
+            (int)EglDepthSize, 24,
+            (int)EglStencilSize, 8,
+            (int)EglNone,
+        };
+        fixed (int* a = pbufferAttribs)
+        {
+            if (GLNative.eglChooseConfig(display, a, &config, 1, &numConfig) != 0 && numConfig > 0)
+            {
+                logger?.LogInformation("EGL：无 WINDOW_BIT config（设备显示无窗口系统），降级 PBUFFER-only config。");
+                return config;
+            }
+        }
+        return nint.Zero;
+    }
+
+    private void CreateOnDisplay(nint window, nint shareContext, int major, int minor)
+    {
+        if (GLNative.eglBindAPI(EglOpenglApi) == 0)
+            throw new InvalidOperationException("EGL：eglBindAPI(EGL_OPENGL_API) 失败（无法绑定桌面 GL）。");
+
+        nint config = ChooseConfigWithWindowPbufferFallback(_display, EglOpenglBit, _logger);
+        if (config == nint.Zero)
+            throw new InvalidOperationException($"EGL：eglChooseConfig 失败（0x{GLNative.eglGetError():X8}）。");
 
         int[] ctxAttribs =
         {
@@ -203,7 +238,7 @@ internal sealed unsafe class EglContext : IGlContext
         // 无法导入 GPU dma_buf（eglCreateImageKHR 每帧失败 → 逐帧 CPU 回落 → 帧卡）。
         // 任一环节失败回落默认显示（行为与未启用一致）。
         nint display = OperatingSystem.IsLinux()
-            && Environment.GetEnvironmentVariable("LINGFAN_EGL_DEVICE_DRM") == "1"
+            && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("LINGFAN_EGL_DEVICE_DRM"))
             ? TryOpenHardwareDeviceDisplay(logger) : nint.Zero;
         if (display == nint.Zero)
         {
@@ -221,6 +256,17 @@ internal sealed unsafe class EglContext : IGlContext
         if (GLNative.eglInitialize(display, &major, &minor) == 0)
             throw new InvalidOperationException($"EGL：eglInitialize 失败（0x{GLNative.eglGetError():X8}）。");
 
+        // 显示级扩展自报：dma_buf 导入能力（EGL_EXT_image_dma_buf_import[_modifiers]）是零拷贝导入前置。
+        // 函数指针可解析 ≠ 本显示支持——Mesa 对不支持导入的显示直接以 EGL_BAD_PARAMETER 拒绝 eglCreateImageKHR。
+        nint dispExtsPtr = GLNative.eglQueryString(display, EglDeviceExtensions);
+        string dispExts = dispExtsPtr != nint.Zero
+            ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(dispExtsPtr) ?? string.Empty
+            : string.Empty;
+        logger?.LogInformation(
+            "[EGL-DEVICE] 离屏显示扩展：dma_buf_import={Import} import_modifiers={Modifiers}",
+            dispExts.Contains("EGL_EXT_image_dma_buf_import", StringComparison.Ordinal),
+            dispExts.Contains("EGL_EXT_image_dma_buf_import_modifiers", StringComparison.Ordinal));
+
         if (isGles)
         {
             // Android：ES 是 EGL 默认绑定 API，且实测部分线程上下文下显式 eglBindAPI 会以
@@ -229,25 +275,9 @@ internal sealed unsafe class EglContext : IGlContext
         else if (GLNative.eglBindAPI(api) == 0)
             throw new InvalidOperationException($"EGL：eglBindAPI(0x{api:X4}) 失败（0x{GLNative.eglGetError():X8}，无法绑定所需 GL API）。");
 
-        int[] configAttribs =
-        {
-            (int)EglSurfaceType, (int)(EglWindowBit | EglPbufferBit),
-            (int)EglRenderableType, (int)renderableType,
-            (int)EglRedSize, 8,
-            (int)EglGreenSize, 8,
-            (int)EglBlueSize, 8,
-            (int)EglAlphaSize, 8,
-            (int)EglDepthSize, 24,
-            (int)EglStencilSize, 8,
-            (int)EglNone,
-        };
-        nint config = nint.Zero;
-        int numConfig = 0;
-        fixed (int* a = configAttribs)
-        {
-            if (GLNative.eglChooseConfig(display, a, &config, 1, &numConfig) == 0 || numConfig == 0)
-                throw new InvalidOperationException($"EGL：离屏 eglChooseConfig 失败（0x{GLNative.eglGetError():X8}）。");
-        }
+        nint config = ChooseConfigWithWindowPbufferFallback(display, renderableType, logger);
+        if (config == nint.Zero)
+            throw new InvalidOperationException($"EGL：离屏 eglChooseConfig 失败（0x{GLNative.eglGetError():X8}）。");
 
         int[] ctxAttribs =
         {
@@ -277,6 +307,30 @@ internal sealed unsafe class EglContext : IGlContext
             throw new InvalidOperationException($"EGL：离屏 eglMakeCurrent 失败（0x{GLNative.eglGetError():X8}）。");
 
         return new EglContext(display, surface, context, logger);
+    }
+
+    /// <summary>EGL 设备的 DRM 渲染节点路径（EGL_DRM_RENDER_NODE_FILE_EXT = 0x3234，需 EGL_EXT_device_drm_render_node）；不支持返回 null。</summary>
+    private static unsafe string? QueryDrmRenderNode(nint dev)
+    {
+        const int EglDrmRenderNodeFileExt = 0x3234;
+        nint nodePtr = GLNative.eglQueryDeviceStringEXT(dev, EglDrmRenderNodeFileExt);
+        return nodePtr != nint.Zero
+            ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(nodePtr)
+            : null;
+    }
+
+    /// <summary>读 DRM 节点的 sysfs PCI vendor（/sys/class/drm/&lt;node&gt;/device/vendor，0x8086=Intel / 0x10DE=NVIDIA / 0x1002=AMD）；不可读返回 null。</summary>
+    private static string? QuerySysfsVendor(string nodePath)
+    {
+        try
+        {
+            string name = global::System.IO.Path.GetFileName(nodePath);
+            return global::System.IO.File.ReadAllText($"/sys/class/drm/{name}/device/vendor").Trim();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -328,6 +382,15 @@ internal sealed unsafe class EglContext : IGlContext
                 }
             }
 
+            // 设备选择判据（治原生崩溃）：VAAPI 解码 GPU（Intel iHD）与 EGL 显示必须同设备——跨厂商
+            // dma_buf 导入已证不可行，且 NVIDIA 驱动对跨厂商导入直接原生崩溃（复测 3 实证）。
+            // GLVND 枚举混排多厂商 EGL 设备（NVIDIA 专有设备可排第一），"首个非软件设备"启发式不可用。
+            // 判据链：EGL 设备 → DRM 渲染节点（EGL_EXT_device_drm_render_node）→ sysfs vendor
+            // （/sys/class/drm/<node>/device/vendor，0x8086=Intel）；自动模式优先 Intel，
+            // LINGFAN_EGL_DEVICE_DRM=renderD129 可显式指定节点（语义自"1"=自动扩展）。
+            string envVal = Environment.GetEnvironmentVariable("LINGFAN_EGL_DEVICE_DRM") ?? "1";
+            bool explicitNode = envVal != "1" && envVal.Length > 0;
+
             for (int i = 0; i < devices.Length; i++)
             {
                 nint dev = devices[i];
@@ -336,11 +399,36 @@ internal sealed unsafe class EglContext : IGlContext
                 string exts = extPtr != nint.Zero
                     ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(extPtr) ?? string.Empty
                     : string.Empty;
+                string? node = QueryDrmRenderNode(dev);
+                string? vendor = node is null ? null : QuerySysfsVendor(node);
                 logger?.LogInformation(
-                    "[EGL-DEVICE] 设备#{Idx} extensions={Exts}",
-                    i, exts.Length > 160 ? exts[..160] + "…" : exts);
+                    "[EGL-DEVICE] 设备#{Idx} node={Node} vendor={Vendor} extensions={Exts}",
+                    i, node ?? "无", vendor ?? "未知", exts.Length > 120 ? exts[..120] + "…" : exts);
+
                 if (exts.Contains("EGL_MESA_device_software", StringComparison.Ordinal))
                     continue;   // 软件设备（llvmpipe）：无法导入 GPU dma_buf，跳过
+
+                // NVIDIA 专有 EGL 设备（EGL_NV_device_cuda）：跨厂商导入不可行且存在原生崩溃风险，跳过。
+                if (exts.Contains("EGL_NV_device_cuda", StringComparison.Ordinal))
+                {
+                    logger?.LogInformation("[EGL-DEVICE] 设备#{Idx} 为 NVIDIA 专有 EGL 设备，跳过（跨厂商导入不可行）。", i);
+                    continue;
+                }
+
+                // 显式节点匹配（LINGFAN_EGL_DEVICE_DRM=renderD129）：只取指定节点。
+                if (explicitNode && (node is null || !node.EndsWith(envVal, StringComparison.Ordinal)))
+                {
+                    logger?.LogInformation("[EGL-DEVICE] 设备#{Idx} 非指定节点（要求 {Want}），跳过。", i, envVal);
+                    continue;
+                }
+
+                // 自动模式优先 Intel（0x8086）；vendor 可读且非 Intel 的设备跳过。
+                if (!explicitNode && vendor is not null && vendor != "0x8086")
+                {
+                    logger?.LogInformation(
+                        "[EGL-DEVICE] 设备#{Idx} vendor={Vendor} 非 Intel，跳过（跨厂商导入不可行）。", i, vendor);
+                    continue;
+                }
 
                 nint disp = GLNative.eglGetPlatformDisplayEXT(EglPlatformDeviceExt, dev, null);
                 if (disp == nint.Zero)

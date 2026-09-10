@@ -378,6 +378,12 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                         _ => 0,
                     };
 
+                    // Linux VAAPI 零拷贝同设备对齐：解码 GPU 为 Intel（iHD），跨厂商 dma_buf 导入不可行
+                    // （Intel tiling modifier 对方无法按其布局采样 → 马赛克花屏，实测实证）。
+                    // vendor 0x8086 提权压过独显优先启发式；Windows 的 D3D11VA LUID 对齐不受影响。
+                    if (OperatingSystem.IsLinux() && candProps.VendorID == 0x8086)
+                        score += 10;
+
                     // 零拷贝跨 API 导入对齐：若指定了首选适配器 LUID（D3D11 默认适配器），
                     // 命中则大幅提权，压过独显优先启发式——跨 GPU/厂商导入 D3D11 共享纹理会被驱动拒绝。
                     if (_preferredAdapterLuid is { } wantLuid)

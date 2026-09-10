@@ -105,6 +105,7 @@ internal static unsafe partial class GLNative
     public static partial void glGetTexImage(uint target, int level, uint format, uint type, void* pixels);
 
     // 查询常量（GL 枚举原始值，照 .h 实物核对）
+    internal const int GlVersionConst = 0x1F02;    // GL_VERSION
     internal const int GlRenderer = 0x1F01;        // GL_RENDERER
     internal const int GlMaxTextureSize = 0x0D33;  // GL_MAX_TEXTURE_SIZE
     internal const int GlTexture2DConst = 0x0DE1;  // GL_TEXTURE_2D

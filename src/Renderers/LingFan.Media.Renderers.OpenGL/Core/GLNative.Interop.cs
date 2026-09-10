@@ -27,19 +27,21 @@ internal static unsafe partial class GLNative
     internal const int WglAccessReadWriteNV = 0x0001;    // WGL_ACCESS_READ_WRITE_NV
     internal const int WglAccessWriteDiscardNV = 0x0002; // WGL_ACCESS_WRITE_DISCARD_NV
 
-    // EGL_EXT_image_dma_buf_import 常量
+    // EGL_EXT_image_dma_buf_import 常量（EGL/eglext.h 官方值，与 Platforms/Linux/EglInterop.cs 对表。
+    // 历史教训：本表曾整块错位一格且混入不存在的"PLANE_COUNT"键，致 dma_buf 导入恒 EGL_BAD_PARAMETER。）
     internal const int EglImageTarget = 0x30D1;          // EGL_IMAGE_TARGET (OES 目标枚举)
-    internal const int EglLinuxDmaBufExt = 0x3272;       // EGL_LINUX_DMA_BUF_EXT
+    internal const int EglLinuxDmaBufExt = 0x3270;       // EGL_LINUX_DMA_BUF_EXT
     internal const int EglWidth = 0x3057;                // EGL_WIDTH
     internal const int EglHeight = 0x3056;              // EGL_HEIGHT
-    internal const int EglDmaBufPlane0FdExt = 0x3273;    // EGL_DMA_BUF_PLANE0_FD_EXT
-    internal const int EglDmaBufPlane0OffsetExt = 0x3274; // EGL_DMA_BUF_PLANE0_OFFSET_EXT
-    internal const int EglDmaBufPlane0PitchExt = 0x3275; // EGL_DMA_BUF_PLANE0_PITCH_EXT
-    internal const int EglDmaBufPlane0ModifierLoExt = 0x3276; // EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT
-    internal const int EglDmaBufPlane0ModifierHiExt = 0x3277; // EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT
-    internal const int EglDmaBufPlaneCountExt = 0x3279;  // EGL_DMA_BUF_PLANE_COUNT_EXT
+    internal const int EglDmaBufPlane0FdExt = 0x3272;    // EGL_DMA_BUF_PLANE0_FD_EXT
+    internal const int EglDmaBufPlane0OffsetExt = 0x3273; // EGL_DMA_BUF_PLANE0_OFFSET_EXT
+    internal const int EglDmaBufPlane0PitchExt = 0x3274; // EGL_DMA_BUF_PLANE0_PITCH_EXT
+    internal const int EglDmaBufPlane0ModifierLoExt = 0x3275; // EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT
+    internal const int EglDmaBufPlane0ModifierHiExt = 0x3276; // EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT
     internal const int EglLinuxDrmFourccExt = 0x3271;    // EGL_LINUX_DRM_FOURCC_EXT
     internal const int EglNone = 0x3038;                 // EGL_NONE
+    // 注：EGL 无 "PLANE_COUNT" 键（0x3278/0x3279 实为 PLANE1_MODIFIER_LO/HI）——平面数由出现的
+    // 最高平面号属性推断；多平面导入须用 PLANE1_* 属性对，不得使用虚构计数键。
 
     // WGL_NV_DX_interop2 函数指针（Windows 调用；x64/arm64 下原生 ABI 即 WINAPI，无需 [Winapi] 调用约定后缀）
     private static unsafe delegate* unmanaged<void*, nint> _wglDXOpenDeviceNV;
@@ -51,9 +53,14 @@ internal static unsafe partial class GLNative
     private static unsafe delegate* unmanaged<nint, int, void*, int> _wglDXUnlockObjectsNV;
 
     // EGL dma_buf / OES 函数指针（Linux 调用，平台默认 ABI）
-    private static unsafe delegate* unmanaged<nint, nint, uint, int*, nint> _eglCreateImageKHR;
+    // 签名必须五参（dpy, ctx, target, clientBuffer, attrib_list）——缺 clientBuffer 会使调用方
+    // 实参整体错位一格（attribs 指针落进 buffer 槽、attrib_list 读栈上垃圾），Mesa 恒报
+    // EGL_BAD_PARAMETER，与显示/参数无关（dma_buf 导入全败的唯一根因，实测实证）。
+    private static unsafe delegate* unmanaged<nint, nint, uint, nint, int*, nint> _eglCreateImageKHR;
     private static unsafe delegate* unmanaged<nint, nint, int> _eglDestroyImageKHR;
     private static unsafe delegate* unmanaged<uint, nint, void> _glEGLImageTargetTexture2DOES;
+    // modifier 列表查询（EGL_EXT_image_dma_buf_import_modifiers）——诊断显示侧导入支持面。
+    private static unsafe delegate* unmanaged<nint, int, int, ulong*, int*, int*, int> _eglQueryDmaBufModifiersEXT;
 
     private static bool _interopResolved;
 
@@ -73,9 +80,10 @@ internal static unsafe partial class GLNative
         }
         else if (OperatingSystem.IsLinux())
         {
-            _eglCreateImageKHR = (delegate* unmanaged<nint, nint, uint, int*, nint>)GetProcAddress("eglCreateImageKHR");
+            _eglCreateImageKHR = (delegate* unmanaged<nint, nint, uint, nint, int*, nint>)GetProcAddress("eglCreateImageKHR");
             _eglDestroyImageKHR = (delegate* unmanaged<nint, nint, int>)GetProcAddress("eglDestroyImageKHR");
             _glEGLImageTargetTexture2DOES = (delegate* unmanaged<uint, nint, void>)GetProcAddress("glEGLImageTargetTexture2DOES");
+            _eglQueryDmaBufModifiersEXT = (delegate* unmanaged<nint, int, int, ulong*, int*, int*, int>)GetProcAddress("eglQueryDmaBufModifiersEXT");
         }
 
         // 仅当确有指针解析成功才置"已解析"：wglGetProcAddress / eglGetProcAddress 在无当前 GL/EGL 上下文时静默返 null。
@@ -123,8 +131,17 @@ internal static unsafe partial class GLNative
 
     // EGL dma_buf / OES 包装
 
-    internal static unsafe nint EglCreateImageKHR(nint dpy, nint ctx, uint target, int* attribList)
-        => _eglCreateImageKHR != null ? _eglCreateImageKHR(dpy, ctx, target, attribList) : nint.Zero;
+    internal static unsafe nint EglCreateImageKHR(nint dpy, nint ctx, uint target, nint clientBuffer, int* attribList)
+        => _eglCreateImageKHR != null ? _eglCreateImageKHR(dpy, ctx, target, clientBuffer, attribList) : nint.Zero;
+
+    /// <summary>
+    /// 查询显示侧指定 fourcc 支持的 dma_buf modifier 列表（EGL_EXT_image_dma_buf_import_modifiers）。
+    /// 两段式调用：先 max=0 取数量，再取列表。externalOnly 可为 null（不需要逐 modifier 的
+    /// external-only 标志）。函数未解析/查询失败返回 false。
+    /// </summary>
+    internal static unsafe bool TryQueryDmaBufModifiers(nint display, int drmFourcc, ulong* modifiers, int* externalOnly, int maxModifiers, int* numModifiers)
+        => _eglQueryDmaBufModifiersEXT != null
+            && _eglQueryDmaBufModifiersEXT(display, drmFourcc, maxModifiers, modifiers, externalOnly, numModifiers) != 0;
 
     internal static unsafe int EglDestroyImageKHR(nint dpy, nint image)
         => _eglDestroyImageKHR != null ? _eglDestroyImageKHR(dpy, image) : 0;

@@ -31,6 +31,11 @@ public sealed partial class VaApiInterop : IVaApiExport
         descriptor = null;
         if (vaDisplay == nint.Zero) return false;
 
+        // VAAPI 契约：外部消费 surface（导出/映射）前必须 vaSyncSurface——解码是异步流水，
+        // 不同步会间歇性读到解码中途的 surface 内容（呈现表现为偶发性画面闪动/局部花屏）。
+        // ffmpeg 的 avcodec_receive_frame 对硬件 surface 不隐式同步，导出侧负责这道栅栏。
+        _ = vaSyncSurface(vaDisplay, surfaceId);
+
         // 清零描述符（libva 负责填充 num_objects/num_layers 与各层 num_planes）。
         var desc = new VADRMPRIMESurfaceDescriptor();
 
@@ -89,6 +94,10 @@ public sealed partial class VaApiInterop : IVaApiExport
         uint memType,
         uint flags,
         ref VADRMPRIMESurfaceDescriptor descriptor);
+
+    // 外部消费 surface 的同步栅栏（va/va.h：vaSyncSurface——导出/映射前必须调用）。
+    [LibraryImport("libva.so.2", EntryPoint = "vaSyncSurface")]
+    private static partial int vaSyncSurface(nint dpy, uint surface);
 
     // libva 原生结构（VADRMPRIMESurfaceDescriptor，va/va_drm.h）
     // 固定大小内联数组经 [InlineArray] 表达，使整体成为 blittable 布局（与 libva C 逐字节一致）；

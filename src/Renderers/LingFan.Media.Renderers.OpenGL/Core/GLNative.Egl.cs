@@ -28,15 +28,56 @@ internal static unsafe partial class GLNative
     [LibraryImport("EGL", EntryPoint = "eglQueryString")]
     public static partial nint eglQueryString(nint display, int name);
 
-    [LibraryImport("EGL", EntryPoint = "eglQueryDevicesEXT")]
-    public static partial int eglQueryDevicesEXT(int maxDevices, nint* devices, int* numDevices);
+    // 设备枚举 / 平台显示（EGL_EXT_device_enumeration / EGL_EXT_platform_device）：
+    // Mesa/GLVND 的 libEGL.so.1 不直接导出这些扩展符号（EntryPointNotFoundException 实测），须经
+    // eglGetProcAddress 运行期解析（EGL 规范对扩展函数的 canonical 途径；无当前上下文亦可调用）。
+    // 解析失败按"枚举失败"返回 0，调用方回落默认显示。
+    private static bool _eglDeviceFunctionsResolved;
 
-    [LibraryImport("EGL", EntryPoint = "eglQueryDeviceStringEXT")]
-    public static partial nint eglQueryDeviceStringEXT(nint device, int name);
+    private static unsafe delegate* unmanaged<int, nint*, int*, int> _pfnEglQueryDevicesEXT;
+    private static unsafe delegate* unmanaged<nint, int, nint> _pfnEglQueryDeviceStringEXT;
+    private static unsafe delegate* unmanaged<uint, nint, int*, nint> _pfnEglGetPlatformDisplayEXT;
+
+    private static unsafe void EnsureEglDeviceFunctions()
+    {
+        if (_eglDeviceFunctionsResolved) return;
+        _pfnEglQueryDevicesEXT = (delegate* unmanaged<int, nint*, int*, int>)ResolveEglProc("eglQueryDevicesEXT");
+        _pfnEglQueryDeviceStringEXT = (delegate* unmanaged<nint, int, nint>)ResolveEglProc("eglQueryDeviceStringEXT");
+        _pfnEglGetPlatformDisplayEXT = (delegate* unmanaged<uint, nint, int*, nint>)ResolveEglProc("eglGetPlatformDisplayEXT");
+        _eglDeviceFunctionsResolved = true;
+    }
+
+    private static unsafe nint ResolveEglProc(string name)
+    {
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(name);
+        byte[] withNull = new byte[bytes.Length + 1];
+        global::System.Buffer.BlockCopy(bytes, 0, withNull, 0, bytes.Length);
+        withNull[bytes.Length] = 0;
+        fixed (byte* p = withNull)
+            return eglGetProcAddress(p);
+    }
+
+    public static unsafe int eglQueryDevicesEXT(int maxDevices, nint* devices, int* numDevices)
+    {
+        EnsureEglDeviceFunctions();
+        if (_pfnEglQueryDevicesEXT == null) return 0;
+        return _pfnEglQueryDevicesEXT(maxDevices, devices, numDevices);
+    }
+
+    public static unsafe nint eglQueryDeviceStringEXT(nint device, int name)
+    {
+        EnsureEglDeviceFunctions();
+        if (_pfnEglQueryDeviceStringEXT == null) return nint.Zero;
+        return _pfnEglQueryDeviceStringEXT(device, name);
+    }
 
     // 第三参按 EGL 规范为 const EGLint*（32 位 EGLint），非 EGLAttrib*——属性表须以 int* 传递。
-    [LibraryImport("EGL", EntryPoint = "eglGetPlatformDisplayEXT")]
-    public static partial nint eglGetPlatformDisplayEXT(uint platform, nint nativeDisplay, int* attribList);
+    public static unsafe nint eglGetPlatformDisplayEXT(uint platform, nint nativeDisplay, int* attribList)
+    {
+        EnsureEglDeviceFunctions();
+        if (_pfnEglGetPlatformDisplayEXT == null) return nint.Zero;
+        return _pfnEglGetPlatformDisplayEXT(platform, nativeDisplay, attribList);
+    }
 
     internal const uint EglPlatformDeviceExt = 0x313F;
     internal const int EglDeviceExtensions = 0x3055;
