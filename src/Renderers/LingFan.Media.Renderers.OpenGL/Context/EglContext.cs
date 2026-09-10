@@ -34,6 +34,8 @@ internal sealed unsafe class EglContext : IGlContext
     private const uint EglOpenglApi = 0x30A0;
     private const uint EglOpenglEsApi = 0x3080;
     private const uint EglOpenglEsBit = 0x0040; // EGL_OPENGL_ES3_BIT
+    private const uint EglPlatformDeviceExt = 0x313F;   // EGL_PLATFORM_DEVICE_EXT
+    private const int EglDeviceExtensions = 0x3055;     // EGL_EXTENSIONS
 
     private nint _display;
     private nint _surface;
@@ -182,7 +184,16 @@ internal sealed unsafe class EglContext : IGlContext
         uint api = isGles ? EglOpenglEsApi : EglOpenglApi;
         uint renderableType = isGles ? EglOpenglEsBit : EglOpenglBit;
 
-        nint display = GLNative.eglGetDisplay(nint.Zero); // EGL_DEFAULT_DISPLAY
+        // Linux 同设备零拷贝（LINGFAN_EGL_DEVICE_DRM=1 启用）：经 EGL_EXT_platform_device 选择
+        // 硬件 EGL 设备（跳过 EGL_MESA_device_software 软件设备），使离屏上下文与 VAAPI 解码
+        // 同设备（Intel iGPU）——dma_buf 导入即可用。默认显示在 Xvfb 下落到 llvmpipe，
+        // 无法导入 GPU dma_buf（eglCreateImageKHR 每帧失败 → 逐帧 CPU 回落 → 帧卡）。
+        // 任一环节失败回落默认显示（行为与未启用一致）。
+        nint display = OperatingSystem.IsLinux()
+            && Environment.GetEnvironmentVariable("LINGFAN_EGL_DEVICE_DRM") == "1"
+            ? TryOpenHardwareDeviceDisplay() : nint.Zero;
+        if (display == nint.Zero)
+            display = GLNative.eglGetDisplay(nint.Zero); // EGL_DEFAULT_DISPLAY
         if (display == nint.Zero)
             throw new InvalidOperationException("EGL：eglGetDisplay(DEFAULT) 失败（无可用 EGL 显示）。");
 
@@ -246,6 +257,50 @@ internal sealed unsafe class EglContext : IGlContext
             throw new InvalidOperationException($"EGL：离屏 eglMakeCurrent 失败（0x{GLNative.eglGetError():X8}）。");
 
         return new EglContext(display, surface, context, logger);
+    }
+
+    /// <summary>
+    /// Linux：经 EGL_EXT_platform_device 选择硬件 EGL 设备（跳过 EGL_MESA_device_software 软件设备），
+    /// 返回已 Initialize 的 EGLDisplay。任一环节失败返回 Zero（调用方回落默认显示）。
+    /// 用途：同设备零拷贝——离屏上下文与 VAAPI 解码（Intel iHD）同 GPU 时 dma_buf 导入才可用；
+    /// 默认显示在 Xvfb 下落到 llvmpipe 软件栈，无法导入 GPU dma_buf。
+    /// </summary>
+    private static unsafe nint TryOpenHardwareDeviceDisplay()
+    {
+        try
+        {
+            int count = 0;
+            if (GLNative.eglQueryDevicesEXT(0, null, &count) == 0 || count == 0)
+                return nint.Zero;
+
+            var devices = new nint[count];
+            fixed (nint* d = devices)
+            {
+                if (GLNative.eglQueryDevicesEXT(count, d, &count) == 0)
+                    return nint.Zero;
+            }
+
+            foreach (var dev in devices)
+            {
+                if (dev == nint.Zero) continue;
+                nint extPtr = GLNative.eglQueryDeviceStringEXT(dev, EglDeviceExtensions);
+                string exts = extPtr != nint.Zero
+                    ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(extPtr) ?? string.Empty
+                    : string.Empty;
+                if (exts.Contains("EGL_MESA_device_software", StringComparison.Ordinal))
+                    continue;   // 软件设备（llvmpipe）：无法导入 GPU dma_buf，跳过
+
+                nint disp = GLNative.eglGetPlatformDisplayExt(EglPlatformDeviceExt, dev, null);
+                if (disp == nint.Zero) continue;
+
+                int major = 0, minor = 0;
+                if (GLNative.eglInitialize(disp, &major, &minor) != 0)
+                    return disp;
+                GLNative.eglTerminate(disp);   // 初始化失败：换下一个设备
+            }
+        }
+        catch { }
+        return nint.Zero;
     }
 
     public void MakeCurrent()

@@ -24,6 +24,18 @@ internal static unsafe partial class GLNative
     [LibraryImport("EGL", EntryPoint = "eglGetDisplay")]
     public static partial nint eglGetDisplay(nint displayId);
 
+    [LibraryImport("EGL", EntryPoint = "eglQueryDevicesEXT")]
+    public static partial int eglQueryDevicesEXT(int maxDevices, nint* devices, int* numDevices);
+
+    [LibraryImport("EGL", EntryPoint = "eglQueryDeviceStringEXT")]
+    public static partial nint eglQueryDeviceStringEXT(nint device, int name);
+
+    [LibraryImport("EGL", EntryPoint = "eglGetPlatformDisplayEXT")]
+    public static partial nint eglGetPlatformDisplayEXT(uint platform, nint nativeDisplay, nint* attribList);
+
+    internal const uint EglPlatformDeviceExt = 0x313F;
+    internal const int EglDeviceExtensions = 0x3055;
+
     [LibraryImport("EGL", EntryPoint = "eglInitialize")]
     public static partial int eglInitialize(nint display, int* major, int* minor);
 
