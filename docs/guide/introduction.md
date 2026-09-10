@@ -15,13 +15,14 @@ Most .NET media stacks are thin wrappers over a single native backend (typically
 
 | Phase | Platform | Backends | GPU | Audio |
 |-------|----------|----------|-----|-------|
-| **V1 (supported)** | Windows | Media Foundation ✅, FFmpeg ✅, VLC ✅ | D3D11 (+ DirectComposition) | WASAPI |
-| Next (planned) | macOS, iOS, Android | FFmpeg ✅, VLC ✅ now; AVFoundation / MediaCodec (planned) | — | — |
-| **Excluded** | Linux | FFmpeg / VLC usable (no native backend) | — | — |
+| **V1 (supported)** | Windows | Media Foundation ✅, FFmpeg ✅, VLC ✅ | D3D11 (+ DirectComposition), Vulkan ✅ (zero-copy) | WASAPI |
+| **V1.5 (supported, cross-platform backend route)** | Linux | FFmpeg ✅ (VAAPI hardware decode ✅, tested), VLC ✅ (implemented, pending Linux validation) | Vulkan ✅ (zero-copy), OpenGL ✅ (zero-copy subject to display support, automatic CPU-upload fallback) | OpenAL ✅ |
+| **V1.x (supported, real-device tested)** | Android | MediaCodec ✅ (real device); FFmpeg ✅, VLC ✅ (implemented) | Vulkan/GLES ✅ (AHB zero-copy, real device) | OpenSL ES / AAudio ✅ (implemented) |
+| **On hold (no hardware)** | macOS, iOS | FFmpeg ✅, VLC ✅ (implemented); AVFoundation (partially implemented, awaiting hardware) | Metal renderer partially implemented | AVAudioEngine / AudioUnit (partially implemented) |
 
-V1 is the only platform with a supported, tested surface (Windows + D3D11 + WASAPI). macOS / iOS / Android already work today through the LGPL-cross-platform FFmpeg / LibVLC shared libraries; their first-party native backends (AVFoundation, MediaCodec) will be integrated progressively over time. **Linux is excluded from the native-backend roadmap** — it has no standard first-party media API, so no native Linux backend will be built; however, FFmpeg / LibVLC still provide playback there, so Linux is simply not a targeted or tested surface.
+V1 was the first supported, tested surface (Windows + D3D11 + WASAPI). **Linux has now been validated along the cross-platform backend route**: the FFmpeg backend hardware-decodes through VAAPI, the exported dma_buf is imported zero-copy by the Vulkan renderer (validated on Intel iGPUs), the OpenGL renderer falls back to CPU upload automatically where Mesa support is limited (the picture always stays correct), and audio plays through OpenAL. **Android is validated on real hardware**: MediaCodec hardware decode outputs through Surface/AHB, sampled zero-copy by the Skia GPU renderer, with audio through OpenSL ES / AAudio. **macOS / iOS are on hold — no hardware is available, so implementation and testing cannot proceed for now (please wait)**: the FFmpeg / LibVLC cross-platform libraries themselves work there, and the Metal renderer plus AVAudioEngine / AudioUnit audio are partially implemented; work resumes once hardware is available. **Linux has no native backend by design** — it has no standard first-party media API, so all playback there rides the FFmpeg / LibVLC cross-platform backends.
 
-> **Not in scope:** WebRTC and GStreamer backends are explicitly out of scope (they exist only as empty scaffolding / stubs). The **Vulkan** renderer is validated for the FFmpeg zero-copy path on Windows but is not part of the V1 supported surface; OpenGL / Metal remain partials.
+> **Not in scope:** WebRTC and GStreamer backends are explicitly out of scope (they exist only as empty scaffolding / stubs). The **Vulkan** renderer is validated for the FFmpeg zero-copy path on both Windows and Linux; OpenGL / Metal remain partials.
 
 ## Package layout (12 logical modules)
 
@@ -34,7 +35,7 @@ V1 is the only platform with a supported, tested surface (Windows + D3D11 + WASA
 | 05 | `Video` | Video domain: track, processor chain, stats |
 | 06 | `Audio` | Audio domain: mixer, volume, effects, stats |
 | 07 | `Backends` | Pluggable backends: FFmpeg / VLC / MediaFoundation (WebRTC stub) |
-| 08 | `Renderers` | GPU renderers: D3D11 (real); Vulkan (validated, FFmpeg zero-copy, Windows) / Metal / OpenGL (partials) |
+| 08 | `Renderers` | GPU renderers: D3D11 (real); Vulkan (validated, zero-copy on Windows / Linux) / OpenGL (implemented) / Metal (partial) |
 | 09 | `Outputs` | Audio outputs: WASAPI, OpenAL, OpenSL ES, AAudio, … |
 | 10 | `Platforms` | Platform capability detection & interop |
 | 11 | `Avalonia` | UI presentation: `VideoView`, `MediaControl`, Skia / Composition presenters |

@@ -15,13 +15,14 @@
 
 | 阶段 | 平台 | 后端 | GPU | 音频 |
 |------|------|------|-----|------|
-| **V1（受支持）** | Windows | Media Foundation ✅、FFmpeg ✅、VLC ✅ | D3D11 (+ DirectComposition) | WASAPI |
-| 下一阶段（计划） | macOS, iOS, Android | FFmpeg ✅、VLC ✅（现已可用）；AVFoundation / MediaCodec（计划中） | — | — |
-| **已排除** | Linux | FFmpeg / VLC 可用（无原生后端） | — | — |
+| **V1（受支持）** | Windows | Media Foundation ✅、FFmpeg ✅、VLC ✅ | D3D11（+ DirectComposition）、Vulkan ✅（零拷贝） | WASAPI |
+| **V1.5（受支持，跨平台后端路线）** | Linux | FFmpeg ✅（VAAPI 硬解 ✅，已实测）、VLC ✅（已实现，Linux 待验证） | Vulkan ✅（零拷贝）、OpenGL ✅（零拷贝受显示支持面限制，自动回落 CPU 上传） | OpenAL ✅ |
+| **V1.x（受支持，真机实测）** | Android | MediaCodec ✅（真机）；FFmpeg ✅、VLC ✅（已实现） | Vulkan/GLES ✅（AHB 零拷贝，真机） | OpenSL ES / AAudio ✅（已实现） |
+| **暂缓（缺设备）** | macOS, iOS | FFmpeg ✅、VLC ✅（已实现）；AVFoundation（部分实现就绪，待设备） | Metal 渲染器等已部分实现 | AVAudioEngine / AudioUnit（已部分实现） |
 
-V1 是唯一具备受支持、经测试表面的平台（Windows + D3D11 + WASAPI）。macOS / iOS / Android 今天已可借助本身即 LGPL 跨平台的 FFmpeg / LibVLC 共享库工作；其第一方原生后端（AVFoundation、MediaCodec）将随时间逐步集成。**Linux 被排除在原生后端路线之外**——它没有标准的第一方媒体 API，故不会构建原生 Linux 后端；不过 FFmpeg / LibVLC 仍可在那里提供播放，因此 Linux 只是不被作为目标或已测试的表面。
+V1 是第一个受支持、经测试的表面（Windows + D3D11 + WASAPI）。**Linux 已在跨平台后端路线上实测通过**：FFmpeg 后端经 VAAPI 硬解，导出的 dma_buf 由 Vulkan 渲染器零拷贝上屏（Intel iGPU 实测），OpenGL 渲染器在 Mesa 支持面不足时自动回落 CPU 上传（画面始终正确），音频经 OpenAL 输出。**Android 已真机实测**：MediaCodec 硬解经 Surface/AHB 输出，由 Skia GPU 渲染器零拷贝采样上屏，音频经 OpenSL ES / AAudio 输出。**macOS / iOS 暂缓——缺设备，暂时无法实现与测试（请等待）**：FFmpeg / LibVLC 跨平台库本身可用，Metal 渲染器、AVAudioEngine / AudioUnit 音频等已部分实现，待有设备后继续。**Linux 不设原生后端**——它没有标准的第一方媒体 API，播放全部经 FFmpeg / LibVLC 跨平台后端实现。
 
-> **范围之外：** WebRTC 与 GStreamer 后端明确不在范围内（仅以空脚手架 / 存根形式存在）。**Vulkan** 渲染器已在 Windows 的 FFmpeg 零拷贝路径上验证，但不属于 V1 受支持表面；OpenGL / Metal 仍为部分实现。
+> **范围之外：** WebRTC 与 GStreamer 后端明确不在范围内（仅以空脚手架 / 存根形式存在）。**Vulkan** 渲染器已在 Windows 与 Linux 的 FFmpeg 零拷贝路径上验证；OpenGL / Metal 仍为部分实现。
 
 ## 包结构（12 个逻辑模块）
 
@@ -34,7 +35,7 @@ V1 是唯一具备受支持、经测试表面的平台（Windows + D3D11 + WASAP
 | 05 | `Video` | 视频域：轨道、处理器链、统计 |
 | 06 | `Audio` | 音频域：混音、音量、效果、统计 |
 | 07 | `Backends` | 可插拔后端：FFmpeg / VLC / MediaFoundation（WebRTC 桩） |
-| 08 | `Renderers` | GPU 渲染器：D3D11（实装）；Vulkan（已验证，FFmpeg 零拷贝，Windows）/ Metal / OpenGL（部分） |
+| 08 | `Renderers` | GPU 渲染器：D3D11（实装）；Vulkan（已验证，Windows / Linux 零拷贝）/ OpenGL（已实现）/ Metal（部分） |
 | 09 | `Outputs` | 音频输出：WASAPI、OpenAL、OpenSL ES、AAudio，… |
 | 10 | `Platforms` | 平台能力探测与互操作 |
 | 11 | `Avalonia` | UI 呈现：`VideoView`、`MediaControl`、Skia / Composition 呈现器 |

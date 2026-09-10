@@ -8,7 +8,7 @@
 
 **LingFan.Media（灵泛媒体）** 是 .NET 平台的跨平台媒体基础设施（独立项目，非灵泛引擎子模块/衍生）。它提供一套模块化、DI 友好、AOT 就绪的抽象层，把核心播放逻辑与具体引擎（解码器、解封装器、渲染器、音频输出）解耦，使这些组件可以按平台或部署环境自由替换。
 
-> 状态：本库基于 **.NET 10** 活跃开发中。当前首要验证目标是 **Windows**；Linux 支持已通过 FFmpeg 与 LibVLC 后端落地，其余平台在路线图内（见[平台与后端状态](#平台与后端状态)）。它尚不是一个功能完备、覆盖所有平台的媒体框架——但整体设计是为了在不破坏公开 API 的前提下逐步走到那里。**目前仅本地文件播放已端到端验证；网络源与流式播放虽已实现，但尚未在运行时验证。**
+> 状态：本库基于 **.NET 10** 活跃开发中。**Windows、Linux、Android** 均为已实测的支持目标——Windows 走 MediaFoundation / FFmpeg / LibVLC 后端；Linux 走 FFmpeg 后端（VAAPI 硬解 + Vulkan / OpenGL 渲染器，OpenAL 音频，已实测），LibVLC 后端在 Linux 已实现但尚未验证；Android 已真机实测（MediaCodec 硬解 + AHB 零拷贝上屏链路）；**macOS / iOS 暂缓——缺设备，暂时无法实现与测试，请等待**（见[平台与后端状态](#平台与后端状态)）。它尚不是一个功能完备、覆盖所有平台的媒体框架——但整体设计是为了在不破坏公开 API 的前提下逐步走到那里。**目前仅本地文件播放已端到端验证；网络源与流式播放虽已实现，但尚未在运行时验证。**
 
 ## 为什么再写一层媒体抽象
 
@@ -22,9 +22,10 @@
 
 | 平台 | 状态 | 可用后端 |
 | --- | --- | --- |
-| **Windows** | 已支持（首要验证目标） | MediaFoundation（原生、可硬件解码）、FFmpeg、LibVLC |
-| **Linux** | 已通过 FFmpeg + LibVLC 落地，配合 Vulkan / OpenGL 渲染器；验证进行中 | FFmpeg、LibVLC |
-| **macOS / iOS / Android** | 路线图——架构上可容纳，但尚未验证 | — |
+| **Windows** | 已支持（已实测） | MediaFoundation（原生、可硬件解码）、FFmpeg、LibVLC |
+| **Linux** | 已支持（已实测：FFmpeg——VAAPI 硬解 + Vulkan / OpenGL 渲染器 + OpenAL 音频；LibVLC 后端待验证） | FFmpeg、LibVLC |
+| **Android** | 已支持（真机实测：MediaCodec 硬解 + AHB 零拷贝上屏链路；OpenSL ES / AAudio 音频已实现） | MediaCodec、FFmpeg、LibVLC |
+| **macOS / iOS** | **暂缓——缺设备，暂时无法实现与测试，请等待**（Metal 渲染器、AVAudioEngine / AudioUnit 音频等已部分实现，待有设备后继续） | FFmpeg、LibVLC |
 
 所有后端共享同一套可插拔模型，因此无论选中哪个引擎，`IMediaPlayer` 的接口形态都一致。后端选择在运行时依据你注册的内容解析。
 
@@ -34,25 +35,34 @@
 
 本库各能力的完成度并不一致。下表按能力逐一标明：是否已端到端验证、已实现但尚未运行时验证、正在验证、在路线图内，或明确不在范围。
 
-**成熟度进程：** V1 Windows（已验证） → 多后端（已验证） → Linux 验证（进行中） → macOS / iOS / Android（路线图）。WebRTC 与 GStreamer 不在范围内。
+**成熟度进程：** V1 Windows（已验证） → 多后端（已验证） → Linux（已验证：FFmpeg + VAAPI 硬解 + Vulkan 零拷贝 + OpenAL） → Android（真机验证） → macOS / iOS（暂缓：缺设备，请等待）。WebRTC 与 GStreamer 不在范围内。
 
 | 能力 | 状态 |
 | --- | --- |
 | 本地文件播放（Windows） | **已验证** |
+| 本地文件播放（Linux） | **已验证** |
 | D3D11 渲染器（Windows） | **已验证** |
 | WASAPI 音频输出（Windows） | **已验证** |
 | 无头帧投递（帧通道） | **已验证** |
 | MediaFoundation 后端 | **已验证** |
 | FFmpeg 后端 | **已验证** |
-| LibVLC 后端 | **已验证** |
+| LibVLC 后端（Windows） | **已验证** |
+| LibVLC 后端（Linux） | 已实现，待验证 |
 | GPU 零拷贝 —— FFmpeg 后端（Windows：D3D11、Vulkan） | **已验证** |
 | GPU 零拷贝 —— FFmpeg 后端（Windows：OpenGL） | 已实现（同一导入路径） |
-| 网络源（`NetworkMediaSource` + SSRF） | 已实现，待验证 |
-| 流式播放 | 已实现，待验证 |
-| Linux（FFmpeg + LibVLC + Vulkan / OpenGL） | **验证中** |
+| VAAPI 硬件解码（Linux，FFmpeg 后端） | **已验证** |
+| GPU 零拷贝 —— FFmpeg 后端（Linux：Vulkan，VAAPI → dma_buf） | **已验证** |
+| GPU 零拷贝 —— FFmpeg 后端（Linux：OpenGL） | 已实现；Mesa 对单平面 tiling 导入的支持面有限，不支持时自动回落 CPU 上传（画面正确） |
+| Linux（FFmpeg + Vulkan / OpenGL + OpenAL；LibVLC 待验证） | **已验证**（本地文件端到端） |
+| 本地播放（Android，真机：MediaCodec 硬解 + 上屏链路） | **已验证** |
+| MediaCodec 硬件解码（Android，真机） | **已验证** |
+| GPU 零拷贝 —— MediaCodec（Android：AHB → Skia GPU 采样） | **已验证**（真机） |
+| OpenSL ES / AAudio 音频输出（Android） | 已实现 |
 | Vulkan 渲染器（FFmpeg 零拷贝路径，Windows） | **已验证** |
 | OpenGL 渲染器（FFmpeg 零拷贝路径，Windows） | 已实现 |
-| macOS / iOS / Android | 路线图 |
+| 网络源（`NetworkMediaSource` + SSRF） | 已实现，待验证 |
+| 流式播放 | 已实现，待验证 |
+| macOS / iOS | **暂缓（缺设备）**——Metal 渲染器、AVAudioEngine / AudioUnit 音频等已部分实现，待有设备后继续实现与测试 |
 | WebRTC / GStreamer | 不在范围 |
 
 > 已验证的 Windows 路径在本地文件上实测了核心抽象、渲染、音频输出与无头帧投递。网络源与流式播放虽已实现（含基于 DNS-pinning 的 SSRF 防护），但尚未端到端实测——在运行时验证之前，请按实验性对待。
@@ -60,6 +70,10 @@
 > **硬件解码说明：** 在 Windows 上，Media Foundation 的解码器会把帧经由 CPU 内存交回（混合解码 / 半硬解）——这是平台 MFT 管线的固有特性，并非本库的缺陷。FFmpeg 与 LibVLC 后端均在 GPU 上解码。
 >
 > **GPU 零拷贝：** FFmpeg 后端把解码后的帧作为 GPU 纹理直接交由 D3D11 / Vulkan / OpenGL 渲染器导入上屏，不经过 CPU 回拷。该能力已在 Windows 验证，包含混合显卡场景——此时 Vulkan 物理设备会自动对齐到 D3D11 默认适配器，确保共享纹理在同一张 GPU 上被导入。Media Foundation 无法暴露可外部导入的共享纹理（MFT 限制），因此回退为 CPU 拷贝。LibVLC 3.x 通过回调 API 交付 CPU 像素，同样走 CPU 拷贝；LibVLC 的真·零拷贝需要 libvlc 4.0，目前尚未采用。
+>
+> **Linux 上的硬件解码与零拷贝：** FFmpeg 后端经 VAAPI 硬解（Intel iHD 实测），导出的 dma_buf 由 Vulkan 渲染器直接导入上屏（已实测）；渲染器与解码 GPU 的厂商对齐是自动的（跨厂商导入受限于 tiling 布局的厂商私有语义，不作支持）。OpenGL 渲染器同样走 dma_buf 导入，但部分 Mesa 驱动对单平面 tiling 组合的导入支持面有限——不支持时自动回落 CPU 上传，画面始终正确。导出前统一执行 `vaSyncSurface` 栅栏，确保外部消费读到完整帧。
+>
+> **Android 上的硬件解码与零拷贝：** MediaCodec 后端经 Surface/AHardwareBuffer 输出（含 c2 硬件解码器优先策略），解码内容经 GLES/EGL 桥接为 AHB，由 Skia GPU 渲染器同设备直接采样上屏——真机验证通过。跨厂商设备保留 ByteBuffer CPU 路径作为回落。音频经 OpenSL ES / AAudio 输出（已实现）。
 
 ## 安装
 

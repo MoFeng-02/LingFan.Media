@@ -1,6 +1,6 @@
 # 后端与平台路线
 
-LingFan.Media 通过**可插拔后端**驱动播放，所有后端都隐藏在 `Abstractions` 接口之后。回退中间件（`IMediaPlayerFactory`）按 DI 注册顺序依次尝试各后端，并在某个后端失败时自动切换。本页梳理当前已实现的内容、仅剩脚手架的部分，以及平台边界——包括 **Linux 的状态**（无原生后端，但可经 FFmpeg / VLC 播放）。
+LingFan.Media 通过**可插拔后端**驱动播放，所有后端都隐藏在 `Abstractions` 接口之后。回退中间件（`IMediaPlayerFactory`）按 DI 注册顺序依次尝试各后端，并在某个后端失败时自动切换。本页梳理当前已实现的内容、仅剩脚手架的部分，以及平台边界——包括 **Linux 的状态**（无原生后端；播放经 FFmpeg / VLC 跨平台后端实现并已实测，VAAPI 硬解 + Vulkan 零拷贝同样可用）。
 
 ## 后端架构
 
@@ -18,14 +18,14 @@ flowchart TD
 
 ## 跨平台后端（保底）
 
-FFmpeg 与 LibVLC 是**跨平台保底**。二者均为 LGPL 授权，可在每一个目标平台运行——**Windows、macOS、iOS、Android**——因此无论平台原生支持如何，播放始终可用。它们仅以动态链接方式被消费（见[许可](./licensing)）。
+FFmpeg 与 LibVLC 是**跨平台保底**。二者均为 LGPL 授权，可在每一个目标平台运行——**Windows、Linux、macOS、iOS、Android**——因此无论平台原生支持如何，播放始终可用。它们仅以动态链接方式被消费（见[许可](./licensing)）。
 
 | 后端 | 许可证 | 平台 | 角色 | 状态 |
 | --- | --- | --- | --- | --- |
-| **FFmpeg** | LGPL 2.1+（共享构建） | Windows、macOS、iOS、Android | 主解封装 / 解码，经自写原生绑定 | ✅ 已实现 |
-| **LibVLC / VLC** | LGPL 2.1+ | Windows、macOS、iOS、Android | 回退播放后端，由中间件自动切换 | ✅ 已实现 |
+| **FFmpeg** | LGPL 2.1+（共享构建） | Windows、Linux、macOS、iOS、Android | 主解封装 / 解码，经自写原生绑定 | ✅ 已实现（Windows / Linux 已实测） |
+| **LibVLC / VLC** | LGPL 2.1+ | Windows、Linux、macOS、iOS、Android | 回退播放后端，由中间件自动切换 | ✅ 已实现（Windows 已实测；Linux 待验证） |
 
-二者今天已在 Windows、macOS、iOS、Android 上发布并可用。Linux **不是目标平台**，但因 FFmpeg / LibVLC 跨平台，它们仍可在那里提供播放——「排除」仅针对构建*原生* Linux 后端。
+二者今天已在 Windows 上实测（本地文件端到端）；Linux 上 FFmpeg 已实测（VAAPI 硬解 + Vulkan 零拷贝 + OpenAL），LibVLC 待验证；并可发布到 macOS、iOS、Android。**Linux 不设原生后端**，播放全部经 FFmpeg / LibVLC 跨平台后端实现——「排除」仅针对构建*原生* Linux 后端。
 
 ## 各后端 GPU 零拷贝能力
 
@@ -33,22 +33,23 @@ FFmpeg 与 LibVLC 是**跨平台保底**。二者均为 LGPL 授权，可在每�
 
 | 后端 | 硬件解码 | GPU 零拷贝 | 说明 |
 | --- | --- | --- | --- |
-| **FFmpeg** | 是（Windows 上 D3D11VA / DXVA2） | **是**（Windows：D3D11、Vulkan、OpenGL） | 解码帧导出为 D3D11 共享纹理并由渲染器导入。已在 Windows 验证，含混合显卡场景——此时 Vulkan 设备对齐到 D3D11 默认适配器。 |
+| **FFmpeg** | 是（Windows：D3D11VA / DXVA2；Linux：VAAPI） | **是**（Windows：D3D11、Vulkan、OpenGL；Linux：Vulkan ✅ 实测、OpenGL 视显示支持面） | Windows 上解码帧导出为 D3D11 共享纹理并由渲染器导入，含混合显卡场景（Vulkan 设备自动对齐 D3D11 适配器）。Linux 上经 VAAPI 硬解、导出 dma_buf（导出前执行 `vaSyncSurface` 栅栏），Vulkan 渲染器零拷贝导入实测通过；渲染器与解码 GPU 的厂商对齐自动完成（跨厂商导入受 tiling 布局厂商私有语义限制，不作支持）。OpenGL 渲染器走同一导入，部分 Mesa 驱动对单平面 tiling 组合支持面有限，不支持时自动回落 CPU 上传（画面始终正确）。 |
+| **MediaCodec（Android）** | 是（c2 / 厂商硬解，c2 优先） | **是**（AHB → Skia GPU 采样，真机验证） | 解码输出经 Surface/AHB，由 GLES/EGL 桥接为 RGBA AHB，Skia GPU 渲染器同设备直采；ByteBuffer CPU 路径保留为跨厂商回落。 |
 | **Media Foundation** | 是（DXVA2 / D3D11VA） | 否 | MFT 管线不暴露可外部导入的共享纹理，因此帧经 CPU 内存拷贝。 |
 | **LibVLC / VLC** | 是 | 否（3.x 下） | `libvlc_video_set_callbacks` API 交付 CPU 像素。真·零拷贝需要 libvlc 4.0 的 output-callbacks API，目前尚未采用。 |
 
 ## 平台原生后端（逐步集成）
 
-当某平台提供第一方媒体 API 时，LingFan.Media 会**按平台逐步集成**——这不是因为跨平台后端不够用，而是为了使用最高效、由操作系统提供的管线。Linux 是例外：它**没有标准的第一方媒体 API**（不像 Media Foundation、AVFoundation 或 MediaCodec），因此按设计排除在原生后端路线之外。
+当某平台提供第一方媒体 API 时，LingFan.Media 会**按平台逐步集成**——这不是因为跨平台后端不够用，而是为了使用最高效、由操作系统提供的管线。Linux 是例外：它**没有标准的第一方媒体 API**（不像 Media Foundation、AVFoundation 或 MediaCodec），因此不设原生 Linux 后端；硬件解码改由 FFmpeg 的 VAAPI 路线承担。
 
 | 平台 | 原生后端 | 状态 |
 | --- | --- | --- |
 | **Windows** | Media Foundation（操作系统内置组件） | ✅ 已实现——无需额外第三方授权 |
-| **Apple（macOS / iOS）** | AVFoundation | 计划中 |
-| **Android** | MediaCodec | 计划中 |
-| **Linux** | — | 已排除——无标准原生 API（可经 FFmpeg / VLC 播放） |
+| **Apple（macOS / iOS）** | AVFoundation（部分实现就绪：Metal 渲染器、AVAudioEngine / AudioUnit 音频） | **暂缓——缺设备，暂时无法实现与测试（请等待）** |
+| **Android** | MediaCodec（系统内置组件） | ✅ 已实现（真机验证：硬解 + AHB 零拷贝上屏） |
+| **Linux** | —（硬件解码走 FFmpeg VAAPI 路线） | 不设原生后端——播放与硬解已实测可用 |
 
-目前只有 Media Foundation 已接入。AVFoundation 与 MediaCodec 在路线之上；它们的缺失**不会**阻塞播放，因为 FFmpeg / LibVLC 已覆盖这些平台。
+目前 Media Foundation（Windows）与 MediaCodec（Android，真机验证）已接入。AVFoundation 在路线之上；它的缺失**不会**阻塞播放，因为 FFmpeg / LibVLC 已覆盖这些平台。
 
 ## 不在路线中
 
@@ -67,18 +68,23 @@ FFmpeg 与 LibVLC 是**跨平台保底**。二者均为 LGPL 授权，可在每�
   </div>
 
   <div style="display:flex;gap:12px;align-items:flex-start;">
-    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-divider);border-radius:999px;background:var(--vp-c-bg-soft);text-align:center;font-size:12px;">下一阶段</span>
-    <div><strong>macOS · iOS · Android。</strong> FFmpeg 与 LibVLC 今天已在这些平台提供可用播放。平台原生后端（AVFoundation、MediaCodec）将**随时间逐步集成**——不引入新的 GPL 代码，因为它们建立在已有的 LGPL 跨平台库之上。</div>
+    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-brand-1);border-radius:999px;background:var(--vp-c-bg-soft);color:var(--vp-c-brand-1);text-align:center;font-size:12px;">Android · 真机</span>
+    <div><strong>Android —— MediaCodec 原生后端已集成并真机验证。</strong>硬件解码经 Surface/AHardwareBuffer 输出（c2 硬解优先），由 GLES/EGL 桥接为 AHB、Skia GPU 渲染器同设备零拷贝采样上屏；跨厂商设备保留 ByteBuffer CPU 回落。音频经 OpenSL ES / AAudio 输出（已实现）。FFmpeg / LibVLC 亦已实现。</div>
   </div>
 
   <div style="display:flex;gap:12px;align-items:flex-start;">
-    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-danger-1,#d32f2f);border-radius:999px;background:var(--vp-c-bg-soft);text-align:center;font-size:12px;color:var(--vp-c-danger-1,#d32f2f);">已排除</span>
-    <div><strong>Linux —— 排除在原生后端路线之外。</strong> Linux 没有标准的第一方媒体 API（Media Foundation / AVFoundation / MediaCodec 在 Linux 上无对应物），因此 LingFan.Media 不会为 Linux 构建原生后端。不过，FFmpeg / LibVLC 是跨平台的，<strong>确实</strong>可在 Linux 上运行，所以播放仍经它们实现——它们即为保底。Linux 只是不被作为目标或已测试的表面。</div>
+    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-divider);border-radius:999px;background:var(--vp-c-bg-soft);text-align:center;font-size:12px;">暂缓 · 缺设备</span>
+    <div><strong>macOS · iOS —— 暂缓，暂时无法实现与测试（请等待）。</strong> FFmpeg 与 LibVLC 跨平台库本身可在这些平台运行，Metal 渲染器与 AVAudioEngine / AudioUnit 音频已部分实现；待有设备后继续集成 AVFoundation 并完成验证。</div>
+  </div>
+
+  <div style="display:flex;gap:12px;align-items:flex-start;">
+    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-brand-1);border-radius:999px;background:var(--vp-c-bg-soft);color:var(--vp-c-brand-1);text-align:center;font-size:12px;">Linux · 已实测</span>
+    <div><strong>Linux —— 经跨平台后端路线支持并实测。</strong>播放与音频由 FFmpeg / LibVLC 与 OpenAL 提供（不设原生后端——Linux 没有标准的第一方媒体 API）。硬解经 FFmpeg 的 VAAPI 路线（Intel iHD 实测），导出的 dma_buf 由 Vulkan 渲染器零拷贝上屏，渲染器与解码 GPU 的厂商对齐自动完成；OpenGL 渲染器在 Mesa 支持面不足时自动回落 CPU 上传，画面始终正确。</div>
   </div>
 
 </div>
 
-> **范畴说明：**「受支持平台」指项目*目标并已测试*的表面，区别于第三方库本身的技术能力。**Vulkan** 渲染器已在 Windows 的 FFmpeg 零拷贝路径上验证，但不属于 V1 受支持表面；OpenGL / Metal 仍为部分实现。
+> **范畴说明：**「受支持平台」指项目*目标并已测试*的表面，区别于第三方库本身的技术能力。**Vulkan** 渲染器已在 Windows 与 Linux 的 FFmpeg 零拷贝路径上验证；OpenGL / Metal 仍为部分实现。
 
 ## 打开 → 就绪 时序
 

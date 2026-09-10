@@ -1,6 +1,6 @@
 # Android MediaCodec 解码·渲染架构设计
 
-> 状态：**草案（待多轮评审确认后开工）** · 适用范围：`LingFan.Media.Backends.MediaCodec` + `LingFan.Media.Avalonia`（Skia 软渲）
+> 状态：**已落地并真机验证**（上屏治根 A·B·C 真机 PASS；零拷贝链 stamped 判据齐）。本文保留设计过程存档；注意最终实现相对 §3 演进——现役上屏链为 MediaCodec(Surface) → GLES/EGL 桥接 → RGBA AHB → Skia GPU 渲染器同设备采样（ByteBuffer CPU 路径保留为跨厂商回落）。
 >
 > 原则：**先用权威共识把方案定对，再动代码**，降低返工率，保证「有据可查」。
 
