@@ -88,8 +88,8 @@ public sealed unsafe class OpenGLOffscreenDeviceContext : IGpuDeviceContext, IDi
             _offscreen = ctx;
             _capabilities = QueryCapabilities();
             _logger?.LogInformation(
-                "[OPENGL-DEVICE] 离屏 GL 设备上下文已建立（{Api}，共享组所有者），{maxTex}px",
-                OperatingSystem.IsWindows() ? "WGL" : "EGL", _capabilities.MaxTextureSize);
+                "[OPENGL-DEVICE] 离屏 GL 设备上下文已建立（{Api}，共享组所有者）renderer={Renderer} maxTex={MaxTex}px",
+                OperatingSystem.IsWindows() ? "WGL" : "EGL", _capabilities.DeviceName, _capabilities.MaxTextureSize);
         }
     }
 

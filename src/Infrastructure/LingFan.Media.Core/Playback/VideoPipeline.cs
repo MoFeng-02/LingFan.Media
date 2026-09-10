@@ -119,6 +119,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // 平均值被系统性低估，直接导致瓶颈被误判到别处。
     private int _presentedInWindow;
     private long _droppedFrames;
+    // 首段丢帧诊断：Start() 置 3，Drop 分支前 3 次打印帧 PTS 与 master 对照——
+    // 帧时间戳上游退化（恒 0/停滞）vs 时钟源异常的直接判别证据。
+    private int _dropDiagCount;
     // 呈现节拍指标（快照上报）：帧间隔与迟到量。呈现节拍抖动（迟到呈现⇒画面重复一拍）
     // 不进丢帧计数——缺少本组指标时，此类卡顿在 [SYNC] 快照中完全不可见。
     // 仅呈现线程读写（快照日志同线程），无需 Interlocked。
@@ -339,6 +342,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         // A/V 同步诊断：每轮开播重置计数，重新抓取起始帧偏移（重播/恢复也重置）。
         _presentCount = 0;
         _lastSyncDiagTicks = 0;
+        _dropDiagCount = 3;
         // 主时钟快照计数复位（[SYNC] 快照）
         _presentedCount = 0;
         _presentedInWindow = 0;
@@ -848,7 +852,18 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 {
                     // 队首帧已严重落后：取走并归还（不可留队头，否则永远卡在 Drop 分支）。
                     if (_frameQueue.TryDequeue(out var dropped) && dropped != null)
+                    {
+                        // 首段丢帧诊断：帧 PTS 与 master 直接对照——PTS 恒 0/停滞而 master 正常推进
+                        // 即上游时间戳退化（解码/回落链），非同步逻辑问题。
+                        if (_dropDiagCount > 0)
+                        {
+                            --_dropDiagCount;
+                            _logger.LogWarning(
+                                "[DROP-DIAG] 丢帧#{Seq}: 帧PTS={Pts:g} master={Master:g} —— 帧被判严重落后；持续同模式=上游时间戳退化或时钟源异常",
+                                3 - _dropDiagCount, headTimestamp, _synchronizer.GetCurrentMasterTime());
+                        }
                         ReturnFrame(dropped);
+                    }
                     Interlocked.Increment(ref _droppedFrames);
                     if (PacingDiagnostics.Enabled)
                     {

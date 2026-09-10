@@ -24,14 +24,19 @@ internal static unsafe partial class GLNative
     [LibraryImport("EGL", EntryPoint = "eglGetDisplay")]
     public static partial nint eglGetDisplay(nint displayId);
 
+    // EGL_EXTENSIONS = 0x3055：对 EGL_NO_DISPLAY 查询返回客户端扩展串（设备枚举/平台设备能力自报）。
+    [LibraryImport("EGL", EntryPoint = "eglQueryString")]
+    public static partial nint eglQueryString(nint display, int name);
+
     [LibraryImport("EGL", EntryPoint = "eglQueryDevicesEXT")]
     public static partial int eglQueryDevicesEXT(int maxDevices, nint* devices, int* numDevices);
 
     [LibraryImport("EGL", EntryPoint = "eglQueryDeviceStringEXT")]
     public static partial nint eglQueryDeviceStringEXT(nint device, int name);
 
+    // 第三参按 EGL 规范为 const EGLint*（32 位 EGLint），非 EGLAttrib*——属性表须以 int* 传递。
     [LibraryImport("EGL", EntryPoint = "eglGetPlatformDisplayEXT")]
-    public static partial nint eglGetPlatformDisplayEXT(uint platform, nint nativeDisplay, nint* attribList);
+    public static partial nint eglGetPlatformDisplayEXT(uint platform, nint nativeDisplay, int* attribList);
 
     internal const uint EglPlatformDeviceExt = 0x313F;
     internal const int EglDeviceExtensions = 0x3055;

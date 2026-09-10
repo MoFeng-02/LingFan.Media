@@ -436,6 +436,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
 
         _initialized = true;
+        // 首启也打印前 4 帧 pts（此前仅 Reset() 后触发）——CPU 回落链路的时间戳健康度直接可见。
+        _decodeDiagCount = 4;
         _logger.LogInformation("视频解码器初始化: {Codec}, 硬件加速={HwAccel}", codec, IsHardwareAccelerated);
     }
 
@@ -1012,8 +1014,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         }
         resource ??= CreateCopyResource(avFrame, width, height, pixFmt, format);
 
-        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
+        // pts 权威链：frame->pts 缺席（NOPTS）时回退 best_effort_timestamp（FFmpeg 解码侧到达时间戳，
+        // 与 ffplay 同款兜底）；两者皆缺才置零。hwaccel 个别路径存在 pts 缺席场景，兜底防全帧零时戳。
+        long framePts = avFrame->pts != FF.AV_NOPTS_VALUE ? avFrame->pts : avFrame->best_effort_timestamp;
+        TimeSpan timestamp = framePts != FF.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(framePts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
             ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
@@ -1356,8 +1361,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         int width = avFrame->width;
         int height = avFrame->height;
 
-        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
+        // pts 权威链：frame->pts 缺席（NOPTS）时回退 best_effort_timestamp（FFmpeg 解码侧到达时间戳，
+        // 与 ffplay 同款兜底）；两者皆缺才置零。hwaccel 个别路径存在 pts 缺席场景，兜底防全帧零时戳。
+        long framePts = avFrame->pts != FF.AV_NOPTS_VALUE ? avFrame->pts : avFrame->best_effort_timestamp;
+        TimeSpan timestamp = framePts != FF.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(framePts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
             ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
@@ -1487,6 +1495,8 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             int ret = FF.av_hwframe_transfer_data(sw, avFrame, 0);
             if (ret < 0)
                 throw new InvalidOperationException($"av_hwframe_transfer_data 失败: {GetErrorString(ret)}");
+            // 传输后再次对齐：个别 hwcontext 传输实现会重建/触碰 dst 元数据，pts 以源帧为唯一权威（幂等）。
+            sw->pts = avFrame->pts;
             return CreateVideoFrameFromAVFrame(sw);
         }
         finally
@@ -1574,8 +1584,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
         int width = avFrame->width;
         int height = avFrame->height;
 
-        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
+        // pts 权威链：frame->pts 缺席（NOPTS）时回退 best_effort_timestamp（FFmpeg 解码侧到达时间戳，
+        // 与 ffplay 同款兜底）；两者皆缺才置零。hwaccel 个别路径存在 pts 缺席场景，兜底防全帧零时戳。
+        long framePts = avFrame->pts != FF.AV_NOPTS_VALUE ? avFrame->pts : avFrame->best_effort_timestamp;
+        TimeSpan timestamp = framePts != FF.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(framePts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
             ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))
@@ -1737,8 +1750,11 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
 
         var resource = new MediaCodecFrameResource(mcBuffer, width, height, frameOwner);
 
-        TimeSpan timestamp = avFrame->pts != FF.AV_NOPTS_VALUE
-            ? TimeSpan.FromTicks((long)(avFrame->pts * _tbSeconds * TimeSpan.TicksPerSecond))
+        // pts 权威链：frame->pts 缺席（NOPTS）时回退 best_effort_timestamp（FFmpeg 解码侧到达时间戳，
+        // 与 ffplay 同款兜底）；两者皆缺才置零。hwaccel 个别路径存在 pts 缺席场景，兜底防全帧零时戳。
+        long framePts = avFrame->pts != FF.AV_NOPTS_VALUE ? avFrame->pts : avFrame->best_effort_timestamp;
+        TimeSpan timestamp = framePts != FF.AV_NOPTS_VALUE
+            ? TimeSpan.FromTicks((long)(framePts * _tbSeconds * TimeSpan.TicksPerSecond))
             : TimeSpan.Zero;
         TimeSpan duration = avFrame->duration > 0
             ? TimeSpan.FromTicks((long)(avFrame->duration * _tbSeconds * TimeSpan.TicksPerSecond))

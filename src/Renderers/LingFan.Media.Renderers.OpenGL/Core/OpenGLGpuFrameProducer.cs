@@ -300,7 +300,11 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
                 }
 
                 nint display = _glContext.OffscreenDisplay; // EGLDisplay（离屏共享组所有者）
-                bool hasModifier = source.DrmModifier != 0;
+
+                // DRM_FORMAT_MOD_INVALID（0x00FFFFFFFFFFFFFF）不可进导入属性表（驱动必拒 EGL_BAD_ATTRIBUTE）：
+                // 按无 modifier（线性布局）处理；真实 tiling modifier（iHD Y-tile 等）照常透传。
+                const ulong DrmFormatModInvalid = 0x00FFFFFFFFFFFFFFUL;
+                bool hasModifier = source.DrmModifier != 0 && source.DrmModifier != DrmFormatModInvalid;
 
                 // Y 平面：单平面 R8（DRM_FORMAT_R8 = 0x20203852）。composed NV12 双平面共享同一 fd。
                 var yAttribs = BuildDmaBufPlaneAttribs(
@@ -312,7 +316,12 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
                     eglImageY = GLNative.EglCreateImageKHR(display, nint.Zero, (uint)GLNative.EglLinuxDmaBufExt, p);
                 if (eglImageY == nint.Zero)
                 {
-                    _logger?.LogWarning("[OPENGL-ZEROCOPY] eglCreateImageKHR(Y 平面) 失败，回落软件解码。");
+                    _logger?.LogWarning(
+                        "[OPENGL-ZEROCOPY] eglCreateImageKHR(Y 平面) 失败 eglErr=0x{Err:X8} —— fourcc=0x{Fourcc:X8} modifier=0x{Mod:X16} pitch={Pitch} offset={Offset} 尺寸={W}x{H} display=0x{Dsp:X8}，回落软件解码。",
+                        GLNative.eglGetError(), (uint)source.DrmFourcc, source.DrmModifier,
+                        source.PlanePitches?.Length > 0 ? source.PlanePitches[0] : 0u,
+                        source.PlaneOffsets?.Length > 0 ? source.PlaneOffsets[0] : 0u,
+                        source.Width, source.Height, display);
                     return false;
                 }
 

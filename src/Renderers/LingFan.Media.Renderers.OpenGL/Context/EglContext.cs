@@ -150,7 +150,20 @@ internal sealed unsafe class EglContext : IGlContext
         fixed (int* s = surfAttribs)
             _surface = GLNative.eglCreateWindowSurface(_display, config, window, s);
         if (_surface == nint.Zero)
-            throw new InvalidOperationException($"EGL：eglCreateWindowSurface 失败（0x{GLNative.eglGetError():X8}）。");
+        {
+            // 设备显示（EGL_EXT_platform_device）无窗口系统：X11 原生窗口在其上非法（EGL_BAD_NATIVE_WINDOW）。
+            // 回落 1×1 pbuffer 维持呈现闭环——零拷贝的验证值在帧导入/采样，不在像素出窗；桌面 X11 会话不受影响。
+            int surfErr = GLNative.eglGetError();
+            int[] pbAttribs = { (int)EglWidth, 1, (int)EglHeight, 1, (int)EglNone };
+            fixed (int* p = pbAttribs)
+                _surface = GLNative.eglCreatePbufferSurface(_display, config, p);
+            if (_surface == nint.Zero)
+                throw new InvalidOperationException(
+                    $"EGL：eglCreateWindowSurface（0x{surfErr:X8}）与 pbuffer 回落（0x{GLNative.eglGetError():X8}）均失败。");
+            _logger?.LogWarning(
+                "EGL：eglCreateWindowSurface 失败（0x{Err:X8}），已回落 1×1 pbuffer 呈现（设备显示无窗口系统）。",
+                surfErr);
+        }
 
         if (GLNative.eglMakeCurrent(_display, _surface, _surface, _context) == 0)
             throw new InvalidOperationException($"EGL：eglMakeCurrent 失败（0x{GLNative.eglGetError():X8}）。");
@@ -191,9 +204,16 @@ internal sealed unsafe class EglContext : IGlContext
         // 任一环节失败回落默认显示（行为与未启用一致）。
         nint display = OperatingSystem.IsLinux()
             && Environment.GetEnvironmentVariable("LINGFAN_EGL_DEVICE_DRM") == "1"
-            ? TryOpenHardwareDeviceDisplay() : nint.Zero;
+            ? TryOpenHardwareDeviceDisplay(logger) : nint.Zero;
         if (display == nint.Zero)
+        {
+            logger?.LogInformation("[EGL-DEVICE] 离屏显示 = 默认（EGL_DEFAULT_DISPLAY；Xvfb 下通常为软件栈，无法导入 GPU dma_buf）。");
             display = GLNative.eglGetDisplay(nint.Zero); // EGL_DEFAULT_DISPLAY
+        }
+        else
+        {
+            logger?.LogInformation("[EGL-DEVICE] 离屏显示 = EGL 硬件设备（EGL_EXT_platform_device，与 VAAPI 解码同设备）。");
+        }
         if (display == nint.Zero)
             throw new InvalidOperationException("EGL：eglGetDisplay(DEFAULT) 失败（无可用 EGL 显示）。");
 
@@ -264,42 +284,92 @@ internal sealed unsafe class EglContext : IGlContext
     /// 返回已 Initialize 的 EGLDisplay。任一环节失败返回 Zero（调用方回落默认显示）。
     /// 用途：同设备零拷贝——离屏上下文与 VAAPI 解码（Intel iHD）同 GPU 时 dma_buf 导入才可用；
     /// 默认显示在 Xvfb 下落到 llvmpipe 软件栈，无法导入 GPU dma_buf。
+    /// <para>全链路逐步打点（设备数/客户端扩展/逐设备扩展/平台显示/初始化）——设备选择属静默失败
+    /// 高发区，无打点即不可诊断。</para>
     /// </summary>
-    private static unsafe nint TryOpenHardwareDeviceDisplay()
+    private static unsafe nint TryOpenHardwareDeviceDisplay(ILogger? logger)
     {
         try
         {
+            // 客户端扩展自报（EGL_NO_DISPLAY 查询）：设备枚举/平台设备能力缺一即无选择资格。
+            nint clientExts = GLNative.eglQueryString(nint.Zero, EglDeviceExtensions);
+            string clientExtStr = clientExts != nint.Zero
+                ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(clientExts) ?? string.Empty
+                : string.Empty;
+            bool hasEnum = clientExtStr.Contains("EGL_EXT_device_enumeration", StringComparison.Ordinal);
+            bool hasPlatform = clientExtStr.Contains("EGL_EXT_platform_device", StringComparison.Ordinal);
+            logger?.LogInformation(
+                "[EGL-DEVICE] 客户端扩展：device_enumeration={Enum} platform_device={Platform}",
+                hasEnum, hasPlatform);
+            if (!hasEnum || !hasPlatform)
+            {
+                logger?.LogWarning("[EGL-DEVICE] 客户端不支持 EGL 设备枚举/平台设备，回落默认显示。");
+                return nint.Zero;
+            }
+
             int count = 0;
             if (GLNative.eglQueryDevicesEXT(0, null, &count) == 0 || count == 0)
+            {
+                logger?.LogWarning(
+                    "[EGL-DEVICE] eglQueryDevicesEXT 计数查询失败（设备数={Count}，eglErr=0x{Err:X8}），回落默认显示。",
+                    count, GLNative.eglGetError());
                 return nint.Zero;
+            }
 
             var devices = new nint[count];
             fixed (nint* d = devices)
             {
                 if (GLNative.eglQueryDevicesEXT(count, d, &count) == 0)
+                {
+                    logger?.LogWarning(
+                        "[EGL-DEVICE] eglQueryDevicesEXT 枚举失败（eglErr=0x{Err:X8}），回落默认显示。",
+                        GLNative.eglGetError());
                     return nint.Zero;
+                }
             }
 
-            foreach (var dev in devices)
+            for (int i = 0; i < devices.Length; i++)
             {
+                nint dev = devices[i];
                 if (dev == nint.Zero) continue;
                 nint extPtr = GLNative.eglQueryDeviceStringEXT(dev, EglDeviceExtensions);
                 string exts = extPtr != nint.Zero
                     ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(extPtr) ?? string.Empty
                     : string.Empty;
+                logger?.LogInformation(
+                    "[EGL-DEVICE] 设备#{Idx} extensions={Exts}",
+                    i, exts.Length > 160 ? exts[..160] + "…" : exts);
                 if (exts.Contains("EGL_MESA_device_software", StringComparison.Ordinal))
                     continue;   // 软件设备（llvmpipe）：无法导入 GPU dma_buf，跳过
 
-                nint disp = GLNative.eglGetPlatformDisplayExt(EglPlatformDeviceExt, dev, null);
-                if (disp == nint.Zero) continue;
+                nint disp = GLNative.eglGetPlatformDisplayEXT(EglPlatformDeviceExt, dev, null);
+                if (disp == nint.Zero)
+                {
+                    logger?.LogWarning(
+                        "[EGL-DEVICE] 设备#{Idx} eglGetPlatformDisplayEXT 失败（eglErr=0x{Err:X8}），尝试下一设备。",
+                        i, GLNative.eglGetError());
+                    continue;
+                }
 
                 int major = 0, minor = 0;
                 if (GLNative.eglInitialize(disp, &major, &minor) != 0)
+                {
+                    logger?.LogInformation(
+                        "[EGL-DEVICE] 已选择硬件设备 #{Idx}（EGL {Major}.{Minor}）。", i, major, minor);
                     return disp;
+                }
+                logger?.LogWarning(
+                    "[EGL-DEVICE] 设备#{Idx} eglInitialize 失败（eglErr=0x{Err:X8}），尝试下一设备。",
+                    i, GLNative.eglGetError());
                 GLNative.eglTerminate(disp);   // 初始化失败：换下一个设备
             }
+
+            logger?.LogWarning("[EGL-DEVICE] 无可用硬件 EGL 设备（全部跳过/失败），回落默认显示。");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "[EGL-DEVICE] 设备选择异常，回落默认显示。");
+        }
         return nint.Zero;
     }
 
