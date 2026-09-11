@@ -129,11 +129,26 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private Exception? _initError;
     private bool _disposed;
 
-    /// <summary>跨线程产帧请求：GL 线程消费后通过 <see cref="FrameRequest.Tcs"/> 回传 AHB 指针。</summary>
+    // ConvertLatest 等待上限：正常产帧往返（闩帧+AHB 分配+渲染+glFinish）远小于 1s；2s 与 MediaPlayer
+    // 的管线等待（PipelineTaskWait）对齐。超时仅发生在 GL 线程死亡/设备级停摆——返回 0 兜底而非
+    // 永久挂死解码线程（挂死会令 DisposeAsync 2s 放行后残留活跃任务拖累后续播放会话）。
+    private static readonly TimeSpan ConvertLatestTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// 跨线程产帧请求：GL 线程消费后通过 <see cref="FrameRequest.Tcs"/> 回传 AHB 指针。
+    /// </summary>
+    /// <remarks>
+    /// <para><b>AHB 移交仲裁（<see cref="Handover"/>，单 int 原子裁决）</b>：等待方可能超时放弃，
+    /// 而 GL 线程稍后才完成产帧——产物归属必须恰好一人，否则孤儿 AHB 泄漏 gralloc。
+    /// 0=未决；1=GL 已发布移交（等待方接管）；2=等待方已超时放弃（GL 发布时自回收）。
+    /// GL 侧 <c>Interlocked.Exchange(1)</c>、等待方超时 <c>Interlocked.CompareExchange(2, 0)</c>：
+    /// 原子性保证「先放弃后发布 / 先发布后放弃」两个时序交叉都恰好由一方回收。</para>
+    /// </remarks>
     private sealed class FrameRequest
     {
-        public nint Result;
+        public nint Result;      // 仅 GL 线程写入；Handover=1 后等待方读取
         public bool IsStop;
+        public int Handover;     // 0=未决 1=已移交等待方 2=等待方已放弃（GL 自回收）
         public readonly System.Threading.Tasks.TaskCompletionSource<nint> Tcs = new();
     }
 
@@ -189,6 +204,19 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         catch (Exception ex)
         {
             _initError = ex;
+            // 线程即将死亡：复位 _initialized——否则后续 ConvertLatest 持续入队永不被消费的请求
+            //（有 ConvertLatestTimeout 兜底不再挂死，但每请求白等 2s 拖垮解码节奏）。
+            _initialized = false;
+            // 异常路径补做上下文清理：原实现直接退出会泄漏 EGL 上下文/表面（display 引用计数不归还，
+            // 反复异常逐次累积）。TeardownGlOnThisThread 幂等（字段守卫+逐项清零），二次进入安全。
+            try
+            {
+                TeardownGlOnThisThread();
+            }
+            catch (Exception tex)
+            {
+                _logger?.LogWarning(tex, "[ANDROID-AHB] GL 线程异常路径清理失败（忽略，线程退出）。");
+            }
             _initDone.Set();         // 解锁 Initialize（即使失败也要置位，避免死等）
             _logger?.LogWarning(ex, "[ANDROID-AHB] GL 线程初始化/运行异常，回退 CPU 路径。");
         }
@@ -213,9 +241,19 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
             _workSignal.Reset();
             while (_requestQueue.TryDequeue(out var req))
             {
+                // 等待方已超时放弃的请求：跳过产帧（省一次 gralloc 分配+渲染），直接记账完成。
+                if (Volatile.Read(ref req.Handover) == 2)
+                {
+                    req.Tcs.TrySetResult(nint.Zero);
+                    continue;
+                }
                 if (req.IsStop)
                 {
                     TeardownGlOnThisThread();
+                    // stop 后排空残留请求：Dispose 竞态窗口内迟到入队者此后永不被消费——
+                    // fail-fast 返回 0，防止其等待方永久阻塞（解码线程挂死 → 会话残留拖累后续播放）。
+                    while (_requestQueue.TryDequeue(out var orphan))
+                        orphan.Tcs.TrySetResult(nint.Zero);
                     return;
                 }
                 try
@@ -225,6 +263,13 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                 catch (Exception ex)
                 {
                     _logger?.LogWarning(ex, "[ANDROID-AHB] 产帧异常，返回 0（丢弃该帧）。");
+                    req.Result = nint.Zero;
+                }
+                // AHB 移交仲裁（唯一裁决点）：Exchange 返回 2 = 等待方已超时放弃 → 产物自回收
+                //（移交协议详见 FrameRequest 注释，杜绝超时与发布竞态的孤儿缓冲）。
+                if (Interlocked.Exchange(ref req.Handover, 1) == 2)
+                {
+                    if (req.Result != nint.Zero) AHardwareBufferRelease(req.Result);
                     req.Result = nint.Zero;
                 }
                 req.Tcs.TrySetResult(req.Result);
@@ -238,6 +283,12 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     /// 本方法只在调用线程入队请求并阻塞等待结果，真正的 GL 工作在 GL 线程（上下文常驻）上完成。
     /// 返回 AHardwareBuffer*（引用所有权移交调用方；帧资源 Dispose 时释放）；失败返回 <see cref="IntPtr.Zero"/>。
     /// </summary>
+    /// <remarks>
+    /// <para><b>超时兜底</b>：等待超过 <see cref="ConvertLatestTimeout"/> 返回 0（与「GL 异常态」同义，
+    /// 解码侧保留待闩帧标志下轮重试）——覆盖 GL 线程中途死亡、stop 后迟到入队（RunLoop 已 fail-fast
+    /// 排空）、设备级产帧停摆三类情形，杜绝解码线程永久挂死。放弃后 GL 线程若完成产帧，产物经
+    /// <see cref="FrameRequest.Handover"/> 仲裁由 GL 侧或本侧回收，孤儿 AHB 不泄漏。</para>
+    /// </remarks>
     public nint ConvertLatest()
     {
         if (!_initialized) return nint.Zero;
@@ -246,7 +297,23 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         _requestQueue.Enqueue(req);
         _workSignal.Set();
         // 阻塞等 GL 线程产帧结果（调用线程为解码读循环后台线程，阻塞无死锁风险：GL 线程不回调调用方）。
-        return req.Tcs.Task.GetAwaiter().GetResult();
+        if (!req.Tcs.Task.Wait(ConvertLatestTimeout))
+        {
+            // 超时放弃（移交仲裁）：CE(2,0)==0 → GL 未发布，置 2 令其发布时自回收；
+            // CE(2,0)==1 → GL 恰已发布并移交，产物在此回收（等待方已走，无人接管即泄漏）。
+            if (Interlocked.CompareExchange(ref req.Handover, 2, 0) == 1)
+            {
+                nint orphan = req.Result;
+                if (orphan != nint.Zero)
+                {
+                    AHardwareBufferRelease(orphan);
+                    _logger?.LogWarning("[ANDROID-AHB] ConvertLatest 超时放弃时 GL 线程恰好移交，孤儿 AHB 已回收 0x{Ahb:X}。", (ulong)orphan);
+                }
+            }
+            _logger?.LogWarning("[ANDROID-AHB] ConvertLatest 等待产帧超时（{Ms}ms），返回 0 兜底（GL 线程可能已死亡/停摆）。", (int)ConvertLatestTimeout.TotalMilliseconds);
+            return nint.Zero;
+        }
+        return req.Tcs.Task.Result;
     }
 
     /// <summary>
@@ -562,7 +629,15 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
             _initialized = false; // 抢占：阻止任何新 ConvertLatest 入队（已在等待的请求由 GL 线程照常处理）
             _requestQueue.Enqueue(new FrameRequest { IsStop = true });
             _workSignal.Set();
-            _glThread.Join();
+            // 有界 Join：GL 线程若卡死在 ProduceFrame（gralloc 分配 / glFinish 设备级停摆），无界 Join
+            // 会把 DisposeAsync 整体挂死（11 步无总超时）→ 重放永无响应。超时放行时跳过
+            // Surface/SurfaceTexture 释放（可能与卡死线程的 updateTexImage 竞态，交终结器兜底）并大声记录。
+            if (!_glThread.Join(TimeSpan.FromSeconds(5)))
+            {
+                _logger?.LogWarning("[ANDROID-AHB] GL 线程退出超时（疑似设备级停摆），跳过 Surface/SurfaceTexture 释放以解锁重放。");
+                _glThread = null;
+                return;
+            }
         }
         _glThread = null;
 
@@ -574,22 +649,25 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     }
 
     /// <summary>在 GL 线程上销毁全部 GL 对象并终止 EGL（上下文此时 current）。</summary>
+    /// <remarks><b>幂等</b>：每项销毁后立即清零字段——异常路径可能二次进入（stop 分支清理中抛异常 →
+    /// GlThreadEntry catch 再次调用），重入时不得重复 EglTerminate（display 引用计数会多减）。</remarks>
     private void TeardownGlOnThisThread()
     {
-        if (_program != 0) GlDeleteProgram(_program);
-        if (_vbo != 0) { uint vb = _vbo; GlDeleteBuffers(1, &vb); }
+        if (_program != 0) { GlDeleteProgram(_program); _program = 0; }
+        if (_vbo != 0) { uint vb = _vbo; GlDeleteBuffers(1, &vb); _vbo = 0; }
         // 取字段副本入局部再取地址（跨环境安全写法：本机 Roslyn 对 &字段 报 CS0212，须走局部变量）。
-        if (_scratchTex != 0) { uint sTex = _scratchTex; GlDeleteTextures(1, &sTex); }
-        if (_oesTex != 0) { uint oTex = _oesTex; GlDeleteTextures(1, &oTex); }
-        if (_fbo != 0) { uint fb = _fbo; GlDeleteFramebuffers(1, &fb); }
+        if (_scratchTex != 0) { uint sTex = _scratchTex; GlDeleteTextures(1, &sTex); _scratchTex = 0; }
+        if (_oesTex != 0) { uint oTex = _oesTex; GlDeleteTextures(1, &oTex); _oesTex = 0; }
+        if (_fbo != 0) { uint fb = _fbo; GlDeleteFramebuffers(1, &fb); _fbo = 0; }
 
         if (_eglDisplay != nint.Zero)
         {
             // 线程即将退出，上下文随之消亡；显式解绑再销毁，符合 EGL 规范。
             EglMakeCurrent(_eglDisplay, nint.Zero, nint.Zero, nint.Zero);
-            if (_eglContext != nint.Zero) EglDestroyContext(_eglDisplay, _eglContext);
-            if (_eglSurface != nint.Zero) EglDestroySurface(_eglDisplay, _eglSurface);
+            if (_eglContext != nint.Zero) { EglDestroyContext(_eglDisplay, _eglContext); _eglContext = nint.Zero; }
+            if (_eglSurface != nint.Zero) { EglDestroySurface(_eglDisplay, _eglSurface); _eglSurface = nint.Zero; }
             EglTerminate(_eglDisplay);
+            _eglDisplay = nint.Zero;
         }
         _logger?.LogInformation("[ANDROID-AHB] GL 线程已销毁上下文并退出。");
     }
