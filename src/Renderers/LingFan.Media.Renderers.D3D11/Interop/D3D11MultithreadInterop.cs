@@ -60,8 +60,8 @@ internal static class D3D11MultithreadInterop
         try
         {
             // 缓存必须先于调用：先取 vtable 槽位委托，再执行，避免坏指针上二次操作。
-            IntPtr vtbl = Marshal.ReadIntPtr(mt);
-            IntPtr slot = Marshal.ReadIntPtr(vtbl, VtblSlotSetMultithreadProtected * IntPtr.Size);
+            // 槽位读取统一走 LingFan.Media.Interop.ComVTable（绝对槽语义）；空槽返回 false 与原实现一致。
+            IntPtr slot = ComVTable.ReadSlot(mt, VtblSlotSetMultithreadProtected);
             if (slot == IntPtr.Zero)
                 return false;
 

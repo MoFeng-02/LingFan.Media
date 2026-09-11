@@ -55,6 +55,7 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private const int EglWidth = 0x3057;
     private const int EglHeight = 0x3056;
     private const int EglNativeBufferAndroid = 0x3140;       // EGL_NATIVE_BUFFER_ANDROID
+    // 与 Egl/EglImageInterop.cs 的 EglImagePreservedKhr 同值（Khronos 官方 0x30D2）——改值须两处同步。
     private const int EglImagePreservedKhr = 0x30D2;
 
     // GLES 常量

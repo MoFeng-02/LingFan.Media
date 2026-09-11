@@ -5,6 +5,7 @@
          net10.0-android 资产额外含 MediaCodec 解码侧 GLES/EGL→AHB 桥接（依赖 Android 托管绑定）。
          android 是 net10.0 超集：net10.0-android 消费方（Backends.MediaCodec）取 android 资产，
          net10.0 消费方经 ProjectReference 目标框架协商只取 net10.0 资产、无需 Android workload。 -->
+    <!-- 承重墙：空 TargetFramework 覆写 Directory.Build.props 的单值 net10.0，多目标（TargetFrameworks）才会生效——勿删。 -->
     <TargetFramework></TargetFramework>
     <TargetFrameworks>net10.0;net10.0-android</TargetFrameworks>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

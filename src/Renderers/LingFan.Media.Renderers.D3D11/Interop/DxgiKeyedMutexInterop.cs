@@ -52,23 +52,22 @@ internal static class DxgiKeyedMutexInterop
         return hr < 0 || km == IntPtr.Zero ? IntPtr.Zero : km;
     }
 
-    /// <summary>从 keyed mutex 裸指针取 <c>AcquireSync</c> 委托（vtable 槽位 8）。</summary>
+    /// <summary>从 keyed mutex 裸指针取 <c>AcquireSync</c> 委托（vtable 绝对槽位 8）。</summary>
     internal static AcquireSyncFn? GetAcquireDelegate(IntPtr kmPtr)
     {
         if (kmPtr == IntPtr.Zero)
             return null;
-        IntPtr vtbl = Marshal.ReadIntPtr(kmPtr);
-        IntPtr slot = Marshal.ReadIntPtr(vtbl, VtblSlotAcquireSync * IntPtr.Size);
+        // 槽位读取统一走 LingFan.Media.Interop.ComVTable（绝对槽语义）；空槽返回 null 与原实现一致。
+        IntPtr slot = ComVTable.ReadSlot(kmPtr, VtblSlotAcquireSync);
         return slot == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<AcquireSyncFn>(slot);
     }
 
-    /// <summary>从 keyed mutex 裸指针取 <c>ReleaseSync</c> 委托（vtable 槽位 9）。</summary>
+    /// <summary>从 keyed mutex 裸指针取 <c>ReleaseSync</c> 委托（vtable 绝对槽位 9）。</summary>
     internal static ReleaseSyncFn? GetReleaseDelegate(IntPtr kmPtr)
     {
         if (kmPtr == IntPtr.Zero)
             return null;
-        IntPtr vtbl = Marshal.ReadIntPtr(kmPtr);
-        IntPtr slot = Marshal.ReadIntPtr(vtbl, VtblSlotReleaseSync * IntPtr.Size);
+        IntPtr slot = ComVTable.ReadSlot(kmPtr, VtblSlotReleaseSync);
         return slot == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<ReleaseSyncFn>(slot);
     }
 }
