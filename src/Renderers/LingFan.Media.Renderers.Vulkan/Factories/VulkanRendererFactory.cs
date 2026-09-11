@@ -215,29 +215,9 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 _metalObjectsSharingEnabled = OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
                 // 填充物理设备身份（deviceUUID/deviceLUID），否则 VulkanSharedSurfaceSourceFactory.Create 的
                 // 「同 GPU 对齐」校验会因 PhysicalDeviceUuid 为空而抛「UUID 不匹配」（合成器上报了 UUID、
-                // 我们是空数组 ⇒ 判不匹配）。与自建分支同段代码，用外部 physicalDevice 查询。
-                PhysicalDeviceIDProperties extIdProps = new()
-                {
-                    SType = StructureType.PhysicalDeviceIDProperties,
-                };
-                PhysicalDeviceProperties2 extProps2 = new()
-                {
-                    SType = StructureType.PhysicalDeviceProperties2,
-                    PNext = &extIdProps,
-                };
-                VulkanNative.GetPhysicalDeviceProperties2(_externalPhysicalDevice, &extProps2);
-                _physicalDeviceUuid = new byte[16];
-                _physicalDeviceLuid = new byte[8];
-                unsafe
-                {
-                    fixed (byte* pUuid = _physicalDeviceUuid, pLuid = _physicalDeviceLuid)
-                    {
-                        byte* sUuid = extIdProps.DeviceUuid;
-                        byte* sLuid = extIdProps.DeviceLuid;
-                        for (int i = 0; i < 16; i++) pUuid[i] = sUuid[i];
-                        for (int i = 0; i < 8; i++) pLuid[i] = sLuid[i];
-                    }
-                }
+                // 我们是空数组 ⇒ 判不匹配）。统一走 VulkanDeviceSelector.GetPhysicalDeviceIdentity。
+                (_physicalDeviceUuid, _physicalDeviceLuid) =
+                    VulkanDeviceSelector.GetPhysicalDeviceIdentity(_externalPhysicalDevice);
                 _renderContext = new RenderContext(
                     GPUApiType.Vulkan,
                     new GpuDeviceCapabilities("External(宿主共享 Vulkan device)", 0, 0, 0, true, true, -1),
@@ -321,22 +301,6 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 // 实例已创建（且已启用 WSI 扩展）→ 解析实例级函数 + KHR 实例扩展
                 VulkanNative.InitInstance(instance);
 
-                // 枚举物理设备
-                uint physCount = 0;
-                // 检查 EnumeratePhysicalDevices 返回值
-                Result enumResult = VulkanNative.EnumeratePhysicalDevices(instance, ref physCount, null);
-                if (enumResult != Result.Success)
-                    throw new InvalidOperationException($"vkEnumeratePhysicalDevices 失败: {enumResult}");
-                if (physCount == 0)
-                    throw new InvalidOperationException("未找到 Vulkan 物理设备。");
-
-                var physDevices = new PhysicalDevice[physCount];
-                fixed (PhysicalDevice* pDevices = physDevices)
-                {
-                    enumResult = VulkanNative.EnumeratePhysicalDevices(instance, ref physCount, pDevices);
-                    if (enumResult != Result.Success)
-                        throw new InvalidOperationException($"vkEnumeratePhysicalDevices (第二次) 失败: {enumResult}");
-                }
                 // 零拷贝跨 GPU 对齐（自动路径）：启用且 Windows 且尚未手动指定 LUID 时，
                 // 查询默认 D3D11 适配器 LUID 并注入，强制 Vulkan 选与 D3D11VA 共享纹理同 GPU。
                 if (_alignToD3D11DefaultAdapter && OperatingSystem.IsWindows() && _preferredAdapterLuid is null)
@@ -354,70 +318,11 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                     }
                 }
 
-                // 选择物理设备——不再盲取 physDevices[0]
-                // 硬条件：具备图形队列族；偏好序：独显 > 集显 > 虚拟 GPU > 其他。
-                // 注：Present 能力查询需要 Surface，而工厂在无 Surface 阶段创建共享设备，
-                // 故此处以图形队列族为硬条件；实际 Present 兼容性由 CreateSurface 后的
-                // SwapChain 创建路径校验（失败会抛明确异常）。
-                physicalDevice = default;
-                queueFamilyIndex = uint.MaxValue;
-                int bestScore = -1;
-                foreach (var candidate in physDevices)
-                {
-                    uint famIdx = FindGraphicsQueueFamily(candidate);
-                    if (famIdx == uint.MaxValue)
-                        continue;
-
-                    PhysicalDeviceProperties candProps;
-                    VulkanNative.GetPhysicalDeviceProperties(candidate, &candProps);
-                    int score = candProps.DeviceType switch
-                    {
-                        PhysicalDeviceType.DiscreteGpu => 3,
-                        PhysicalDeviceType.IntegratedGpu => 2,
-                        PhysicalDeviceType.VirtualGpu => 1,
-                        _ => 0,
-                    };
-
-                    // Linux VAAPI 零拷贝同设备对齐：解码 GPU 为 Intel（iHD），跨厂商 dma_buf 导入不可行
-                    // （Intel tiling modifier 对方无法按其布局采样 → 马赛克花屏，实测实证）。
-                    // vendor 0x8086 提权压过独显优先启发式；Windows 的 D3D11VA LUID 对齐不受影响。
-                    if (OperatingSystem.IsLinux() && candProps.VendorID == 0x8086)
-                        score += 10;
-
-                    // 零拷贝跨 API 导入对齐：若指定了首选适配器 LUID（D3D11 默认适配器），
-                    // 命中则大幅提权，压过独显优先启发式——跨 GPU/厂商导入 D3D11 共享纹理会被驱动拒绝。
-                    if (_preferredAdapterLuid is { } wantLuid)
-                    {
-                        PhysicalDeviceIDProperties candIdProps = new()
-                        {
-                            SType = StructureType.PhysicalDeviceIDProperties,
-                        };
-                        PhysicalDeviceProperties2 candProps2 = new()
-                        {
-                            SType = StructureType.PhysicalDeviceProperties2,
-                            PNext = &candIdProps,
-                        };
-                        VulkanNative.GetPhysicalDeviceProperties2(candidate, &candProps2);
-                        // 不校验 DeviceLuidValid：本 Silk.NET 版本无该字段；无效 LUID 恒为 0，
-                        // 与真实 D3D11 适配器 LUID（非 0）比较必不命中，安全回落独显优先。
-                        if (LuidEquals(candIdProps.DeviceLuid, wantLuid))
-                        {
-                            score += 100;
-                            _logger.LogDebug("Vulkan 物理设备选择：候选命中首选适配器 LUID，提权对齐零拷贝导入（{Name}）",
-                                GetDeviceNameSafe(candProps.DeviceName));
-                        }
-                    }
-
-                    if (score > bestScore)
-                    {
-                        bestScore = score;
-                        physicalDevice = candidate;
-                        queueFamilyIndex = famIdx;
-                    }
-                }
-
-                if (queueFamilyIndex == uint.MaxValue)
-                    throw new InvalidOperationException("未找到具备图形队列族的 Vulkan 物理设备。");
+                // 选择物理设备——统一走 GPUShare.Vulkan 的 VulkanDeviceSelector（选卡策略唯一实现）：
+                // 硬条件 = 具备图形队列族；偏好序 = 独显 > 集显 > 虚拟 GPU > 其他；
+                // Linux VAAPI 同设备对齐（Intel vendor 提权）与 D3D11 LUID 对齐提权均在选择器内判定。
+                (physicalDevice, queueFamilyIndex) = VulkanDeviceSelector.SelectPhysicalDevice(
+                    instance, _preferredAdapterLuid, _logger);
 
                 // 创建逻辑设备
                 // 设备扩展：基础 VK_KHR_swapchain + 按平台/可用性过滤的外部内存/信号量导出扩展
@@ -464,7 +369,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                             SamplerYcbcrConversion = true,
                         };
                         // 诊断：探测原始结果 + apiVersion + 设备名（定位 Features2 假阴性之谜）
-                        string ahbDevName = GetDeviceNameSafe(devProps.DeviceName);
+                        string ahbDevName = VulkanDeviceSelector.GetDeviceNameSafe(devProps.DeviceName);
                         _logger.LogInformation(
                             "Android AHB 零拷贝：samplerYcbcrConversion 已启用（探测={Probe}，probeResult={Result}，" +
                             "probeValue={ProbeValue}，apiVersion=0x{Api:X}，规范兜底={Spec}，device={Device}）",
@@ -481,7 +386,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
 
                 // 视频解码队列族（B4 Vulkan Video 硬解复用同一设备；无则跳过，不影响现有渲染）。
                 // 直接写入字段（与 _device/_queue 等同为方法级工作变量，确保 catch 之后的赋值块仍可见）。
-                _videoQueueFamilyIndex = FindVideoDecodeQueueFamily(physicalDevice);
+                _videoQueueFamilyIndex = VulkanDeviceSelector.FindVideoDecodeQueueFamily(physicalDevice);
                 bool videoOnSeparateFamily = _videoQueueFamilyIndex != uint.MaxValue && _videoQueueFamilyIndex != queueFamilyIndex;
                 // 若 video-decode 与 graphics 同族（部分 GPU 的 graphics 族兼具 VIDEO_DECODE_BIT），
                 // 该族需 2 条队列（idx0=graphics, idx1=video），否则 graphics 族仅 1 条。
@@ -567,30 +472,8 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
                 // 填充所选物理设备身份（供 no-airspace 共享表面源「同 GPU 对齐」）
                 // vkGetPhysicalDeviceProperties2 + pNext=PhysicalDeviceIDProperties 取 deviceUUID(16) / deviceLUID(8)。
                 // 这些字段是稀疏固定的（多 GPU 机器上合成器与主 GPU 的身份必须一致才能跨设备导入）。
-                PhysicalDeviceIDProperties idProps = new()
-                {
-                    SType = StructureType.PhysicalDeviceIDProperties,
-                };
-                PhysicalDeviceProperties2 props2 = new()
-                {
-                    SType = StructureType.PhysicalDeviceProperties2,
-                    PNext = &idProps,
-                };
-                VulkanNative.GetPhysicalDeviceProperties2(physicalDevice, &props2);
-                _physicalDeviceUuid = new byte[16];
-                _physicalDeviceLuid = new byte[8];
-                unsafe
-                {
-                    fixed (byte* pUuid = _physicalDeviceUuid, pLuid = _physicalDeviceLuid)
-                    {
-                        // DeviceUuid/DeviceLuid 是固定缓冲字段，不可再 fixed；
-                        // 固定缓冲在 unsafe 上下文中可直接隐式转为 byte*。
-                        byte* sUuid = idProps.DeviceUuid;
-                        byte* sLuid = idProps.DeviceLuid;
-                        for (int i = 0; i < 16; i++) pUuid[i] = sUuid[i];
-                        for (int i = 0; i < 8; i++) pLuid[i] = sLuid[i];
-                    }
-                }
+                (_physicalDeviceUuid, _physicalDeviceLuid) =
+                    VulkanDeviceSelector.GetPhysicalDeviceIdentity(physicalDevice);
                 // 外部共享是否真正可用（win32/fd 变体扩展须已启用），供源在 Create 时干净回退。
                 bool hasExternalMem = OperatingSystem.IsWindows()
                     ? Array.IndexOf(devExts, "VK_KHR_external_memory_win32") >= 0
@@ -671,69 +554,7 @@ public sealed unsafe class VulkanRendererFactory : IVideoRendererFactory, IDispo
         }
     }
 
-    // 独立的图形队列族查找（供候选设备逐一评估复用）。
-    private static unsafe uint FindGraphicsQueueFamily(PhysicalDevice device)
-    {
-        uint familyCount = 0;
-        VulkanNative.GetPhysicalDeviceQueueFamilyProperties(device, ref familyCount, null);
-        if (familyCount == 0)
-            return uint.MaxValue;
-
-        var families = new QueueFamilyProperties[familyCount];
-        fixed (QueueFamilyProperties* pFamilies = families)
-        {
-            VulkanNative.GetPhysicalDeviceQueueFamilyProperties(device, ref familyCount, pFamilies);
-        }
-
-        for (uint i = 0; i < familyCount; i++)
-        {
-            if ((families[i].QueueFlags & QueueFlags.GraphicsBit) != 0)
-                return i;
-        }
-        return uint.MaxValue;
-    }
-
-    // 独立的 video-decode 队列族查找（供 B4 Vulkan Video 硬解复用同一物理设备）。
-    // VK_QUEUE_VIDEO_DECODE_BIT_KHR = 0x00000020；自定义绑定未单独特化该枚举值时按原始位比对。
-    private static unsafe uint FindVideoDecodeQueueFamily(PhysicalDevice device)
-    {
-        uint familyCount = 0;
-        VulkanNative.GetPhysicalDeviceQueueFamilyProperties(device, ref familyCount, null);
-        if (familyCount == 0)
-            return uint.MaxValue;
-
-        var families = new QueueFamilyProperties[familyCount];
-        fixed (QueueFamilyProperties* pFamilies = families)
-        {
-            VulkanNative.GetPhysicalDeviceQueueFamilyProperties(device, ref familyCount, pFamilies);
-        }
-
-        const uint VideoDecodeQueueBit = 0x00000020;
-        for (uint i = 0; i < familyCount; i++)
-        {
-            if (((uint)families[i].QueueFlags & VideoDecodeQueueBit) != 0)
-                return i;
-        }
-        return uint.MaxValue;
-    }
-
-    /// <summary>从 Vulkan 固定 256 字节设备名缓冲安全取 UTF-8 字符串（诊断用）。</summary>
-    private static unsafe string GetDeviceNameSafe(byte* name)
-    {
-        if (name is null) return "(unknown)";
-        ReadOnlySpan<byte> span = new(name, 256);
-        int nul = span.IndexOf((byte)0);
-        return System.Text.Encoding.UTF8.GetString(nul >= 0 ? span[..nul] : span);
-    }
-
-    /// <summary>比较 Vulkan 设备 LUID（8 字节固定缓冲）与目标 LUID 字节数组（8 字节）是否一致。</summary>
-    private static unsafe bool LuidEquals(byte* a, byte[] b)
-    {
-        if (a is null || b is null || b.Length < 8) return false;
-        for (int i = 0; i < 8; i++)
-            if (a[i] != b[i]) return false;
-        return true;
-    }
+    // 队列族查找 / 物理设备身份 / 设备名读取统一走 GPUShare.Vulkan 的 VulkanDeviceSelector（选卡与身份查询唯一实现）。
 
     // 先枚举设备实际支持的扩展再过滤——直接请求未支持的扩展会让
     // vkCreateDevice 整体失败（ErrorExtensionNotPresent）。外部内存/信号量导出扩展
