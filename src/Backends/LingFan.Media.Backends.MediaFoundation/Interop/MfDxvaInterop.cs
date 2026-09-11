@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using LingFan.Media.Abstractions;
+using LingFan.Media.GPUShare.D3D11;
 
 namespace LingFan.Media.Backends.MediaFoundation.Interop;
 
@@ -9,7 +10,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// </summary>
 /// <remarks>
 /// <para>提供：(1) <see cref="MFCreateDXGIDeviceManager"/>（mfplat.dll 扁平导出）创建 DXGI 设备管理器；
-/// (2) <see cref="D3D11CreateDevice"/>（d3d11.dll 扁平导出）创建窗口无关共享 D3D11 设备（无头模式自备）；
+/// (2) D3D11 设备创建统一委托 GPUShare.D3D11 的 <see cref="D3D11Interop"/>（仓级互操作事实源，含 DXVA 所需 VideoSupport）；
 /// (3) <c>IMFDXGIDeviceManager.ResetDevice</c> / <c>IMFDXGIBuffer.GetResource</c> / <c>IMFDXGIBuffer.GetSubresourceIndex</c>
 /// 三个原始 vtable 委托（与 <see cref="MfVTable"/> 同款按槽取函数指针）。</para>
 /// <para><b>AOT 兼容</b>：全 <c>[LibraryImport]</c> 源生成 P/Invoke + 原始 vtable 委托（<c>CallingConvention.Winapi</c>），无反射、无 <c>[ComImport]</c>。</para>
@@ -21,53 +22,17 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 internal static partial class MfDxvaInterop
 {
     private const string MfplatDll = "mfplat.dll";
-    private const string D3D11Dll = "d3d11.dll";
-
-    // D3D11_CREATE_DEVICE_FLAG / D3D_DRIVER_TYPE / SDK 版本常量（d3d11.h / d3dcommon.h）
-    private const uint D3D_DRIVER_TYPE_HARDWARE = 1;
-    private const uint D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20;
-    private const uint D3D11_CREATE_DEVICE_VIDEO_SUPPORT = 0x800; // DXVA 硬解要求设备支持视频（SDK d3d11.h:15018 权威值）
-    private const uint D3D11_SDK_VERSION = 7;
 
     /// <summary>创建 DXGI 设备管理器（DXVA 必需）。返回 IMFDXGIDeviceManager COM 指针 + resetToken。</summary>
     [LibraryImport(MfplatDll)]
     internal static partial int MFCreateDXGIDeviceManager(out uint resetToken, out IntPtr ppDeviceManager);
 
-    /// <summary>创建窗口无关 D3D11 设备（无头模式 DXVA 自备；有头模式由渲染器经 IGpuDeviceContext 提供）。</summary>
-    [LibraryImport(D3D11Dll)]
-    internal static partial int D3D11CreateDevice(
-        IntPtr pAdapter,
-        uint DriverType,
-        IntPtr Software,
-        uint Flags,
-        IntPtr pFeatureLevels,
-        uint FeatureLevels,
-        uint SDKVersion,
-        out IntPtr ppDevice,
-        out uint pFeatureLevel,
-        out IntPtr ppImmediateContext);
-
-    /// <summary>创建硬件 D3D11 设备（BGRA 支持）；失败抛 HResult 异常并把输出清零。</summary>
+    /// <summary>
+    /// 创建硬件 D3D11 设备（BGRA + VideoSupport，DXVA 硬解要求；无头模式自备，有头模式由渲染器经 IGpuDeviceContext 提供）。
+    /// </summary>
+    /// <remarks>统一委托 GPUShare.D3D11 的 <see cref="D3D11Interop.D3D11CreateDeviceForVideo"/>，本类不再自持 d3d11.dll 扁平导出。</remarks>
     internal static void CreateD3D11Device(out IntPtr device, out IntPtr context)
-    {
-        int hr = D3D11CreateDevice(
-            IntPtr.Zero,
-            D3D_DRIVER_TYPE_HARDWARE,
-            IntPtr.Zero,
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-            IntPtr.Zero,
-            0,
-            D3D11_SDK_VERSION,
-            out device,
-            out _,
-            out context);
-        if (hr < 0)
-        {
-            device = IntPtr.Zero;
-            context = IntPtr.Zero;
-            Marshal.ThrowExceptionForHR(hr);
-        }
-    }
+        => D3D11Interop.D3D11CreateDeviceForVideo(out device, out context);
 
     // IMFDXGIDeviceManager（IUnknown 之后 vtable 绝对槽，MfVTable.Get 的 slotIndex = 绝对槽 − 3）：
     //    CloseDeviceHandle=3(→0), GetVideoService=4(→1), LockDevice=5(→2), OpenDeviceHandle=6(→3),

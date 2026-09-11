@@ -525,6 +525,12 @@ public static unsafe partial class D3D11Interop
         }
     }
 
+    /// <summary>DXGI_SHARED_RESOURCE_READ（<see cref="CreateSharedHandle"/> 的 access 组合位）。</summary>
+    public const uint DxgiSharedResourceRead = 0x1;
+
+    /// <summary>DXGI_SHARED_RESOURCE_WRITE。</summary>
+    public const uint DxgiSharedResourceWrite = 0x2;
+
     /// <summary>IDXGIResource1::CreateSharedHandle（绝对槽位 13）；pAttributes=null、lpName=null、dwAccess=access。</summary>
     public static IntPtr CreateSharedHandle(IntPtr dxgiResource1Ptr, uint access)
     {
@@ -621,6 +627,23 @@ public static unsafe partial class D3D11Interop
             out device, IntPtr.Zero, out context);
         if (hr < 0)
             throw new COMException($"D3D11CreateDevice 失败 (0x{hr:X8})", hr);
+    }
+
+    /// <summary>
+    /// 为视频解码创建 D3D11 设备（DriverType=Hardware + BgraSupport|VideoSupport）。
+    /// DXVA 硬解硬性要求 VideoSupport（解码 MFT 经 IMFDXGIDeviceManager 绑定设备），
+    /// 与 <see cref="D3D11CreateDevice(out IntPtr, out IntPtr)"/> 的纯渲染用途区分。
+    /// </summary>
+    /// <remarks>返回的 device/context 引用计数已为 1，调用方须显式 <see cref="Release"/>。</remarks>
+    public static void D3D11CreateDeviceForVideo(out IntPtr device, out IntPtr context)
+    {
+        int hr = D3D11CreateDeviceNative(
+            IntPtr.Zero, D3D11_DRIVER_TYPE_HARDWARE, IntPtr.Zero,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+            IntPtr.Zero, 0, D3D11_SDK_VERSION,
+            out device, IntPtr.Zero, out context);
+        if (hr < 0)
+            throw new COMException($"D3D11CreateDevice(ForVideo) 失败 (0x{hr:X8})", hr);
     }
 
     /// <summary>

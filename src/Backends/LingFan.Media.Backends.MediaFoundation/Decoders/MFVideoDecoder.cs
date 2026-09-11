@@ -6,6 +6,7 @@ using LingFan.Media.Backends.MediaFoundation.Concurrency;
 using LingFan.Media.Backends.MediaFoundation.Interop;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
+using LingFan.Media.GPUShare.D3D11;
 
 namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 
@@ -1145,11 +1146,20 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
             {
                 try
                 {
-                    var d3dTex = new ID3D11Texture2D(tex);
-                    using var dxgiRes = d3dTex.QueryInterface<IDXGIResource1>();
-                    nint sharedHandle = dxgiRes.CreateSharedHandle(
-                        null, Vortice.DXGI.SharedResourceFlags.Read | Vortice.DXGI.SharedResourceFlags.Write, null);
-                    int arrayLayers = (int)d3dTex.Description.ArraySize;
+                    // 共享句柄导出统一走 GPUShare.D3D11（仓级互操作事实源）：
+                    // QI IDXGIResource1（失败抛 COMException → catch 回落，与原语义一致）→ CreateSharedHandle 导出 NT 句柄。
+                    IntPtr dxgiRes1 = D3D11Interop.QueryInterface(tex, D3D11Interop.IID_IDXGIResource1);
+                    nint sharedHandle;
+                    try
+                    {
+                        sharedHandle = D3D11Interop.CreateSharedHandle(
+                            dxgiRes1, D3D11Interop.DxgiSharedResourceRead | D3D11Interop.DxgiSharedResourceWrite);
+                    }
+                    finally
+                    {
+                        D3D11Interop.Release(dxgiRes1);
+                    }
+                    int arrayLayers = (int)D3D11Interop.GetTexture2DDesc(tex).ArraySize;
                     var source = new GpuFrameImportSource
                     {
                         Kind = GpuFrameImportKind.D3D11SharedHandle,

@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <!-- DXVA 设备创建与 DXGI 共享句柄导出统一走 GPUShare.D3D11（仓级 D3D11 互操作事实源）。 -->
+    <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.D3D11\LingFan.Media.GPUShare.D3D11.csproj" />
     <!-- COM vtable 槽位读取唯一实现（MfVTable 薄壳委托）。 -->
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Interop\LingFan.Media.Interop.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
