@@ -51,19 +51,8 @@ internal static unsafe partial class GLNative
             return nint.Zero;
         }
 
-        // 中性名 "EGL"：Linux 桌面 EGL(libEGL.so.1) / Android 裸 libEGL.so（供 Android GLES 上下文路径）。
-        // 仅在这些平台被构造（调用方以对应 OS 守卫，对应上下文类存在）。不含 Apple 平台（Metal 覆盖）。
-        // Windows 上交回默认解析（EGL 绑定永不被调用）。
-        if (string.Equals(libraryName, "EGL", StringComparison.Ordinal))
-        {
-            if (OperatingSystem.IsLinux())
-                return NativeLibrary.TryLoad("libEGL.so.1", assembly, searchPath, out nint h) ? h : nint.Zero;
-            if (OperatingSystem.IsAndroid())
-                return NativeLibrary.TryLoad("libEGL.so", assembly, searchPath, out nint h) ? h : nint.Zero;
-            return nint.Zero;
-        }
-
-        // opengl32 / user32 / gdi32 等 Windows 专属库名交回默认解析（仅 Windows 调用）。
+        // 中性名 "EGL" 已随 EGL 绑定收敛至 GPUShare.EGL 程序集（其 EglNative 静态构造函数注册自己的解析器），
+        // 本程序集不再承载 EGL 导入；此处的 opengl32 / user32 / gdi32 等 Windows 专属库名交回默认解析（仅 Windows 调用）。
         return nint.Zero;
     }
 

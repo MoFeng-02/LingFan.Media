@@ -525,13 +525,9 @@ public static unsafe partial class D3D11Interop
         }
     }
 
-    /// <summary>DXGI_SHARED_RESOURCE_READ（<see cref="CreateSharedHandle"/> 的 access 组合位）。</summary>
-    public const uint DxgiSharedResourceRead = 0x1;
-
-    /// <summary>DXGI_SHARED_RESOURCE_WRITE。</summary>
-    public const uint DxgiSharedResourceWrite = 0x2;
-
     /// <summary>IDXGIResource1::CreateSharedHandle（绝对槽位 13）；pAttributes=null、lpName=null、dwAccess=access。</summary>
+    /// <remarks>dwAccess 须用 SDK dxgi.h 权威值组合：READ=0x80000000、WRITE=0x1（见 <see cref="SharedResourceReadWrite"/>）。
+    /// 防回归：READ/WRITE 直觉序（0x1/0x2）是错的——0x2 不是任何 DXGI 共享资源标志。</remarks>
     public static IntPtr CreateSharedHandle(IntPtr dxgiResource1Ptr, uint access)
     {
         var fn = ComVTable.GetAbsolute<PFN_CreateSharedHandle>(dxgiResource1Ptr, 13);

@@ -1153,7 +1153,7 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
                     try
                     {
                         sharedHandle = D3D11Interop.CreateSharedHandle(
-                            dxgiRes1, D3D11Interop.DxgiSharedResourceRead | D3D11Interop.DxgiSharedResourceWrite);
+                            dxgiRes1, D3D11Interop.SharedResourceReadWrite);
                     }
                     finally
                     {
