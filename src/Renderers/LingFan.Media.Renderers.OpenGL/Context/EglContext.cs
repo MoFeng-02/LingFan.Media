@@ -60,13 +60,13 @@ internal sealed unsafe class EglContext : IGlContext
         if (window == nint.Zero)
             throw new ArgumentNullException(nameof(window));
         _logger = logger;
-        _display = GLNative.eglGetDisplay(display);
+        _display = EglNative.eglGetDisplay(display);
         if (_display == nint.Zero)
             throw new InvalidOperationException("EGL：eglGetDisplay 失败（Display 无效）。");
 
         int major = 0, minor = 0;
-        if (GLNative.eglInitialize(_display, &major, &minor) == 0)
-            throw new InvalidOperationException($"EGL：eglInitialize 失败（0x{GLNative.eglGetError():X8}）。");
+        if (EglNative.eglInitialize(_display, &major, &minor) == 0)
+            throw new InvalidOperationException($"EGL：eglInitialize 失败（0x{EglNative.eglGetError():X8}）。");
         _ownsDisplay = true;
 
         CreateOnDisplay(window, shareContext, major, minor);
@@ -84,7 +84,7 @@ internal sealed unsafe class EglContext : IGlContext
         GlVersionQuery.Query(out int vMajor, out int vMinor);
         if (vMajor != 0) GlMajor = vMajor;
         if (vMinor != 0) GlMinor = vMinor;
-        GLNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);
+        EglNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);
     }
 
     /// <summary>私有构造：在已初始化的共享 EGLDisplay 上建上下文（不拥有生命周期）。</summary>
@@ -135,7 +135,7 @@ internal sealed unsafe class EglContext : IGlContext
         };
         fixed (int* a = windowAttribs)
         {
-            if (GLNative.eglChooseConfig(display, a, &config, 1, &numConfig) != 0 && numConfig > 0)
+            if (EglNative.eglChooseConfig(display, a, &config, 1, &numConfig) != 0 && numConfig > 0)
                 return config;
         }
 
@@ -153,7 +153,7 @@ internal sealed unsafe class EglContext : IGlContext
         };
         fixed (int* a = pbufferAttribs)
         {
-            if (GLNative.eglChooseConfig(display, a, &config, 1, &numConfig) != 0 && numConfig > 0)
+            if (EglNative.eglChooseConfig(display, a, &config, 1, &numConfig) != 0 && numConfig > 0)
             {
                 logger?.LogInformation("EGL：无 WINDOW_BIT config（设备显示无窗口系统），降级 PBUFFER-only config。");
                 return config;
@@ -164,12 +164,12 @@ internal sealed unsafe class EglContext : IGlContext
 
     private void CreateOnDisplay(nint window, nint shareContext, int major, int minor)
     {
-        if (GLNative.eglBindAPI(EglOpenglApi) == 0)
+        if (EglNative.eglBindAPI(EglOpenglApi) == 0)
             throw new InvalidOperationException("EGL：eglBindAPI(EGL_OPENGL_API) 失败（无法绑定桌面 GL）。");
 
         nint config = ChooseConfigWithWindowPbufferFallback(_display, EglOpenglBit, _logger);
         if (config == nint.Zero)
-            throw new InvalidOperationException($"EGL：eglChooseConfig 失败（0x{GLNative.eglGetError():X8}）。");
+            throw new InvalidOperationException($"EGL：eglChooseConfig 失败（0x{EglNative.eglGetError():X8}）。");
 
         int[] ctxAttribs =
         {
@@ -177,31 +177,31 @@ internal sealed unsafe class EglContext : IGlContext
             (int)EglNone,
         };
         fixed (int* c = ctxAttribs)
-            _context = GLNative.eglCreateContext(_display, config, shareContext, c);
+            _context = EglNative.eglCreateContext(_display, config, shareContext, c);
         if (_context == nint.Zero)
-            throw new InvalidOperationException($"EGL：eglCreateContext 失败（0x{GLNative.eglGetError():X8}）。");
+            throw new InvalidOperationException($"EGL：eglCreateContext 失败（0x{EglNative.eglGetError():X8}）。");
 
         int[] surfAttribs = { (int)EglNone };
         fixed (int* s = surfAttribs)
-            _surface = GLNative.eglCreateWindowSurface(_display, config, window, s);
+            _surface = EglNative.eglCreateWindowSurface(_display, config, window, s);
         if (_surface == nint.Zero)
         {
             // 设备显示（EGL_EXT_platform_device）无窗口系统：X11 原生窗口在其上非法（EGL_BAD_NATIVE_WINDOW）。
             // 回落 1×1 pbuffer 维持呈现闭环——零拷贝的验证值在帧导入/采样，不在像素出窗；桌面 X11 会话不受影响。
-            int surfErr = GLNative.eglGetError();
+            int surfErr = EglNative.eglGetError();
             int[] pbAttribs = { (int)EglWidth, 1, (int)EglHeight, 1, (int)EglNone };
             fixed (int* p = pbAttribs)
-                _surface = GLNative.eglCreatePbufferSurface(_display, config, p);
+                _surface = EglNative.eglCreatePbufferSurface(_display, config, p);
             if (_surface == nint.Zero)
                 throw new InvalidOperationException(
-                    $"EGL：eglCreateWindowSurface（0x{surfErr:X8}）与 pbuffer 回落（0x{GLNative.eglGetError():X8}）均失败。");
+                    $"EGL：eglCreateWindowSurface（0x{surfErr:X8}）与 pbuffer 回落（0x{EglNative.eglGetError():X8}）均失败。");
             _logger?.LogWarning(
                 "EGL：eglCreateWindowSurface 失败（0x{Err:X8}），已回落 1×1 pbuffer 呈现（设备显示无窗口系统）。",
                 surfErr);
         }
 
-        if (GLNative.eglMakeCurrent(_display, _surface, _surface, _context) == 0)
-            throw new InvalidOperationException($"EGL：eglMakeCurrent 失败（0x{GLNative.eglGetError():X8}）。");
+        if (EglNative.eglMakeCurrent(_display, _surface, _surface, _context) == 0)
+            throw new InvalidOperationException($"EGL：eglMakeCurrent 失败（0x{EglNative.eglGetError():X8}）。");
 
         GLNative.LoadModern();
         GlVersionQuery.Query(out int vMajor, out int vMinor);
@@ -212,7 +212,7 @@ internal sealed unsafe class EglContext : IGlContext
 
         // 释放：EGL 上下文具线程亲和性。创建于 Attach 线程，渲染在管线线程 Present 中发生，
         // 需在此解绑，使渲染线程可经 MakeCurrent 重新绑定（否则同 WGL 会因已有线程占用而失败）。
-        GLNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);
+        EglNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);
     }
 
     /// <summary>
@@ -243,7 +243,7 @@ internal sealed unsafe class EglContext : IGlContext
         if (display == nint.Zero)
         {
             logger?.LogInformation("[EGL-DEVICE] 离屏显示 = 默认（EGL_DEFAULT_DISPLAY；Xvfb 下通常为软件栈，无法导入 GPU dma_buf）。");
-            display = GLNative.eglGetDisplay(nint.Zero); // EGL_DEFAULT_DISPLAY
+            display = EglNative.eglGetDisplay(nint.Zero); // EGL_DEFAULT_DISPLAY
         }
         else
         {
@@ -253,12 +253,12 @@ internal sealed unsafe class EglContext : IGlContext
             throw new InvalidOperationException("EGL：eglGetDisplay(DEFAULT) 失败（无可用 EGL 显示）。");
 
         int major = 0, minor = 0;
-        if (GLNative.eglInitialize(display, &major, &minor) == 0)
-            throw new InvalidOperationException($"EGL：eglInitialize 失败（0x{GLNative.eglGetError():X8}）。");
+        if (EglNative.eglInitialize(display, &major, &minor) == 0)
+            throw new InvalidOperationException($"EGL：eglInitialize 失败（0x{EglNative.eglGetError():X8}）。");
 
         // 显示级扩展自报：dma_buf 导入能力（EGL_EXT_image_dma_buf_import[_modifiers]）是零拷贝导入前置。
         // 函数指针可解析 ≠ 本显示支持——Mesa 对不支持导入的显示直接以 EGL_BAD_PARAMETER 拒绝 eglCreateImageKHR。
-        nint dispExtsPtr = GLNative.eglQueryString(display, EglDeviceExtensions);
+        nint dispExtsPtr = EglNative.eglQueryString(display, EglDeviceExtensions);
         string dispExts = dispExtsPtr != nint.Zero
             ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(dispExtsPtr) ?? string.Empty
             : string.Empty;
@@ -272,12 +272,12 @@ internal sealed unsafe class EglContext : IGlContext
             // Android：ES 是 EGL 默认绑定 API，且实测部分线程上下文下显式 eglBindAPI 会以
             // EGL_BAD_DISPLAY 拒绝——直接跳过（默认绑定即所需 ES），避免无意义的平台差异。
         }
-        else if (GLNative.eglBindAPI(api) == 0)
-            throw new InvalidOperationException($"EGL：eglBindAPI(0x{api:X4}) 失败（0x{GLNative.eglGetError():X8}，无法绑定所需 GL API）。");
+        else if (EglNative.eglBindAPI(api) == 0)
+            throw new InvalidOperationException($"EGL：eglBindAPI(0x{api:X4}) 失败（0x{EglNative.eglGetError():X8}，无法绑定所需 GL API）。");
 
         nint config = ChooseConfigWithWindowPbufferFallback(display, renderableType, logger);
         if (config == nint.Zero)
-            throw new InvalidOperationException($"EGL：离屏 eglChooseConfig 失败（0x{GLNative.eglGetError():X8}）。");
+            throw new InvalidOperationException($"EGL：离屏 eglChooseConfig 失败（0x{EglNative.eglGetError():X8}）。");
 
         int[] ctxAttribs =
         {
@@ -286,9 +286,9 @@ internal sealed unsafe class EglContext : IGlContext
         };
         nint context;
         fixed (int* c = ctxAttribs)
-            context = GLNative.eglCreateContext(display, config, nint.Zero, c);
+            context = EglNative.eglCreateContext(display, config, nint.Zero, c);
         if (context == nint.Zero)
-            throw new InvalidOperationException($"EGL：离屏 eglCreateContext 失败（0x{GLNative.eglGetError():X8}）。");
+            throw new InvalidOperationException($"EGL：离屏 eglCreateContext 失败（0x{EglNative.eglGetError():X8}）。");
 
         // pbuffer 表面（1×1）：离屏上下文经此 MakeCurrent，无需可见窗口。
         int[] pbAttribs =
@@ -299,12 +299,12 @@ internal sealed unsafe class EglContext : IGlContext
         };
         nint surface;
         fixed (int* p = pbAttribs)
-            surface = GLNative.eglCreatePbufferSurface(display, config, p);
+            surface = EglNative.eglCreatePbufferSurface(display, config, p);
         if (surface == nint.Zero)
-            throw new InvalidOperationException($"EGL：离屏 eglCreatePbufferSurface 失败（0x{GLNative.eglGetError():X8}）。");
+            throw new InvalidOperationException($"EGL：离屏 eglCreatePbufferSurface 失败（0x{EglNative.eglGetError():X8}）。");
 
-        if (GLNative.eglMakeCurrent(display, surface, surface, context) == 0)
-            throw new InvalidOperationException($"EGL：离屏 eglMakeCurrent 失败（0x{GLNative.eglGetError():X8}）。");
+        if (EglNative.eglMakeCurrent(display, surface, surface, context) == 0)
+            throw new InvalidOperationException($"EGL：离屏 eglMakeCurrent 失败（0x{EglNative.eglGetError():X8}）。");
 
         return new EglContext(display, surface, context, logger);
     }
@@ -313,7 +313,7 @@ internal sealed unsafe class EglContext : IGlContext
     private static unsafe string? QueryDrmRenderNode(nint dev)
     {
         const int EglDrmRenderNodeFileExt = 0x3234;
-        nint nodePtr = GLNative.eglQueryDeviceStringEXT(dev, EglDrmRenderNodeFileExt);
+        nint nodePtr = EglNative.eglQueryDeviceStringEXT(dev, EglDrmRenderNodeFileExt);
         return nodePtr != nint.Zero
             ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(nodePtr)
             : null;
@@ -346,7 +346,7 @@ internal sealed unsafe class EglContext : IGlContext
         try
         {
             // 客户端扩展自报（EGL_NO_DISPLAY 查询）：设备枚举/平台设备能力缺一即无选择资格。
-            nint clientExts = GLNative.eglQueryString(nint.Zero, EglDeviceExtensions);
+            nint clientExts = EglNative.eglQueryString(nint.Zero, EglDeviceExtensions);
             string clientExtStr = clientExts != nint.Zero
                 ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(clientExts) ?? string.Empty
                 : string.Empty;
@@ -362,22 +362,22 @@ internal sealed unsafe class EglContext : IGlContext
             }
 
             int count = 0;
-            if (GLNative.eglQueryDevicesEXT(0, null, &count) == 0 || count == 0)
+            if (EglNative.eglQueryDevicesEXT(0, null, &count) == 0 || count == 0)
             {
                 logger?.LogWarning(
                     "[EGL-DEVICE] eglQueryDevicesEXT 计数查询失败（设备数={Count}，eglErr=0x{Err:X8}），回落默认显示。",
-                    count, GLNative.eglGetError());
+                    count, EglNative.eglGetError());
                 return nint.Zero;
             }
 
             var devices = new nint[count];
             fixed (nint* d = devices)
             {
-                if (GLNative.eglQueryDevicesEXT(count, d, &count) == 0)
+                if (EglNative.eglQueryDevicesEXT(count, d, &count) == 0)
                 {
                     logger?.LogWarning(
                         "[EGL-DEVICE] eglQueryDevicesEXT 枚举失败（eglErr=0x{Err:X8}），回落默认显示。",
-                        GLNative.eglGetError());
+                        EglNative.eglGetError());
                     return nint.Zero;
                 }
             }
@@ -395,7 +395,7 @@ internal sealed unsafe class EglContext : IGlContext
             {
                 nint dev = devices[i];
                 if (dev == nint.Zero) continue;
-                nint extPtr = GLNative.eglQueryDeviceStringEXT(dev, EglDeviceExtensions);
+                nint extPtr = EglNative.eglQueryDeviceStringEXT(dev, EglDeviceExtensions);
                 string exts = extPtr != nint.Zero
                     ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(extPtr) ?? string.Empty
                     : string.Empty;
@@ -430,17 +430,17 @@ internal sealed unsafe class EglContext : IGlContext
                     continue;
                 }
 
-                nint disp = GLNative.eglGetPlatformDisplayEXT(EglPlatformDeviceExt, dev, null);
+                nint disp = EglNative.eglGetPlatformDisplayEXT(EglPlatformDeviceExt, dev, null);
                 if (disp == nint.Zero)
                 {
                     logger?.LogWarning(
                         "[EGL-DEVICE] 设备#{Idx} eglGetPlatformDisplayEXT 失败（eglErr=0x{Err:X8}），尝试下一设备。",
-                        i, GLNative.eglGetError());
+                        i, EglNative.eglGetError());
                     continue;
                 }
 
                 int major = 0, minor = 0;
-                if (GLNative.eglInitialize(disp, &major, &minor) != 0)
+                if (EglNative.eglInitialize(disp, &major, &minor) != 0)
                 {
                     logger?.LogInformation(
                         "[EGL-DEVICE] 已选择硬件设备 #{Idx}（EGL {Major}.{Minor}）。", i, major, minor);
@@ -448,8 +448,8 @@ internal sealed unsafe class EglContext : IGlContext
                 }
                 logger?.LogWarning(
                     "[EGL-DEVICE] 设备#{Idx} eglInitialize 失败（eglErr=0x{Err:X8}），尝试下一设备。",
-                    i, GLNative.eglGetError());
-                GLNative.eglTerminate(disp);   // 初始化失败：换下一个设备
+                    i, EglNative.eglGetError());
+                EglNative.eglTerminate(disp);   // 初始化失败：换下一个设备
             }
 
             logger?.LogWarning("[EGL-DEVICE] 无可用硬件 EGL 设备（全部跳过/失败），回落默认显示。");
@@ -464,22 +464,22 @@ internal sealed unsafe class EglContext : IGlContext
     public void MakeCurrent()
     {
         if (_context != nint.Zero)
-            GLNative.eglMakeCurrent(_display, _surface, _surface, _context);
+            EglNative.eglMakeCurrent(_display, _surface, _surface, _context);
     }
 
-    public void ReleaseCurrent() => GLNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);
+    public void ReleaseCurrent() => EglNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);
 
-    public void SwapBuffers() => GLNative.eglSwapBuffers(_display, _surface);
+    public void SwapBuffers() => EglNative.eglSwapBuffers(_display, _surface);
 
     public void Dispose()
     {
         if (_display != nint.Zero)
         {
-            GLNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);
-            if (_surface != nint.Zero) GLNative.eglDestroySurface(_display, _surface);
-            if (_context != nint.Zero) GLNative.eglDestroyContext(_display, _context);
+            EglNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);
+            if (_surface != nint.Zero) EglNative.eglDestroySurface(_display, _surface);
+            if (_context != nint.Zero) EglNative.eglDestroyContext(_display, _context);
             // 共享显示路径（上屏复用离屏所有者 EGLDisplay）不在此终止显示——生命周期由离屏所有者持有。
-            if (_ownsDisplay) GLNative.eglTerminate(_display);
+            if (_ownsDisplay) EglNative.eglTerminate(_display);
         }
         _surface = nint.Zero;
         _context = nint.Zero;

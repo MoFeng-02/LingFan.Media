@@ -37,6 +37,7 @@
   </Folder>
   <Folder Name="/GPUShare/">
     <Project Path="src/GPUShare/LingFan.Media.GPUShare.D3D11/LingFan.Media.GPUShare.D3D11.csproj" />
+    <Project Path="src/GPUShare/LingFan.Media.GPUShare.EGL/LingFan.Media.GPUShare.EGL.csproj" />
     <Project Path="src/GPUShare/LingFan.Media.GPUShare.Vulkan/LingFan.Media.GPUShare.Vulkan.csproj" />
     <Project Path="src/GPUShare/LingFan.Media.GPUShare.Android/LingFan.Media.GPUShare.Android.csproj" />
   </Folder>

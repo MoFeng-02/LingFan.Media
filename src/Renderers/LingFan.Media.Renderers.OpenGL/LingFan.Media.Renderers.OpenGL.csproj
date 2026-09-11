@@ -25,6 +25,8 @@
 		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Android\LingFan.Media.GPUShare.Android.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
     <ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
+    <!-- EGL 互操作唯一真源（中性名 "EGL" 解析 / dma_buf 导入常量与符号）：GPUShare.EGL。 -->
+    <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.EGL\LingFan.Media.GPUShare.EGL.csproj" />
     <!-- 零拷贝桥接 D3D11 设备创建：与 ffmpeg 解码器同源（FindPreferredAdapter + D3D11CreateDeviceOnAdapter，独显优先），
          保证桥接设备与解码设备在同一张 GPU（双卡跨 GPU 时 OpenSharedResource1 必失败）。 -->
     <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.D3D11\LingFan.Media.GPUShare.D3D11.csproj" />

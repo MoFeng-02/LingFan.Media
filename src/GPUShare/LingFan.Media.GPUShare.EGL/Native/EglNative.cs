@@ -1,22 +1,59 @@
-using System.Runtime.InteropServices;
+using System.Text;
 
-namespace LingFan.Media.Renderers.OpenGL;
+namespace LingFan.Media.GPUShare.EGL;
 
 /// <summary>
-/// <see cref="GLNative"/> 的 Linux EGL 引导符号（仅 Linux 调用）。
+/// EGL 原生绑定层（中性互操作底座，EGL 符号唯一真源）。
 /// </summary>
 /// <remarks>
-/// <para>Windows 上这些 [LibraryImport] 永不被调用（调用方均以 <see cref="OperatingSystem.IsLinux"/> 守卫），
-/// 且解析器对中性名 <c>"EGL"</c> 在 Windows 上交回 <see langword="null"/>，故无运行期加载失败。</para>
-/// <para><c>eglGetProcAddress</c> 为私有，供核心 <see cref="GLNative.GetProcAddress"/> 在 Linux 上解析 GL 现代函数；
-/// 须在 EGL 上下文 current 后调用（否则返回 <see langword="null"/>）。</para>
+/// <para><b>归属</b>：GPU 胶水层（GPUShare.EGL）——EGL 引导/上下文/查询符号在此统一声明，
+/// 渲染器（Renderers.OpenGL 等）作为消费方引用；同一套常量与绑定禁止在其他工程复刻。</para>
+/// <para><b>跨平台库名</b>：经 <see cref="NativeLibrary.SetDllImportResolver"/> 把中性名 <c>"EGL"</c> 重定向——
+/// Linux 解析为 <c>libEGL.so.1</c>，Android 解析为裸 <c>libEGL.so</c>；
+/// Windows 上 EGL 绑定永不被调用（调用方以 <see cref="OperatingSystem.IsLinux"/> 守卫），交回默认解析。</para>
 /// <para>EGL 句柄类型（EGLDisplay / EGLConfig / EGLSurface / EGLContext）按 ABI 统一映射为 <c>nint</c>；
 /// EGLint 为 32 位整数，用 <c>int</c>；属性表（EGLint*）以 <c>int*</c> 传递。</para>
+/// <para><b>AOT 兼容</b>：全部 <c>[LibraryImport]</c> 源生成 + <c>delegate* unmanaged</c> 函数指针承载扩展入口，零反射。</para>
 /// </remarks>
-internal static unsafe partial class GLNative
+public static unsafe partial class EglNative
 {
+    static EglNative()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(EglNative).Assembly, ResolveEglLoader);
+    }
+
+    private static nint ResolveEglLoader(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+    {
+        // 中性名 "EGL"：Linux 桌面 EGL(libEGL.so.1) / Android 裸 libEGL.so（供 GLES 上下文路径）。
+        // 不含 Apple 平台——Apple 不使用 OpenGL/EGL，由 Metal 后端覆盖。Windows 交回默认解析（绑定永不被调用）。
+        if (string.Equals(libraryName, "EGL", StringComparison.Ordinal))
+        {
+            if (OperatingSystem.IsLinux())
+                return NativeLibrary.TryLoad("libEGL.so.1", assembly, searchPath, out nint h) ? h : nint.Zero;
+            if (OperatingSystem.IsAndroid())
+                return NativeLibrary.TryLoad("libEGL.so", assembly, searchPath, out nint h) ? h : nint.Zero;
+            return nint.Zero;
+        }
+
+        return nint.Zero;
+    }
+
+    /// <summary>
+    /// 经 <c>eglGetProcAddress</c> 解析 EGL/GL 扩展函数地址（无当前上下文亦可调用；
+    /// 个别实现要求 EGL 上下文 current 后才返回非空，调用方须容忍 null 并允许重试）。
+    /// </summary>
+    public static unsafe nint ResolveProc(string name)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(name);
+        byte[] withNull = new byte[bytes.Length + 1];
+        global::System.Buffer.BlockCopy(bytes, 0, withNull, 0, bytes.Length);
+        withNull[bytes.Length] = 0;
+        fixed (byte* p = withNull)
+            return eglGetProcAddress(p);
+    }
+
     [LibraryImport("EGL", EntryPoint = "eglGetProcAddress", StringMarshalling = StringMarshalling.Utf8)]
-    private static partial nint eglGetProcAddress(byte* name);
+    public static partial nint eglGetProcAddress(byte* name);
 
     [LibraryImport("EGL", EntryPoint = "eglBindAPI")]
     public static partial int eglBindAPI(uint api);
@@ -41,20 +78,10 @@ internal static unsafe partial class GLNative
     private static unsafe void EnsureEglDeviceFunctions()
     {
         if (_eglDeviceFunctionsResolved) return;
-        _pfnEglQueryDevicesEXT = (delegate* unmanaged<int, nint*, int*, int>)ResolveEglProc("eglQueryDevicesEXT");
-        _pfnEglQueryDeviceStringEXT = (delegate* unmanaged<nint, int, nint>)ResolveEglProc("eglQueryDeviceStringEXT");
-        _pfnEglGetPlatformDisplayEXT = (delegate* unmanaged<uint, nint, int*, nint>)ResolveEglProc("eglGetPlatformDisplayEXT");
+        _pfnEglQueryDevicesEXT = (delegate* unmanaged<int, nint*, int*, int>)ResolveProc("eglQueryDevicesEXT");
+        _pfnEglQueryDeviceStringEXT = (delegate* unmanaged<nint, int, nint>)ResolveProc("eglQueryDeviceStringEXT");
+        _pfnEglGetPlatformDisplayEXT = (delegate* unmanaged<uint, nint, int*, nint>)ResolveProc("eglGetPlatformDisplayEXT");
         _eglDeviceFunctionsResolved = true;
-    }
-
-    private static unsafe nint ResolveEglProc(string name)
-    {
-        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(name);
-        byte[] withNull = new byte[bytes.Length + 1];
-        global::System.Buffer.BlockCopy(bytes, 0, withNull, 0, bytes.Length);
-        withNull[bytes.Length] = 0;
-        fixed (byte* p = withNull)
-            return eglGetProcAddress(p);
     }
 
     public static unsafe int eglQueryDevicesEXT(int maxDevices, nint* devices, int* numDevices)
@@ -79,8 +106,8 @@ internal static unsafe partial class GLNative
         return _pfnEglGetPlatformDisplayEXT(platform, nativeDisplay, attribList);
     }
 
-    internal const uint EglPlatformDeviceExt = 0x313F;
-    internal const int EglDeviceExtensions = 0x3055;
+    public const uint EglPlatformDeviceExt = 0x313F;   // EGL_PLATFORM_DEVICE_EXT
+    public const int EglDeviceExtensions = 0x3055;     // EGL_EXTENSIONS
 
     [LibraryImport("EGL", EntryPoint = "eglInitialize")]
     public static partial int eglInitialize(nint display, int* major, int* minor);

@@ -317,7 +317,7 @@ public sealed unsafe class GLEglDmaBufTexture : IFrameResource, IGpuTextureResou
         }
 
         if (_eglImage != nint.Zero)
-            GLNative.EglDestroyImageKHR(_eglDisplay, _eglImage);
+            EglDmaBufImport.EglDestroyImageKHR(_eglDisplay, _eglImage);
     }
 }
 
@@ -403,7 +403,7 @@ public sealed unsafe class GLDmaBufNv12Texture : IFrameResource, IGpuTextureReso
             }
         }
 
-        if (_eglImageY != nint.Zero) GLNative.EglDestroyImageKHR(_eglDisplay, _eglImageY);
-        if (_eglImageUV != nint.Zero) GLNative.EglDestroyImageKHR(_eglDisplay, _eglImageUV);
+        if (_eglImageY != nint.Zero) EglDmaBufImport.EglDestroyImageKHR(_eglDisplay, _eglImageY);
+        if (_eglImageUV != nint.Zero) EglDmaBufImport.EglDestroyImageKHR(_eglDisplay, _eglImageUV);
     }
 }

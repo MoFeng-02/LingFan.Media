@@ -293,7 +293,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
             int fd = source.Handle == IntPtr.Zero ? -1 : (int)source.Handle;
             try
             {
-                if (!GLNative.IsEglDmaBufImportAvailable())
+                if (!EglDmaBufImport.IsEglDmaBufImportAvailable())
                 {
                     _logger?.LogWarning("[OPENGL-ZEROCOPY] EGL_EXT_image_dma_buf_import 不可用，回落软件解码。");
                     return false;
@@ -303,7 +303,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
 
                 // 显示级能力自报（S_OK≠被接受）：函数指针可解析 ≠ 本显示支持 dma_buf 导入；
                 // Mesa 对不支持导入的显示直接以 EGL_BAD_PARAMETER 拒绝 eglCreateImageKHR。
-                nint dispExtsPtr = GLNative.eglQueryString(display, GLNative.EglDeviceExtensions);
+                nint dispExtsPtr = EglNative.eglQueryString(display, EglNative.EglDeviceExtensions);
                 string dispExts = dispExtsPtr != nint.Zero
                     ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(dispExtsPtr) ?? string.Empty
                     : string.Empty;
@@ -329,7 +329,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
                     // 显示侧 modifiers 列表不支持该组合时，正确出路是 CPU 传输（画面正确，无零拷贝）。
                     _logger?.LogWarning(
                         "[OPENGL-ZEROCOPY] Y 平面带 modifier 导入被拒（eglErr=0x{Err:X8}，modifier=0x{Mod:X16}）——本显示不支持该 tiling 组合，回落 CPU 传输（画面正确，无零拷贝）。",
-                        GLNative.eglGetError(), source.DrmModifier);
+                        EglNative.eglGetError(), source.DrmModifier);
                     LogDisplayDmaBufModifiers(display, 0x20203852);
                     return false;
                 }
@@ -337,7 +337,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
                 {
                     _logger?.LogWarning(
                         "[OPENGL-ZEROCOPY] eglCreateImageKHR(Y 平面) 失败 eglErr=0x{Err:X8} —— fourcc=0x{Fourcc:X8} modifier=0x{Mod:X16} pitch={Pitch} offset={Offset} 尺寸={W}x{H} display=0x{Dsp:X8}，回落软件解码。",
-                        GLNative.eglGetError(), (uint)source.DrmFourcc, source.DrmModifier, yPitch, yOffset,
+                        EglNative.eglGetError(), (uint)source.DrmFourcc, source.DrmModifier, yPitch, yOffset,
                         source.Width, source.Height, display);
                     return false;
                 }
@@ -352,18 +352,18 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
                 {
                     _logger?.LogWarning(
                         "[OPENGL-ZEROCOPY] eglCreateImageKHR(UV 平面) 失败 eglErr=0x{Err:X8} useModifier={UseModifier}，回落软件解码。",
-                        GLNative.eglGetError(), hasModifier);
+                        EglNative.eglGetError(), hasModifier);
                     return false;
                 }
 
                 GLNative.glGenTextures(1, &texY);
                 GLNative.glBindTexture(GLNative.GlTexture2DConst, texY);
-                GLNative.GlEGLImageTargetTexture2DOES((uint)GLNative.GlTexture2DConst, eglImageY);
+                EglDmaBufImport.GlEGLImageTargetTexture2DOES((uint)GLNative.GlTexture2DConst, eglImageY);
                 SetDmaBufTexParams();
 
                 GLNative.glGenTextures(1, &texUV);
                 GLNative.glBindTexture(GLNative.GlTexture2DConst, texUV);
-                GLNative.GlEGLImageTargetTexture2DOES((uint)GLNative.GlTexture2DConst, eglImageUV);
+                EglDmaBufImport.GlEGLImageTargetTexture2DOES((uint)GLNative.GlTexture2DConst, eglImageUV);
                 SetDmaBufTexParams();
 
                 texture = new GLDmaBufNv12Texture(
@@ -380,8 +380,8 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
             {
                 if (texY != 0) GLNative.glDeleteTextures(1, &texY);
                 if (texUV != 0) GLNative.glDeleteTextures(1, &texUV);
-                if (eglImageY != nint.Zero) GLNative.EglDestroyImageKHR(_glContext.OffscreenDisplay, eglImageY);
-                if (eglImageUV != nint.Zero) GLNative.EglDestroyImageKHR(_glContext.OffscreenDisplay, eglImageUV);
+                if (eglImageY != nint.Zero) EglDmaBufImport.EglDestroyImageKHR(_glContext.OffscreenDisplay, eglImageY);
+                if (eglImageUV != nint.Zero) EglDmaBufImport.EglDestroyImageKHR(_glContext.OffscreenDisplay, eglImageUV);
                 if (fd >= 0) CloseFd(fd); // 失败出口：fd 尚未被消费，须关闭防泄漏
                 throw;
             }
@@ -396,7 +396,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
     private unsafe void LogDisplayDmaBufModifiers(nint display, int drmFourcc)
     {
         int num = 0;
-        if (!GLNative.TryQueryDmaBufModifiers(display, drmFourcc, null, null, 0, &num) || num <= 0)
+        if (!EglDmaBufImport.TryQueryDmaBufModifiers(display, drmFourcc, null, null, 0, &num) || num <= 0)
         {
             _logger?.LogInformation(
                 "[OPENGL-ZEROCOPY] 显示对 fourcc=0x{Fourcc:X8} 的 modifier 查询为空/失败——导入支持面可能以 linear 为限。",
@@ -409,7 +409,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         fixed (int* e = externalOnly)
         {
             int count = num;
-            _ = GLNative.TryQueryDmaBufModifiers(display, drmFourcc, m, e, num, &count);
+            _ = EglDmaBufImport.TryQueryDmaBufModifiers(display, drmFourcc, m, e, num, &count);
         }
         var list = string.Join(
             ", ",
@@ -428,7 +428,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         fixed (int* p = attribs)
         {
             // dma_buf 导入：ctx 与 clientBuffer 均须 EGL_NO_*（零）——五参签名缺一即实参错位（历史全败根因）。
-            return GLNative.EglCreateImageKHR(display, nint.Zero, (uint)GLNative.EglLinuxDmaBufExt, nint.Zero, p);
+            return EglDmaBufImport.EglCreateImageKHR(display, nint.Zero, (uint)EglDmaBufImport.EglLinuxDmaBufExt, nint.Zero, p);
         }
     }
 
@@ -441,26 +441,26 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         {
             return new[]
             {
-                GLNative.EglWidth, width,
-                GLNative.EglHeight, height,
-                GLNative.EglDmaBufPlane0FdExt, fd,
-                GLNative.EglDmaBufPlane0OffsetExt, (int)offset,
-                GLNative.EglDmaBufPlane0PitchExt, (int)pitch,
-                GLNative.EglDmaBufPlane0ModifierLoExt, (int)(modifier & 0xFFFFFFFF),
-                GLNative.EglDmaBufPlane0ModifierHiExt, (int)(modifier >> 32),
-                GLNative.EglLinuxDrmFourccExt, drmFourcc,
-                GLNative.EglNone,
+                EglDmaBufImport.EglWidth, width,
+                EglDmaBufImport.EglHeight, height,
+                EglDmaBufImport.EglDmaBufPlane0FdExt, fd,
+                EglDmaBufImport.EglDmaBufPlane0OffsetExt, (int)offset,
+                EglDmaBufImport.EglDmaBufPlane0PitchExt, (int)pitch,
+                EglDmaBufImport.EglDmaBufPlane0ModifierLoExt, (int)(modifier & 0xFFFFFFFF),
+                EglDmaBufImport.EglDmaBufPlane0ModifierHiExt, (int)(modifier >> 32),
+                EglDmaBufImport.EglLinuxDrmFourccExt, drmFourcc,
+                EglDmaBufImport.EglNone,
             };
         }
         return new[]
         {
-            GLNative.EglWidth, width,
-            GLNative.EglHeight, height,
-            GLNative.EglDmaBufPlane0FdExt, fd,
-            GLNative.EglDmaBufPlane0OffsetExt, (int)offset,
-            GLNative.EglDmaBufPlane0PitchExt, (int)pitch,
-            GLNative.EglLinuxDrmFourccExt, drmFourcc,
-            GLNative.EglNone,
+            EglDmaBufImport.EglWidth, width,
+            EglDmaBufImport.EglHeight, height,
+            EglDmaBufImport.EglDmaBufPlane0FdExt, fd,
+            EglDmaBufImport.EglDmaBufPlane0OffsetExt, (int)offset,
+            EglDmaBufImport.EglDmaBufPlane0PitchExt, (int)pitch,
+            EglDmaBufImport.EglLinuxDrmFourccExt, drmFourcc,
+            EglDmaBufImport.EglNone,
         };
     }
 

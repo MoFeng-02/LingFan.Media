@@ -14,7 +14,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// Windows 解析为 <c>opengl32.dll</c>（系统 OpenGL 1.1 thunk，运行期派发到 GPU 厂商 ICD）；
 /// Linux（EGL 桌面 GL）解析为 <c>libGL.so.1</c>（Mesa 派发）。
 /// WGL 引导符号（<c>wglGetProcAddress</c> 等）直接走 <c>[LibraryImport("opengl32")]</c>（Windows 默认解析）；
-/// EGL 引导符号走中性名 <c>"EGL"</c> → Linux <c>libEGL.so.1</c> / Android 裸 <c>libEGL.so</c>（供 Android GLES 上下文路径）。
+/// EGL 引导符号收敛至 GPUShare.EGL 的 <c>EglNative</c>（中性名 <c>"EGL"</c> → Linux <c>libEGL.so.1</c> / Android 裸 <c>libEGL.so</c>）。
 /// 本绑定仅覆盖 Windows/Linux（桌面 GL）与 Android（GLES EGL），不含任何 Apple 平台——Apple 不使用 OpenGL，由 Metal 后端覆盖。</para>
 /// <para><b>调用约定</b>：GL 使用平台默认 ABI——Windows 上 <c>WINAPI</c>（__stdcall），
 /// Linux 上 C 默认（cdecl）。故函数指针统一 <c>delegate* unmanaged&lt;...&gt;</c>（即 Winapi 默认），
@@ -25,11 +25,11 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// GL 1.2+ 核心/扩展函数（着色器、VBO、VAO 等）在 Windows 上 <c>opengl32.dll</c> 导出表不含，
 /// 必须经 <see cref="GetProcAddress"/>（Windows: <c>wglGetProcAddress</c>；Linux: <c>eglGetProcAddress</c>）
 /// 在 GL 上下文 current 后运行时解析——见 <see cref="LoadModern"/>。</para>
-/// <para>此类型仅承载原生绑定；GL 上下文生命周期（<see cref="GLNative.Wgl"/> / <see cref="GLNative.Egl"/> 引导符号的使用）由渲染器负责。</para>
+/// <para>此类型仅承载原生绑定；GL 上下文生命周期（<see cref="GLNative.Wgl"/> 引导符号与 GPUShare.EGL <c>EglNative</c> 的使用）由渲染器负责。</para>
 /// </remarks>
 internal static unsafe partial class GLNative
 {
-    // 中性库名重定向：GL(跨平台) / EGL(Linux)
+    // 中性库名重定向：GL(跨平台)。EGL 中性名解析已随 EGL 绑定收敛至 GPUShare.EGL 程序集。
     static GLNative()
     {
         NativeLibrary.SetDllImportResolver(typeof(GLNative).Assembly, ResolveGlLoader);
@@ -184,7 +184,7 @@ internal static unsafe partial class GLNative
 
     /// <summary>
     /// 经平台引导符号解析 GL 1.2+ 函数指针。
-    /// Windows 走 <c>wglGetProcAddress</c>，Linux 走 <c>eglGetProcAddress</c>（见 <see cref="GLNative.Wgl"/> / <see cref="GLNative.Egl"/>）。
+    /// Windows 走 <c>wglGetProcAddress</c>，Linux 走 GPUShare.EGL <c>EglNative.eglGetProcAddress</c>。
     /// <para><b>须在 GL 上下文已 current 后调用</b>：无当前上下文时两平台均静默返回 <see langword="null"/>。</para>
     /// </summary>
     public static unsafe nint GetProcAddress(string name)
@@ -198,7 +198,7 @@ internal static unsafe partial class GLNative
         {
             if (OperatingSystem.IsWindows())
                 return wglGetProcAddress(p);
-            return eglGetProcAddress(p);
+            return EglNative.eglGetProcAddress(p);
         }
     }
 

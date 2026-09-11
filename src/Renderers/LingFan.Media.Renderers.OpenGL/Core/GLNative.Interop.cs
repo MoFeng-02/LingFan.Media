@@ -3,22 +3,19 @@ using System.Runtime.InteropServices;
 namespace LingFan.Media.Renderers.OpenGL;
 
 /// <summary>
-/// OpenGL 跨 API 零拷贝互操作系统（仅由 <see cref="OpenGLGpuFrameProducer"/> 在对应平台调用）。
+/// OpenGL 跨 API 零拷贝互操作（WGL_NV_DX_interop2，Windows 路径）。
 /// </summary>
 /// <remarks>
 /// <para><b>Windows：WGL_NV_DX_interop2</b>——<c>wglDXOpenDeviceNV</c> / <c>wglDXRegisterObjectNV</c> /
 /// <c>wglDXUnregisterObjectNV</c> / <c>wglDXCloseDeviceNV</c>，把 D3D11 共享纹理注册为 GL 纹理（零拷贝）。
-/// 这些 WGL 扩展函数经 <see cref="GetProcAddress"/>（内部 <c>wglGetProcAddress</c>）运行时解析，调用方以
+/// 这些 WGL 扩展函数经 <see cref="GLNative.GetProcAddress"/>（内部 <c>wglGetProcAddress</c>）运行时解析，调用方以
 /// <see cref="OperatingSystem.IsWindows"/> 守卫；GL 上下文建立前 <c>wglGetProcAddress</c> 返回 <see langword="null"/>，调用方判空回落软件解码。</para>
-/// <para><b>Linux：EGL_EXT_image_dma_buf_import</b>——<c>eglCreateImageKHR</c> / <c>eglDestroyImageKHR</c> +
-/// <c>glEGLImageTargetTexture2DOES</c>，把 VAAPI dma_buf 导入为 GL 纹理（零拷贝）。函数经
-/// <c>eglGetProcAddress</c> / <c>glGetProcAddress</c>（均经 <see cref="GetProcAddress"/> 路由）运行时解析。</para>
-    /// <para><b>调用约定</b>：本库目标 x64/arm64（AOT），原生 ABI 在 Windows 上即 WINAPI/__stdcall，
-    /// 函数指针统一用 <c>delegate* unmanaged</c>（x64 下 stdcall 与平台默认 ABI 等同，无需 [Winapi] 调用约定后缀）；
-    /// EGL / GL 扩展同为平台默认 ABI。</para>
-/// <para><b>AOT</b>：零反射——函数指针经 <see cref="GetProcAddress"/> 取 <see cref="nint"/> 后直接转
+/// <para><b>Linux：EGL_EXT_image_dma_buf_import</b>——已收敛至 <c>LingFan.Media.GPUShare.EGL.EglDmaBufImport</c>
+/// （GPUShare.EGL，EGL 常量与扩展符号唯一真源），本类型不再承载 EGL 互操作。</para>
+/// <para><b>调用约定</b>：本库目标 x64/arm64（AOT），原生 ABI 在 Windows 上即 WINAPI/__stdcall，
+/// 函数指针统一用 <c>delegate* unmanaged</c>（x64 下 stdcall 与平台默认 ABI 等同，无需 [Winapi] 调用约定后缀）。</para>
+/// <para><b>AOT</b>：零反射——函数指针经 <see cref="GLNative.GetProcAddress"/> 取 <see cref="nint"/> 后直接转
 /// <c>delegate* unmanaged</c>，不依赖 <c>Marshal.GetDelegateForFunctionPointer</c> 的反射路径。</para>
-/// <para><b>跨平台无 #if</b>：解析按 <see cref="OperatingSystem"/> 运行时分发，扩展字段始终为 null 于非对应平台（调用方据可用性探测回落）。</para>
 /// </remarks>
 internal static unsafe partial class GLNative
 {
@@ -26,22 +23,6 @@ internal static unsafe partial class GLNative
     internal const int WglAccessReadOnlyNV = 0x0000;     // WGL_ACCESS_READ_ONLY_NV
     internal const int WglAccessReadWriteNV = 0x0001;    // WGL_ACCESS_READ_WRITE_NV
     internal const int WglAccessWriteDiscardNV = 0x0002; // WGL_ACCESS_WRITE_DISCARD_NV
-
-    // EGL_EXT_image_dma_buf_import 常量（EGL/eglext.h 官方值。
-    // 历史教训：本表曾整块错位一格且混入不存在的"PLANE_COUNT"键，致 dma_buf 导入恒 EGL_BAD_PARAMETER。）
-    internal const int EglImageTarget = 0x30D1;          // EGL_IMAGE_TARGET (OES 目标枚举)
-    internal const int EglLinuxDmaBufExt = 0x3270;       // EGL_LINUX_DMA_BUF_EXT
-    internal const int EglWidth = 0x3057;                // EGL_WIDTH
-    internal const int EglHeight = 0x3056;              // EGL_HEIGHT
-    internal const int EglDmaBufPlane0FdExt = 0x3272;    // EGL_DMA_BUF_PLANE0_FD_EXT
-    internal const int EglDmaBufPlane0OffsetExt = 0x3273; // EGL_DMA_BUF_PLANE0_OFFSET_EXT
-    internal const int EglDmaBufPlane0PitchExt = 0x3274; // EGL_DMA_BUF_PLANE0_PITCH_EXT
-    internal const int EglDmaBufPlane0ModifierLoExt = 0x3275; // EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT
-    internal const int EglDmaBufPlane0ModifierHiExt = 0x3276; // EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT
-    internal const int EglLinuxDrmFourccExt = 0x3271;    // EGL_LINUX_DRM_FOURCC_EXT
-    internal const int EglNone = 0x3038;                 // EGL_NONE
-    // 注：EGL 无 "PLANE_COUNT" 键（0x3278/0x3279 实为 PLANE1_MODIFIER_LO/HI）——平面数由出现的
-    // 最高平面号属性推断；多平面导入须用 PLANE1_* 属性对，不得使用虚构计数键。
 
     // WGL_NV_DX_interop2 函数指针（Windows 调用；x64/arm64 下原生 ABI 即 WINAPI，无需 [Winapi] 调用约定后缀）
     private static unsafe delegate* unmanaged<void*, nint> _wglDXOpenDeviceNV;
@@ -52,19 +33,9 @@ internal static unsafe partial class GLNative
     private static unsafe delegate* unmanaged<nint, int, void*, int> _wglDXLockObjectsNV;
     private static unsafe delegate* unmanaged<nint, int, void*, int> _wglDXUnlockObjectsNV;
 
-    // EGL dma_buf / OES 函数指针（Linux 调用，平台默认 ABI）
-    // 签名必须五参（dpy, ctx, target, clientBuffer, attrib_list）——缺 clientBuffer 会使调用方
-    // 实参整体错位一格（attribs 指针落进 buffer 槽、attrib_list 读栈上垃圾），Mesa 恒报
-    // EGL_BAD_PARAMETER，与显示/参数无关（dma_buf 导入全败的唯一根因，实测实证）。
-    private static unsafe delegate* unmanaged<nint, nint, uint, nint, int*, nint> _eglCreateImageKHR;
-    private static unsafe delegate* unmanaged<nint, nint, int> _eglDestroyImageKHR;
-    private static unsafe delegate* unmanaged<uint, nint, void> _glEGLImageTargetTexture2DOES;
-    // modifier 列表查询（EGL_EXT_image_dma_buf_import_modifiers）——诊断显示侧导入支持面。
-    private static unsafe delegate* unmanaged<nint, int, int, ulong*, int*, int*, int> _eglQueryDmaBufModifiersEXT;
-
     private static bool _interopResolved;
 
-    /// <summary>运行时解析互扩展函数指针（幂等；GL 上下文须已建立并 current 于对应平台）。</summary>
+    /// <summary>运行时解析互扩展函数指针（幂等；GL 上下文须已建立并 current 于 Windows）。</summary>
     private static void ResolveInterop()
     {
         if (_interopResolved) return;
@@ -78,20 +49,10 @@ internal static unsafe partial class GLNative
             _wglDXLockObjectsNV = (delegate* unmanaged<nint, int, void*, int>)GetProcAddress("wglDXLockObjectsNV");
             _wglDXUnlockObjectsNV = (delegate* unmanaged<nint, int, void*, int>)GetProcAddress("wglDXUnlockObjectsNV");
         }
-        else if (OperatingSystem.IsLinux())
-        {
-            _eglCreateImageKHR = (delegate* unmanaged<nint, nint, uint, nint, int*, nint>)GetProcAddress("eglCreateImageKHR");
-            _eglDestroyImageKHR = (delegate* unmanaged<nint, nint, int>)GetProcAddress("eglDestroyImageKHR");
-            _glEGLImageTargetTexture2DOES = (delegate* unmanaged<uint, nint, void>)GetProcAddress("glEGLImageTargetTexture2DOES");
-            _eglQueryDmaBufModifiersEXT = (delegate* unmanaged<nint, int, int, ulong*, int*, int*, int>)GetProcAddress("eglQueryDmaBufModifiersEXT");
-        }
 
-        // 仅当确有指针解析成功才置"已解析"：wglGetProcAddress / eglGetProcAddress 在无当前 GL/EGL 上下文时静默返 null。
+        // 仅当确有指针解析成功才置"已解析"：wglGetProcAddress 在无当前 GL 上下文时静默返 null。
         // 若不缓存此负结果，下次（上下文已 current）可重试解析，避免零拷贝路径被一次性误判永久禁用。
-        bool resolvedAny = OperatingSystem.IsWindows()
-            ? _wglDXOpenDeviceNV != null
-            : _eglCreateImageKHR != null;
-        _interopResolved = resolvedAny;
+        _interopResolved = _wglDXOpenDeviceNV != null;
     }
 
     /// <summary>WGL_NV_DX_interop2 是否可用（Windows；GL 上下文须已建立）。</summary>
@@ -99,13 +60,6 @@ internal static unsafe partial class GLNative
     {
         ResolveInterop();
         return _wglDXOpenDeviceNV != null;
-    }
-
-    /// <summary>EGL_EXT_image_dma_buf_import + glEGLImageTargetTexture2DOES 是否可用（Linux；EGL 上下文须已建立）。</summary>
-    internal static bool IsEglDmaBufImportAvailable()
-    {
-        ResolveInterop();
-        return _eglCreateImageKHR != null && _glEGLImageTargetTexture2DOES != null;
     }
 
     // WGL_NV_DX_interop2 包装（调用前须 MakeCurrent GL 上下文；GL 上下文须为离屏共享组所有者）
@@ -128,27 +82,4 @@ internal static unsafe partial class GLNative
 
     internal static unsafe int WglDXUnlockObjectsNV(nint hDevice, int count, void* objects)
         => _wglDXUnlockObjectsNV != null ? _wglDXUnlockObjectsNV(hDevice, count, objects) : 0;
-
-    // EGL dma_buf / OES 包装
-
-    internal static unsafe nint EglCreateImageKHR(nint dpy, nint ctx, uint target, nint clientBuffer, int* attribList)
-        => _eglCreateImageKHR != null ? _eglCreateImageKHR(dpy, ctx, target, clientBuffer, attribList) : nint.Zero;
-
-    /// <summary>
-    /// 查询显示侧指定 fourcc 支持的 dma_buf modifier 列表（EGL_EXT_image_dma_buf_import_modifiers）。
-    /// 两段式调用：先 max=0 取数量，再取列表。externalOnly 可为 null（不需要逐 modifier 的
-    /// external-only 标志）。函数未解析/查询失败返回 false。
-    /// </summary>
-    internal static unsafe bool TryQueryDmaBufModifiers(nint display, int drmFourcc, ulong* modifiers, int* externalOnly, int maxModifiers, int* numModifiers)
-        => _eglQueryDmaBufModifiersEXT != null
-            && _eglQueryDmaBufModifiersEXT(display, drmFourcc, maxModifiers, modifiers, externalOnly, numModifiers) != 0;
-
-    internal static unsafe int EglDestroyImageKHR(nint dpy, nint image)
-        => _eglDestroyImageKHR != null ? _eglDestroyImageKHR(dpy, image) : 0;
-
-    internal static unsafe void GlEGLImageTargetTexture2DOES(uint target, nint image)
-    {
-        if (_glEGLImageTargetTexture2DOES != null)
-            _glEGLImageTargetTexture2DOES(target, image);
-    }
 }
