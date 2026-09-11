@@ -7,6 +7,8 @@ global using Microsoft.Extensions.Logging;
 global using Microsoft.Extensions.DependencyInjection;
 // COM 互操作命名空间
 global using System.Runtime.InteropServices;
+// COM vtable 槽位读取唯一实现（LingFan.Media.Interop.ComVTable）
+global using LingFan.Media.Interop;
 // 平台标注命名空间
 global using System.Runtime.Versioning;
 // 代码分析抑制命名空间

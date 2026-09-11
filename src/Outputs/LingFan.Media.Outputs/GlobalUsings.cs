@@ -9,3 +9,5 @@ global using Microsoft.Extensions.DependencyInjection;
 global using LingFan.Media.Extensions;
 // Marshal / COM interop
 global using System.Runtime.InteropServices;
+// COM vtable 槽位读取唯一实现（LingFan.Media.Interop.ComVTable）
+global using LingFan.Media.Interop;

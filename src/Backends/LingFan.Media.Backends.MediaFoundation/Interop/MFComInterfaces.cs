@@ -261,7 +261,7 @@ internal delegate int IMFSample_GetBufferByIndex(IntPtr self, uint dwBufferIndex
 internal delegate int IMFSample_AddBuffer(IntPtr self, IntPtr pBuffer);
 
 /// <summary>
-/// 从 COM 接口指针读取第 (3 + slotIndex) 个 vtable 槽位的函数指针并转为强类型委托。
+/// MF 侧 vtable 读取薄壳：记录 InteropTrace 后委托共享底座 <see cref="ComVTable"/>（相对槽位约定）。
 /// 接口方法槽位从 3（IUnknown 之后）起；IUnknown 的 Release 在槽 2（slotIndex=-1）。
 /// </summary>
 internal static class MfVTable
@@ -270,8 +270,6 @@ internal static class MfVTable
     {
         // 错误链：记录每次 vtable 取入口；严格模式下若 comPtr 已释放则立刻指认 UAF。
         InteropTrace.OnVTableGet(comPtr, typeof(TDelegate).Name);
-        IntPtr vtable = Marshal.ReadIntPtr(comPtr);
-        IntPtr methodPtr = Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
-        return Marshal.GetDelegateForFunctionPointer<TDelegate>(methodPtr);
+        return ComVTable.Get<TDelegate>(comPtr, slotIndex);
     }
 }

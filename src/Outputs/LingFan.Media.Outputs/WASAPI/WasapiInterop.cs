@@ -360,21 +360,4 @@ internal delegate int IAudioClock_GetFrequency(IntPtr self, out ulong pu64Freque
 [UnmanagedFunctionPointer(CallingConvention.Winapi)]
 internal delegate int IAudioClock_GetPosition(IntPtr self, out ulong pu64DevicePosition, out ulong pu64QPCPosition);
 
-/// <summary>
-/// 从 COM 接口指针读取第 (3 + slotIndex) 个 vtable 槽位的函数指针并转为强类型委托。
-/// </summary>
-internal static class ComVTable
-{
-    /// <summary>读取第 (3 + slotIndex) 个 vtable 槽位的原始函数指针（绝对槽位 = IUnknown 3 槽 + slotIndex）。</summary>
-    public static IntPtr GetMethodPointer(IntPtr comPtr, int slotIndex)
-    {
-        IntPtr vtable = Marshal.ReadIntPtr(comPtr);
-        return Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
-    }
-
-    public static TDelegate Get<TDelegate>(IntPtr comPtr, int slotIndex) where TDelegate : Delegate
-    {
-        IntPtr methodPtr = GetMethodPointer(comPtr, slotIndex);
-        return Marshal.GetDelegateForFunctionPointer<TDelegate>(methodPtr);
-    }
-}
+// COM vtable 槽位读取统一走 LingFan.Media.Interop.ComVTable（相对槽位约定：绝对槽位 = 3 + slotIndex）。

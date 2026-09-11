@@ -652,10 +652,9 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
 
     private static T GetVTable<T>(IntPtr obj, int slot) where T : Delegate
     {
-        // OpenSL ES 对象为 void**：*obj 是方法表指针
-        IntPtr vtable = Marshal.ReadIntPtr(obj);
-        IntPtr method = Marshal.ReadIntPtr(vtable, slot * IntPtr.Size);
-        return Marshal.GetDelegateForFunctionPointer<T>(method);
+        // OpenSL ES 对象为 void**：*obj 是方法表指针。OpenSL 接口无 IUnknown 前缀，
+        // SLOT_* 常量为 0 基绝对槽位 → 统一走 ComVTable.GetAbsolute。
+        return ComVTable.GetAbsolute<T>(obj, slot);
     }
 
     private static IntPtr GetIid(string name)

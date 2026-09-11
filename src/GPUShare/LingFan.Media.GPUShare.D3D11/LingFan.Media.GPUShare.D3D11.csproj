@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+    <!-- COM vtable 槽位读取唯一实现（LingFan.Media.Interop.ComVTable）。 -->
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Interop\LingFan.Media.Interop.csproj" />
   </ItemGroup>
 
 </Project>

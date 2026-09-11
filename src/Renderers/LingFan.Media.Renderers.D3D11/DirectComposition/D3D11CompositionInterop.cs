@@ -35,18 +35,7 @@ internal sealed partial class D3D11CompositionInterop : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int IDCompositionTarget_SetRoot(IntPtr self, IntPtr visual);
 
-    /// <summary>
-    /// 从 COM 接口指针读取第 (3 + slotIndex) 个 vtable 槽位的函数指针并转为强类型委托。
-    /// </summary>
-    private static class DCompVTable
-    {
-        public static TDelegate Get<TDelegate>(IntPtr comPtr, int slotIndex) where TDelegate : Delegate
-        {
-            IntPtr vtable = Marshal.ReadIntPtr(comPtr);
-            IntPtr methodPtr = Marshal.ReadIntPtr(vtable, (3 + slotIndex) * IntPtr.Size);
-            return Marshal.GetDelegateForFunctionPointer<TDelegate>(methodPtr);
-        }
-    }
+    // DComp vtable 读取统一走 LingFan.Media.Interop.ComVTable（相对槽位约定：绝对槽位 = 3 + slotIndex）。
 
     private static readonly Guid IID_IDCompositionDevice = new("C37EA93A-E7AA-450D-B16F-9746CB0406F3");
 
@@ -76,22 +65,22 @@ internal sealed partial class D3D11CompositionInterop : IDisposable
             // 取得原始 COM 指针所有权（refcount=1，由本类在 Dispose 时 Marshal.Release）
             _device = devicePtr;
 
-            DCompVTable.Get<IDCompositionDevice_CreateVisual>(_device, 4)(_device, out IntPtr visualPtr);
+            ComVTable.Get<IDCompositionDevice_CreateVisual>(_device, 4)(_device, out IntPtr visualPtr);
             _visual = visualPtr;
             // DComp-1：SetContent 相对槽应为 12（绝对槽 15）。原 slotIndex 9 命中 SetBorderMode，
             // 导致无空域合成静默失效。增加 HR 检查，失败则回退 HWND 模式（调用方 Dispose 本对象）。
-            int setContentHr = DCompVTable.Get<IDCompositionVisual_SetContent>(_visual, 12)(_visual, swapChainPtr);
+            int setContentHr = ComVTable.Get<IDCompositionVisual_SetContent>(_visual, 12)(_visual, swapChainPtr);
             if (setContentHr < 0)
                 return false;
 
-            DCompVTable.Get<IDCompositionDevice_CreateTargetForHwnd>(_device, 3)(_device, hwnd, true, out IntPtr targetPtr);
+            ComVTable.Get<IDCompositionDevice_CreateTargetForHwnd>(_device, 3)(_device, hwnd, true, out IntPtr targetPtr);
             if (targetPtr == IntPtr.Zero)
                 return false;
             _target = targetPtr;
 
-            DCompVTable.Get<IDCompositionTarget_SetRoot>(_target, 0)(_target, _visual);
+            ComVTable.Get<IDCompositionTarget_SetRoot>(_target, 0)(_target, _visual);
 
-            DCompVTable.Get<IDCompositionDevice_Commit>(_device, 0)(_device);
+            ComVTable.Get<IDCompositionDevice_Commit>(_device, 0)(_device);
             return true;
         }
         catch
@@ -112,7 +101,7 @@ internal sealed partial class D3D11CompositionInterop : IDisposable
 
         if (_target != IntPtr.Zero)
         {
-            try { DCompVTable.Get<IDCompositionTarget_SetRoot>(_target, 0)(_target, IntPtr.Zero); }
+            try { ComVTable.Get<IDCompositionTarget_SetRoot>(_target, 0)(_target, IntPtr.Zero); }
             catch { /* 忽略 */ }
             Marshal.Release(_target);
             _target = IntPtr.Zero;
@@ -124,7 +113,7 @@ internal sealed partial class D3D11CompositionInterop : IDisposable
         }
         if (_device != IntPtr.Zero)
         {
-            try { DCompVTable.Get<IDCompositionDevice_Commit>(_device, 0)(_device); }
+            try { ComVTable.Get<IDCompositionDevice_Commit>(_device, 0)(_device); }
             catch { /* 忽略 */ }
             Marshal.Release(_device);
             _device = IntPtr.Zero;

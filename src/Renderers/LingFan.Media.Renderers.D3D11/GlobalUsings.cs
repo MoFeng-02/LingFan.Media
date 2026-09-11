@@ -14,6 +14,8 @@ global using Vortice.Mathematics;
 global using System.Runtime.InteropServices;
 // Extensions 命名空间（MediaBuilder）
 global using LingFan.Media.Extensions;
+// COM vtable 槽位读取唯一实现（LingFan.Media.Interop.ComVTable）
+global using LingFan.Media.Interop;
 
 // 整个 D3D11 渲染器项目为 Windows 专用（Vortice.Direct3D11 仅支持 Windows）
 [assembly: System.Runtime.Versioning.SupportedOSPlatform("windows")]

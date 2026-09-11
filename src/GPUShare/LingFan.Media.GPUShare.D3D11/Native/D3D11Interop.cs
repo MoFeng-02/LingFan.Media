@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using LingFan.Media.Interop;
 
 namespace LingFan.Media.GPUShare.D3D11;
 
@@ -92,28 +93,8 @@ public static unsafe partial class D3D11Interop
 
     // 嵌套 vtable 读取器（绝对 0 基槽位）
 
-    /// <summary>
-    /// COM vtable 读取器：<c>comPtr → vtable 指针 → [slot * IntPtr.Size] = 方法指针</c>。
-    /// <paramref name="slot"/> 一律为绝对 0 基槽位（0=QueryInterface, 1=AddRef, 2=Release）。
-    /// </summary>
-    public static class ComVTable
-    {
-        /// <summary>读取指定绝对槽位的方法指针（不构造委托）。</summary>
-        public static IntPtr ReadSlot(IntPtr comPtr, int slot)
-        {
-            IntPtr vtable = Marshal.ReadIntPtr(comPtr);
-            return Marshal.ReadIntPtr(vtable, slot * IntPtr.Size);
-        }
-
-        /// <summary>读取指定绝对槽位并构造强类型委托。</summary>
-        public static TDelegate Get<TDelegate>(IntPtr comPtr, int slot) where TDelegate : Delegate
-        {
-            IntPtr fp = ReadSlot(comPtr, slot);
-            return Marshal.GetDelegateForFunctionPointer<TDelegate>(fp);
-        }
-    }
-
-
+    // COM vtable 槽位读取统一走 LingFan.Media.Interop.ComVTable（本工程约定：绝对 0 基槽位，0=QueryInterface）。
+    // 历史教训：本地 ComVTable.Get 为绝对槽位语义，收敛共享底座后改名 GetAbsolute 以区分 WASAPI/MF 的相对槽位 Get。
     // vtable 委托原型（CallingConvention.Winapi = StdCall，绝不用 ThisCall）
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -235,7 +216,7 @@ public static unsafe partial class D3D11Interop
     /// <summary>QueryInterface：失败抛 <see cref="COMException"/>。</summary>
     public static IntPtr QueryInterface(IntPtr comPtr, Guid iid)
     {
-        var fn = ComVTable.Get<PFN_QueryInterface>(comPtr, 0);
+        var fn = ComVTable.GetAbsolute<PFN_QueryInterface>(comPtr, 0);
         int hr = fn(comPtr, ref iid, out IntPtr ppv);
         if (hr < 0)
             throw new COMException($"QueryInterface({iid:B}) 失败 (0x{hr:X8})", hr);
@@ -245,7 +226,7 @@ public static unsafe partial class D3D11Interop
     /// <summary>QueryInterface：失败返回 <c>false</c>（不抛）。</summary>
     public static bool TryQueryInterface(IntPtr comPtr, Guid iid, out IntPtr ppv)
     {
-        var fn = ComVTable.Get<PFN_QueryInterface>(comPtr, 0);
+        var fn = ComVTable.GetAbsolute<PFN_QueryInterface>(comPtr, 0);
         int hr = fn(comPtr, ref iid, out ppv);
         return hr >= 0 && ppv != IntPtr.Zero;
     }
@@ -262,7 +243,7 @@ public static unsafe partial class D3D11Interop
             return IntPtr.Zero;
         try
         {
-            var fn = ComVTable.Get<PFN_GetDevice>(child, 3);
+            var fn = ComVTable.GetAbsolute<PFN_GetDevice>(child, 3);
             fn(child, out IntPtr device);
             return device;
         }
@@ -273,7 +254,7 @@ public static unsafe partial class D3D11Interop
     }
 
     /// <summary>AddRef（返回新引用计数）。</summary>
-    public static int AddRef(IntPtr comPtr) => ComVTable.Get<PFN_AddRefRelease>(comPtr, 1)(comPtr);
+    public static int AddRef(IntPtr comPtr) => ComVTable.GetAbsolute<PFN_AddRefRelease>(comPtr, 1)(comPtr);
 
     /// <summary>
     /// 经 ID3D11Texture2D::GetDesc（绝对槽位 10）读取纹理 DESC（只读，不改引用计数、无副作用）。
@@ -283,7 +264,7 @@ public static unsafe partial class D3D11Interop
     {
         if (texture2DPtr == IntPtr.Zero)
             throw new ArgumentException("texture2D 句柄不可为 Zero", nameof(texture2DPtr));
-        var fn = ComVTable.Get<PFN_GetTexture2DDesc>(texture2DPtr, 10);
+        var fn = ComVTable.GetAbsolute<PFN_GetTexture2DDesc>(texture2DPtr, 10);
         fn(texture2DPtr, out var desc);
         return desc;
     }
@@ -291,7 +272,7 @@ public static unsafe partial class D3D11Interop
 
 
     /// <summary>Release（返回新引用计数；本模块全程仅持 IntPtr，显式 Release 规避双重释放）。</summary>
-    public static int Release(IntPtr comPtr) => ComVTable.Get<PFN_AddRefRelease>(comPtr, 2)(comPtr);
+    public static int Release(IntPtr comPtr) => ComVTable.GetAbsolute<PFN_AddRefRelease>(comPtr, 2)(comPtr);
 
     /// <summary>ID3D11Device::CreateTexture2D（绝对槽位 5）。</summary>
     public static IntPtr CreateTexture2D(IntPtr devicePtr, in D3D11Texture2DDesc desc)
@@ -300,7 +281,7 @@ public static unsafe partial class D3D11Interop
         // 栈帧在方法返回前不被 GC 移动，与 fixed 语义等价。
         D3D11Texture2DDesc d = desc;
         D3D11Texture2DDesc* p = &d;
-        var fn = ComVTable.Get<PFN_CreateTexture2D>(devicePtr, 5);
+        var fn = ComVTable.GetAbsolute<PFN_CreateTexture2D>(devicePtr, 5);
         int hr = fn(devicePtr, (IntPtr)p, IntPtr.Zero, out IntPtr tex);
         if (hr < 0)
             throw new COMException($"CreateTexture2D 失败 (0x{hr:X8})", hr);
@@ -312,7 +293,7 @@ public static unsafe partial class D3D11Interop
     {
         D3D11VideoProcessorContentDescription d = desc;
         D3D11VideoProcessorContentDescription* p = &d;
-        var fn = ComVTable.Get<PFN_CreateVideoProcessorEnumerator>(videoDevicePtr, 10);
+        var fn = ComVTable.GetAbsolute<PFN_CreateVideoProcessorEnumerator>(videoDevicePtr, 10);
         int hr = fn(videoDevicePtr, (IntPtr)p, out IntPtr pp);
         if (hr < 0)
             throw new COMException($"CreateVideoProcessorEnumerator 失败 (0x{hr:X8})", hr);
@@ -322,7 +303,7 @@ public static unsafe partial class D3D11Interop
     /// <summary>ID3D11VideoDevice::CreateVideoProcessor（绝对槽位 4）。</summary>
     public static IntPtr CreateVideoProcessor(IntPtr videoDevicePtr, IntPtr enumeratorPtr, uint contentDescIndex)
     {
-        var fn = ComVTable.Get<PFN_CreateVideoProcessor>(videoDevicePtr, 4);
+        var fn = ComVTable.GetAbsolute<PFN_CreateVideoProcessor>(videoDevicePtr, 4);
         int hr = fn(videoDevicePtr, enumeratorPtr, contentDescIndex, out IntPtr pp);
         if (hr < 0)
             throw new COMException($"CreateVideoProcessor 失败 (0x{hr:X8})", hr);
@@ -334,7 +315,7 @@ public static unsafe partial class D3D11Interop
     {
         D3D11VideoProcessorCaps caps = default;
         D3D11VideoProcessorCaps* p = &caps;
-        var fn = ComVTable.Get<PFN_GetVideoProcessorCaps>(enumeratorPtr, 9);
+        var fn = ComVTable.GetAbsolute<PFN_GetVideoProcessorCaps>(enumeratorPtr, 9);
         int hr = fn(enumeratorPtr, (IntPtr)p);
         if (hr < 0)
             throw new COMException($"GetVideoProcessorCaps 失败 (0x{hr:X8})", hr);
@@ -349,7 +330,7 @@ public static unsafe partial class D3D11Interop
     {
         uint flags = 0;
         uint* p = &flags;
-        var fn = ComVTable.Get<PFN_CheckVideoProcessorFormat>(enumeratorPtr, 8);
+        var fn = ComVTable.GetAbsolute<PFN_CheckVideoProcessorFormat>(enumeratorPtr, 8);
         int hr = fn(enumeratorPtr, format, (IntPtr)p);
         if (hr < 0)
             throw new COMException($"CheckVideoProcessorFormat(0x{format:X}) 失败 (0x{hr:X8})", hr);
@@ -364,7 +345,7 @@ public static unsafe partial class D3D11Interop
     {
         D3D11VideoProcessorContentDescription desc = default;
         D3D11VideoProcessorContentDescription* p = &desc;
-        var fn = ComVTable.Get<PFN_GetVideoProcessorContentDesc>(enumeratorPtr, 7);
+        var fn = ComVTable.GetAbsolute<PFN_GetVideoProcessorContentDesc>(enumeratorPtr, 7);
         int hr = fn(enumeratorPtr, (IntPtr)p);
         if (hr < 0)
             throw new COMException($"GetVideoProcessorContentDesc 失败 (0x{hr:X8})", hr);
@@ -377,7 +358,7 @@ public static unsafe partial class D3D11Interop
     {
         D3D11VideoProcessorInputViewDesc d = desc;
         D3D11VideoProcessorInputViewDesc* p = &d;
-        var fn = ComVTable.Get<PFN_CreateVideoProcessorInputView>(videoDevicePtr, 8);
+        var fn = ComVTable.GetAbsolute<PFN_CreateVideoProcessorInputView>(videoDevicePtr, 8);
         int hr = fn(videoDevicePtr, resourcePtr, enumeratorPtr, (IntPtr)p, out IntPtr pp);
         if (hr < 0)
             throw new COMException($"CreateVideoProcessorInputView 失败 (0x{hr:X8})", hr);
@@ -390,7 +371,7 @@ public static unsafe partial class D3D11Interop
     {
         D3D11VideoProcessorOutputViewDesc d = desc;
         D3D11VideoProcessorOutputViewDesc* p = &d;
-        var fn = ComVTable.Get<PFN_CreateVideoProcessorOutputView>(videoDevicePtr, 9);
+        var fn = ComVTable.GetAbsolute<PFN_CreateVideoProcessorOutputView>(videoDevicePtr, 9);
         int hr = fn(videoDevicePtr, resourcePtr, enumeratorPtr, (IntPtr)p, out IntPtr pp);
         if (hr < 0)
             throw new COMException($"CreateVideoProcessorOutputView 失败 (0x{hr:X8})", hr);
@@ -403,7 +384,7 @@ public static unsafe partial class D3D11Interop
     {
         D3D11VideoProcessorStream s = stream;
         D3D11VideoProcessorStream* p = &s;
-        var fn = ComVTable.Get<PFN_VideoProcessorBlt>(videoContextPtr, 53);
+        var fn = ComVTable.GetAbsolute<PFN_VideoProcessorBlt>(videoContextPtr, 53);
         int hr = fn(videoContextPtr, processor, outputView, outputFrame, 1, (IntPtr)p);
         if (hr < 0)
             throw new COMException($"VideoProcessorBlt 失败 (0x{hr:X8})", hr);
@@ -420,7 +401,7 @@ public static unsafe partial class D3D11Interop
     /// <param name="frameFormat">D3D11_VIDEO_FRAME_FORMAT（0=逐行扫描 PROGRESSIVE）。</param>
     public static void VideoProcessorSetStreamFrameFormat(IntPtr videoContextPtr, IntPtr processor, uint streamIndex, uint frameFormat)
     {
-        var fn = ComVTable.Get<PFN_VideoProcessorSetStreamFrameFormat>(videoContextPtr, 27);
+        var fn = ComVTable.GetAbsolute<PFN_VideoProcessorSetStreamFrameFormat>(videoContextPtr, 27);
         fn(videoContextPtr, processor, streamIndex, frameFormat);
     }
 
@@ -432,7 +413,7 @@ public static unsafe partial class D3D11Interop
     {
         D3D11VideoProcessorColorSpace cs = colorSpace;
         D3D11VideoProcessorColorSpace* p = &cs;
-        var fn = ComVTable.Get<PFN_VideoProcessorSetStreamColorSpace>(videoContextPtr, 28);
+        var fn = ComVTable.GetAbsolute<PFN_VideoProcessorSetStreamColorSpace>(videoContextPtr, 28);
         fn(videoContextPtr, processor, streamIndex, (IntPtr)p);
     }
 
@@ -444,7 +425,7 @@ public static unsafe partial class D3D11Interop
     {
         D3D11VideoProcessorColorSpace cs = colorSpace;
         D3D11VideoProcessorColorSpace* p = &cs;
-        var fn = ComVTable.Get<PFN_VideoProcessorSetOutputColorSpace>(videoContextPtr, 15);
+        var fn = ComVTable.GetAbsolute<PFN_VideoProcessorSetOutputColorSpace>(videoContextPtr, 15);
         fn(videoContextPtr, processor, (IntPtr)p);
     }
 
@@ -461,14 +442,14 @@ public static unsafe partial class D3D11Interop
     {
         D3D11Rect r = rect;
         D3D11Rect* p = &r;
-        var fn = ComVTable.Get<PFN_VideoProcessorSetStreamSourceRect>(videoContextPtr, 30);
+        var fn = ComVTable.GetAbsolute<PFN_VideoProcessorSetStreamSourceRect>(videoContextPtr, 30);
         fn(videoContextPtr, processor, streamIndex, enable, (IntPtr)p);
     }
 
     /// <summary>ID3D11DeviceContext::Flush（绝对槽位 111）。</summary>
     public static void Flush(IntPtr contextPtr)
     {
-        var fn = ComVTable.Get<PFN_Flush>(contextPtr, 111);
+        var fn = ComVTable.GetAbsolute<PFN_Flush>(contextPtr, 111);
         fn(contextPtr);
     }
 
@@ -483,7 +464,7 @@ public static unsafe partial class D3D11Interop
     public static void CopySubresourceRegion(IntPtr contextPtr, IntPtr dstTexture, uint dstSubresource,
         uint dstX, uint dstY, uint dstZ, IntPtr srcTexture, uint srcSubresource, IntPtr pSrcBox)
     {
-        var fn = ComVTable.Get<PFN_CopySubresourceRegion>(contextPtr, 46);
+        var fn = ComVTable.GetAbsolute<PFN_CopySubresourceRegion>(contextPtr, 46);
         fn(contextPtr, dstTexture, dstSubresource, dstX, dstY, dstZ, srcTexture, srcSubresource, pSrcBox);
     }
 
@@ -506,14 +487,14 @@ public static unsafe partial class D3D11Interop
         }
         try
         {
-            var fnGetCount = ComVTable.Get<PFN_GetNumStoredMessages>(infoQueue, 8);
+            var fnGetCount = ComVTable.GetAbsolute<PFN_GetNumStoredMessages>(infoQueue, 8);
             uint count = fnGetCount(infoQueue);
             if (count == 0)
             {
                 Console.Error.WriteLine("[D3D11-DEBUG] 调试层已启用，但无存储消息");
                 return;
             }
-            var fnGetMessage = ComVTable.Get<PFN_GetMessage>(infoQueue, 5);
+            var fnGetMessage = ComVTable.GetAbsolute<PFN_GetMessage>(infoQueue, 5);
             Console.Error.WriteLine($"[D3D11-DEBUG] 共 {count} 条存储消息（仅显示前 30 条）：");
             for (uint i = 0; i < count && i < 30; i++)
             {
@@ -547,7 +528,7 @@ public static unsafe partial class D3D11Interop
     /// <summary>IDXGIResource1::CreateSharedHandle（绝对槽位 13）；pAttributes=null、lpName=null、dwAccess=access。</summary>
     public static IntPtr CreateSharedHandle(IntPtr dxgiResource1Ptr, uint access)
     {
-        var fn = ComVTable.Get<PFN_CreateSharedHandle>(dxgiResource1Ptr, 13);
+        var fn = ComVTable.GetAbsolute<PFN_CreateSharedHandle>(dxgiResource1Ptr, 13);
         int hr = fn(dxgiResource1Ptr, IntPtr.Zero, access, IntPtr.Zero, out IntPtr handle);
         if (hr < 0)
             throw new COMException($"CreateSharedHandle 失败 (0x{hr:X8})", hr);
@@ -559,7 +540,7 @@ public static unsafe partial class D3D11Interop
     /// 必须抛异常让调用方回落，绝不可继续写入共享纹理（竞态）。</remarks>
     public static void AcquireSync(IntPtr keyedMutexPtr, ulong key, uint milliseconds)
     {
-        var fn = ComVTable.Get<PFN_AcquireSync>(keyedMutexPtr, 8);
+        var fn = ComVTable.GetAbsolute<PFN_AcquireSync>(keyedMutexPtr, 8);
         int hr = fn(keyedMutexPtr, key, milliseconds);
         if (hr != 0)
             throw new COMException($"AcquireSync 失败/超时 (0x{hr:X8})", hr);
@@ -568,7 +549,7 @@ public static unsafe partial class D3D11Interop
     /// <summary>IDXGIKeyedMutex::ReleaseSync（绝对槽位 9）。</summary>
     public static void ReleaseSync(IntPtr keyedMutexPtr, ulong key)
     {
-        var fn = ComVTable.Get<PFN_ReleaseSync>(keyedMutexPtr, 9);
+        var fn = ComVTable.GetAbsolute<PFN_ReleaseSync>(keyedMutexPtr, 9);
         int hr = fn(keyedMutexPtr, key);
         if (hr != 0)
             throw new COMException($"ReleaseSync 失败 (0x{hr:X8})", hr);
@@ -577,7 +558,7 @@ public static unsafe partial class D3D11Interop
     /// <summary>IDXGIDevice::GetAdapter（绝对槽位 7）。</summary>
     public static IntPtr GetAdapter(IntPtr dxgiDevicePtr)
     {
-        var fn = ComVTable.Get<PFN_GetAdapter>(dxgiDevicePtr, 7);
+        var fn = ComVTable.GetAbsolute<PFN_GetAdapter>(dxgiDevicePtr, 7);
         int hr = fn(dxgiDevicePtr, out IntPtr pp);
         if (hr < 0)
             throw new COMException($"GetAdapter 失败 (0x{hr:X8})", hr);
@@ -620,7 +601,7 @@ public static unsafe partial class D3D11Interop
         Span<byte> buf = stackalloc byte[308];
         fixed (byte* p = buf)
         {
-            var fn = ComVTable.Get<PFN_GetDesc1>(adapter1Ptr, 10);
+            var fn = ComVTable.GetAbsolute<PFN_GetDesc1>(adapter1Ptr, 10);
             int hr = fn(adapter1Ptr, (IntPtr)p);
             if (hr < 0)
                 throw new COMException($"GetDesc1 失败 (0x{hr:X8})", hr);
@@ -716,7 +697,7 @@ public static unsafe partial class D3D11Interop
     /// <summary>IDXGIFactory1::EnumAdapters1（绝对槽位 12）。返回 HRESULT（DXGI_ERROR_NOT_FOUND=无更多）。</summary>
     private static int EnumAdapters1(IntPtr factoryPtr, uint adapterIndex, out IntPtr ppAdapter)
     {
-        var fn = ComVTable.Get<PFN_EnumAdapters1>(factoryPtr, 12);
+        var fn = ComVTable.GetAbsolute<PFN_EnumAdapters1>(factoryPtr, 12);
         return fn(factoryPtr, adapterIndex, out ppAdapter);
     }
 
@@ -732,7 +713,7 @@ public static unsafe partial class D3D11Interop
         Span<byte> buf = stackalloc byte[308];
         fixed (byte* p = buf)
         {
-            var fn = ComVTable.Get<PFN_GetDesc1>(adapterPtr, 10);
+            var fn = ComVTable.GetAbsolute<PFN_GetDesc1>(adapterPtr, 10);
             int hr = fn(adapterPtr, (IntPtr)p);
             if (hr < 0)
                 throw new COMException($"GetDesc1 失败 (0x{hr:X8})", hr);
