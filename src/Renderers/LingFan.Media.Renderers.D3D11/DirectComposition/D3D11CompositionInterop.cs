@@ -13,8 +13,7 @@ namespace LingFan.Media.Renderers.D3D11.DirectComposition;
 /// <para><b>线程安全</b>：须在 UI 线程调用。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，采用原始 vtable P/Invoke（ComVTable 委托封送），不使用 <c>[ComImport]</c>/RCW，
 /// <c>NativeAOT</c> 兼容。</para>
-/// <para><b>分工</b>：<see cref="LingFan.Media.Platforms.Windows.DirectCompositionInterop"/> 供外部消费者（Avalonia 层等）使用；
-/// 本类为 D3D11 渲染器内部专用，避免跨模块引用。两者 COM 接口定义相同但独立维护。</para>
+/// <para><b>归属</b>：本类为 D3D11 渲染器内部专用的 DirectComposition 互操作，不跨模块引用。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal sealed partial class D3D11CompositionInterop : IDisposable

@@ -27,7 +27,7 @@ internal static unsafe partial class GLNative
     internal const int WglAccessReadWriteNV = 0x0001;    // WGL_ACCESS_READ_WRITE_NV
     internal const int WglAccessWriteDiscardNV = 0x0002; // WGL_ACCESS_WRITE_DISCARD_NV
 
-    // EGL_EXT_image_dma_buf_import 常量（EGL/eglext.h 官方值，与 Platforms/Linux/EglInterop.cs 对表。
+    // EGL_EXT_image_dma_buf_import 常量（EGL/eglext.h 官方值。
     // 历史教训：本表曾整块错位一格且混入不存在的"PLANE_COUNT"键，致 dma_buf 导入恒 EGL_BAD_PARAMETER。）
     internal const int EglImageTarget = 0x30D1;          // EGL_IMAGE_TARGET (OES 目标枚举)
     internal const int EglLinuxDmaBufExt = 0x3270;       // EGL_LINUX_DMA_BUF_EXT
