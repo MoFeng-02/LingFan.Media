@@ -22,8 +22,11 @@ namespace LingFan.Media.GPUShare.Android.Egl;
 public static unsafe partial class EglImageInterop
 {
     // EGL 常量（EGL_ANDROID_get_native_buffer / EGL_KHR_image）。
+    // EglImagePreservedKhr 须为 Khronos 官方值 0x30D2（eglext.h EGL_KHR_image_base）；早期误写
+    // 0x309B（实为 EGL 1.4 的 EGL_MULTISAMPLE_RESOLVE_BOX，不相干枚举）——驱动容忍未知属性未报
+    // EGL_BAD_ATTRIBUTE，但 EGL_IMAGE_PRESERVED（保留 buffer 内容）声明从未真正生效。
     private const uint EglNativeBufferAndroid = 0x3140;
-    private const uint EglImagePreservedKhr = 0x309B;
+    private const uint EglImagePreservedKhr = 0x30D2;
     private const uint EglTrue = 1;
     private const uint EglNone = 0x3038;
     private const nint EglNoImageKhr = 0;
