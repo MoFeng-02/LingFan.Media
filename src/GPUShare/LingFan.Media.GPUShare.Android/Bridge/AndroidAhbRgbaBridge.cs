@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using Android.Graphics;       // SurfaceTexture / Surface
 using Android.Views;
+using LingFan.Media.GPUShare.Android.Egl; // EglImageInterop.EglImagePreservedKhr（EGL_KHR_image_base 唯一真源）
 // Microsoft.Extensions.Logging / LingFan.Media.Abstractions 由 GlobalUsings 全局引入；
 // AndroidHardwareBufferFrameResource 位于父命名空间 LingFan.Media.GPUShare.Android，自动解析。
 
@@ -55,8 +56,7 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private const int EglWidth = 0x3057;
     private const int EglHeight = 0x3056;
     private const int EglNativeBufferAndroid = 0x3140;       // EGL_NATIVE_BUFFER_ANDROID
-    // 与 Egl/EglImageInterop.cs 的 EglImagePreservedKhr 同值（Khronos 官方 0x30D2）——改值须两处同步。
-    private const int EglImagePreservedKhr = 0x30D2;
+    // EglImagePreservedKhr 已收敛至 Egl/EglImageInterop.cs（同程序集 internal），本文件不再复刻定义。
 
     // GLES 常量
     private const uint GlTextureExternalOes = 0x8D65;
@@ -359,7 +359,7 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
                 return nint.Zero;
             }
             _logger?.LogTrace("[ANDROID-AHB-TRACE] S5eglGetNativeClientBuffer 成功 clientBuf=0x{Cb}", (ulong)clientBuf);
-            int[] imgAttrs = { EglImagePreservedKhr, 1, EglNone };
+            int[] imgAttrs = { EglImageInterop.EglImagePreservedKhr, 1, EglNone };
             fixed (int* ia = imgAttrs)
                 eglImage = _eglCreateImageKhr(_eglDisplay, EglNoContext, (uint)EglNativeBufferAndroid, clientBuf, (nint)ia);
             if (eglImage == nint.Zero)
