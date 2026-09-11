@@ -22,7 +22,15 @@ public sealed class BundledSampleProvider : IBundledSampleProvider
         try
         {
             using Stream stream = AssetLoader.Open(new Uri(SampleUri));
-            string path = Path.Combine(Path.GetTempPath(), $"LingFanSample_{Guid.NewGuid():N}.mp4");
+            // 清理上一会话残留：每次播放写一个 GUID 新文件，旧文件不删会在 TempPath 累积
+            //（每份 ≈ 数十 MB，反复重播持续吃存储）。播放串行（旧播放器先 Dispose），无并发占用。
+            string tempDir = Path.GetTempPath();
+            foreach (string stale in Directory.GetFiles(tempDir, "LingFanSample_*.mp4"))
+            {
+                try { File.Delete(stale); } catch { /* 被占用/已删除：忽略，不影响本次播放 */ }
+            }
+
+            string path = Path.Combine(tempDir, $"LingFanSample_{Guid.NewGuid():N}.mp4");
             using (var file = File.Create(path))
             {
                 stream.CopyTo(file);

@@ -122,6 +122,18 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     // "已播完 + 至多一个在途缓冲"，绝不越过实际可闻位置漂移。暂停期间插值关闭。
     private long _lastStepQpc;      // 最近一次消费步进时刻（Volatile 读写；0=尚未步进）
     private int _lastBufferSamples; // 最近一个完成缓冲的采样数（插值封顶用）
+
+    // 节拍仪表（欠载定位）：完成回调到达间隔 ≈ 单缓冲时长为健康（队列常满，mixer 1× 消费）；
+    // 间隔超出 capMs 的部分 = 设备 BufferQueue 排空时间（喂帧跟不上）或回调调度延迟。
+    // 窗口欠载占比应与 [SYNC] 快照的「1 - 时钟比」吻合，用于区分「喂帧被饿」与「回调调度延迟」。
+    // 全部字段在回调线程 _gate 内读写（步进与状态输出同处持锁），零额外锁开销。
+    private long _pacePrevStepQpc;      // 上一次步进时刻（0=无前值，跳过首个间隔）
+    private long _paceWindowStartQpc;   // 状态窗口起点（5s 滚动；0=未开窗）
+    private int _paceStepCount;         // 窗口内回调步进数
+    private double _paceIntervalSumMs;  // 窗口内回调间隔和（均值分母 = 步进数）
+    private double _paceIntervalPeakMs; // 窗口内回调间隔峰值
+    private int _underrunCount;         // 窗口内欠载事件数（间隔 > 1.5×capMs）
+    private double _underrunDebtMs;     // 窗口内欠载累计时长（间隔超出 capMs 的部分）
     private volatile bool _clockRunning; // 播放中（Resume 置位；Pause/重播复位清除）
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -479,8 +491,39 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
                 if (_inFlightSamples.TryDequeue(out int samples))
                 {
                     Interlocked.Add(ref _framesConsumed, samples);
-                    Volatile.Write(ref _lastStepQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+                    long nowQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+                    Volatile.Write(ref _lastStepQpc, nowQpc);
                     _lastBufferSamples = samples;
+
+                    // 节拍仪表：完成回调间隔 = 该缓冲实际播放时长（健康 ≈ capMs）+ 设备排空时间。
+                    double capMs = samples * 1000.0 / _sampleRate;
+                    if (_pacePrevStepQpc != 0)
+                    {
+                        double intervalMs = System.Diagnostics.Stopwatch.GetElapsedTime(_pacePrevStepQpc, nowQpc).TotalMilliseconds;
+                        _paceStepCount++;
+                        _paceIntervalSumMs += intervalMs;
+                        if (intervalMs > _paceIntervalPeakMs) _paceIntervalPeakMs = intervalMs;
+                        if (intervalMs > capMs * 1.5)
+                        {
+                            _underrunCount++;
+                            _underrunDebtMs += intervalMs - capMs;
+                        }
+                        if (_paceWindowStartQpc == 0)
+                            _paceWindowStartQpc = nowQpc;
+                        double windowSec = System.Diagnostics.Stopwatch.GetElapsedTime(_paceWindowStartQpc, nowQpc).TotalSeconds;
+                        if (windowSec >= 5.0 && _paceStepCount >= 2)
+                        {
+                            double avg = _paceIntervalSumMs / _paceStepCount;
+                            double debtRatio = _underrunDebtMs / (windowSec * 1000.0);
+                            _logger.LogInformation(
+                                "[OPENSLES-pace] 窗口={Sec:F1}s 欠载={Count} 次/累计 {Debt:F0} ms（占比 {Ratio:P0}）回调间隔均/峰={Avg:F1}/{Peak:F1} ms 单缓冲={Cap:F1} ms",
+                                windowSec, _underrunCount, _underrunDebtMs, debtRatio, avg, _paceIntervalPeakMs, capMs);
+                            _paceWindowStartQpc = nowQpc;
+                            _paceStepCount = 0; _paceIntervalSumMs = 0; _paceIntervalPeakMs = 0;
+                            _underrunCount = 0; _underrunDebtMs = 0;
+                        }
+                    }
+                    _pacePrevStepQpc = nowQpc;
                 }
             }
         }
@@ -590,6 +633,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         _clockRunning = false;
         Volatile.Write(ref _lastStepQpc, 0);
         _lastBufferSamples = 0;
+        _pacePrevStepQpc = 0; // 重置后首个间隔无前值，跳过（防 Flush/重播间隙被误计欠载）
     }
 
     /// <inheritdoc/>
