@@ -1,12 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- 多目标：net10.0 资产供跨平台消费方（Renderers.OpenGL / GPUShare.Vulkan / Media.Avalonia）；
+         net10.0-android 资产额外含 MediaCodec 解码侧 GLES/EGL→AHB 桥接（依赖 Android 托管绑定）。
+         android 是 net10.0 超集：net10.0-android 消费方（Backends.MediaCodec）取 android 资产，
+         net10.0 消费方经 ProjectReference 目标框架协商只取 net10.0 资产、无需 Android workload。 -->
+    <TargetFramework></TargetFramework>
+    <TargetFrameworks>net10.0;net10.0-android</TargetFrameworks>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
+    <SupportedOSPlatform>android</SupportedOSPlatform>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+  </ItemGroup>
+
+  <!-- 默认通配会把 Bridge 纳入全部 TFM → 先显式排除，再仅对 android TFM 引入。 -->
+  <ItemGroup>
+    <Compile Remove="Bridge\**" />
+  </ItemGroup>
+
+  <!-- 仅 android TFM 资产：解码侧 GLES/EGL→AHB 桥接（依赖 Android.Graphics/Views 托管绑定，纯 net10.0 不可编译）。 -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
+    <Compile Include="Bridge\AndroidAhbRgbaBridge.cs" />
   </ItemGroup>
 
 </Project>

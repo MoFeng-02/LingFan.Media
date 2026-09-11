@@ -4,6 +4,7 @@ using Android.Media;
 using Android.Views;
 using Java.Nio;
 using LingFan.Media.GPUShare.Android; // AndroidHardwareBufferFrameResource（跨 GPU API 中立帧 DTO，消费方向：Backends→GPUShare.Android）
+using LingFan.Media.GPUShare.Android.Bridge; // AndroidAhbRgbaBridge（解码侧 GLES/EGL→AHB 桥接，GPUShare.Android android 资产）
 // 本后端命名空间段为 ...MediaCodec，会遮蔽类型 Android.Media.MediaCodec → 用不撞名的别名。
 using AndroidMediaCodec = Android.Media.MediaCodec;
 // Android.Graphics.PixelFormat 与 Abstractions 全局冲突 → 别名锁定契约层像素格式。

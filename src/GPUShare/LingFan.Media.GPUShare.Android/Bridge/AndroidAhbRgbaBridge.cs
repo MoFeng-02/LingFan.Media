@@ -6,11 +6,10 @@ using System.Text;
 using System.Threading;
 using Android.Graphics;       // SurfaceTexture / Surface
 using Android.Views;
-using Microsoft.Extensions.Logging;
-using LingFan.Media.Abstractions;
-using LingFan.Media.GPUShare.Android; // AndroidHardwareBufferFrameResource（跨 GPU API 中立帧 DTO）
+// Microsoft.Extensions.Logging / LingFan.Media.Abstractions 由 GlobalUsings 全局引入；
+// AndroidHardwareBufferFrameResource 位于父命名空间 LingFan.Media.GPUShare.Android，自动解析。
 
-namespace LingFan.Media.Backends.MediaCodec.Decoders;
+namespace LingFan.Media.GPUShare.Android.Bridge;
 
 /// <summary>
 /// Android GLES/EGL 桥接：把 MediaCodec 经 <see cref="SurfaceTexture"/> 产出的 OES 外部纹理
@@ -33,9 +32,10 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// 与 Renderers.OpenGLES 的 <c>GlesNative</c> 同范式）；AHardwareBuffer 经 <c>libandroid.so</c>。属图形底层原语
 /// （非媒体 API），AOT 源生成、零反射（Android 后端媒体 API 走托管绑定，
 /// 仅图形原语例外，与解码器既有 <c>AHardwareBuffer_fromHardwareBuffer</c> carve-out 一致）。</para>
-/// <para><b>DIP</b>：本类仅依赖 Abstractions + GPUShare.Android（跨 GPU API 中立帧 DTO），不反向引用任何 Renderer，依赖倒置合规。</para>
+/// <para><b>归属</b>：GPUShare.Android（仅 net10.0-android 资产，依赖 Android 托管绑定）——解码侧 GLES/EGL→AHB 的
+/// GPU 胶水；仅依赖 Abstractions（<c>AndroidHardwareBufferFrameResource</c> 为同程序集中性帧 DTO），不引用任何 Renderer，依赖倒置合规。</para>
 /// </remarks>
-internal sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
+public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
 {
     // EGL 常量
     private const nint EglNoContext = 0;
