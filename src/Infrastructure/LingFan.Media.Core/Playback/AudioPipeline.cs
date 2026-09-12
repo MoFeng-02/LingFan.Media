@@ -165,12 +165,16 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         if (resuming)
         {
             _output.Resume();
-            _pipelineTask = Task.Run(PipelineLoop);
+            Func<Task> loop = () => PipelineLoop();
+            _pipelineTask = Task.Factory.StartNew(loop, CancellationToken.None,
+                TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
         }
         else
         {
             var prime = _output.BeginStreamingAsync(_cts.Token);
-            _pipelineTask = Task.Run(PipelineLoop);
+            Func<Task> loop = () => PipelineLoop();
+            _pipelineTask = Task.Factory.StartNew(loop, CancellationToken.None,
+                TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
             await prime;
         }
     }
@@ -365,10 +369,28 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private double _diagSubmitMs;       // 最近一次迭代：TrySubmitChunk 累计时长（ms，含设备背压等待）
     private long _lastGapWarnQpc;       // 缺口 Warning 节流锚点（1s）
 
+    // 供给速率仪表：均匀的吞吐亏损（如线程调度延迟摊在每个提交周期）不产生 >120ms 离散缺口，
+    // 唯有按「窗口内提交采样数 / 墙钟」计算实时百分比才能显形。速率 ≈100% 而设备仍欠载 → 消费/
+    // 记账侧；速率 <100% → 本循环上游（解码/包供给）不足。窗口 5s，回调式输出（与 OPENSLES-pace 对表）。
+    private long _supplyWindowStartQpc;     // 0=未开窗
+    private long _supplySubmittedSamples;   // 窗口内提交采样数
+    private int _supplyDecodedPackets;      // 窗口内解码包数
+    private int _supplyQueueMin = int.MaxValue; // 窗口内采样队列最小水位
+    private int _supplyQueueMax;            // 窗口内采样队列最大水位
+    private int _supplySampleRate;          // 首帧采样率（窗口速率分母；懒初始化于首次提交）
+
     private async Task PipelineLoop()
     {
         try
         {
+            // 音频是主时钟的唯一供血者：喂帧线程被挤 → BufferQueue 排空 → 主时钟停走 →
+            // 音频欠载 + 视频按慢钟拖呈（真机实测强切会话时钟比 0.8、在途归零全程）。
+            // LongRunning 专用线程上提升 AboveNormal（全平台——主时钟欠载与平台无关）；
+            // async 续体在读包真阻塞时偶尔换线程属已知边界，提交热路径（同步段）全程生效。
+            try { System.Threading.Thread.CurrentThread.Priority = System.Threading.ThreadPriority.AboveNormal; }
+            catch { }
+            _supplyWindowStartQpc = 0; _supplySubmittedSamples = 0; _supplyDecodedPackets = 0;
+            _supplyQueueMin = int.MaxValue; _supplyQueueMax = 0;
             while (!_cts.IsCancellationRequested)
             {
                 // 喂帧缺口定位：两次成功提交间隔 > 120ms 且非暂停 → 喂帧饥饿（设备水库被抽干的主因），
@@ -441,6 +463,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     break;
                 }
 
+                _supplyDecodedPackets++;
                 if (AudioDiagEnabled)
                 {
                     var decStart = Stopwatch.GetTimestamp();
@@ -463,6 +486,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 // 主时钟停走 → 视频帧卡顿）。穿插提交使在途水位全程 ≥6 缓冲，解码慢/抖不再欠载。
                 while (_sampleQueue.Count < PrerollFrames && _packetQueue.Reader.TryRead(out var next))
                 {
+                    _supplyDecodedPackets++;
                     var pdStart = Stopwatch.GetTimestamp();
                     await DecodeAndEnqueueAsync(next);
                     _diagDecodeMs += Stopwatch.GetElapsedTime(pdStart).TotalMilliseconds;
@@ -526,7 +550,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         if (!_sampleQueue.TryDequeue(out var head) || head is null)
             return true;
         if (_submitChunkSamples == 0)
+        {
             _submitChunkSamples = Math.Max(MinChunkSamples, (int)(head.SampleRate * MaxSubmitChunkMs / 1000.0));
+            _supplySampleRate = head.SampleRate;
+        }
 
         var batch = new List<AudioFrame>(1) { head };
         int chunkSamples = head.FrameCount;
@@ -550,6 +577,28 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         {
             SubmitBatch(batch, _cts.Token);
             _lastSubmitEndTs = Stopwatch.GetTimestamp();
+        }
+
+        // 供给速率仪表窗口（5s）：提交采样数 ÷ 墙钟 = 实时百分比。均匀吞吐亏损（调度延迟摊进
+        // 每个提交周期）不产生离散缺口，唯此指标显形——速率 <100% → 本循环上游（包供给/解码）不足；
+        // ≈100% 而设备仍欠载 → 消费/记账侧。与 [OPENSLES-pace] 欠载占比对表。
+        _supplySubmittedSamples += chunkSamples;
+        int sqNow = _sampleQueue.Count;
+        if (sqNow < _supplyQueueMin) _supplyQueueMin = sqNow;
+        if (sqNow > _supplyQueueMax) _supplyQueueMax = sqNow;
+        long supplyNow = Stopwatch.GetTimestamp();
+        if (_supplyWindowStartQpc == 0)
+            _supplyWindowStartQpc = supplyNow;
+        double supplyWinSec = Stopwatch.GetElapsedTime(_supplyWindowStartQpc, supplyNow).TotalSeconds;
+        if (supplyWinSec >= 5.0 && _supplySampleRate > 0 && _supplySubmittedSamples > 0)
+        {
+            double supplyRate = _supplySubmittedSamples / (supplyWinSec * _supplySampleRate) * 100.0;
+            _logger.LogInformation(
+                "[AUDIO-SUPPLY] 窗口={Sec:F1}s 提交采样={N}（速率 {Rate:F0}% 实时）解码包={P} 采样队列 min/max={Lo}/{Hi}",
+                supplyWinSec, _supplySubmittedSamples, supplyRate, _supplyDecodedPackets, _supplyQueueMin, _supplyQueueMax);
+            _supplyWindowStartQpc = supplyNow;
+            _supplySubmittedSamples = 0; _supplyDecodedPackets = 0;
+            _supplyQueueMin = int.MaxValue; _supplyQueueMax = 0;
         }
         return true;
     }
