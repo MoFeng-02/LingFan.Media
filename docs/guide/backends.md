@@ -1,6 +1,6 @@
 # Backends & Platform Roadmap
 
-LingFan.Media drives playback through **pluggable backends**, all hidden behind the `Abstractions` interfaces. A fallback middleware (`IMediaPlayerFactory`) tries each registered backend in order and switches automatically when one fails. This page maps what is implemented today, what is only scaffolding, and the platform boundaries — including the status of **Linux** (no native backend; playback rides the FFmpeg / VLC cross-platform backends and is tested, with VAAPI hardware decode and Vulkan zero-copy available).
+LingFan.Media drives playback through **pluggable backends**, all hidden behind the `Abstractions` interfaces. A fallback middleware (`IMediaPlayerFactory`) tries each registered backend in order and switches automatically when one fails. This page maps what is implemented today, what is only scaffolding, and the platform boundaries — including the status of **Linux** (no native backend; playback rides the FFmpeg / VLC cross-platform backends and is tested, with VAAPI hardware decode and Vulkan zero-copy available). For the deployment checklist and playback guide, see **[Linux Deployment & Playback](./linux)**.
 
 ## Backend architecture
 

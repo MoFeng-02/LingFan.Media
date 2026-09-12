@@ -1,6 +1,6 @@
 # 后端与平台路线
 
-LingFan.Media 通过**可插拔后端**驱动播放，所有后端都隐藏在 `Abstractions` 接口之后。回退中间件（`IMediaPlayerFactory`）按 DI 注册顺序依次尝试各后端，并在某个后端失败时自动切换。本页梳理当前已实现的内容、仅剩脚手架的部分，以及平台边界——包括 **Linux 的状态**（无原生后端；播放经 FFmpeg / VLC 跨平台后端实现并已实测，VAAPI 硬解 + Vulkan 零拷贝同样可用）。
+LingFan.Media 通过**可插拔后端**驱动播放，所有后端都隐藏在 `Abstractions` 接口之后。回退中间件（`IMediaPlayerFactory`）按 DI 注册顺序依次尝试各后端，并在某个后端失败时自动切换。本页梳理当前已实现的内容、仅剩脚手架的部分，以及平台边界——包括 **Linux 的状态**（无原生后端；播放经 FFmpeg / VLC 跨平台后端实现并已实测，VAAPI 硬解 + Vulkan 零拷贝同样可用）。Linux 的部署清单与播放指南见 **[Linux 部署与播放指南](./linux)**。
 
 ## 后端架构
 
