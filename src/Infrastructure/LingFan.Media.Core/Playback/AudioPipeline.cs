@@ -356,17 +356,48 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private static readonly bool EosDiagEnabled =
         string.Equals(Environment.GetEnvironmentVariable("LINGFAN_EOS_DIAG"), "1", StringComparison.Ordinal);
 
+    // 喂帧缺口定位（始终在线、稀疏触发）：两次成功提交间隔 > 120ms 且非暂停时输出一条 Warning，
+    // 附上一迭代的相位分解（读包等待/解码/提交耗时）——真机定位「喂帧被饿」的卡点阶段：
+    // 读包等待大 = 上游包通道饿；解码大 = 音频解码慢；提交大 = 设备背压异常；均小而缺口大 = 线程池续体延迟。
+    // 健康节奏提交间隔 ≈ 小量子（40ms），零输出。1s 节流防饥饿期刷屏。
+    private double _diagReadWaitMs;     // 最近一次迭代：ReadAsync 等待时长（ms）
+    private double _diagDecodeMs;       // 最近一次迭代：DecodeAndEnqueue 累计时长（ms）
+    private double _diagSubmitMs;       // 最近一次迭代：TrySubmitChunk 累计时长（ms，含设备背压等待）
+    private long _lastGapWarnQpc;       // 缺口 Warning 节流锚点（1s）
+
     private async Task PipelineLoop()
     {
         try
         {
             while (!_cts.IsCancellationRequested)
             {
+                // 喂帧缺口定位：两次成功提交间隔 > 120ms 且非暂停 → 喂帧饥饿（设备水库被抽干的主因），
+                // 输出上一迭代相位分解定位卡点。暂停间隙不计（恢复后刷新锚点）。
+                long iterStart = Stopwatch.GetTimestamp();
+                if (!_isPaused && _lastSubmitEndTs != 0)
+                {
+                    double gapMs = Stopwatch.GetElapsedTime(_lastSubmitEndTs, iterStart).TotalMilliseconds;
+                    if (gapMs > 120)
+                    {
+                        long warnNow = Stopwatch.GetTimestamp();
+                        if (_lastGapWarnQpc == 0 ||
+                            Stopwatch.GetElapsedTime(_lastGapWarnQpc, warnNow).TotalMilliseconds >= 1000)
+                        {
+                            _lastGapWarnQpc = warnNow;
+                            _logger.LogWarning(
+                                "[AUDIO-FEED] 提交缺口 {Gap:F0}ms：读包等待={Read:F1}ms 解码={Dec:F1}ms 提交={Sub:F1}ms 采样队列={Sq}",
+                                gapMs, _diagReadWaitMs, _diagDecodeMs, _diagSubmitMs, _sampleQueue.Count);
+                        }
+                    }
+                }
+                _diagReadWaitMs = 0; _diagDecodeMs = 0; _diagSubmitMs = 0;
+
                 if (_isPaused)
                 {
                     _pauseAcknowledged = true;
                     _pauseAckTcs?.TrySetResult(true);
                     await Task.Delay(10, _cts.Token);
+                    _lastSubmitEndTs = Stopwatch.GetTimestamp(); // 暂停间隙不计入喂帧缺口
                     continue;
                 }
 
@@ -375,8 +406,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 //    （解决诊断仪"假 stall"），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时、抗 decode 抖动）。
                 if (_sampleQueue.Count > 0)
                 {
+                    var subStart = Stopwatch.GetTimestamp();
                     if (!TrySubmitChunk())
                         break;
+                    _diagSubmitMs += Stopwatch.GetElapsedTime(subStart).TotalMilliseconds;
                     continue;
                 }
 
@@ -390,18 +423,11 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 {
                     if (!_packetQueue.Reader.TryRead(out packet))
                     {
-                        if (AudioDiagEnabled)
-                        {
-                            var readStart = Stopwatch.GetTimestamp();
-                            packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
-                            var readMs = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds;
-                            if (readMs > 80)
-                                _logger.LogWarning("[AUDIO-DIAG] ReadAsync 阻塞 {Ms}ms（上游包未及时到达 → 提交中断 → 静音）", readMs);
-                        }
-                        else
-                        {
-                            packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
-                        }
+                        var readStart = Stopwatch.GetTimestamp();
+                        packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
+                        _diagReadWaitMs = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds;
+                        if (AudioDiagEnabled && _diagReadWaitMs > 80)
+                            _logger.LogWarning("[AUDIO-DIAG] ReadAsync 阻塞 {Ms}ms（上游包未及时到达 → 提交中断 → 静音）", _diagReadWaitMs);
                     }
                 }
                 catch (ChannelClosedException)
@@ -419,13 +445,16 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 {
                     var decStart = Stopwatch.GetTimestamp();
                     await DecodeAndEnqueueAsync(packet);
-                    var decMs = Stopwatch.GetElapsedTime(decStart).TotalMilliseconds;
+                    _diagDecodeMs += Stopwatch.GetElapsedTime(decStart).TotalMilliseconds;
+                    var decMs = _diagDecodeMs;
                     if (decMs > 80)
                         _logger.LogWarning("[AUDIO-DIAG] Decode+Enqueue 阻塞 {Ms}ms（解码慢）", decMs);
                 }
                 else
                 {
+                    var decStart = Stopwatch.GetTimestamp();
                     await DecodeAndEnqueueAsync(packet);
+                    _diagDecodeMs += Stopwatch.GetElapsedTime(decStart).TotalMilliseconds;
                 }
 
                 // 前瞻：采样队列未填满且仍有包立即可用时，连续解码（不 await），把解码与提交解耦。
@@ -434,23 +463,18 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 // 主时钟停走 → 视频帧卡顿）。穿插提交使在途水位全程 ≥6 缓冲，解码慢/抖不再欠载。
                 while (_sampleQueue.Count < PrerollFrames && _packetQueue.Reader.TryRead(out var next))
                 {
-                    if (AudioDiagEnabled)
-                    {
-                        var pdStart = Stopwatch.GetTimestamp();
-                        await DecodeAndEnqueueAsync(next);
-                        var pdMs = Stopwatch.GetElapsedTime(pdStart).TotalMilliseconds;
-                        if (pdMs > 80)
-                            _logger.LogWarning("[AUDIO-DIAG] 前瞻 Decode 阻塞 {Ms}ms（解码慢）", pdMs);
-                    }
-                    else
-                    {
-                        await DecodeAndEnqueueAsync(next);
-                    }
+                    var pdStart = Stopwatch.GetTimestamp();
+                    await DecodeAndEnqueueAsync(next);
+                    _diagDecodeMs += Stopwatch.GetElapsedTime(pdStart).TotalMilliseconds;
+                    if (AudioDiagEnabled && _diagDecodeMs > 80)
+                        _logger.LogWarning("[AUDIO-DIAG] 前瞻 Decode 阻塞 {Ms}ms（解码慢）", _diagDecodeMs);
 
                     if (_sampleQueue.Count > 0)
                     {
+                        var subStart = Stopwatch.GetTimestamp();
                         if (!TrySubmitChunk())
                             break;
+                        _diagSubmitMs += Stopwatch.GetElapsedTime(subStart).TotalMilliseconds;
                     }
                 }
 
