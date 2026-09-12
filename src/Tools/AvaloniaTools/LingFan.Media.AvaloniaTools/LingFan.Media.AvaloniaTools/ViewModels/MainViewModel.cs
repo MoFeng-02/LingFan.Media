@@ -4,8 +4,10 @@ using LingFan.Media.Abstractions;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace LingFan.Media.AvaloniaTools.ViewModels;
@@ -20,6 +22,14 @@ public partial class MainViewModel : ViewModelBase
 
     [ObservableProperty]
     private string _status = "请点击「打开文件」选择一个媒体文件";
+
+    // 旧会话释放队列（单消费者 FIFO）：多次强切时多个旧会话的设备侧释放（解码器实例/gralloc/
+    // GPU 上下文）经此串行化，避免并发释放风暴互相挤占并波及新会话；批间让步间隔给设备侧回收留窗口。
+    private readonly Channel<IMediaPlayer> _disposalQueue =
+        Channel.CreateUnbounded<IMediaPlayer>(new UnboundedChannelOptions { SingleReader = true });
+    private int _disposalWorkerActive;      // 0=worker 未运行 1=运行中（Interlocked 抢占防重复拉起）
+    private const int DisposalGraceMs = 2000;  // 批首宽限：新会话启动最脆弱窗口内不启动销毁
+    private const int DisposalBatchPaceMs = 800; // 批内节奏：连续多个旧会话逐个错峰释放
 
     public MainViewModel(IServiceProvider sp)
     {
@@ -60,15 +70,47 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        // 旧会话后台优雅释放：不阻塞 UI 与新会话启动，设备侧释放在新会话稳定后进行
+        // 旧会话入释放队列：单消费者按批错峰释放（新会话启动窗口与设备回收不受挤占）
         if (old is not null)
-            _ = DisposeOldAsync(old);
+            EnqueueDisposal(old);
     }
 
-    private static async Task DisposeOldAsync(IMediaPlayer old)
+    /// <summary>旧会话入队并按需拉起单消费者 worker（Interlocked 抢占防重复）。</summary>
+    private void EnqueueDisposal(IMediaPlayer old)
     {
-        try { await old.DisposeAsync(); }
-        catch { /* 旧会话释放失败不影响新会话 */ }
+        _disposalQueue.Writer.TryWrite(old);
+        if (Interlocked.Exchange(ref _disposalWorkerActive, 1) == 0)
+            _ = DisposalWorkerAsync();
+    }
+
+    /// <summary>
+    /// 释放 worker（VM 生命周期内常驻）：FIFO 按批错峰释放旧会话。
+    /// 节奏：距上次释放超过 3s（空闲批）→ 批首宽限 {DisposalGraceMs}ms（避开新会话启动窗）；
+    /// 连续释放 → 批间让步 {DisposalBatchPaceMs}ms（设备侧回收窗口）。单个失败不中断队列。
+    /// </summary>
+    private async Task DisposalWorkerAsync()
+    {
+        long lastDisposeDoneQpc = 0;
+        try
+        {
+            await foreach (var old in _disposalQueue.Reader.ReadAllAsync())
+            {
+                var now = Stopwatch.GetTimestamp();
+                bool idleBatch = lastDisposeDoneQpc == 0 ||
+                    Stopwatch.GetElapsedTime(lastDisposeDoneQpc, now).TotalMilliseconds > 3000;
+                await Task.Delay(idleBatch ? DisposalGraceMs : DisposalBatchPaceMs);
+                try
+                {
+                    await old.DisposeAsync();
+                }
+                catch { /* 单个旧会话释放失败不影响队列后续 */ }
+                lastDisposeDoneQpc = Stopwatch.GetTimestamp();
+            }
+        }
+        catch (ChannelClosedException)
+        {
+            // 队列关闭：退出（本示例不关闭队列，防御性兜底）
+        }
     }
 
     /// <summary>播放 / 暂停切换。</summary>
