@@ -378,6 +378,8 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private int _supplyQueueMin = int.MaxValue; // 窗口内采样队列最小水位
     private int _supplyQueueMax;            // 窗口内采样队列最大水位
     private int _supplySampleRate;          // 首帧采样率（窗口速率分母；懒初始化于首次提交）
+    private int _diagPacketDepthMin = int.MaxValue; // 窗口内音频包通道最小深度：≈0 → demux 供给不足；
+                                                    // 有积压而产出仍不足 → 解码消费慢（二选一定位）
 
     private async Task PipelineLoop()
     {
@@ -443,6 +445,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 MediaPacket? packet;
                 try
                 {
+                    // 包通道水位采样（喂帧判据）：decode 消费前的通道深度。
+                    int depth = _packetQueue.Reader.Count;
+                    if (depth < _diagPacketDepthMin) _diagPacketDepthMin = depth;
                     if (!_packetQueue.Reader.TryRead(out packet))
                     {
                         var readStart = Stopwatch.GetTimestamp();
@@ -594,11 +599,13 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         if (supplyWinSec >= 5.0 && _supplySampleRate > 0 && _supplySubmittedSamples > 0)
         {
             double supplyRate = _supplySubmittedSamples / (supplyWinSec * _supplySampleRate) * 100.0;
+            int pktMinShown = _diagPacketDepthMin == int.MaxValue ? -1 : _diagPacketDepthMin;
             _logger.LogInformation(
-                "[AUDIO-SUPPLY] 窗口={Sec:F1}s 提交采样={N}（速率 {Rate:F0}% 实时）解码包={P} 采样队列 min/max={Lo}/{Hi}",
-                supplyWinSec, _supplySubmittedSamples, supplyRate, _supplyDecodedPackets, _supplyQueueMin, _supplyQueueMax);
+                "[AUDIO-SUPPLY] 窗口={Sec:F1}s 提交采样={N}（速率 {Rate:F0}% 实时）解码包={P} 包通道最小={PkMin} 采样队列 min/max={Lo}/{Hi}",
+                supplyWinSec, _supplySubmittedSamples, supplyRate, _supplyDecodedPackets, pktMinShown, _supplyQueueMin, _supplyQueueMax);
             _supplyWindowStartQpc = supplyNow;
             _supplySubmittedSamples = 0; _supplyDecodedPackets = 0;
+            _diagPacketDepthMin = int.MaxValue;
             _supplyQueueMin = int.MaxValue; _supplyQueueMax = 0;
         }
         return true;
