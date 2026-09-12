@@ -132,8 +132,10 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private int _paceStepCount;         // 窗口内回调步进数
     private double _paceIntervalSumMs;  // 窗口内回调间隔和（均值分母 = 步进数）
     private double _paceIntervalPeakMs; // 窗口内回调间隔峰值
-    private int _underrunCount;         // 窗口内欠载事件数（间隔 > 1.5×capMs）
+    private int _underrunCount;         // 窗口内欠载事件数（间隔 > 1.25×capMs）
     private double _underrunDebtMs;     // 窗口内欠载累计时长（间隔超出 capMs 的部分）
+    private int _paceInFlightMin = int.MaxValue; // 窗口内在途缓冲最小值：=0 即设备完全排空（喂帧被饿实锤）；
+                                                 // >0 而间隔仍拉伸 → 回调调度延迟路径
     private volatile bool _clockRunning; // 播放中（Resume 置位；Pause/重播复位清除）
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -497,13 +499,15 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
 
                     // 节拍仪表：完成回调间隔 = 该缓冲实际播放时长（健康 ≈ capMs）+ 设备排空时间。
                     double capMs = samples * 1000.0 / _sampleRate;
+                    int inFlightNow = _inFlightBuffers.Count;
+                    if (inFlightNow < _paceInFlightMin) _paceInFlightMin = inFlightNow;
                     if (_pacePrevStepQpc != 0)
                     {
                         double intervalMs = System.Diagnostics.Stopwatch.GetElapsedTime(_pacePrevStepQpc, nowQpc).TotalMilliseconds;
                         _paceStepCount++;
                         _paceIntervalSumMs += intervalMs;
                         if (intervalMs > _paceIntervalPeakMs) _paceIntervalPeakMs = intervalMs;
-                        if (intervalMs > capMs * 1.5)
+                        if (intervalMs > capMs * 1.25)
                         {
                             _underrunCount++;
                             _underrunDebtMs += intervalMs - capMs;
@@ -515,12 +519,14 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
                         {
                             double avg = _paceIntervalSumMs / _paceStepCount;
                             double debtRatio = _underrunDebtMs / (windowSec * 1000.0);
+                            int minShown = _paceInFlightMin == int.MaxValue ? -1 : _paceInFlightMin;
                             _logger.LogInformation(
-                                "[OPENSLES-pace] 窗口={Sec:F1}s 欠载={Count} 次/累计 {Debt:F0} ms（占比 {Ratio:P0}）回调间隔均/峰={Avg:F1}/{Peak:F1} ms 单缓冲={Cap:F1} ms",
-                                windowSec, _underrunCount, _underrunDebtMs, debtRatio, avg, _paceIntervalPeakMs, capMs);
+                                "[OPENSLES-pace] 窗口={Sec:F1}s 欠载={Count} 次/累计 {Debt:F0} ms（占比 {Ratio:P0}）回调间隔均/峰={Avg:F1}/{Peak:F1} ms 在途最小={Min} 单缓冲={Cap:F1} ms",
+                                windowSec, _underrunCount, _underrunDebtMs, debtRatio, avg, _paceIntervalPeakMs, minShown, capMs);
                             _paceWindowStartQpc = nowQpc;
                             _paceStepCount = 0; _paceIntervalSumMs = 0; _paceIntervalPeakMs = 0;
                             _underrunCount = 0; _underrunDebtMs = 0;
+                            _paceInFlightMin = int.MaxValue;
                         }
                     }
                     _pacePrevStepQpc = nowQpc;
