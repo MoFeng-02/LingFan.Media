@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LingFan.Media.Abstractions;
 using LingFan.Media.Sources;
@@ -27,9 +27,11 @@ public partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// 打开并播放指定文件。由 MainView 的文件选择器 Click 处理器传入本地路径。
-    /// 内部：解析回退工厂 → 创建播放器 → 先 OpenAsync（Session 就绪）→ 再绑定 Player → PlayAsync。
-    /// 三后端（FFmpeg/VLC/MF）由回退工厂按注册顺序自动选可用者。
+    /// 打开并播放指定文件（工厂式并行会话）。
+    /// 设计依据：Session 隔离——每个 IMediaPlayer 拥有独立 Session（Clock/Buffer/Pipeline），
+    /// 多实例并行是架构支持的目标形态。覆盖式（先销毁旧再建新）会把旧会话的满负荷设备侧
+    /// 释放（解码器实例/gralloc/GPU）压进新会话最脆弱的启动窗口。
+    /// 顺序：创建新播放器 → OpenAsync（旧会话不受影响继续播放）→ 绑定切换 → PlayAsync → 旧会话后台释放。
     /// </summary>
     [RelayCommand]
     private async Task OpenFile(string? path)
@@ -37,33 +39,36 @@ public partial class MainViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(path))
             return;
 
+        var factory = _sp.GetRequiredService<IMediaPlayerFactory>();
+        var player = factory.Create();
+        var old = Player;
+
         try
         {
             Status = $"正在打开：{Path.GetFileName(path)} …";
-
-            // 释放上一个播放器（先解绑再 Dispose，避免 VideoView 仍引用旧帧通道）
-            if (Player is not null)
-            {
-                var old = Player;
-                Player = null;
-                await old.DisposeAsync();
-            }
-
-            var factory = _sp.GetRequiredService<IMediaPlayerFactory>();
-            var player = factory.Create();
-
-            // 先 Open（Session 就绪），再绑定 VideoView.Player —— 遵守 VideoView 的绑定契约
+            // 新会话独立 Open（Session 隔离：旧会话此刻仍在正常播放，互不干扰）
             await player.OpenAsync(new FileMediaSource(path), CancellationToken.None);
-
-            Player = player;          // 绑定到 VideoView → 触发帧通道订阅 / GPU Presenter 接管
-            await player.PlayAsync(); // A/V 编排（视频首帧上屏后再起音频）由播放器内部完成
-
+            Player = player;          // 绑定 VideoView（帧通道/呈现器切换到新会话）
+            await player.PlayAsync();
             Status = $"播放中：{Path.GetFileName(path)}";
         }
         catch (Exception ex)
         {
+            // 新会话失败：丢弃新播放器，旧会话照常播放（不因切换失败中断当前播放）
+            try { await player.DisposeAsync(); } catch { }
             Status = $"打开失败：{ex.Message}";
+            return;
         }
+
+        // 旧会话后台优雅释放：不阻塞 UI 与新会话启动，设备侧释放在新会话稳定后进行
+        if (old is not null)
+            _ = DisposeOldAsync(old);
+    }
+
+    private static async Task DisposeOldAsync(IMediaPlayer old)
+    {
+        try { await old.DisposeAsync(); }
+        catch { /* 旧会话释放失败不影响新会话 */ }
     }
 
     /// <summary>播放 / 暂停切换。</summary>
