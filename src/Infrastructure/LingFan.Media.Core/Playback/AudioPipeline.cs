@@ -490,8 +490,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     var pdStart = Stopwatch.GetTimestamp();
                     await DecodeAndEnqueueAsync(next);
                     _diagDecodeMs += Stopwatch.GetElapsedTime(pdStart).TotalMilliseconds;
-                    if (AudioDiagEnabled && _diagDecodeMs > 80)
-                        _logger.LogWarning("[AUDIO-DIAG] 前瞻 Decode 阻塞 {Ms}ms（解码慢）", _diagDecodeMs);
+                    var pdMs = Stopwatch.GetElapsedTime(pdStart).TotalMilliseconds;
+                    if (AudioDiagEnabled && pdMs > 80)
+                        _logger.LogWarning("[AUDIO-DIAG] 前瞻 Decode 阻塞 {Ms}ms（解码慢）", pdMs);
 
                     if (_sampleQueue.Count > 0)
                     {
