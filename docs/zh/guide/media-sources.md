@@ -7,10 +7,10 @@
 | 源 | 类 | 产出的流 | 状态 |
 | --- | --- | --- | --- |
 | **文件** | `FileMediaSource` | `FileMediaStream` | ✅ 已实现——主要路径，经测试最充分 |
-| **网络**（HTTP / HTTPS） | `NetworkMediaSource` | `NetworkMediaStream` | 🟡 已实现，**尚未测试**——异步建连、SSRF 防护、自定义请求头 / Cookie / 超时 |
-| **内存流** | `StreamMediaSource` | `PassThroughMediaStream` | 🟡 已实现，**尚未测试**——包装任意 `System.IO.Stream` |
+| **网络**（HTTP / HTTPS） | `NetworkMediaSource` | `NetworkMediaStream` | ✅ 已端到端验证——异步建连、SSRF 防护、Range 定位、自定义请求头 / Cookie / 超时 |
+| **内存流** | `StreamMediaSource` | `PassThroughMediaStream` | ✅ 已实现——包装任意 `System.IO.Stream`，与文件源走同一条路径 |
 
-文件是已被测试套件覆盖的参考路径。网络与内存流均已端到端写入（代码路径存在且可编译），但**尚未被测试覆盖**——在验证落地前，请将其视为实验性。
+文件是参考路径。网络源同样已端到端验证：播放、Range 定位与播放中定位均对支持 `Accept-Ranges` 的 HTTP 源实测，每次都播到自然结束且零丢帧。内存流路径在文件源被包装成流时一并被覆盖。
 
 三者均已端到端打通：`MediaPlayer.OpenAsync(IMediaSource)` 调用 `streamFactory.CreateAsync(source)`，返回每个后端 demuxer 都统一消费的 `IMediaStream`。管线中**不存在按源分支**的逻辑。
 

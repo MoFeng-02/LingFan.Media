@@ -8,7 +8,7 @@
 
 **LingFan.Media (灵泛)** is a cross-platform media infrastructure for the .NET platform. It provides a modular, DI-friendly, and AOT-ready abstraction layer that decouples core playback logic from the concrete engines (decoders, demuxers, renderers, audio outputs) so they can be swapped per platform or per deployment.
 
-> Status: The library is actively developed on **.NET 10**. **Windows, Linux, and Android** are supported, tested targets — Windows through the MediaFoundation / FFmpeg / LibVLC backends; Linux through the FFmpeg backend (VAAPI hardware decode + Vulkan / OpenGL renderers, OpenAL audio, tested), with the LibVLC backend implemented there but not yet validated; Android is validated on real devices (MediaCodec hardware decode + AHB zero-copy presentation); **macOS / iOS are on hold — no hardware is available, so implementation and testing cannot proceed for now (please wait)** (see [Platform & backend status](#platform--backend-status)). It is not yet a feature-complete, every-platform media framework — the design is built to get there without breaking the public surface. **Only local-file playback has been validated end-to-end so far; network-source and streaming paths are implemented but not yet runtime-validated.**
+> Status: The library is actively developed on **.NET 10**. **Windows, Linux, and Android** are supported, tested targets — Windows through the MediaFoundation / FFmpeg / LibVLC backends; Linux through the FFmpeg backend (VAAPI hardware decode + Vulkan / OpenGL renderers, OpenAL audio, tested), with the LibVLC backend implemented there but not yet validated; Android is validated on real devices (MediaCodec hardware decode + AHB zero-copy presentation); **macOS / iOS are on hold — no hardware is available, so implementation and testing cannot proceed for now (please wait)** (see [Platform & backend status](#platform--backend-status)). It is not yet a feature-complete, every-platform media framework — the design is built to get there without breaking the public surface. **Local-file and network sources are both validated end-to-end on Windows**: network playback, range-based seeking and mid-playback seeking were exercised against an HTTP source with `Accept-Ranges` support, playing to natural end with zero dropped frames.
 
 ## Why another media layer
 
@@ -60,12 +60,12 @@ The library is further along in some areas than others. The table below marks ea
 | OpenSL ES / AAudio audio output (Android) | Implemented |
 | Vulkan renderer (FFmpeg zero-copy path, Windows) | **Validated** |
 | OpenGL renderer (FFmpeg zero-copy path, Windows) | Implemented |
-| Network sources (`NetworkMediaSource` + SSRF) | Implemented, not yet validated |
-| Streaming playback | Implemented, not yet validated |
+| Network sources (`NetworkMediaSource` + SSRF) | **Validated on Windows** (HTTP source with `Accept-Ranges`, end-to-end) |
+| Streaming playback + mid-playback seeking over HTTP range | **Validated on Windows** (played to natural end, zero dropped frames) |
 | macOS / iOS | **On hold (no hardware)** — Metal renderer, AVAudioEngine / AudioUnit audio partially implemented; work resumes once hardware is available |
 | WebRTC / GStreamer | Out of scope |
 
-> The validated Windows path exercises the core abstraction, rendering, audio output, and headless frame delivery on a local file. Network and streaming paths are implemented (including DNS-pinning SSRF protection) but have not yet been exercised end-to-end — treat them as experimental until validated at runtime.
+> The validated Windows path exercises the core abstraction, rendering, audio output, and headless frame delivery on a local file. Network sources are validated on Windows too (including DNS-pinning SSRF protection): playback, range-based seeking and mid-playback seeking were exercised against an HTTP source that supports `Accept-Ranges`, each run playing to its natural end with zero dropped frames.
 
 > **Hardware decode:** On Windows, Media Foundation's decoder returns frames through CPU memory (hybrid decode) — a characteristic of the platform's MFT pipeline, not a defect in LingFan.Media. The FFmpeg and LibVLC backends decode on the GPU.
 >
@@ -128,9 +128,9 @@ await player.DisposeAsync();
 
 `AddMediaFoundation()` (Windows), `AddFFmpeg()`, and `AddVLCNative()` register their factories into the DI container. When multiple are registered, the runtime selects one in registration order and falls back if a backend cannot handle the source. To force a specific backend, use the `IMediaPlayerFactory.Create(...)` overload that accepts an explicit backend group.
 
-### Network sources (experimental, not yet validated)
+### Network sources
 
-`NetworkMediaSource` is implemented with DNS-pinning–based SSRF protection: private, loopback, link-local, and reserved/CGNAT addresses are rejected at construction, and the resolved IP is pinned for the actual connection so a redirected URL cannot reach an internal address. **However, network and streaming playback have not yet been exercised end-to-end** — only local-file playback has been tested so far. Treat network sources as experimental until they are validated at runtime.
+`NetworkMediaSource` is implemented with DNS-pinning–based SSRF protection: private, loopback, link-local, and reserved/CGNAT addresses are rejected at construction, and the resolved IP is pinned for the actual connection so a redirected URL cannot reach an internal address. Seeking in a network stream is carried out by reopening the connection with an HTTP `Range` request rather than by seeking the underlying socket, and a server that ignores the range (answering `200` instead of `206`) is detected and refused so playback is never silently repositioned to the wrong place. Opening headers (user agent, user-supplied headers, cookies) are collected on the stream contract so address-based backends can forward them. **Network playback is validated end-to-end**: playback, range seeking and mid-playback seeking were exercised against an HTTP source supporting `Accept-Ranges`, each run reaching its natural end with zero dropped frames.
 
 ## Architecture in brief
 

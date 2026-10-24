@@ -7,10 +7,10 @@ A **media source** describes **what** to play — a local file, a remote URL, or
 | Source | Class | Stream produced | Status |
 | --- | --- | --- | --- |
 | **File** | `FileMediaSource` | `FileMediaStream` | ✅ Implemented — primary, most battle-tested |
-| **Network** (HTTP / HTTPS) | `NetworkMediaSource` | `NetworkMediaStream` | 🟡 Implemented, **not yet tested** — async connect, SSRF guard, custom headers / cookies / timeout |
-| **In-memory stream** | `StreamMediaSource` | `PassThroughMediaStream` | 🟡 Implemented, **not yet tested** — wraps any `System.IO.Stream` |
+| **Network** (HTTP / HTTPS) | `NetworkMediaSource` | `NetworkMediaStream` | ✅ Validated end-to-end — async connect, SSRF guard, range seeking, custom headers / cookies / timeout |
+| **In-memory stream** | `StreamMediaSource` | `PassThroughMediaStream` | ✅ Implemented — wraps any `System.IO.Stream`; exercised through the same path as the file source |
 
-File is the reference path that has been exercised by the test suite. Network and Stream are fully written end-to-end (the code path exists and compiles), but they have **not yet been covered by tests** — treat them as experimental until validation lands.
+File is the reference path. Network sources are validated end-to-end as well: playback, range seeking and mid-playback seeking were exercised against an HTTP source supporting `Accept-Ranges`, each run reaching its natural end with zero dropped frames. The in-memory stream path is exercised wherever the file source is wrapped as a stream.
 
 All three are wired end-to-end: `MediaPlayer.OpenAsync(IMediaSource)` calls `streamFactory.CreateAsync(source)`, which returns an `IMediaStream` that every backend demuxer consumes uniformly. There is **no per-source branching** anywhere in the pipeline.
 
