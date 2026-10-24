@@ -274,10 +274,26 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
 
             if (ret < 0)
             {
-                // AVERROR_EOF 或其他错误 → 返回 null 表示流结束
-                if (ret != FF.AVERROR_EOF)
-                    _logger.LogWarning("av_read_frame 返回 {Ret}: {Error}", ret, GetErrorString(ret));
-                return null;
+                if (ret == FF.AVERROR_EOF)
+                {
+                    // 定位后的首个读请求就遇到流末：落点可能超出可解码范围，或读链路已断开。
+                    // 仍按流末返回（上层据此收尾），但留下上下文，便于与「正常播放完毕」区分。
+                    if (_logFirstPacketAfterSeek)
+                    {
+                        _logFirstPacketAfterSeek = false;
+                        _logger.LogWarning(
+                            "定位后首包即为流末：targetTs={TargetTs}，落点可能超出可解码范围或读链路已断开",
+                            _lastSeekTargetTs);
+                    }
+
+                    // 流正常结束
+                    return null;
+                }
+
+                // 非 EOF 错误（数据源中断、容器损坏等）按错误传播，
+                // 不以「返回 null = 流结束」掩盖——否则中断表现为无声无息的提前播完。
+                // pkt 由 finally 统一释放，此处不重复释放。
+                throw new IOException($"av_read_frame 失败: {GetErrorString(ret)} (code={ret})");
             }
 
             // 引用计数零拷贝：av_packet_clone = av_packet_alloc + av_packet_ref，
@@ -426,6 +442,8 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
     /// <remarks>
     /// 运行在 FFmpeg 工作线程（非 UI 线程）。建连已在 <see cref="OpenAsync"/> 的异步路径完成，
     /// 此处仅做已连接流的逐块同步读取——这是 FFmpeg C API 的固有同步边界，非伪异步。
+    /// EOF 与错误严格区分：读到 0 字节 = EOF；异常（含网络读超时/连接中断）= AVERROR_EXTERNAL，
+    /// 交由上层按错误处理而非当作播放结束。
     /// </remarks>
     private unsafe int ReadPacketCallback(void* opaque, byte* buf, int bufSize)
     {
@@ -441,12 +459,27 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
             Span<byte> span = new(buf, bufSize);
             int read = _stream.Read(span);
 
-            return read <= 0 ? FF.AVERROR_EOF : read;
+            if (read <= 0)
+            {
+                // 定位窗口内数据源直接返回 0 与「容器层读到的流末」是两种成因（落点超出可读范围、
+                // 或 Range 连接已被对端关闭）。返回值不变（上层仍按流末收尾），
+                // 只留下带定位目标的上下文，便于结合上层日志判断读链路是否正常。
+                if (_logFirstPacketAfterSeek)
+                {
+                    _logger.LogWarning(
+                        "定位窗口内数据源读取返回 {ReadBytes}：targetTs={TargetTs}，读链路可能已中断或落点不可读",
+                        read, _lastSeekTargetTs);
+                }
+
+                return FF.AVERROR_EOF;
+            }
+
+            return read;
         }
         catch (Exception ex)
         {
             try { _logger.LogError(ex, "AVIO ReadPacketCallback 异常（已吞除以防逃逸进原生 ffmpeg）"); } catch { }
-            return FF.AVERROR_EOF;
+            return FF.AVERROR_EXTERNAL;
         }
     }
 
@@ -459,13 +492,13 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         try
         {
             if (_stream == null || _disposed || !_stream.CanSeek)
-                return FF.AVERROR_EOF;
+                return FF.AVERROR_EXTERNAL;
 
             // AVSEEK_SIZE：查询流大小
             if (whence == FF.AVSEEK_SIZE)
             {
                 long len = _stream.Length;
-                return len < 0 ? FF.AVERROR_EOF : len;
+                return len < 0 ? FF.AVERROR_EXTERNAL : len;
             }
 
             SeekOrigin origin = whence switch
@@ -481,7 +514,7 @@ internal sealed class FFmpegDemuxer : IMediaDemuxer
         catch (Exception ex)
         {
             try { _logger.LogError(ex, "AVIO SeekCallback 异常（已吞除以防逃逸进原生 ffmpeg）"); } catch { }
-            return FF.AVERROR_EOF;
+            return FF.AVERROR_EXTERNAL;
         }
     }
 

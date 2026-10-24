@@ -20,6 +20,8 @@ internal static partial class FF
     public const long AV_NOPTS_VALUE = unchecked((long)0x8000000000000000); // 0x8000000000000000
     public const long AV_TIME_BASE = 1000000;
     public const int AVERROR_EOF = -541478725;
+    /// <summary>libavutil/error.h AVERROR_EXTERNAL = FFERRTAG('E','X','T','2')——非分类的原生/IO 错误（与 EOF 严格区分）。</summary>
+    public const int AVERROR_EXTERNAL = unchecked((int)0xCDABA7BB);
 
     // 平台 errno EAGAIN：直接取自既有 AutoGen 绑定（ffmpeg.EAGAIN == 11，对应 Windows MSVC 构建的 FFmpeg）。
     // 固定此值可保证 AVERROR(EAGAIN) 判别行为与迁移前完全一致，避免硬解/软解回退时误判"再试"。
