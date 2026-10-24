@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>MediaSourceProbe</RootNamespace>
+    <AssemblyName>MediaSourceProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- FFmpeg 后端经自写原生绑定调用原生 DLL；预检块引用 Windows 专有 API：抑制 CA1416（预检已按 OS 门控）。 -->
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- FFmpeg 后端（网络/流源的核心消费路径） -->
+    <ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Consumers\LingFan.Media.Consumers.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 真实媒体资源（与测试工程同源，供默认文件回退） -->
+    <None Include="..\..\..\Resources\**\*" LinkBase="Resources\" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 原生 ffmpeg 共享库随构建/发布复制到输出目录（含无版本别名），供自写加载器动态加载（LGPL，绝不静态合并） -->
+    <None Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
+    LGPL 合规关键步骤：把合规的 ffmpeg 共享构建（BtbN lgpl-shared）复制到输出/发布目录，
+    自写 FF 绑定运行时动态加载（与 FfmpegPlaybackProbe 同款契约块）。
+  -->
+  <Target Name="CopyFFmpegNative" AfterTargets="Build;Publish">
+    <ItemGroup>
+      <FFmpegDll Include="$(MSBuildProjectDirectory)\..\..\..\ThirdParty\ffmpeg\*\bin\*.dll" />
+      <FFmpegDll>
+        <Alias>$([System.Text.RegularExpressions.Regex]::Replace('%(Filename)', '-[0-9]+', ''))</Alias>
+      </FFmpegDll>
+    </ItemGroup>
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(OutDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+    <Copy SourceFiles="@(FFmpegDll)" DestinationFiles="@(FFmpegDll->'$(PublishDir)%(Alias)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(FFmpegDll)' != '' AND '$(PublishDir)' != ''" />
+    <Message Condition="'@(FFmpegDll)' != ''" Text="[FFMPEG] 已复制 @(FFmpegDll-&gt;Count()) 个 ffmpeg 原生 DLL (+无版本别名) 到输出/发布目录" Importance="high" />
+    <Message Condition="'@(FFmpegDll)' == ''" Text="[FFMPEG] 未找到 ThirdParty/ffmpeg/*/bin/*.dll，请先解包合规的 ffmpeg 共享构建（见 THIRD_PARTY_NOTICES.md）。" Importance="high" />
+  </Target>
+
+</Project>

@@ -58,6 +58,7 @@
     <Project Path="src/Tools/LinuxHeadlessVulkanProbe/LinuxHeadlessVulkanProbe.csproj" />
     <Project Path="src/Tools/MediaCorrectnessProbe/MediaCorrectnessProbe.csproj" />
     <Project Path="src/Tools/MediaPlaybackProbe/MediaPlaybackProbe.csproj" />
+    <Project Path="src/Tools/MediaSourceProbe/MediaSourceProbe.csproj" />
     <Project Path="src/Tools/OpenGLHeadfulPlaybackProbe/OpenGLHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/PlaybackProbe/PlaybackProbe.csproj" />
     <Project Path="src/Tools/VlcHeadfulPlaybackProbe/VlcHeadfulPlaybackProbe.csproj" />
