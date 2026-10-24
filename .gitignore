@@ -511,3 +511,7 @@ ThirdParty/
 /vk_settings
 /Copy-ToWsl.ps1
 /article
+
+# 协作与记忆状态（含会话标识、成员邮箱、内部审计叙事，不入库）
+/.agent-teams
+/.dsh-memory
