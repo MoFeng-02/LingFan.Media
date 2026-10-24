@@ -98,6 +98,27 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
     /// <inheritdoc/>
     public bool TryWriteFrame(VideoFrame frame, out SharedGpuSurfaceDescriptor descriptor)
     {
+        try
+        {
+            return TryWriteFrameCore(frame, out descriptor);
+        }
+        catch (OperationCanceledException)
+        {
+            // 取消是管线优雅退出的信号，语义上不是「本帧写不进去」——继续上抛。
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 契约（ISharedGpuSurfaceSource.TryWriteFrame）：失败返回 false 属正常降级路径，
+            // 不应抛异常打断管线。EnsureSharedTexture / Present* 的 COMException 在此收拢为丢帧。
+            _logger.LogWarning(ex, "D3D11 共享表面写入失败，丢弃本帧。");
+            descriptor = default;
+            return false;
+        }
+    }
+
+    private bool TryWriteFrameCore(VideoFrame frame, out SharedGpuSurfaceDescriptor descriptor)
+    {
         descriptor = default;
         if (_disposed)
             return false;
@@ -114,9 +135,19 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
 
         if (frame.Resource is IGpuTextureResource gpu)
         {
+            // 零句柄 = 本帧没有可采样的原生纹理（互操作纹理按帧注册、或生产者尚未就绪）。
+            // 必须先判零再构造包装：以 IntPtr.Zero 构造 ID3D11Texture2D 后访问 Device 是原生访问冲突，
+            // 托管 catch 拦不住（AV 不是托管异常），故在入口处就回退 Skia 软渲染。
+            IntPtr nativeTexture = gpu.NativeTextureHandle;
+            if (nativeTexture == IntPtr.Zero)
+            {
+                _logger.LogWarning("GPU 纹理帧未提供原生纹理句柄，跳过零拷贝（回退 Skia 软渲染）。");
+                return false;
+            }
+
             // 以同一 COM 指针构造 Vortice 包装（不 AddRef、不 Dispose，SafeHandle 持有引用，
             // 与 D3D11TextureResource.ReadbackToCpu 同源做法）。
-            srcGpu = new ID3D11Texture2D(gpu.NativeTextureHandle);
+            srcGpu = new ID3D11Texture2D(nativeTexture);
             w = gpu.Width;
             h = gpu.Height;
             fmt = gpu.Format;

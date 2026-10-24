@@ -854,8 +854,18 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
 
     // Clear
 
+    /// <summary>
+    /// 有头呈现的「Present→上屏」延迟：swapchain 用 FIFO（严格 vsync），即一个刷新周期。
+    /// </summary>
+    private static readonly TimeSpan PresentationLatencyValue = TimeSpan.FromMilliseconds(16.67);
+
     /// <inheritdoc />
-    public TimeSpan PresentationLatency => TimeSpan.Zero;
+    /// <remarks>
+    /// FIFO 呈现模式（<c>PresentModeKHR.FifoKhr</c>）下 Present 受 vsync 门控，队列满时阻塞，
+    /// 因此「Present→上屏」= 一个刷新周期，按 60Hz 近似 16.67ms。返回零会让同步器永不给提前窗口，
+    /// 全程系统性晚一帧。
+    /// </remarks>
+    public TimeSpan PresentationLatency => PresentationLatencyValue;
 
     /// <inheritdoc/>
     public void Clear()

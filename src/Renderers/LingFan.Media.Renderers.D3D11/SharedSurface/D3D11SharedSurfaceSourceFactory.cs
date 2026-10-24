@@ -1,5 +1,6 @@
 using LingFan.Media.Renderers.Shared;
 using Vortice.Direct3D11;
+using Vortice.DXGI;
 
 namespace LingFan.Media.Renderers.D3D11;
 
@@ -50,10 +51,46 @@ public sealed class D3D11SharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFac
 
         // 共享设备已开启多线程保护；使用其 immediate context 提交（与管线/解码线程并发安全）。
         ID3D11DeviceContext d3d11Context = device.ImmediateContext;
+
+        // 设备身份核验（契约 Create(targetAdapter)）：宿主声明了目标适配器 LUID 时必须与实际设备一致，
+        // 否则抛 NotSupportedException 让调用方干净回退下一个工厂。
+        // UUID 在 D3D11 侧没有对应查询途径（DXGI 的身份是 LUID），故只核 LUID——
+        // 未提供 LUID 或无法查询时按「无法确认」放行，绝不把「无法确认」当成「不匹配」。
+        if (targetAdapter is { HasDeviceLuid: true } identity)
+        {
+            byte[]? luid = TryGetAdapterLuid(device);
+            if (luid is not null && !identity.MatchesDeviceLuid(luid))
+                throw new NotSupportedException(
+                    "D3D11 共享表面源所在适配器与目标适配器不一致（DXGI LUID 不匹配）。");
+        }
+
         var source = new D3D11SharedSurfaceSource(
             device, d3d11Context, _loggerFactory.CreateLogger<D3D11SharedSurfaceSource>());
         // 宽高比缩放模式与渲染器工厂保持一致（默认 Uniform 信箱）
         source.ScaleMode = _rendererFactory.ScaleMode;
         return source;
+    }
+
+    /// <summary>
+    /// 读取 D3D11 设备所属 DXGI 适配器的 LUID（8 字节，低 32 位在前）。
+    /// </summary>
+    /// <returns>LUID 字节；查询失败返回 <see langword="null"/>（调用方视为「无法确认」）。</returns>
+    private static byte[]? TryGetAdapterLuid(ID3D11Device device)
+    {
+        try
+        {
+            using IDXGIDevice dxgiDevice = device.QueryInterface<IDXGIDevice>();
+            using IDXGIAdapter adapter = dxgiDevice.GetParent<IDXGIAdapter>();
+            var desc = adapter.Description;
+            byte[] bytes = new byte[8];
+            BitConverter.TryWriteBytes(bytes.AsSpan(0, 4), desc.Luid.LowPart);
+            BitConverter.TryWriteBytes(bytes.AsSpan(4, 4), desc.Luid.HighPart);
+            return bytes;
+        }
+        catch (Exception)
+        {
+            // 适配器查询失败（如 WARP/受限环境）不构成「不匹配」，交由调用方继续。
+            return null;
+        }
     }
 }

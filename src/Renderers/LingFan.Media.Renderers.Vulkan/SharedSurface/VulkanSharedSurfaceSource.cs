@@ -296,6 +296,19 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         {
             return TryWriteFrameCore(frame, out descriptor);
         }
+        catch (OperationCanceledException)
+        {
+            // 取消是管线优雅退出的信号，语义上不是「本帧写不进去」——继续上抛，由调用方结束循环。
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 契约（ISharedGpuSurfaceSource.TryWriteFrame）：失败返回 false 属正常降级路径，
+            // 不应抛异常打断管线。原生/托管异常一律在此收拢为丢帧。
+            _logger.LogWarning(ex, "[VULKAN-SHARED] 写入共享表面失败，丢弃本帧。");
+            descriptor = default;
+            return false;
+        }
         finally
         {
             MarkStage("done");
@@ -314,8 +327,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
 
         // 每帧重置 AHB 自提交标志（仅 Android AHB 零拷贝路径在 TryRecordAhbConversion 内部分步自提交后置位）。
         _ahbSelfSubmitted = false;
-        // Android 双缓冲：本帧翻转到另一槽写入并交付（绕开 Skia Ganesh 对同 VkImage 的内容缓存）。
-        if (_isAndroid)
+        // 双槽形态（Android VkImage 直采）：本帧翻转到另一槽写入并交付（绕开 Skia Ganesh 对同 VkImage 的内容缓存）。
+        // 判据与 _slotCount 同源——单槽形态若翻转会越界到不存在的槽 1（_sharedMemorySizes[1]/_sharedImages[1] 均为空）。
+        if (_slotCount > 1)
             _sharedActive ^= 1;
 
         int w, h;
@@ -1002,20 +1016,26 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private void ReleaseSharedSurface()
     {
         if (_device.Handle == 0) return;
-        if (_sharedImageViews[0].Handle != 0)
+        // 释放上界与建槽循环（EnsureSharedSurface）同源：双槽形态必须两槽都释放，
+        // 否则槽 1 的 VkImageView/VkImage/VkDeviceMemory 永久泄漏（且 _sharedImages[1] 残留非零句柄）。
+        for (int slot = 0; slot < _slotCount; slot++)
         {
-            VulkanNative.DestroyImageView(_device, _sharedImageViews[0], null);
-            _sharedImageViews[0] = default;
-        }
-        if (_sharedImages[0].Handle != 0)
-        {
-            VulkanNative.DestroyImage(_device, _sharedImages[0], null);
-            _sharedImages[0] = default;
-        }
-        if (_sharedMemories[0].Handle != 0)
-        {
-            VulkanNative.FreeMemory(_device, _sharedMemories[0], null);
-            _sharedMemories[0] = default;
+            if (_sharedImageViews[slot].Handle != 0)
+            {
+                VulkanNative.DestroyImageView(_device, _sharedImageViews[slot], null);
+                _sharedImageViews[slot] = default;
+            }
+            if (_sharedImages[slot].Handle != 0)
+            {
+                VulkanNative.DestroyImage(_device, _sharedImages[slot], null);
+                _sharedImages[slot] = default;
+            }
+            if (_sharedMemories[slot].Handle != 0)
+            {
+                VulkanNative.FreeMemory(_device, _sharedMemories[slot], null);
+                _sharedMemories[slot] = default;
+            }
+            _sharedMemorySizes[slot] = 0;
         }
         if (_convertView.Handle != 0)
         {
@@ -1034,7 +1054,10 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
         }
         // 导出的外部句柄随内存释放自动失效，无需 CloseHandle/dup；_version 保留递增语义。
         _exportedMemoryHandle = IntPtr.Zero;
-        _sharedCopyReady[0] = false; _sharedCopyReady[1] = false; _sharedActive = 0;
+        // 复制完成标志与槽一一对应：按槽数清（双槽形态两槽都清），再复位活动槽。
+        for (int slot = 0; slot < _slotCount; slot++)
+            _sharedCopyReady[slot] = false;
+        _sharedActive = 0;
         _texW = 0;
         _texH = 0;
     }

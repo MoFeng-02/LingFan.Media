@@ -20,7 +20,8 @@ namespace LingFan.Media.Renderers.OpenGL.SharedSurface;
 /// <see cref="TryWriteFrame"/> 对非 AHB 帧返回 <see langword="false"/>，交由渲染器的
 /// 健康回退机制切换到其它源或 CPU 上屏——不可用普通纹理名冒充 EGLImage，
 /// 消费方会把它当 display 级句柄解引用。</para>
-/// <para><b>帧所有权</b>：纹理与上下文生命周期归本源所有，消费方只借用纹理名，绝不释放。</para>
+/// <para><b>帧所有权</b>：上下文与共享对象生命周期归本源所有，消费方只借用 <c>EGLImageKHR</c>
+/// （经描述符 <c>NativeImage</c> 交付，<b>不是</b> GL 纹理对象名），绝不释放。</para>
 /// <para><b>异步策略</b>：同步（纯 GPU 命令提交与状态更新，无 I/O，补 async 即伪异步）。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，裸 P/Invoke（GLNative），无反射。</para>
 /// </remarks>

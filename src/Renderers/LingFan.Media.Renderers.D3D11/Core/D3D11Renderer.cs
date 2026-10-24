@@ -70,16 +70,16 @@ internal sealed class D3D11Renderer : IVideoRenderer
     private bool _loggedScaleOnce;
 
     /// <summary>
-    /// 音画同步解决：真实「Present→上屏」延迟 = 显示器刷新周期。
-    /// 视频帧在 audioClock 到达 PTS 前「本周期」调用 Present，像素恰在 PTS 时经 vsync 扫描出。
-    /// 此前错误地用 <see cref="MediaClock"/> 的 SyncThreshold(50ms) 作呈现提前量 → 视频系统性提前。
-    /// 优先按 DXGI 实际刷新率计算；查询失败回退 60Hz(16.67ms)。Attach 时刷新。
+    /// 音画同步的呈现提前量：<c>Present→上屏</c> 端到端延迟的估计值，按 60Hz 显示器标定，常量 40ms。
+    /// 视频帧在音频时钟到达 PTS 前 40ms 调用 Present，像素恰在 PTS 时经 vsync 扫描出。
     /// </summary>
-    // 真实「Present→上屏」延迟 = 端到端呈现延迟，非单纯刷新周期。
-    // 仅用刷新周期 16.67ms 作阈值时，视频恒定晚（delta 为负）；
-    // D3D11 vsync 锁定 swapchain 的端到端延迟包含最坏 vsync 相位（16.67ms）
-    // + Present()/消费者管线路径的延迟。故阈值取 40ms：帧在 PTS 前 40ms 释放、经消费者管线
-    // 后恰在 PTS 上屏，delta 收敛到约 0。非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 微调（VideoPipeline 叠加）。
+    /// <remarks>
+    /// <para>该值不是显示器刷新周期：只把 16.67ms 刷新周期当阈值时视频恒定偏晚（delta 为负）。
+    /// D3D11 的 vsync 锁定 swapchain 端到端延迟 = 最坏 vsync 相位（16.67ms）+ Present()/消费者管线路径延迟，
+    /// 故取 40ms，使 delta 收敛到约 0。</para>
+    /// <para>本值不随 <c>Attach</c> 重算（按实际刷新率取值需枚举输出显示器）：非 60Hz 显示器用
+    /// <c>LINGFAN_SYNC_LEAD_MS</c> 在 VideoPipeline 侧叠加微调。</para>
+    /// </remarks>
     private TimeSpan _presentationLatency = TimeSpan.FromMilliseconds(40.0);
 
     /// <summary>
@@ -230,9 +230,8 @@ internal sealed class D3D11Renderer : IVideoRenderer
 
             _attached = true;
 
-            // 音画同步解决：「Present→上屏」延迟 = 显示器刷新周期（vsync 下像素在下一刷新栅格扫描出）。
-            // 默认取 60Hz(16.67ms)；非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 在 VideoPipeline 叠加微调。
-            // （DXGI 刷新率查询因 Vortice 3.8.3 枚举名不稳，改为固定物理正确的刷新周期 + 手动微调，避免原生风险。）
+            // 音画同步：呈现提前量在字段处按 60Hz 端到端延迟（40ms）标定，Attach 不重算；
+            // 非 60Hz 显示器用 LINGFAN_SYNC_LEAD_MS 在 VideoPipeline 侧叠加微调。
 
             // 一次性附加诊断：摊开几何与线程归属。
             // DirectComposition 要求视觉树（CreateTargetForHwnd / SetRoot / Commit）在【拥有该窗口

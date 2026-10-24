@@ -296,9 +296,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     /// 窗口内内容稳定；导入由 <see cref="_ahbDirectRetire"/> 退役环在 <see cref="AhbDirectRetireDepth"/>
     /// 帧后销毁（GPU 早已执行完采样）。</para>
     /// <para><b>布局</b>：导入图像实际布局按 Android AHB 惯例视作 GENERAL（全程无屏障无过渡；采样在
-    /// GENERAL 下合法）。交付描述符声明为 ShaderReadOnlyOptimal——与旧双提交路径一致的可包装形状
-    /// （实测声明 GENERAL 会被 SKImage.FromTexture 拒收）；采样型包装无布局屏障，声明值
-    /// 仅作 Skia 内部记账。</para>
+    /// GENERAL 下合法）。交付描述符<b>如实声明该实际布局</b>（<c>ImageLayout.General</c>）——采样型包装
+    /// 不做布局屏障，声明值仅作 Skia 内部记账，唯一要求是<b>声明与实际一致</b>：若声明
+    /// SHADER_READ_ONLY 而实际 GENERAL，包装可能通过但采样结果黑屏。</para>
     /// </remarks>
     /// <returns>是否成功建立直采样描述符（false 时调用方落回旧转换路径）。</returns>
     private bool TryBuildAhbDirectDescriptor(

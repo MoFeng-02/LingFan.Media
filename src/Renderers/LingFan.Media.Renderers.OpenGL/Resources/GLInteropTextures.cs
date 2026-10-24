@@ -57,7 +57,15 @@ public sealed unsafe class GLD3D11InteropTexture : IFrameResource, IGpuTextureRe
         _subresourceIndex = subresourceIndex;
     }
 
-    /// <summary>无已注册 GL 纹理；管线在绘制时现场注册，不依赖此句柄。</summary>
+    /// <summary>
+    /// 返回 <see cref="IntPtr.Zero"/>：本帧没有可长期持有的 GL 纹理名。
+    /// </summary>
+    /// <remarks>
+    /// 零句柄的含义是「本帧无长期句柄」，不是「不支持」——D3D11 互操作纹理的 GL 侧纹理由管线在
+    /// 每次绘制时现场注册（WGL_NV_DX_interop 的 lock/unlock 与注册生命周期都绑在那一帧的绘制上），
+    /// 因此没有可跨帧交出去的纹理名。消费方不得据此判不支持、也不得把它当作错误码；
+    /// 需要像素时走 <see cref="ReadbackToCpu"/>。
+    /// </remarks>
     IntPtr IGpuTextureResource.NativeTextureHandle => IntPtr.Zero;
 
     int IGpuTextureResource.SubresourceIndex => _subresourceIndex;

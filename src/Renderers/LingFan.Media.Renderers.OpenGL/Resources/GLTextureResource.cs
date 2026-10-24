@@ -76,25 +76,39 @@ public sealed unsafe class GLTextureResource : IFrameResource, IGpuTextureResour
     int IGpuTextureResource.SubresourceIndex => _subresourceIndex;
 
     /// <inheritdoc/>
+    /// <exception cref="NotSupportedException">未注入共享设备上下文、纹理目标非 <c>GL_TEXTURE_2D</c>，
+    /// 或像素格式不在 <see cref="PixelFormat.RGBA32"/>/<see cref="PixelFormat.BGRA32"/> 之内。</exception>
     public GpuTextureReadback ReadbackToCpu()
     {
         if (_deviceContext is null)
             throw new NotSupportedException(
                 "GL 纹理 CPU 回读需要共享设备上下文（由解码侧 interop 注入 OpenGLOffscreenDeviceContext）。");
 
+        // 只支持二维纹理目标：3D / 立方图 / 纹理数组按二维绑定读取会取错层或直接 GL 错误。
+        if (_target != GLNative.GlTexture2DConst)
+            throw new NotSupportedException(
+                $"GL 纹理 CPU 回读仅支持 GL_TEXTURE_2D（当前目标 0x{_target:X4}）。");
+
+        // 只支持 8 位 RGBA 族：回读固定按 GL_RGBA / GL_UNSIGNED_BYTE 取像素，
+        // 其它格式（NV12、浮点、10bit）会得到错误数据，按契约显式拒绝而非静默假绿。
+        if (Format is not (PixelFormat.RGBA32 or PixelFormat.BGRA32))
+            throw new NotSupportedException(
+                $"GL 纹理 CPU 回读暂不支持像素格式 {Format}（仅 RGBA32 / BGRA32）。");
+
         _deviceContext.EnsureCreated();
         _deviceContext.MakeCurrent();
         try
         {
             uint tex = _textureId;
-            GLNative.glBindTexture(GLNative.GlTexture2DConst, tex);
+            GLNative.glBindTexture((uint)_target, tex);
             int w = Width, h = Height;
             int size = w * h * 4;
             byte[] data = new byte[size];
             fixed (byte* p = data)
                 GLNative.glGetTexImage(GLNative.GlTexture2DConst, 0, GLNative.GlRgbaConst, GLNative.GlUnsignedByteConst, p);
 
-            // RGBA → BGRA（与 D3D11TextureResource 同源，避免色彩漂移）
+            // GL_RGBA 取出的分量顺序恒为 R,G,B,A（与纹理内部 BGRA8 存储无关），
+            // 故两种格式都只需交换 R/B 即得 BGRA32（与 D3D11TextureResource 同源，避免色彩漂移）。
             for (int i = 0; i < size; i += 4)
             {
                 byte r = data[i];
