@@ -48,6 +48,10 @@ public sealed class FileMediaStream : IMediaStream
     /// <inheritdoc/>
     public string Location => _path;
 
+    /// <inheritdoc/>
+    /// <remarks>本地文件按路径打开,无 HTTP 请求头。</remarks>
+    public IReadOnlyDictionary<string, string>? SuggestedOpenHeaders => null;
+
     /// <summary>
     /// 初始化 <see cref="FileMediaStream"/> 的新实例并打开文件流。
     /// </summary>

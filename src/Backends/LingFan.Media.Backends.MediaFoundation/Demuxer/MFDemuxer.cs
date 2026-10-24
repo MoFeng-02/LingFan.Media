@@ -133,8 +133,8 @@ internal sealed class MFDemuxer : IMediaDemuxer
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 混合：<c>await stream.ConnectAsync</c>（真异步 I/O）+
-    /// <c>await Task.Run(OpenCore)</c>（伪异步：MFCreateSourceReaderFromURL + 轨道解析为同步 COM 调用）。
+    /// 伪异步：<c>await Task.Run(OpenCore)</c>（MFCreateSourceReaderFromURL + 轨道解析为同步 COM 调用）。
+    /// 流本身不被读取（MF 按地址经自身网络栈打开），故无预建连；SSRF 校验已在流工厂创建时完成。
     /// </remarks>
     public async Task OpenAsync(IMediaStream stream, CancellationToken ct = default)
     {
@@ -156,11 +156,9 @@ internal sealed class MFDemuxer : IMediaDemuxer
         ct.ThrowIfCancellationRequested();
         _stream = stream;
 
-        // 异步预建连
-        await stream.ConnectAsync(ct).ConfigureAwait(false);
-
         // 从 IMediaStream 获取 URL（文件路径或网络 URL）
-        // MFSourceReader 需要 URL 或 IMFByteStream
+        // MFSourceReader 需要 URL 或 IMFByteStream。
+        // 不调用 stream.ConnectAsync：MF 按地址自建连接，流本身不会被读取（预建连只会白建一条连接）。
         _url = ExtractUrl(stream);
 
         if (string.IsNullOrEmpty(_url))

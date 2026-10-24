@@ -162,11 +162,11 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
 
         ct.ThrowIfCancellationRequested();
 
-        await stream.ConnectAsync(ct).ConfigureAwait(false);
-
         nint instance = _backend.Instance.Handle;
 
-        // 地址式打开优先（location 打开比 imem 内存源更可靠）
+        // 地址式打开优先（location 打开比 imem 内存源更可靠）。
+        // 地址式路径流本身不被读取（URL 交 VLC 网络栈打开），故不预建连（避免白建连接）；
+        // imem 路径回调内同步读流，必须预建连（网络流）。
         string? location = stream.Location;
         if (!string.IsNullOrEmpty(location))
         {
@@ -184,6 +184,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
         else
         {
             // 无地址（内存/透传流）：回退 imem 路径。VLC 下 imem 仍受 get/release 指针校验限制，罕见路径。
+            await stream.ConnectAsync(ct).ConfigureAwait(false);
             _mediaInput = new VLCNativeMediaStreamInput(stream);
             _media = _mediaInput.CreateMedia(instance);
         }

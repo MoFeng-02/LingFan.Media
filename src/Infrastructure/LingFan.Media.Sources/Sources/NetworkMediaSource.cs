@@ -1,6 +1,6 @@
 using System.Collections.Frozen;
 using System.Net;
-using System.Net.Sockets;
+using LingFan.Media.Sources.Security;
 
 namespace LingFan.Media.Sources;
 
@@ -20,8 +20,14 @@ public sealed class NetworkMediaSource : IMediaSource, IMediaSourceMetadata
     /// <summary>自定义 HTTP 头。</summary>
     public IReadOnlyDictionary<string, string> Headers { get; }
 
-    /// <summary>网络超时（默认 30 秒）。</summary>
+    /// <summary>网络超时（连接与响应头阶段，默认 30 秒）。</summary>
     public TimeSpan Timeout { get; }
+
+    /// <summary>
+    /// 读超时（数据阶段）：单次读取在该时长内未读到任何数据即判定连接停滞并中断连接。
+    /// 默认 10 秒；设为 <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> 可关闭（不推荐）。
+    /// </summary>
+    public TimeSpan ReadTimeout { get; }
 
     /// <summary>是否允许不安全 HTTPS（默认 false）。</summary>
     public bool AllowInsecureHttps { get; }
@@ -63,6 +69,7 @@ public sealed class NetworkMediaSource : IMediaSource, IMediaSourceMetadata
     /// <param name="isLive">是否直播流。</param>
     /// <param name="extraFields">额外元数据。</param>
     /// <param name="allowPrivateAddresses">是否允许访问内网 IP（SSRF 防护开关）。</param>
+    /// <param name="readTimeout">读超时（数据阶段，默认 10 秒；传 <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> 关闭）。</param>
     public NetworkMediaSource(
         string url,
         IReadOnlyDictionary<string, string>? headers = null,
@@ -73,7 +80,8 @@ public sealed class NetworkMediaSource : IMediaSource, IMediaSourceMetadata
         string? contentType = null,
         bool isLive = false,
         IReadOnlyDictionary<string, string>? extraFields = null,
-        bool allowPrivateAddresses = false)
+        bool allowPrivateAddresses = false,
+        TimeSpan? readTimeout = null)
     {
         if (string.IsNullOrWhiteSpace(url))
             throw new ArgumentException("URL 不能为空。", nameof(url));
@@ -100,6 +108,7 @@ public sealed class NetworkMediaSource : IMediaSource, IMediaSourceMetadata
         Url = url;
         Headers = headers ?? FrozenDictionary<string, string>.Empty;
         Timeout = timeout ?? TimeSpan.FromSeconds(30);
+        ReadTimeout = readTimeout ?? TimeSpan.FromSeconds(10);
         AllowInsecureHttps = allowInsecureHttps;
         AllowPrivateAddresses = allowPrivateAddresses;
         Cookies = cookies;
@@ -110,76 +119,32 @@ public sealed class NetworkMediaSource : IMediaSource, IMediaSourceMetadata
     }
 
     /// <summary>
-    /// 检查目标主机是否为内网/回环地址。
+    /// 检查目标主机是否为内网/回环/保留地址（构造期字符串级快查）。
     /// </summary>
-    /// <param name="host">主机名或 IP 地址字符串。</param>
-    /// <returns>是内网/回环地址返回 true。</returns>
+    /// <remarks>
+    /// <para>名单单一真源 = <see cref="SsrfGuard.IsPrivateOrLoopbackOrReserved"/>（与 DNS 解析后校验、
+    /// 建连级校验完全同源，杜绝双清单漂移）；编码字面量（hex/十进制/八进制点分）经
+    /// <see cref="SsrfGuard.TryParseIpLiteral"/> 补齐（IPAddress.TryParse 不识别这些形式）。</para>
+    /// <para>本检查是快失败层，DNS 解析后的 <see cref="SsrfGuard.Validate"/>（工厂层）与
+    /// 建连级 pinning（ConnectCallback）仍逐层兜底。</para>
+    /// </remarks>
+    /// <param name="host">主机名或 IP 地址字符串（IPv6 含方括号形式，TryParse 可解析）。</param>
+    /// <returns>是内网/回环/保留地址返回 true。</returns>
     private static bool IsPrivateOrLoopbackAddress(string host)
     {
         if (string.IsNullOrEmpty(host))
             return false;
 
-        // localhost 主机名
+        // localhost 主机名（非 IP 形式，字面量解析不覆盖）
         if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        // 尝试解析为 IP 地址
-        if (IPAddress.TryParse(host, out var ip))
-        {
-            if (ip.AddressFamily == AddressFamily.InterNetwork)
-            {
-                // IPv4 私有/保留地址段检查
-                var bytes = ip.GetAddressBytes();
-                // 127.0.0.0/8 — 回环
-                if (bytes[0] == 127) return true;
-                // 10.0.0.0/8 — 私有 A 类
-                if (bytes[0] == 10) return true;
-                // 172.16.0.0/12 — 私有 B 类
-                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true;
-                // 192.168.0.0/16 — 私有 C 类
-                if (bytes[0] == 192 && bytes[1] == 168) return true;
-                // 169.254.0.0/16 — 链路本地
-                if (bytes[0] == 169 && bytes[1] == 254) return true;
-                // 0.0.0.0/8 — 本地网络
-                if (bytes[0] == 0) return true;
-            }
-            else if (ip.AddressFamily == AddressFamily.InterNetworkV6)
-            {
-                // IPv6 回环 ::1
-                if (IPAddress.IsLoopback(ip)) return true;
-                // IPv6 链路本地 fe80::/10
-                if (ip.IsIPv6LinkLocal) return true;
-                // IPv6 站点本地 fec0::/10（已弃用但仍检查）
-                if (ip.IsIPv6SiteLocal) return true;
+        // 标准点分/方括号 IPv6 字面量
+        if (IPAddress.TryParse(host, out var ip) && SsrfGuard.IsPrivateOrLoopbackOrReserved(ip))
+            return true;
 
-                var v6Bytes = ip.GetAddressBytes();
-
-                // IPv6 唯一本地地址 fc00::/7（含 fd00::/8，IPv6 私有地址等价物）
-                if (v6Bytes.Length == 16 && (v6Bytes[0] == 0xfc || v6Bytes[0] == 0xfd))
-                    return true;
-
-                // IPv4-mapped IPv6 地址 ::ffff:a.b.c.d — 防止通过 IPv6 映射绕过 IPv4 检查
-                // 标准格式: 前10字节为0，第11/12字节为0xff
-                if (v6Bytes.Length == 16 &&
-                    v6Bytes[10] == 0xff && v6Bytes[11] == 0xff)
-                {
-                    var mappedIp = new IPAddress(v6Bytes[12..]);
-                    return IsPrivateOrLoopbackAddress(mappedIp.ToString());
-                }
-
-                // IPv4-compatible IPv6 地址 ::a.b.c.d（deprecated RFC 4291）— 前12字节全零
-                // 防止通过 IPv6 兼容格式绕过 IPv4 检查（::1 已被上面 IsLoopback 捕获）
-                if (v6Bytes.Length == 16 &&
-                    v6Bytes[0] == 0 && v6Bytes[1] == 0 && v6Bytes[2] == 0 && v6Bytes[3] == 0 &&
-                    v6Bytes[4] == 0 && v6Bytes[5] == 0 && v6Bytes[6] == 0 && v6Bytes[7] == 0 &&
-                    v6Bytes[8] == 0 && v6Bytes[9] == 0 && v6Bytes[10] == 0 && v6Bytes[11] == 0)
-                {
-                    var compatIp = new IPAddress(v6Bytes[12..]);
-                    return IsPrivateOrLoopbackAddress(compatIp.ToString());
-                }
-            }
-        }
-
-        return false;
+        // 编码字面量：0x7f000001 / 2130706433 / 0177.0.0.1
+        return SsrfGuard.TryParseIpLiteral(host, out var literal)
+               && SsrfGuard.IsPrivateOrLoopbackOrReserved(literal);
     }
 }

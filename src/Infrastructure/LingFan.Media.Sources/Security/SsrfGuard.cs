@@ -96,6 +96,18 @@ public static class SsrfGuard
             var b = ip.GetAddressBytes();
             if (b.Length == 16)
             {
+                // 未指定地址 ::（全零，RFC 4291）——保留地址，一律拒绝
+                if (b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0 && b[4] == 0 && b[5] == 0 &&
+                    b[6] == 0 && b[7] == 0 && b[8] == 0 && b[9] == 0 && b[10] == 0 && b[11] == 0 &&
+                    b[12] == 0 && b[13] == 0 && b[14] == 0 && b[15] == 0)
+                    return true;
+
+                // IPv4-compatible IPv6 地址（::a.b.c.d，前 12 字节全零，deprecated RFC 4291）——
+                // 映射回 IPv4 检查，防通过 IPv6 兼容格式绕过 IPv4 名单（::1 已被上方 IsLoopback 捕获）
+                if (b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0 && b[4] == 0 && b[5] == 0 &&
+                    b[6] == 0 && b[7] == 0 && b[8] == 0 && b[9] == 0 && b[10] == 0 && b[11] == 0)
+                    return IsPrivateOrLoopbackOrReserved(new IPAddress(b[12..]));
+
                 // fc00::/7 唯一本地地址（含 fd00::/8，IPv6 私有等价物）
                 if (b[0] == 0xfc || b[0] == 0xfd) return true;
                 // 多播/保留（ff00::/8 起）

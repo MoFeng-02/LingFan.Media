@@ -13,7 +13,7 @@ namespace LingFan.Media.Backends.MediaCodec.Demuxer;
 /// <remarks>
 /// <para><b>异步策略</b>（与 MFBackend 对称）：</para>
 /// <list type="bullet">
-/// <item><see cref="OpenAsync"/>：混合——<c>await stream.ConnectAsync</c>（真异步 I/O）+
+/// <item><see cref="OpenAsync"/>：混合——条件式 <c>await stream.ConnectAsync</c>（仅无地址流需预建连；文件/URL 由系统读取器按地址打开，流不被读取）+
 /// <c>await Task.Run(OpenCore)</c>（伪异步：托管同步调用卸载线程池，与 MF 后端同构）。</item>
 /// <item><see cref="ReadPacketAsync"/> / <see cref="SeekAsync"/>：伪异步——<c>await Task.Run</c> 卸载同步调用。</item>
 /// <item><see cref="InitializeAsync"/>：接口契约，返回 <c>Task.CompletedTask</c>。</item>
@@ -24,7 +24,7 @@ namespace LingFan.Media.Backends.MediaCodec.Demuxer;
 /// <list type="bullet">
 /// <item>本地文件 → <see cref="MediaExtractor.SetDataSource(Java.IO.FileDescriptor, long, long)"/>（<c>FileInputStream.FD</c>），
 /// 经 fd 直读，规避路径/URI 解析差异（部分 ROM 对裸路径返回 MALFORMED）。</item>
-/// <item>http(s) URL → <see cref="MediaExtractor.SetDataSource(string)"/>（托管原生网络读取）。</item>
+/// <item>http(s) URL → <c>MediaExtractor.SetDataSource(url, headers)</c>（托管原生网络读取；随附建议打开头）。</item>
 /// <item>无地址流 → <see cref="AndroidManagedDataSource"/> 桥接 <see cref="IMediaStream"/>（API 23+，走 Java 绑定规避 CFI SIGTRAP）。</item>
 /// </list>
 /// <para><b>多轨交织</b>：选中全部轨道后，extractor 按 PTS 自动交错返回各轨采样，<see cref="ReadPacketAsync"/> 直接透传，
@@ -94,8 +94,10 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
         ct.ThrowIfCancellationRequested();
         _stream = stream;
 
-        // 真异步：网络流预建连（文件/透传流为无操作）
-        await stream.ConnectAsync(ct).ConfigureAwait(false);
+        // 网络流预建连：仅无地址流（MediaDataSource 桥内同步读流）需要；
+        // 文件/URL 由系统读取器按地址原生打开，流本身不被读取（预建连只会白建一条连接）。
+        if (string.IsNullOrEmpty(stream.Location))
+            await stream.ConnectAsync(ct).ConfigureAwait(false);
 
         // 伪异步：托管同步调用卸载线程池（与 MFBackend 同构）
         try
@@ -135,7 +137,17 @@ internal sealed class AndroidDemuxer : IMediaDemuxer
             else if (!string.IsNullOrEmpty(location))
             {
                 // http(s) URL：托管原生网络读取（native 到 native，无 CFI 问题）。
-                extractor.SetDataSource(location!);
+                // 透传建议打开头（默认 User-Agent/用户自定义头/Cookie）：地址式打开若丢头，
+                // 防盗链源（Referer/UA/Cookie 校验）会直接 403。无头时用无参重载。
+                var openHeaders = _stream!.SuggestedOpenHeaders;
+                if (openHeaders is { Count: > 0 })
+                {
+                    extractor.SetDataSource(location!, openHeaders.ToDictionary(kv => kv.Key, kv => kv.Value));
+                }
+                else
+                {
+                    extractor.SetDataSource(location!);
+                }
             }
             else
             {

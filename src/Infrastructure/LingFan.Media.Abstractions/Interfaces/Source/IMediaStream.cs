@@ -68,6 +68,17 @@ public interface IMediaStream
     /// <summary>定位到指定偏移。</summary>
     long Seek(long offset, SeekOrigin origin);
 
+    /// <summary>
+    /// 按 <see cref="Location"/> 地址打开时建议随附的 HTTP 请求头（默认 User-Agent、
+    /// 用户自定义头与 Cookie 的合并结果）；非网络流为 null。
+    /// </summary>
+    /// <remarks>
+    /// <para>供按地址直开的解封装后端（URL 交给后端自身网络栈的场景）在打开地址时透传，
+    /// 避免自定义头/Cookie 在地址式打开路径上被静默丢弃（防盗链源必需）。</para>
+    /// <para>中性契约成员（BCL 字典类型，零外部引用）；实现须显式提供该属性（不依赖接口默认实现）。</para>
+    /// </remarks>
+    IReadOnlyDictionary<string, string>? SuggestedOpenHeaders { get; }
+
     /// <summary>关闭流。</summary>
     void Close();
 }

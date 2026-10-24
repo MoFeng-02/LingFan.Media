@@ -14,40 +14,9 @@ public sealed class PassThroughMediaStream : IMediaStream
 {
     private readonly Stream _stream;
     private readonly bool _ownsStream;
+    private readonly bool _canSeek;
+    private long _position;
     private bool _closed;
-
-    /// <inheritdoc/>
-    public long Length
-    {
-        get
-        {
-            ObjectDisposedException.ThrowIf(_closed, this);
-            return _stream.CanSeek ? _stream.Length : -1;
-        }
-    }
-
-    /// <inheritdoc/>
-    public long Position
-    {
-        get
-        {
-            ObjectDisposedException.ThrowIf(_closed, this);
-            return _stream.Position;
-        }
-    }
-
-    /// <inheritdoc/>
-    public bool CanSeek
-    {
-        get
-        {
-            ObjectDisposedException.ThrowIf(_closed, this);
-            return _stream.CanSeek;
-        }
-    }
-
-    /// <inheritdoc/>
-    public string? Location => null; // 透传流无地址；需以字节流方式打开的 backend 不适用按地址打开
 
     /// <summary>
     /// 初始化 <see cref="PassThroughMediaStream"/> 的新实例。
@@ -59,7 +28,48 @@ public sealed class PassThroughMediaStream : IMediaStream
 
         _stream = source.Stream;
         _ownsStream = source.OwnsStream;
+        _canSeek = _stream.CanSeek;
+
+        // 可定位流以底层位置为权威;不可定位流(如 NetworkStream)访问 Position 会抛异常,以计数为准(从 0 起)
+        _position = _canSeek ? _stream.Position : 0;
     }
+
+    /// <inheritdoc/>
+    public long Length
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_closed, this);
+            return _canSeek ? _stream.Length : -1;
+        }
+    }
+
+    /// <inheritdoc/>
+    public long Position
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_closed, this);
+            return _canSeek ? _stream.Position : _position;
+        }
+    }
+
+    /// <inheritdoc/>
+    public bool CanSeek
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_closed, this);
+            return _canSeek;
+        }
+    }
+
+    /// <inheritdoc/>
+    public string? Location => null; // 透传流无地址；需以字节流方式打开的 backend 不适用按地址打开
+
+    /// <inheritdoc/>
+    /// <remarks>透传流无地址语义,无建议打开头。</remarks>
+    public IReadOnlyDictionary<string, string>? SuggestedOpenHeaders => null;
 
     /// <inheritdoc/>
     public int Read(Span<byte> buffer)
@@ -71,7 +81,10 @@ public sealed class PassThroughMediaStream : IMediaStream
             return 0;
 
         // 直接透传底层 Stream 的同步 Read
-        return _stream.Read(buffer);
+        int read = _stream.Read(buffer);
+        if (!_canSeek)
+            _position += read;
+        return read;
     }
 
     /// <inheritdoc/>
@@ -83,7 +96,10 @@ public sealed class PassThroughMediaStream : IMediaStream
         if (buffer.Length == 0)
             return 0;
 
-        return await _stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+        var read = await _stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+        if (!_canSeek)
+            _position += read;
+        return read;
     }
 
     /// <inheritdoc/>
@@ -91,11 +107,16 @@ public sealed class PassThroughMediaStream : IMediaStream
     public Task ConnectAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     /// <inheritdoc/>
+    /// <remarks>不可定位流在此明确拒绝（而非透传底层流的实现相关异常）。</remarks>
     public long Seek(long offset, SeekOrigin origin)
     {
         ObjectDisposedException.ThrowIf(_closed, this);
 
-        return _stream.Seek(offset, origin);
+        if (!_canSeek)
+            throw new NotSupportedException("底层流不可定位，无法 Seek。");
+
+        _position = _stream.Seek(offset, origin);
+        return _position;
     }
 
     /// <inheritdoc/>
