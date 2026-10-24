@@ -14,35 +14,27 @@ namespace LingFan.Media.Renderers.OpenGL.SharedSurface;
 /// <remarks>
 /// <para><b>同步模型自报</b>：<see cref="SharedGpuSyncMode.None"/>——纹理内容在交付前已完成
 /// GL 写入，跨上下文采样可见性由共享机制保证（见下方已知限制）。</para>
-/// <para><b>M1 已知限制</b>：纹理在离屏上下文中创建，与宿主采样上下文<b>尚未建立共享组</b>
-/// （待 M2 经 EGLImage 导入或共享上下文建立）。此阶段消费方包装采样的正确性不成立——
-/// 本阶段判据为链路日志行为（包装成功/失败形态、回退链行为），不判画面正确性。</para>
+/// <para><b>只接受 AHB 帧</b>：<see cref="SharedGpuHandleKind.GlTexture"/> 的描述符约定
+/// <c>NativeImage</c> 承载 <c>EGLImageKHR</c>，消费方据此直接做
+/// <c>glEGLImageTargetTexture2DOES</c>。CPU 帧无法产出 EGLImage，因此本源的
+/// <see cref="TryWriteFrame"/> 对非 AHB 帧返回 <see langword="false"/>，交由渲染器的
+/// 健康回退机制切换到其它源或 CPU 上屏——不可用普通纹理名冒充 EGLImage，
+/// 消费方会把它当 display 级句柄解引用。</para>
 /// <para><b>帧所有权</b>：纹理与上下文生命周期归本源所有，消费方只借用纹理名，绝不释放。</para>
 /// <para><b>异步策略</b>：同步（纯 GPU 命令提交与状态更新，无 I/O，补 async 即伪异步）。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，裸 P/Invoke（GLNative），无反射。</para>
 /// </remarks>
 internal sealed unsafe class OpenGLSharedSurfaceSource : ISharedGpuSurfaceSource
 {
-    // GL 常量（GLES 3.0 核心）：GL_TEXTURE_2D / GL_COLOR_BUFFER_BIT / GL_RGBA / GL_UNSIGNED_BYTE /
-    // GL_RGBA8 / GL_LINEAR / GL_TEXTURE_MAG_FILTER / GL_TEXTURE_MIN_FILTER。
-    private const uint GlTexture2D = 0x0DE1;
-    private const uint GlColorBufferBit = 0x4000;
-    private const uint GlRgba = 0x1908;
-    private const uint GlUnsignedByte = 0x1401;
+    // GL 内部格式（GLES 3.0 核心 GL_RGBA8）：描述符 GlTexture 语义下承载纹理内部格式。
     private const int GlRgba8 = 0x8058;
-    private const int GlLinear = 0x2601;
-    private const uint GlTextureMagFilter = 0x2801;
-    private const uint GlTextureMinFilter = 0x2800;
 
     private readonly EglContext _context;
     private readonly ILogger<OpenGLSharedSurfaceSource> _logger;
-    private readonly int _width;
-    private readonly int _height;
+    private readonly int _declaredWidth;
+    private readonly int _declaredHeight;
 
-    private uint _texture;
     private ulong _version;
-    private long _writtenFrames;
-    private bool _textureReady;
     private bool _announcedZeroCopy;
     private bool _disposed;
 
@@ -50,12 +42,16 @@ internal sealed unsafe class OpenGLSharedSurfaceSource : ISharedGpuSurfaceSource
     private readonly Dictionary<IntPtr, nint> _eglImages = new();
 
     /// <summary>初始化共享表面源：创建离屏 EGL 上下文（GL ES 3.0）。</summary>
+    /// <param name="width">宿主申报的期望宽（仅用于诊断；实际交付尺寸取自每帧 AHB）。</param>
+    /// <param name="height">宿主申报的期望高（仅用于诊断；实际交付尺寸取自每帧 AHB）。</param>
+    /// <param name="logger">日志。</param>
     public OpenGLSharedSurfaceSource(int width, int height, ILogger<OpenGLSharedSurfaceSource> logger)
     {
-        _width = width;
-        _height = height;
+        _declaredWidth = width;
+        _declaredHeight = height;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _context = EglContext.CreateOffscreen(logger);
+        _logger.LogDebug("[GL-SHARED] 离屏上下文就绪，宿主申报尺寸 {W}x{H}（交付尺寸以每帧 AHB 为准）。", _declaredWidth, _declaredHeight);
     }
 
     /// <inheritdoc/>
@@ -84,51 +80,21 @@ internal sealed unsafe class OpenGLSharedSurfaceSource : ISharedGpuSurfaceSource
 
         // AHB 零拷贝路径：解码侧产出的 AHardwareBuffer 经 EGLImage 导入为普通 GL_TEXTURE_2D
         // 采样（EGLImage 为 display 级对象，与宿主 EGL 渲染上下文天然同 display，跨上下文共享成立）。
-        if (frame.Resource is AndroidHardwareBufferFrameResource ahb)
+        if (frame.Resource is not AndroidHardwareBufferFrameResource ahb)
         {
-            if (!_announcedZeroCopy)
-            {
-                _announcedZeroCopy = true;
-                _logger.LogInformation("[GL-SHARED] 路径锁定=ZERO-COPY(AHB→EGLImage→GL 采样)——GPU 出帧，无 CPU 像素拷贝。生产者 EGLDisplay=0x{Display:X}。", _context.PlatformDisplay);
-            }
-            return TryDeliverAhb(ahb, frame.RotationDegrees, out descriptor);
+            // CPU 帧没有 EGLImage 可交付。普通 GL 纹理名不是 display 级对象，
+            // 消费方按契约当 EGLImageKHR 解引用会直接崩溃，因此如实返回失败，
+            // 由渲染器的健康回退切换到其它源（或 CPU 上屏）。
+            _logger.LogDebug("[GL-SHARED] 跳过非硬件缓冲帧（帧资源 {Kind}）：本源的 GlTexture 句柄语义要求 AHB。", frame.Resource.GetType().Name);
+            return false;
         }
 
-        _context.MakeCurrent();
-        try
+        if (!_announcedZeroCopy)
         {
-            if (!_textureReady)
-                CreateTexture();
-
-            // M1 测试内容：按帧序号变化的纯色（灰度随帧递增，肉眼可判持续出帧与重排）。
-            var level = (float)((_writtenFrames % 120) / 120.0);
-            GLNative.glClearColor(level, 0.25f, 1.0f - level, 1.0f);
-            GLNative.glClear(GlColorBufferBit);
-            GLNative.glFinish();
-
-            _version++;
-            _writtenFrames++;
-            descriptor = new SharedGpuSurfaceDescriptor(
-                Handle: (IntPtr)_texture,
-                Kind: SharedGpuHandleKind.GlTexture,
-                Width: _width,
-                Height: _height,
-                Format: SharedGpuSurfaceFormat.R8G8B8A8UNorm,
-                Version: _version,
-                SyncMode: SharedGpuSyncMode.None,
-                NativeImage: (IntPtr)_texture,
-                NativeDeviceMemory: IntPtr.Zero,
-                NativeImageLayout: 0,
-                NativeVkFormat: (uint)GlRgba8, // GlTexture 语义下此字段承载 GL 内部格式
-                NativeQueueFamilyIndex: 0,
-                NativeImageUsage: 0,
-                NativeImageTiling: 0);
-            return true;
+            _announcedZeroCopy = true;
+            _logger.LogInformation("[GL-SHARED] 路径锁定=ZERO-COPY(AHB→EGLImage→GL 采样)——GPU 出帧，无 CPU 像素拷贝。生产者 EGLDisplay=0x{Display:X}。", _context.PlatformDisplay);
         }
-        finally
-        {
-            _context.ReleaseCurrent();
-        }
+        return TryDeliverAhb(ahb, frame.RotationDegrees, out descriptor);
     }
 
     /// <summary>
@@ -180,19 +146,6 @@ internal sealed unsafe class OpenGLSharedSurfaceSource : ISharedGpuSurfaceSource
         }
     }
 
-    private void CreateTexture()
-    {
-        uint texture = 0;
-        GLNative.glGenTextures(1, &texture);
-        GLNative.glBindTexture(GlTexture2D, texture);
-        GLNative.glTexImage2D(GlTexture2D, 0, GlRgba8, _width, _height, 0, GlRgba, GlUnsignedByte, null);
-        GLNative.glTexParameteri(GlTexture2D, GlTextureMagFilter, GlLinear);
-        GLNative.glTexParameteri(GlTexture2D, GlTextureMinFilter, GlLinear);
-        _texture = texture;
-        _textureReady = true;
-        _logger.LogInformation("[GL-SHARED] 测试纹理就绪 {W}x{H} tex={Tex}（M1：跨上下文共享待 M2 建立）", _width, _height, _texture);
-    }
-
     /// <inheritdoc/>
     public void Dispose()
     {
@@ -203,12 +156,6 @@ internal sealed unsafe class OpenGLSharedSurfaceSource : ISharedGpuSurfaceSource
         try
         {
             _context.MakeCurrent();
-            if (_texture != 0)
-            {
-                uint texture = _texture;
-                GLNative.glDeleteTextures(1, &texture);
-                _texture = 0;
-            }
             // EGLImage 逐个销毁（MakeCurrent 后 eglGetCurrentDisplay 有效；已导入纹理持引用，安全）。
             foreach (var eglImage in _eglImages.Values)
                 EglImageInterop.DestroyImage(_context.PlatformDisplay, eglImage);
