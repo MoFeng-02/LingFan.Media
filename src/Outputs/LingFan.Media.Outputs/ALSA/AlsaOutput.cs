@@ -22,8 +22,7 @@ public sealed class AlsaOutput : IAudioOutput
     /// <inheritdoc/>
     public void Submit(AudioFrame frame)
     {
-        // 即使桩也必须遵守 Submit 所有权语义：取走 frame 所有权后 Dispose
-        frame?.Dispose();
+        // 契约：Submit 不接管帧所有权（帧由调用方归还池或释放），桩实现同样不得 Dispose。
         throw new NotSupportedException("ALSA 输出尚未实现。");
     }
 

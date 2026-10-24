@@ -54,10 +54,25 @@ public sealed class SkiaVulkanImagePresenter : IHostSurfacePresenter
 
         var backendTexture = new GRBackendTexture(descriptor.Width, descriptor.Height, vkInfo);
         // TopLeft：本链路图像行 0 = 画面顶部（GPU 四边形渲染 + 行对齐拷贝），Skia 画布同 y 向下。
-        // 颜色型别与 VkFormat R8G8B8A8_UNORM 对应；视频帧无透明通道 → Opaque。
+        // 色彩型别必须随描述符声明的格式走：BGRA 生产者按 Rgba8888 读会 R/B 互换。
+        SKColorType? colorType = descriptor.Format switch
+        {
+            SharedGpuSurfaceFormat.B8G8R8A8UNorm => SKColorType.Bgra8888,
+            SharedGpuSurfaceFormat.R8G8B8A8UNorm => SKColorType.Rgba8888,
+            // 未知格式不猜：交回回调方走下一个呈现适配器或软渲染兜底。
+            _ => null,
+        };
+        if (colorType is null)
+        {
+            backendTexture.Dispose();
+            failureReason = $"共享表面像素格式 {descriptor.Format} 无对应 Skia 色彩型别";
+            return false;
+        }
+
+        // 视频帧无透明通道 → Opaque。
         var image = SKImage.FromTexture(
             grContext, backendTexture, GRSurfaceOrigin.TopLeft,
-            SKColorType.Rgba8888, SKAlphaType.Opaque);
+            colorType.Value, SKAlphaType.Opaque);
         if (image is null)
         {
             backendTexture.Dispose();

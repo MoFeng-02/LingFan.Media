@@ -62,6 +62,10 @@ public sealed class VideoView : Control, IRenderTarget
     private Type? _activeFactoryType;
     private long _presentedFrames; // 诊断节流计数
 
+    // 当前渲染器健康事件的订阅委托实例。必须保存实例本身：IRendererHealth.Unhealthy 是 Action 类型事件，
+    // 退订要求与订阅是同一个委托；每次新建 lambda 会让 -= 匹配不上而静默失效，造成重复订阅。
+    private Action? _healthHandler;
+
     #region StyledProperties
 
     /// <summary>绑定播放器的 StyledProperty。</summary>
@@ -243,6 +247,8 @@ public sealed class VideoView : Control, IRenderTarget
         // 释放渲染器（Detach 解绑渲染目标 + Dispose 同步释放；Skia 为同步 Dispose，无 I/O 可 await）
         if (_renderer is not null)
         {
+            // 必须先退订再拆除：渲染器内部的长生命周期对象可能在拆除后仍触发 Unhealthy。
+            UnsubscribeRendererHealth(_renderer);
             _renderer.Detach();
             _renderer.Dispose();
             _renderer = null;
@@ -277,6 +283,8 @@ public sealed class VideoView : Control, IRenderTarget
         // 4. 释放渲染器（Detach 解绑渲染目标 + Dispose 同步释放；Skia 为同步 Dispose，无 I/O 可 await）
         if (_renderer is not null)
         {
+            // 必须先退订再拆除：渲染器内部的长生命周期对象可能在拆除后仍触发 Unhealthy。
+            UnsubscribeRendererHealth(_renderer);
             _renderer.Detach();
             _renderer.Dispose();
             _renderer = null;
@@ -409,7 +417,12 @@ public sealed class VideoView : Control, IRenderTarget
                 renderer.Attach(this);
                 _activeFactoryType = factory.GetType();
                 if (renderer is IRendererHealth health)
-                    health.Unhealthy += OnRendererUnhealthy;
+                {
+                    // Unhealthy 事件不带 sender，只能靠包装 lambda 捕获被订阅的渲染器实例来判断事件归属。
+                    var source = renderer;
+                    _healthHandler = () => OnRendererUnhealthy(source);
+                    health.Unhealthy += _healthHandler;
+                }
                 _renderer = renderer;
                 break;
             }
@@ -444,6 +457,7 @@ public sealed class VideoView : Control, IRenderTarget
     {
         if (_renderer != null)
         {
+            UnsubscribeRendererHealth(_renderer);
             _renderer.Detach();
             _renderer.Dispose();
             _renderer = null;
@@ -461,11 +475,13 @@ public sealed class VideoView : Control, IRenderTarget
     /// 触发本方法，把该工厂加入 <see cref="_failedFactories"/> 后重建回退链——保证永不静默空白，
     /// 任意渲染器失败都有 Skia 兜底，符合「后端/渲染器统一公平、不能让某个玩不了」原则。</para>
     /// </remarks>
-    private void OnRendererUnhealthy()
+    private void OnRendererUnhealthy(IVideoRenderer source)
     {
         Dispatcher.UIThread.Post(() =>
         {
-            if (_renderer is null)
+            // 归属校验：事件只应来自订阅时捕获的那个渲染器。若它已不是当前渲染器（拆换过程中发出的迟到事件），
+            // 必须丢弃——否则会把此刻在用的新渲染器连带拉黑，工厂被误判、回退链被无谓降级。
+            if (_renderer is null || !ReferenceEquals(source, _renderer))
                 return;
             if (_activeFactoryType is { } ft)
             {
@@ -474,10 +490,29 @@ public sealed class VideoView : Control, IRenderTarget
             }
             var bad = _renderer;
             _renderer = null;
+            UnsubscribeRendererHealth(bad);
             bad.Detach();
             bad.Dispose();
             EnsurePresenter();
         });
+    }
+
+    /// <summary>
+    /// 退订渲染器的健康事件。渲染器被拆除前必须调用：<see cref="IRendererHealth.Unhealthy"/>
+    /// 可能由渲染器内部持有的长生命周期对象触发，拆除后若不退订，重建时会叠加成重复订阅，
+    /// 同一次不健康回调被处理多遍（重复拉黑工厂、重复重建回退链）。
+    /// </summary>
+    private void UnsubscribeRendererHealth(IVideoRenderer renderer)
+    {
+        if (renderer is not IRendererHealth health)
+            return;
+
+        // 用订阅时保存的同一委托实例退订：方法组转委托每次都会新建实例，直接 -= 方法组匹配不上会静默失效。
+        if (_healthHandler is { } handler)
+        {
+            health.Unhealthy -= handler;
+            _healthHandler = null;
+        }
     }
 
     /// <summary>

@@ -691,6 +691,10 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                 Width = desc.Width,
                 Height = desc.Height,
                 Format = ToExternalFormat(desc.Format),
+                // 外部内存元数据必须如实透传：OPAQUE_FD / NT 句柄自身不携带内存尺寸，
+                // 留 0 会被合成器以 "Invalid memory size" 拒绝（与 None 路径 ImportFreshAsync 同源）。
+                MemorySize = desc.MemorySize,
+                MemoryOffset = desc.MemoryOffset,
             };
             _imported = _interop.ImportImage(new PlatformHandle(desc.Handle, _handleType!), props);
             if (_imported is null)
@@ -733,6 +737,10 @@ internal sealed class CompositionVideoRenderer : IVideoRenderer, IRendererHealth
                 Width = desc.Width,
                 Height = desc.Height,
                 Format = ToExternalFormat(desc.Format),
+                // 外部内存元数据必须如实透传：OPAQUE_FD / NT 句柄自身不携带内存尺寸，
+                // 留 0 会被合成器以 "Invalid memory size" 拒绝（与 None 路径 ImportFreshAsync 同源）。
+                MemorySize = desc.MemorySize,
+                MemoryOffset = desc.MemoryOffset,
             };
             imported = _interop!.ImportImage(new PlatformHandle(desc.Handle, _handleType!), props);
             if (imported is null)

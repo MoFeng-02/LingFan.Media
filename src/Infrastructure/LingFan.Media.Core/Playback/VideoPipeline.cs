@@ -1008,19 +1008,31 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                                 3 - _dropDiagCount, headTimestamp, _synchronizer.GetCurrentMasterTime());
                         }
                         ReturnFrame(dropped);
+                        // 计数只在真的取走并丢弃一帧时自增：队列空/取到 null 时没有帧被丢弃，
+                        // 计入会让 VideoDroppedFrames 偏大，违反「文件视频帧数 − 实际呈现帧数」的口径。
+                        Interlocked.Increment(ref _droppedFrames);
+                        // 节拍诊断与丢帧计数同源：只有真的丢掉一帧才记一次 Drop。
+                        if (PacingDiagnostics.Enabled)
+                            PacingDiagnostics.Present.OnDrop();
                     }
-                    Interlocked.Increment(ref _droppedFrames);
                     if (PacingDiagnostics.Enabled)
-                    {
-                        PacingDiagnostics.Present.OnDrop();
                         LogPacingIfDue();
-                    }
                     continue;
                 }
 
                 // Present：队头帧判定可呈现，正式取走并呈现。
                 if (_frameQueue.TryDequeue(out var frame) && frame != null)
+                {
                     ProcessFrame(frame);
+                }
+                else
+                {
+                    // 队头刚被判为「可呈现」，取帧却失败：该帧已被并发清空（Flush/Stop），不会再被呈现，
+                    // 按「文件视频帧数 − 实际呈现帧数」的口径属真丢帧。
+                    Interlocked.Increment(ref _droppedFrames);
+                    if (PacingDiagnostics.Enabled)
+                        PacingDiagnostics.Present.OnDrop();
+                }
             }
         }
         catch (OperationCanceledException)

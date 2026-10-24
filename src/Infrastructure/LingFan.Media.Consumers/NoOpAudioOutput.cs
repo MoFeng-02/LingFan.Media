@@ -32,7 +32,7 @@ public sealed class NoOpAudioOutput : IAudioOutput, IRealtimePacedOutput
     public void Initialize(int sampleRate, int channels)
     {
         _sampleRate = sampleRate;
-        _submittedSamples = 0;
+        Interlocked.Exchange(ref _submittedSamples, 0);
         _anchored = false;
     }
 
@@ -66,11 +66,11 @@ public sealed class NoOpAudioOutput : IAudioOutput, IRealtimePacedOutput
         {
             _anchored = true;
             _anchorWall = DateTime.UtcNow;
-            _submittedSamples = 0;
+            Interlocked.Exchange(ref _submittedSamples, 0);
             return;
         }
 
-        _submittedSamples += frame.FrameCount;
+        Interlocked.Add(ref _submittedSamples, frame.FrameCount);
         var played = _sampleRate > 0 ? (double)_submittedSamples / _sampleRate : 0d;
         var target = _anchorWall + TimeSpan.FromSeconds(played);
         var delay = target - DateTime.UtcNow;
@@ -88,11 +88,20 @@ public sealed class NoOpAudioOutput : IAudioOutput, IRealtimePacedOutput
     public void Flush()
     {
         _anchored = false;
-        _submittedSamples = 0;
+        Interlocked.Exchange(ref _submittedSamples, 0);
     }
 
     /// <inheritdoc />
-    public TimeSpan GetPlaybackPosition() => TimeSpan.Zero;
+    public TimeSpan GetPlaybackPosition()
+    {
+        // 与 Submit 的实时节奏同源：已提交采样数 ÷ 采样率 = 本次播放已推进的时长。
+        // 返回常量零会让把它当主时钟源的播放器主时钟永不推进（位置恒 0、画面靠停摆降级出帧）。
+        var sampleRate = _sampleRate;
+        if (sampleRate <= 0)
+            return TimeSpan.Zero;
+
+        return TimeSpan.FromSeconds((double)Interlocked.Read(ref _submittedSamples) / sampleRate);
+    }
 
     /// <inheritdoc />
     public TimeSpan Latency => TimeSpan.Zero;

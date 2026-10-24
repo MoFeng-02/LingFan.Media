@@ -109,8 +109,9 @@ public sealed class PlaybackController
             // Idle → Opening
             (MediaState.Idle, MediaState.Opening) => true,
 
-            // Opening → Buffering / Error
+            // Opening → Buffering / Error；Opening → Idle 用于打开被取消后的状态收敛（HandleOpenFailure）
             (MediaState.Opening, MediaState.Buffering) => true,
+            (MediaState.Opening, MediaState.Idle) => true,
 
             // Buffering → Idle (缓冲完成，就绪)
             (MediaState.Buffering, MediaState.Idle) => true,
@@ -133,8 +134,9 @@ public sealed class PlaybackController
             (MediaState.Ended, MediaState.Playing) => true,
             (MediaState.Ended, MediaState.Stopped) => true,
 
-            // Stopped → Idle (重置)
+            // Stopped → Idle (重置) / Playing (停止后再次播放，管线由 PlayAsync 重新拉起)
             (MediaState.Stopped, MediaState.Idle) => true,
+            (MediaState.Stopped, MediaState.Playing) => true,
 
             // 同状态（幂等）
             _ when from == to => true,

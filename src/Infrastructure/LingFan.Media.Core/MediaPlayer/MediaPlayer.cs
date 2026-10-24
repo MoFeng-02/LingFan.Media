@@ -284,6 +284,8 @@ public sealed class MediaPlayer : IMediaPlayer
             };
 
             // 5. 创建解码器（延迟创建，需要 codec 信息）
+            // 走异步入口：后端可在创建解码器前让硬解所需的 GPU 设备/上下文就绪。句柄 getter 不隐式创建设备，
+            // 未就绪时句柄为零，解码器会静默回退软件解码（不报错）；同步入口没有这个就绪时机。
             var videoTrack = _session.SelectedVideoTrack;
             var audioTrack = _session.SelectedAudioTrack;
             var subtitleTrack = _session.SelectedSubtitleTrack;
@@ -294,7 +296,7 @@ public sealed class MediaPlayer : IMediaPlayer
                 // 同时透传公开开关 EnableHardwareAcceleration：用户显式关闭硬解时须真实生效，
                 // 否则两级与（会话级 VideoSettings × 后端级 FFmpegOptions）的会话级恒为 true 而失效。
                 var videoInfo = videoTrack.VideoInfo;
-                _videoDecoder = _videoDecoderFactory.Create(videoTrack.VideoCodec.Value, new VideoSettings
+                _videoDecoder = await _videoDecoderFactory.CreateAsync(videoTrack.VideoCodec.Value, new VideoSettings
                 {
                     CodecConfiguration = videoInfo?.CodecConfiguration ?? default,
                     TimeBase = videoInfo?.TimeBase ?? default,
@@ -303,7 +305,7 @@ public sealed class MediaPlayer : IMediaPlayer
                     Width = videoInfo?.Width is > 0 ? videoInfo.Width : null,
                     Height = videoInfo?.Height is > 0 ? videoInfo.Height : null,
                     EnableHardwareAcceleration = _options.EnableHardwareAcceleration
-                });
+                }, ct);
 
                 // 解码偏好策略：内容复杂度超过软件解码阈值时，应优先硬件加速。
                 // 若最终未走硬解（无可用 GPU / 用户显式关闭），明确告警"可能无法实时"，
@@ -340,7 +342,7 @@ public sealed class MediaPlayer : IMediaPlayer
                     CodecConfiguration = audioTrack.AudioInfo?.CodecConfiguration ?? default,
                     TimeBase = audioTrack.AudioInfo?.TimeBase ?? default,
                 };
-                _audioDecoder = _audioDecoderFactory.Create(audioTrack.AudioCodec.Value, audioSettings);
+                _audioDecoder = await _audioDecoderFactory.CreateAsync(audioTrack.AudioCodec.Value, audioSettings, ct);
 
                 // 直通型解码器（MediaFoundation：真正的解码由 SourceReader 内部完成，解码器只包装 PCM 字节）
                 // 无从自知输出格式，须由此注入解封装层实测的 PCM 参数。
@@ -576,13 +578,15 @@ public sealed class MediaPlayer : IMediaPlayer
             // 2. 清空缓冲队列（移到 Flush 之前，确保管线恢复后包队列已空，不会处理旧包）
             _bufferManager?.Clear();
 
-            // 3. 时钟跳转
+            // 3. Demuxer 定位（此时读取线程已退出，无竞争）
+            //    失败必须中止：解封装器留在原位置，若照常推进主时钟并按新位置重填缓冲，
+            //    后续包时间戳会整体落后主时钟，表现为成批丢帧与「点了定位但没反应」的静默失效。
+            if (_demuxer != null && !await _demuxer.SeekAsync(position, ct))
+                throw new InvalidOperationException($"解封装器定位失败（目标 {position}）。");
+
+            // 4. 时钟跳转（仅在定位成功后推进，避免失败路径上主时钟跑到数据前面）
             if (_clock != null)
                 _synchronizer?.OnSeek(position);
-
-            // 4. Demuxer 定位（此时读取线程已退出，无竞争）
-            if (_demuxer != null)
-                await _demuxer.SeekAsync(position, ct);
 
             // 5. 管线刷新（异步等待管线暂停确认后再清空+重置，无 Thread.Sleep 阻塞。
             //    内部先暂停管线线程防止 DecodeAsync 与 Reset 竞争，清空帧队列+重置解码器，然后恢复）
@@ -614,9 +618,60 @@ public sealed class MediaPlayer : IMediaPlayer
         catch (Exception ex)
         {
             _logger.LogError(ex, "定位失败");
+
+            // 不变量：本方法任何返回/抛出路径结束后，若 State == Playing，两条管线的包通道必须仍有活着的写入者。
+            // 定位发生在「读线程已停、缓冲已清空」之后，若直接抛出，包通道既无写入者也不会被 Complete，
+            // 播放器会停在「状态说在播、画面永远不动」的半态——比定位本身失败更难发现，故先收敛再抛出。
+            await RecoverAfterFailedSeekAsync(ct);
+
             ErrorOccurred?.Invoke(this, new MediaErrorEventArgs(
                 MediaErrorCode.SeekFailed, "定位失败", ex));
             throw;
+        }
+    }
+
+    /// <summary>
+    /// 定位失败后的收敛：先尝试从解封装器当前（未移动的）位置重建喂包通道；重建不了则把状态收敛到
+    /// <see cref="MediaState.Stopped"/>。
+    /// </summary>
+    /// <remarks>
+    /// <para>定位流程先停读线程、清空缓冲，再让解封装器定位。定位失败时解封装器位置并未移动，
+    /// 因此重建喂包即可从原位置继续，播放不中断，调用方仍会收到定位失败的通知。</para>
+    /// <para>不变量：本方法返回后若状态仍是 <see cref="MediaState.Playing"/>，两条管线的包通道必须仍有
+    /// 活着的写入者。重建失败或本次调用已取消时喂包无法恢复，此时宁可收敛到 <see cref="MediaState.Stopped"/>
+    /// 报停，也不能让状态标签与管线真实状况相反。</para>
+    /// </remarks>
+    private async Task RecoverAfterFailedSeekAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (_bufferManager != null && !ct.IsCancellationRequested)
+            {
+                // 播放中定位时通道仍可写，PrepareForSeek 幂等；流已结束时经 ResetQueues 重建新通道，
+                // 故必须把管线内部的包队列重新指向新实例，否则解码循环会在旧通道上瞬间 EOF。
+                _bufferManager.PrepareForSeek();
+                await _bufferManager.StartAsync(ct);
+                _videoPipeline?.SetPacketQueue(_bufferManager.VideoPacketQueue);
+                _audioPipeline?.SetPacketQueue(_bufferManager.AudioPacketQueue);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "定位失败后重建喂包通道失败，改判为停止");
+        }
+
+        try
+        {
+            _pipelineHost?.Stop();
+            // 只有播放类状态才需要收敛：Idle/Stopped 下本就没有写入者的义务，
+            // 强行转换会撞上状态机的非法转换表并产生无意义告警。
+            if (_controller.CurrentState is MediaState.Playing or MediaState.Paused)
+                TransitionState(MediaState.Stopped);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "定位失败后收敛到停止状态失败");
         }
     }
 

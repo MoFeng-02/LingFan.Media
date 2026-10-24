@@ -303,6 +303,12 @@ public sealed class BufferManager : IBufferManager
     internal Task? ReaderTask => _readerTask;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 「归零统计 + 排空队列」必须在同一把 <c>_stateLock</c> 内完成：读取线程累加
+    /// <c>_bufferedDuration</c>/<c>_bufferedBytes</c> 与判定就绪都在同一把锁内，
+    /// 若在锁外逐包 Dispose，读线程可能把刚被清空的队列重新计入统计，统计与队列实际内容脱节。
+    /// 排空本身不 await（<c>TryRead</c>），不会造成锁内等待；读线程的写入在锁外 await，不会死锁。
+    /// </remarks>
     public void Clear()
     {
         lock (_stateLock)
@@ -311,16 +317,16 @@ public sealed class BufferManager : IBufferManager
             _bufferedDuration = TimeSpan.Zero;
             _bufferedBytes = 0;
             _isReady = false;
+
+            // 清空并 Dispose 所有包
+            while (_videoPacketQueue.Reader.TryRead(out var packet))
+                packet.Dispose();
+
+            while (_audioPacketQueue.Reader.TryRead(out var packet))
+                packet.Dispose();
+
+            _subtitlePacketQueue.Clear();
         }
-
-        // 清空并 Dispose 所有包
-        while (_videoPacketQueue.Reader.TryRead(out var packet))
-            packet.Dispose();
-
-        while (_audioPacketQueue.Reader.TryRead(out var packet))
-            packet.Dispose();
-
-        _subtitlePacketQueue.Clear();
 
         OnBufferProgressChanged();
     }
