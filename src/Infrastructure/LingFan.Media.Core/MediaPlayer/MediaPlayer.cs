@@ -246,7 +246,8 @@ public sealed class MediaPlayer : IMediaPlayer
 
             // 3. 创建会话
             var duration = _demuxer.Metadata.Duration;
-            var isLive = source.Type == MediaSourceType.Network;
+            // 直播语义取自源元数据（VOD 网络源不该被误标为直播）
+            var isLive = source is IMediaSourceMetadata { IsLive: true };
             _session = new MediaSession(source, _demuxer.Tracks, _demuxer.Metadata, duration, isLive);
 
             // 4. 创建管线内部对象
@@ -259,6 +260,28 @@ public sealed class MediaPlayer : IMediaPlayer
             if (ClockTuning.UseAudioPlaybackClock)
                 _synchronizer.SetMasterClockProvider(() => _audioOutput?.GetPlaybackPositionDirect() ?? TimeSpan.Zero);
             _bufferManager = new BufferManager(_demuxer, _loggerFactory.CreateLogger<BufferManager>());
+
+            // 读取线程故障上报：缓冲读取异常（网络中断/读超时/容器损坏）→ 错误事件 + Error 状态。
+            // 队列已由 BufferManager 在故障时 Complete，管线自然收场，不在此重复干预。
+            // 处理器整体防抛：此处处于读循环异常路径，事件订阅者的异常若逃逸，
+            // 会令 ReaderTask 进入 faulted 且 Error 状态未置——故吞入日志，绝不抛回读线程。
+            var openedSourceType = source.Type;
+            _bufferManager.ReaderFaulted += (_, readEx) =>
+            {
+                try
+                {
+                    var errorArgs = new MediaErrorEventArgs(
+                        openedSourceType == MediaSourceType.Network ? MediaErrorCode.NetworkError : MediaErrorCode.Unknown,
+                        "数据读取中断", readEx, isFatal: true);
+                    _controller.OnError(errorArgs);
+                    ErrorOccurred?.Invoke(this, errorArgs);
+                    TransitionState(MediaState.Error);
+                }
+                catch (Exception handlerEx)
+                {
+                    _logger.LogError(handlerEx, "读取故障上报处理异常（已吞除，不影响读线程收场）");
+                }
+            };
 
             // 5. 创建解码器（延迟创建，需要 codec 信息）
             var videoTrack = _session.SelectedVideoTrack;
@@ -569,6 +592,9 @@ public sealed class MediaPlayer : IMediaPlayer
             // 6. 重新填充缓冲（从新的 Demuxer 位置开始读取）
             if (_bufferManager != null)
             {
+                // 定位前显式登记状态：播放中定位时通道仍然可写，无需重建；
+                // 只有流已结束（通道曾关闭）时才重建，避免把仍在消费的管线连到已关闭的通道上。
+                _bufferManager.PrepareForSeek();
                 await _bufferManager.StartAsync(ct);
 
                 // 重播（Ended→Playing）修复：流末 EOF 后 BufferManager.StartAsync 会
@@ -579,6 +605,11 @@ public sealed class MediaPlayer : IMediaPlayer
                 _videoPipeline?.SetPacketQueue(_bufferManager.VideoPacketQueue);
                 _audioPipeline?.SetPacketQueue(_bufferManager.AudioPacketQueue);
             }
+
+            // 7. 恢复消费：管线在定位复位后保持暂停，必须在包缓冲重填完成后才恢复；
+            //    若管线在复位时已经退出，由管线自身拉起新的消费循环（幂等，不重复启动）。
+            if (_pipelineHost != null && _controller.CurrentState == MediaState.Playing)
+                await _pipelineHost.ResumeAfterSeekAsync();
         }
         catch (Exception ex)
         {

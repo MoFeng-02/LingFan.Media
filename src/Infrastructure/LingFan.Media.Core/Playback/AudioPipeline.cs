@@ -34,15 +34,32 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private volatile bool _isRunning;
     private volatile bool _isPaused;
     private volatile bool _isResuming;   // Pause 后置位；下次 Start 走恢复路径（立即 Resume 而非 preroll）
-    private volatile bool _pauseAcknowledged;
     private TaskCompletionSource<bool>? _pauseAckTcs;
     // 自然完成标志：仅当管线因"流末耗尽"（包源关闭）正常退出时置位，
     // 用于区分 Ended（自然结束）与取消退出，避免停止/释放时误触发 Completed 事件。
-    private bool _completedNaturally;
+    // 由消费循环线程写、由定位复位线程清，两个方向都跨线程，故必须是 volatile：
+    // 否则复位方可能读到旧值，或旧循环的置位对复位方不可见而留下假完成。
+    private volatile bool _completedNaturally;
+
+    // 运行代号：每次拉起消费循环自增。定位复位后旧循环可能仍在收尾，其收尾动作与完成上报
+    // 都必须只对当轮生效，否则会把新一轮的运行状态改坏。
+    // 音频只有一条消费循环（提交与解码都在同一个循环里），循环是否存活由 _isRunning 单一表达，
+    // 因此不需要视频侧那种独立的存活标志；代号只用于阻断旧循环的收尾副作用。
+    private int _runId;
+
+    // 上一轮消费循环是否已被定位复位作废。复位在有界等待超时的情况下会带着「旧循环仍在收尾」
+    // 返回，此后仅凭 _pipelineTask 的完成状态无法判断它是否已被取代：一条既未完成又已作废的
+    // 循环仍会在稍后退出，此时只解除暂停就会得到一条不再喂帧的管线。故把「已作废」显式记录下来，
+    // ResumeAfterSeekAsync 据此决定是解暂停还是重拉循环；StartAsync 起新循环时清除。
+    private volatile bool _loopSuperseded;
+
+    // 复位时有界等待旧消费循环退出的上限。超时只记日志并继续：定位不能被卡住的循环拖住，
+    // 旧循环余下的收尾由运行代号阻断。
+    private static readonly TimeSpan LoopStopTimeout = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// 解码锁：确保 DecodeAsync 与 Reset 不会并发执行。
-    /// PipelineLoop 在解码+入队期间持有锁，Flush/FlushAsync 在 Clear+Reset 前获取锁。
+    /// PipelineLoop 在解码+入队期间持有锁，定位复位 在 Clear+Reset 前获取锁。
     /// 即使暂停确认超时（管线线程卡在长解码中），锁也能确保安全。
     /// </summary>
     private readonly SemaphoreSlim _decodeLock = new(1, 1);
@@ -66,7 +83,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     /// 中立 BCL 委托，由 Audio 模块把 <c>VolumeControl</c>/<c>IAudioEffect</c>/<c>AudioMixer</c> 转换而来，Core 不依赖 Audio 模块。</param>
     /// <param name="effectReset">音频效果状态重置委托。
     /// 中立 BCL 委托（<see cref="Action"/>），由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。
-    /// 在 Seek/Flush 的解码锁内调用，清除有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）的跨位置残留。</param>
+    /// 在 Seek/定位复位 的解码锁内调用，清除有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）的跨位置残留。</param>
     public AudioPipeline(
         Channel<MediaPacket> packetQueue,
         IAudioDecoder decoder,
@@ -157,6 +174,11 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             _cts = new CancellationTokenSource();
         }
 
+        // 新运行代号：旧循环若仍在收尾，其收尾动作不会影响本轮。
+        Interlocked.Increment(ref _runId);
+        // 本轮循环即当前循环，复位留下的「已作废」标记到此为止。
+        _loopSuperseded = false;
+
         // 治本(1)（起播静默窗）：非恢复播放走 preroll —— WASAPI 内部 Stop→Reset 并 arm，
         // 提交循环写满设备缓冲后自动 Start，引擎抓取真实数据而非静音 → 起播无静默窗。
         // 恢复播放（Pause→Resume）走旧路径立即 Resume。
@@ -201,98 +223,24 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 清空队列、解码器缓冲和音频输出（Seek 后调用）。同步版本，用于无法 await 的场景。
-    /// 先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// 定位复位：把管线带回「可继续消费新包」的状态，是 seek 的唯一复位入口。
     /// </summary>
     /// <remarks>
-    /// <para>两阶段安全保证：</para>
-    /// <list type="number">
-    /// <item>暂停确认（50ms 超时）：快速路径，管线空闲时立即确认</item>
-    /// <item>解码锁（2s 超时）：慢速路径，管线卡在长解码中时等待解码完成</item>
-    /// </list>
-    /// <para>即使暂停确认超时，解码锁也能确保 Reset 不与 DecodeAsync 并发。</para>
-    /// <para>优先使用异步版本 <see cref="FlushAsync"/>（无 Thread.Sleep 阻塞）。</para>
+    /// <para>顺序：暂停确认（50ms）→ 递增运行代号并终止旧消费循环（<see cref="LoopStopTimeout"/> 有界等待）
+    /// → 解码锁内复位（2s）。任一步超时只记日志并继续，不会阻塞调用方。</para>
+    /// <para>必须在缓冲重填之前调用：旧解码器若还在消费，会先吃掉定位后的关键帧与首段样本。</para>
+    /// <para>返回后保持暂停且 <see cref="IsRunning"/> 为 false，完成标志已清除；旧循环的完成上报与
+    /// 运行状态写入都被运行代号阻断。调用方须在缓冲重填完成后调用 <see cref="ResumeAfterSeekAsync"/>
+    /// 重新拉起循环。</para>
     /// </remarks>
-    public void Flush()
+    internal async Task ResetForSeekAsync()
     {
-        var shouldResume = _isRunning && !_isPaused;
-        if (_isRunning)
-        {
-            _pauseAcknowledged = false;
-            _isPaused = true;
-
-            // 阶段1: 等待暂停确认（快速路径，50ms 超时）
-            for (var i = 0; i < 50 && !_pauseAcknowledged; i++)
-            {
-                Thread.Sleep(1);
-            }
-
-            if (!_pauseAcknowledged)
-            {
-                _logger.LogWarning("音频管线暂停确认超时（50ms），等待解码锁确保安全");
-            }
-
-            // 阶段2: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）
-            if (_decodeLock.Wait(TimeSpan.FromSeconds(2)))
-            {
-                try
-                {
-                    _sampleQueue.Reset(_framePool);
-                    _decoder.Reset();
-                    _effectReset?.Invoke(); // 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
-                    _output.Flush();
-                }
-                finally
-                {
-                    _decodeLock.Release();
-                }
-            }
-            else
-            {
-                _logger.LogError("音频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
-                _sampleQueue.Reset(_framePool);
-                _output.Flush();
-                _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
-                _pendingEffectReset = true;    // 同上：有状态效果延迟重置，避免与 Process 并发
-            }
-        }
-        else
-        {
-            // 管线未运行，无需锁
-            _sampleQueue.Reset(_framePool);
-            _decoder.Reset();
-            _output.Flush();
-        }
-
-        if (shouldResume)
-        {
-            _isPaused = false;
-        }
-    }
-
-    /// <summary>
-    /// 清空队列、解码器缓冲和音频输出（Seek 后调用）。异步版本，优先使用。
-    /// 先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
-    /// </summary>
-    /// <remarks>
-    /// <para>两阶段安全保证：</para>
-    /// <list type="number">
-    /// <item>暂停确认（50ms 超时）：快速路径，使用 TaskCompletionSource 信号通知</item>
-    /// <item>解码锁（2s 超时）：慢速路径，管线卡在长解码中时等待解码完成</item>
-    /// </list>
-    /// <para>即使暂停确认超时，解码锁也能确保 Reset 不与 DecodeAsync 并发。</para>
-    /// <para>RunContinuationsAsynchronously 避免续体在管线线程执行。</para>
-    /// </remarks>
-    public async Task FlushAsync()
-    {
-        var shouldResume = _isRunning && !_isPaused;
+        // 阶段1: 等待暂停确认（快速路径，50ms 超时）。循环不在运行时没有暂停可确认，直接跳过。
         if (_isRunning)
         {
             _pauseAckTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pauseAcknowledged = false;
             _isPaused = true;
 
-            // 阶段1: 等待暂停确认（快速路径，50ms 超时）
             try
             {
                 await _pauseAckTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(50));
@@ -301,43 +249,90 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             {
                 _logger.LogWarning("音频管线暂停确认超时（50ms），等待解码锁确保安全");
             }
+        }
 
-            // 阶段2: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）
-            if (await _decodeLock.WaitAsync(TimeSpan.FromSeconds(2)))
+        // 阶段2: 作废并终止上一轮消费循环。运行中与已退出两条路径走同一段逻辑：复位本身是幂等的，
+        // 而「循环是否在运行」并不是可靠的判据——复位上一次超时返回后，旧循环可能仍在收尾。
+        // 先递增运行代号并置「已作废」，旧循环的收尾（完成上报与运行状态写入）从这一刻起就失去资格，
+        // 不必依赖「先清完成标志」这种存在并发窗口的时序；随后取消它并有界等待退出。
+        Interlocked.Increment(ref _runId);
+        _loopSuperseded = true;
+        _completedNaturally = false;
+        _isPaused = true;
+        _isRunning = false;
+        _cts.Cancel();
+
+        // 有界等待：旧循环可能阻塞在包通道读取或设备提交上。超时只记录，绝不让定位挂在它身上；
+        // 其后的收尾动作已由运行代号阻断。等待本身有上限，因此不需要再判断调用方是否就是循环线程。
+        var loopTask = _pipelineTask;
+        if (loopTask != null)
+        {
+            try
             {
-                try
-                {
-                    _sampleQueue.Reset(_framePool);
-                    _decoder.Reset();
-                    _effectReset?.Invoke(); // 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
-                    _output.Flush();
-                }
-                finally
-                {
-                    _decodeLock.Release();
-                }
+                await loopTask.WaitAsync(LoopStopTimeout);
             }
-            else
+            catch (TimeoutException)
             {
-                _logger.LogError("音频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
+                _logger.LogWarning("音频管线消费循环未在 {Timeout}ms 内退出，继续复位；其收尾动作由运行代号阻断",
+                    LoopStopTimeout.TotalMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "音频管线消费循环退出异常，继续复位");
+            }
+        }
+
+        // 阶段3: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）。
+        // 循环已退出时锁必然空闲，因此不必为「未运行」另开一条免锁分支——复活旧循环或与异常收尾并发
+        // 时，免锁 Reset 会让解码器状态与队列在别人手里被改写。
+        if (await _decodeLock.WaitAsync(TimeSpan.FromSeconds(2)))
+        {
+            try
+            {
                 _sampleQueue.Reset(_framePool);
+                _decoder.Reset();
+                _effectReset?.Invoke(); // 重置有状态音频效果（清除延迟线/包络/滤波器历史，防 Seek 后瞬态）
                 _output.Flush();
-                _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
-                _pendingEffectReset = true;    // 同上：有状态效果延迟重置，避免与 Process 并发
+            }
+            finally
+            {
+                _decodeLock.Release();
             }
         }
         else
         {
-            // 管线未运行，无需锁
+            _logger.LogError("音频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
             _sampleQueue.Reset(_framePool);
-            _decoder.Reset();
             _output.Flush();
+            _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
+            _pendingEffectReset = true;    // 同上：有状态效果延迟重置，避免与 Process 并发
         }
 
-        if (shouldResume)
+        // 复位后一律保持暂停且不处于运行态，由 ResumeAfterSeekAsync 在缓冲重填后重新拉起循环。
+        _isPaused = true;
+        _completedNaturally = false;
+        _isRunning = false;
+    }
+
+    /// <summary>
+    /// 定位后恢复播放。管线仍在运行时只解除暂停；已退出（消费循环因通道更换或异常收尾）时
+    /// 重新拉起消费循环。对仍在运行的管线重复调用不会启动第二条循环。
+    /// </summary>
+    internal async Task ResumeAfterSeekAsync()
+    {
+        // 判据是「消费循环是否还活着且未被取代」，不是 _isRunning：复位与异常收尾都可能留下
+        // 标志为 true 而循环已退出的窗口；复位超时返回后旧循环更可能既未完成又已被作废，
+        // 此时只解除暂停会得到一条永不喂帧的管线。
+        if (!_loopSuperseded && _pipelineTask is { IsCompleted: false })
         {
             _isPaused = false;
+            _output.Resume();
+            return;
         }
+
+        // 定位不是冷启动：复用已建立的输出流，走恢复路径而不是重新 BeginStreaming。
+        _isResuming = true;
+        await StartAsync();
     }
 
     // 前瞻窗口（预解码帧数）：让提交阶段能成批提交，折叠逐帧 STA 跨线程往返的固定开销（修复听感卡顿/掉速）。
@@ -383,6 +378,12 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
     private async Task PipelineLoop()
     {
+        // 本轮循环的运行代号：定位复位后旧循环可能仍在收尾，其收尾动作与完成上报都必须
+        // 只对当轮生效，否则会把新一轮的状态改坏。
+        int runId = Volatile.Read(ref _runId);
+        // 本轮令牌在入口固化：定位复位会换掉 _cts 实例，若每次都读字段，旧循环会改用新令牌
+        // 继续存活，取消就不再对它生效。
+        var ct = _cts.Token;
         try
         {
             // 音频是主时钟的唯一供血者：喂帧线程被挤 → BufferQueue 排空 → 主时钟停走 →
@@ -393,8 +394,12 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
             catch { }
             _supplyWindowStartQpc = 0; _supplySubmittedSamples = 0; _supplyDecodedPackets = 0;
             _supplyQueueMin = int.MaxValue; _supplyQueueMax = 0;
-            while (!_cts.IsCancellationRequested)
+            while (!ct.IsCancellationRequested)
             {
+                // 已复位到新一轮：旧循环立即退场，不再取包或提交，避免与新一轮争抢单读者队列。
+                if (Volatile.Read(ref _runId) != runId)
+                    break;
+
                 // 喂帧缺口定位：两次成功提交间隔 > 120ms 且非暂停 → 喂帧饥饿（设备水库被抽干的主因），
                 // 输出上一迭代相位分解定位卡点。暂停间隙不计（恢复后刷新锚点）。
                 long iterStart = Stopwatch.GetTimestamp();
@@ -418,9 +423,8 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
 
                 if (_isPaused)
                 {
-                    _pauseAcknowledged = true;
                     _pauseAckTcs?.TrySetResult(true);
-                    await Task.Delay(10, _cts.Token);
+                    await Task.Delay(10, ct);
                     _lastSubmitEndTs = Stopwatch.GetTimestamp(); // 暂停间隙不计入喂帧缺口
                     continue;
                 }
@@ -431,7 +435,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 if (_sampleQueue.Count > 0)
                 {
                     var subStart = Stopwatch.GetTimestamp();
-                    if (!TrySubmitChunk())
+                    if (!TrySubmitChunk(ct))
                         break;
                     _diagSubmitMs += Stopwatch.GetElapsedTime(subStart).TotalMilliseconds;
                     continue;
@@ -451,7 +455,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     if (!_packetQueue.Reader.TryRead(out packet))
                     {
                         var readStart = Stopwatch.GetTimestamp();
-                        packet = await _packetQueue.Reader.ReadAsync(_cts.Token);
+                        packet = await _packetQueue.Reader.ReadAsync(ct);
                         _diagReadWaitMs = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds;
                         if (AudioDiagEnabled && _diagReadWaitMs > 80)
                             _logger.LogWarning("[AUDIO-DIAG] ReadAsync 阻塞 {Ms}ms（上游包未及时到达 → 提交中断 → 静音）", _diagReadWaitMs);
@@ -459,6 +463,10 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 }
                 catch (ChannelClosedException)
                 {
+                    // 通道更换（定位复位重建队列）不等于流末：旧循环直接退场，交给新一轮循环。
+                    if (Volatile.Read(ref _runId) != runId)
+                        break;
+
                     // 流结束：所有采样已提交，标记自然完成并退出，finally 中触发 Completed 事件。
                     if (EosDiagEnabled)
                         _logger.LogInformation("[AUDIO-EOS] 自然完成 masterTime={Master:g}",
@@ -472,7 +480,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 if (AudioDiagEnabled)
                 {
                     var decStart = Stopwatch.GetTimestamp();
-                    await DecodeAndEnqueueAsync(packet);
+                    await DecodeAndEnqueueAsync(packet, ct);
                     _diagDecodeMs += Stopwatch.GetElapsedTime(decStart).TotalMilliseconds;
                     var decMs = _diagDecodeMs;
                     if (decMs > 80)
@@ -481,7 +489,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 else
                 {
                     var decStart = Stopwatch.GetTimestamp();
-                    await DecodeAndEnqueueAsync(packet);
+                    await DecodeAndEnqueueAsync(packet, ct);
                     _diagDecodeMs += Stopwatch.GetElapsedTime(decStart).TotalMilliseconds;
                 }
 
@@ -493,7 +501,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 {
                     _supplyDecodedPackets++;
                     var pdStart = Stopwatch.GetTimestamp();
-                    await DecodeAndEnqueueAsync(next);
+                    await DecodeAndEnqueueAsync(next, ct);
                     _diagDecodeMs += Stopwatch.GetElapsedTime(pdStart).TotalMilliseconds;
                     var pdMs = Stopwatch.GetElapsedTime(pdStart).TotalMilliseconds;
                     if (AudioDiagEnabled && pdMs > 80)
@@ -502,7 +510,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                     if (_sampleQueue.Count > 0)
                     {
                         var subStart = Stopwatch.GetTimestamp();
-                        if (!TrySubmitChunk())
+                        if (!TrySubmitChunk(ct))
                             break;
                         _diagSubmitMs += Stopwatch.GetElapsedTime(subStart).TotalMilliseconds;
                     }
@@ -528,10 +536,14 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         }
         finally
         {
-            // 仅当流末自然耗尽时触发 Completed（取消退出不触发，避免 Stop/Dispose 误报 Ended）。
-            if (_completedNaturally)
-                Completed?.Invoke(this, EventArgs.Empty);
-            _isRunning = false;
+            // 已复位到新一轮：旧循环直接退场，既不报完成也不改动新一轮的运行状态。
+            if (Volatile.Read(ref _runId) == runId)
+            {
+                // 仅当流末自然耗尽时触发 Completed（取消退出不触发，避免 Stop/Dispose 误报 Ended）。
+                if (_completedNaturally)
+                    Completed?.Invoke(this, EventArgs.Empty);
+                _isRunning = false;
+            }
         }
     }
 
@@ -541,11 +553,13 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     /// （消除"解码阶段零提交 → 水库抽干 → 欠载"窗口）。
     /// </summary>
     /// <returns>false = 已取消且队列已清空（调用方应退出循环）。</returns>
-    private bool TrySubmitChunk()
+    /// <param name="ct">本轮消费循环的令牌（循环入口固化）。用参数而不是现读 <see cref="_cts"/>，
+    /// 否则旧循环在定位复位换掉 <see cref="_cts"/> 后会改用新令牌继续提交。</param>
+    private bool TrySubmitChunk(CancellationToken ct)
     {
         // 关闭/停止：不再向渲染线程阻塞提交，直接归还剩余帧。
         // 避免 Stop/Dispose 时 SubmitBatch 卡在 WaitForBufferSpace 2s 超时累加 → 退出挂起 5s。
-        if (_cts.IsCancellationRequested)
+        if (ct.IsCancellationRequested)
         {
             while (_sampleQueue.TryDequeue(out var f) && f != null)
                 ReturnFrame(f);
@@ -573,7 +587,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         if (AudioDiagEnabled)
         {
             var subStart = Stopwatch.GetTimestamp();
-            SubmitBatch(batch, _cts.Token);
+            SubmitBatch(batch, ct);
             _lastSubmitEndTs = Stopwatch.GetTimestamp();
             var subMs = Stopwatch.GetElapsedTime(subStart).TotalMilliseconds;
             if (subMs > 80)
@@ -581,7 +595,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
         }
         else
         {
-            SubmitBatch(batch, _cts.Token);
+            SubmitBatch(batch, ct);
             _lastSubmitEndTs = Stopwatch.GetTimestamp();
         }
 
@@ -666,21 +680,34 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 解码单个包并入队（与 Flush/Reset 加锁，防止竞态）。供 PipelineLoop 主解码与前瞻预解码共用。
+    /// 解码单个包并入队（与 定位复位/Reset 加锁，防止竞态）。供 PipelineLoop 主解码与前瞻预解码共用。
     /// </summary>
-    private async Task DecodeAndEnqueueAsync(MediaPacket packet)
+    /// <param name="ct">本轮消费循环的令牌（循环入口固化）。用参数而不是现读 <see cref="_cts"/>，
+    /// 否则旧循环在定位复位换掉 <see cref="_cts"/> 后会改用新令牌继续解码。</param>
+    private async Task DecodeAndEnqueueAsync(MediaPacket packet, CancellationToken ct)
     {
-        await _decodeLock.WaitAsync(_cts.Token);
+        // 包的所有权在本方法内转移：只要没能把包交给解码器，就必须由这里归还。
+        // 等待锁期间循环被取消（定位复位取消令牌）时不会有任何一方接手该包，故显式归还。
         try
         {
-            // 隐患B修复：解码锁获取超时期间 Flush 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
+            await _decodeLock.WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            packet.Dispose();
+            throw;
+        }
+
+        try
+        {
+            // 隐患B修复：解码锁获取超时期间 定位复位 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
             if (_pendingDecoderReset)
             {
                 _decoder.Reset();
                 _pendingDecoderReset = false;
             }
 
-           // 解码锁超时期间 Flush 可能跳过效果重置，此处补做，
+           // 解码锁超时期间 定位复位 可能跳过效果重置，此处补做，
             // 确保有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）必然复位
             if (_pendingEffectReset)
             {
@@ -688,7 +715,7 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 _pendingEffectReset = false;
             }
 
-            // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Flush 暂停）
+            // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 定位复位 暂停）
             if (_isPaused)
             {
                 packet.Dispose();

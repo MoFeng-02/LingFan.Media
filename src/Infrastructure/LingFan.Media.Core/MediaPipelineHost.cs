@@ -146,35 +146,41 @@ public sealed class MediaPipelineHost
     }
 
     /// <summary>
-    /// Seek 后刷新两条管线和字幕处理器。同步版本，用于无法 await 的场景。
-    /// 各管线 Flush 内部两阶段保证——
-    /// 暂停确认（快速路径）+ 解码锁（慢速路径，确保 Reset 不与 DecodeAsync 并发）。
-    /// </summary>
-    public void Flush()
-    {
-        _videoPipeline?.Flush();
-        _audioPipeline?.Flush();
-        _subtitleProcessor?.Clear();
-    }
-
-    /// <summary>
-    /// Seek 后刷新两条管线和字幕处理器。异步版本，优先使用。
-    /// 各管线 FlushAsync 内部两阶段保证——
-    /// 暂停确认（快速路径，TaskCompletionSource）+ 解码锁（慢速路径，确保 Reset 不与 DecodeAsync 并发）。
+    /// 定位复位：把两条管线与字幕处理器带回「可继续消费新包」的状态，是 seek 的唯一复位入口。
     /// </summary>
     /// <remarks>
-    /// <para>顺序 await 各管线（与同步版一致）。</para>
+    /// <para>先清完成门控再复位管线：否则上一次播放残留的完成态会在定位后立刻判定播放结束。</para>
+    /// <para>各管线复位内部两阶段保证——暂停确认（快速路径，TaskCompletionSource）+ 解码锁（慢速路径，确保 Reset 不与 DecodeAsync 并发）。</para>
     /// <para>最坏情况总耗时：50ms+50ms+150ms（暂停确认）+ 最多 2s+2s+2s（解码锁），
     /// 正常情况约 50ms+50ms+150ms（管线空闲，锁立即获取）。</para>
+    /// <para>复位后管线保持暂停，须在包缓冲重填完成后再调用 <see cref="ResumeAfterSeekAsync"/>。</para>
     /// </remarks>
     public async Task FlushAsync()
     {
+        lock (_completionLock)
+        {
+            _videoCompleted = false;
+            _audioCompleted = false;
+            _completionRaised = false;
+        }
+
         if (_videoPipeline != null)
-            await _videoPipeline.FlushAsync();
+            await _videoPipeline.ResetForSeekAsync();
         if (_audioPipeline != null)
-            await _audioPipeline.FlushAsync();
+            await _audioPipeline.ResetForSeekAsync();
         if (_subtitleProcessor != null)
             await _subtitleProcessor.ClearAsync();
+    }
+
+    /// <summary>
+    /// 定位后恢复播放。对仍在运行的管线只解除暂停，不重复启动消费循环；
+    /// 管线已在定位复位前退出时，由各管线自行拉起新的消费循环。
+    /// </summary>
+    public async Task ResumeAfterSeekAsync()
+    {
+        _videoPipeline?.ResumeAfterSeek();
+        if (_audioPipeline != null)
+            await _audioPipeline.ResumeAfterSeekAsync();
     }
 
     /// <summary>

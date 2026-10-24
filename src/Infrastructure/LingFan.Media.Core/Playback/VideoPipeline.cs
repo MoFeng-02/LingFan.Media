@@ -37,6 +37,23 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // 自然完成标志：仅当管线因"流末耗尽"正常退出（非 Stop/Dispose 取消）时才置位，
     // 用于区分 Ended（自然结束）与取消退出，避免停止/释放时误触发 Completed 事件。
     private bool _completedNaturally;
+    // 运行代号：每次启动消费循环自增。循环线程在收尾时用它判断自己是否仍属于「当前这一轮」，
+    // 从而让定位复位重启后的新循环不被上一轮的迟到收尾改写状态（否则新循环会立刻判为已结束）。
+    private int _runId;
+    // 解码消费循环存活标志：仅由当轮解码循环在自己的收尾处置 false。
+    // 恢复呈现时必须以它判断是否需要重拉循环——只看 _isRunning 会漏掉
+    // 「解码循环已退出、呈现循环仍在空转」的形态，那种形态下帧队列永远不会再被填充。
+    private volatile bool _decodeLoopAlive;
+    // 解码循环重建是否正在进行：仅用于「重建链已在跑」时阻止再起第二条重建链。
+    // 重建期间 _decodeLoopAlive 保持 false——新的解码循环尚未真正启动，不能对外自述健康，
+    // 否则上层（恢复呈现、启动）会误判解码仍健在，只解除暂停而不再重拉循环。
+    private volatile bool _decodeRestarting;
+    // 解码重建序号：重建链可能被后来的重建取代（旧链在新循环收尾后才走到 finally），
+    // 只有仍是最新一次重建的链才允许清除 _decodeRestarting，避免旧链把新一轮的标记抹掉。
+    private int _decodeRestartId;
+    // 定位复位时等待消费循环退出的上限。超时后照常继续复位：运行代号已作废旧轮，
+    // 旧线程即使残留也不会再改动新一轮状态。
+    private static readonly TimeSpan LoopStopTimeout = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// 前向解码缓冲目标深度（帧数）。解码生产者（<see cref="DecodeLoop"/>）将帧队列维持在
@@ -55,7 +72,6 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         string.Equals(Environment.GetEnvironmentVariable("LINGFAN_SYNC_DIAG"), "1", StringComparison.Ordinal);
     private volatile bool _isRunning;
     private volatile bool _isPaused;
-    private volatile bool _pauseAcknowledged;
     private TaskCompletionSource<bool>? _pauseAckTcs;
     // 重播衔接卡顿解决：**首帧门控 + 视频预滚动**。
     // 成因：MediaPipelineHost.StartAsync 原为「音频先启动 → 视频后启动」。首播时 BufferManager 在
@@ -178,6 +194,12 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     // 本看门狗在管线线程之外每 2s 输出：循环心跳年龄 / 主时钟 / 队列 / sink 在途深度——
     // 冻结时一眼定位「循环死 vs 时钟死 vs sink 链死」。诊断期常开，代价一条日志/2s。
     private Task? _freezeWatchdogTask;
+    // 「已有看门狗在跑」的判据：存活标记 + 它绑定的令牌源。
+    // 只看任务引用不可靠（包装任务在首个 await 处即完成），只看引用非空也不可靠
+    // （取消退出后引用仍在）；带上令牌源是为了取消换代后能立即重建新一轮，
+    // 而不必等旧循环自己收尾。
+    private volatile bool _freezeWatchdogRunning;
+    private CancellationTokenSource? _freezeWatchdogCts;
     private long _loopHeartbeatQpc;
     private long _sinkEnterQpc;
     private long _sinkExitQpc;
@@ -201,7 +223,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// 解码锁：确保 DecodeAsync 与 Reset 不会并发执行。
-    /// PipelineLoop 在解码+入队期间持有锁，Flush/FlushAsync 在 Clear+Reset 前获取锁。
+    /// PipelineLoop 在解码+入队期间持有锁，定位复位 在 Clear+Reset 前获取锁。
     /// 即使暂停确认超时（管线线程卡在长解码中），锁也能确保安全。
     /// </summary>
     private readonly SemaphoreSlim _decodeLock = new(1, 1);
@@ -316,23 +338,45 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// 启动或恢复管线。
     /// 首次播放时启动管线线程，恢复播放时解除暂停阻塞。
     /// </summary>
-    public void Start()
+    public void Start() => StartCore(resetStartupGates: true);
+
+    /// <summary>
+    /// 启动消费循环（呈现循环 + 解码循环）。
+    /// </summary>
+    /// <param name="resetStartupGates">
+    /// 是否复位起播门控（音频就绪信号、首帧门控、首帧上屏信号）。全新播放与重播必须复位；
+    /// 定位后的重启不复位——门控在播放中已经放行，重新关上会让画面空等音频就绪数秒。
+    /// </param>
+    /// <remarks>幂等：循环仍在运行时只解除暂停，不重复创建线程。</remarks>
+    private void StartCore(bool resetStartupGates)
     {
-        if (_isRunning)
+        // 两条消费循环都存活才算「已在运行」。只有呈现循环存活时不能整体早退：那时解码循环
+        // 已退出、帧队列不会再被填充，整体早退会让管线永久停在零帧；也不能重拉呈现循环，
+        // 帧队列以单读模式创建，第二条呈现线程会破坏该契约。
+        if (_isRunning && _decodeLoopAlive)
         {
             _isPaused = false;
             return;
         }
 
+        if (_isRunning)
+        {
+            RestartDecodeLoopOnly();
+            return;
+        }
+
         _isRunning = true;
         _isPaused = false;
-        // 首帧门控复位（仅全新启动/重播路径）：恢复暂停时上方已早退，门控保持已开启不受影响。
-        _audioReadySignaled = false;
-        _audioGateOpened = false;
-        // 首帧上屏信号复位：每次全新启动/重播重建 TCS（TCS 不可重置），
-        // 供 MediaPipelineHost 在启动音频前等待「视频首帧已真正上屏」。
-        _firstFramePresented = false;
-        _firstFramePresentedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (resetStartupGates)
+        {
+            // 首帧门控复位（仅全新启动/重播路径）：恢复暂停时上方已早退，门控保持已开启不受影响。
+            _audioReadySignaled = false;
+            _audioGateOpened = false;
+            // 首帧上屏信号复位：每次全新启动/重播重建 TCS（TCS 不可重置），
+            // 供 MediaPipelineHost 在启动音频前等待「视频首帧已真正上屏」。
+            _firstFramePresented = false;
+            _firstFramePresentedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
         _decodeDone = false;
         _eosReached = false;
         // 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
@@ -364,11 +408,19 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             _cts = new CancellationTokenSource();
         }
 
+        // 新运行代号：上一轮循环（若还有未收尾的线程）从此不再被视为当前这一轮。
+        Interlocked.Increment(ref _runId);
+        // 本次整体启动会自建解码循环，任何仍在等待的重建链都必须作废：
+        // 否则它稍后也会启动一条解码循环，同一轮出现两条解码线程。
+        Interlocked.Increment(ref _decodeRestartId);
+        _decodeRestarting = false;
+
         // 双线程解耦：解码生产者 + 呈现消费者。两者经 FrameQueue 通信，解码延迟不阻塞呈现节拍。
         // 呈现消费者用 LongRunning 专用实时线程：避免 async 续体被线程池调度延迟（±50ms 抖动脉冲），
         // 且线程全程保持 Highest 优先级（不被 OS 抢占）。解码生产者保持 Task.Run（缓冲生产者，延迟不影响呈现节拍）。
         _pipelineTask = Task.Factory.StartNew(PipelineLoop, CancellationToken.None,
             TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        _decodeLoopAlive = true;
         _decodeTask = Task.Run(DecodeLoop);
         StartFreezeWatchdog();
     }
@@ -376,13 +428,19 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// <summary>启动冻结看门狗（独立诊断线程）：每 2s 打一条管线心跳快照，管线卡死时仍持续输出。</summary>
     private void StartFreezeWatchdog()
     {
-        if (_freezeWatchdogTask is not null)
+        // 判「同一代看门狗是否在跑」：存活标记与令牌源必须同时匹配才早退。
+        // 按引用非空早退会让取消退出后的重建永久失效；只按任务未完成早退则会在
+        // 首次 await 之后恒判为已完成（外层包装任务），导致每次启动多起一条循环。
+        var cts = _cts;
+        if (_freezeWatchdogRunning && ReferenceEquals(_freezeWatchdogCts, cts))
             return;
+        _freezeWatchdogCts = cts;
+        _freezeWatchdogRunning = true;
         _loopHeartbeatQpc = _sinkEnterQpc = _sinkExitQpc = System.Diagnostics.Stopwatch.GetTimestamp();
         _decodeHeartbeatQpc = System.Diagnostics.Stopwatch.GetTimestamp();
         _decodePhase = 0;
         _pipelinePhase = 0;
-        CancellationToken ct = _cts.Token;
+        CancellationToken ct = cts.Token;
         _freezeWatchdogTask = Task.Factory.StartNew(async () =>
         {
             try
@@ -438,7 +496,14 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
             {
                 // 停止/释放时正常退出。
             }
-        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            finally
+            {
+                // 只清自己这一代的标记：取消换代后新一轮看门狗已接管，
+                // 旧循环收尾不得把新一轮的存活标记抹掉。
+                if (ReferenceEquals(_freezeWatchdogCts, cts))
+                    _freezeWatchdogRunning = false;
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
     }
 
     /// <summary>
@@ -534,136 +599,209 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 清空队列和解码器缓冲（Seek 后调用）。同步版本，用于无法 await 的场景。
-    /// 先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
+    /// 定位复位：把管线从「可能已自然结束、可能残留完成标志」的状态带回可继续消费新包的状态。
+    /// 定位是唯一需要复位的场景；复位后管线保持暂停，待调用方重新灌入数据后再调用
+    /// <see cref="ResumeAfterSeek"/> 恢复呈现。
     /// </summary>
     /// <remarks>
-    /// <para>两阶段安全保证：</para>
-    /// <list type="number">
-    /// <item>暂停确认（50ms 超时）：快速路径，管线空闲时立即确认</item>
-    /// <item>解码锁（2s 超时）：慢速路径，管线卡在长解码中时等待解码完成</item>
-    /// </list>
-    /// <para>即使暂停确认超时，解码锁也能确保 Reset 不与 DecodeAsync 并发。</para>
-    /// <para>优先使用异步版本 <see cref="FlushAsync"/>（无 Thread.Sleep 阻塞）。</para>
+    /// <para>为什么必须清完成标志：解码循环退出时会把 <c>_decodeDone</c> 置位，呈现循环看到它即判定
+    /// 「流自然结束」并触发 Completed；若不复位，定位后新包尚未到达，管线就抢先自我收尾。</para>
+    /// <para>复位顺序：先暂停并等待确认，再停掉两条消费循环并等待其退出，然后递增运行代号作废
+    /// 复位前启动的循环，最后取解码锁清帧队列、复位解码器与有状态处理器并清完成标志。</para>
+    /// <para>必须先停循环再复位解码器：旧解码循环可能正在 DecodeAsync，也可能在复位之后把
+    /// 「通道关闭」当作流末而写入完成标志。</para>
+    /// <para>队列残留帧在复位时归还帧池而非 Dispose，避免多次定位耗尽帧池。</para>
     /// </remarks>
-    public void Flush()
+    internal async Task ResetForSeekAsync()
     {
-        var shouldResume = _isRunning && !_isPaused;
-        if (_isRunning)
-        {
-            _pauseAcknowledged = false;
-            _isPaused = true;
-
-            // 阶段1: 等待暂停确认（快速路径，50ms 超时）
-            for (var i = 0; i < 50 && !_pauseAcknowledged; i++)
-            {
-                Thread.Sleep(1);
-            }
-
-            if (!_pauseAcknowledged)
-            {
-                _logger.LogWarning("视频管线暂停确认超时（50ms），等待解码锁确保安全");
-            }
-
-            // 阶段2: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）
-            if (_decodeLock.Wait(TimeSpan.FromSeconds(2)))
-            {
-                try
-                {
-                    _frameQueue.Reset(_framePool);
-                    _decoder.Reset();
-                    _processorReset?.Invoke(); // 重置有状态处理器（释放 _held 等）
-                }
-                finally
-                {
-                    _decodeLock.Release();
-                }
-            }
-            else
-            {
-                _logger.LogError("视频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
-                _frameQueue.Reset(_framePool); // Channel 线程安全，仍然清空
-                _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
-                _pendingProcessorReset = true;   // 同上：有状态处理器延迟重置，避免与 Process 并发
-            }
-        }
-        else
-        {
-            // 管线未运行，无需锁
-            _frameQueue.Reset(_framePool);
-            _decoder.Reset();
-        }
-
-        if (shouldResume)
-        {
-            _isPaused = false;
-        }
-    }
-
-    /// <summary>
-    /// 清空队列和解码器缓冲（Seek 后调用）。异步版本，优先使用。
-    /// 先暂停管线线程，等待确认或获取解码锁后清空和重置，最后恢复运行。
-    /// </summary>
-    /// <remarks>
-    /// <para>两阶段安全保证：</para>
-    /// <list type="number">
-    /// <item>暂停确认（50ms 超时）：快速路径，使用 TaskCompletionSource 信号通知</item>
-    /// <item>解码锁（2s 超时）：慢速路径，管线卡在长解码中时等待解码完成</item>
-    /// </list>
-    /// <para>即使暂停确认超时，解码锁也能确保 Reset 不与 DecodeAsync 并发。</para>
-    /// <para>RunContinuationsAsynchronously 避免续体在管线线程执行。</para>
-    /// </remarks>
-    public async Task FlushAsync()
-    {
-        var shouldResume = _isRunning && !_isPaused;
         if (_isRunning)
         {
             _pauseAckTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pauseAcknowledged = false;
             _isPaused = true;
 
-            // 阶段1: 等待暂停确认（快速路径，50ms 超时）
+            // 阶段1: 等待暂停确认（快速路径，50ms 超时），让呈现循环尽快离开呈现分支。
             try
             {
                 await _pauseAckTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(50));
             }
             catch (TimeoutException)
             {
-                _logger.LogWarning("视频管线暂停确认超时（50ms），等待解码锁确保安全");
+                _logger.LogWarning("视频管线暂停确认超时（50ms），继续停止消费循环");
             }
+        }
 
-            // 阶段2: 获取解码锁（慢速路径，确保无 DecodeAsync 在执行）
-            if (await _decodeLock.WaitAsync(TimeSpan.FromSeconds(2)))
+        // 阶段2: 停掉两条消费循环。定位期间不允许旧循环继续消费包或呈现帧：
+        // 旧解码器可能吃掉定位后的关键帧，旧循环也可能在复位后写入完成标志。
+        _isRunning = false;
+        _isPaused = true;
+        _cts.Cancel();
+
+        // 代号在等待循环退出之前递增：旧循环的收尾若落在等待窗口内，也会因代号不匹配
+        // 而不写完成标志、不改存活标志，复位结果不会被上一轮的迟到收尾改写。
+        Interlocked.Increment(ref _runId);
+
+        var pipelineTask = _pipelineTask;
+        if (pipelineTask != null)
+        {
+            try
             {
-                try
-                {
-                    _frameQueue.Reset(_framePool);
-                    _decoder.Reset();
-                    _processorReset?.Invoke(); // 重置有状态处理器（释放 _held 等）
-                }
-                finally
-                {
-                    _decodeLock.Release();
-                }
+                await pipelineTask.WaitAsync(LoopStopTimeout);
             }
-            else
+            catch (TimeoutException)
             {
-                _logger.LogError("视频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
-                _frameQueue.Reset(_framePool); // Channel 线程安全，仍然清空
-                _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
-                _pendingProcessorReset = true;   // 同上：有状态处理器延迟重置，避免与 Process 并发
+                _logger.LogWarning("视频呈现循环停止超时（{Timeout}ms），继续复位", LoopStopTimeout.TotalMilliseconds);
+            }
+        }
+
+        var decodeTask = _decodeTask;
+        if (decodeTask != null)
+        {
+            try
+            {
+                await decodeTask.WaitAsync(LoopStopTimeout);
+            }
+            catch (TimeoutException)
+            {
+                _logger.LogWarning("视频解码循环停止超时（{Timeout}ms），继续复位", LoopStopTimeout.TotalMilliseconds);
+            }
+        }
+
+        // 阶段3: 落下存活标志。运行代号在取消后已递增，复位前启动的循环即使仍在收尾也已作废：
+        // 它们不再消费包、不再写完成标志、也不再触发 Completed。
+        // 同时在途的解码重建也必须作废：它稍后若照常启动解码循环，就会与本轮复位后的重启并行。
+        _decodeLoopAlive = false;
+        Interlocked.Increment(ref _decodeRestartId);
+        _decodeRestarting = false;
+
+        // 阶段4: 清帧队列、复位解码器与有状态处理器。解码锁仍要取：超时未退出的旧解码循环
+        // 可能正持锁执行 DecodeAsync。
+        if (await _decodeLock.WaitAsync(TimeSpan.FromSeconds(2)))
+        {
+            try
+            {
+                _frameQueue.Reset(_framePool);
+                _decoder.Reset();
+                _processorReset?.Invoke(); // 重置有状态处理器（释放 _held 等）
+                _pendingDecoderReset = false;
+                _pendingProcessorReset = false;
+            }
+            finally
+            {
+                _decodeLock.Release();
             }
         }
         else
         {
-            // 管线未运行，无需锁
-            _frameQueue.Reset(_framePool);
-            _decoder.Reset();
+            _logger.LogError("视频管线解码锁获取超时（2s），标记延迟 Reset 防止竞态崩溃");
+            _frameQueue.Reset(_framePool); // Channel 线程安全，仍然清空
+            _pendingDecoderReset = true;   // 锁超时未做 Reset，待管线线程下次进入锁时补做，确保解码器状态必然复位
+            _pendingProcessorReset = true;   // 同上：有状态处理器延迟重置，避免与 Process 并发
         }
 
-        if (shouldResume)
+        // 完成标志统一在复位动作之后清除：先清会被仍在收尾的上一轮循环重新置位。
+        _decodeDone = false;
+        _eosReached = false;
+        _completedNaturally = false;
+        _isPaused = true;
+        _isRunning = false;
+    }
+
+    /// <summary>
+    /// 定位后恢复呈现。<see cref="ResetForSeekAsync"/> 已把两条消费循环停掉，因此这里统一拉起
+    /// 新一轮循环；新一轮已在运行时重复调用只解除暂停，不会启动第二条。
+    /// </summary>
+    internal void ResumeAfterSeek()
+    {
+        // 解码循环单独退出而呈现循环仍在空转时，_isRunning 仍为 true：必须同时看存活标志，
+        // 否则只会解除暂停而不重拉解码，帧队列永远不再被填充。
+        if (_isRunning && _decodeLoopAlive)
         {
             _isPaused = false;
+            return;
+        }
+
+        // 保留启动门控状态：定位不是冷启动，画面无需重新等待音频就绪与首帧信号。
+        StartCore(resetStartupGates: false);
+    }
+
+    /// <summary>
+    /// 只补拉已经退出的解码消费循环，呈现循环保持原样继续运行。
+    /// </summary>
+    /// <remarks>
+    /// 不重建呈现循环：帧队列以单读模式创建，第二条呈现线程会破坏该契约。
+    /// 上一轮解码循环的收尾可能稍后才执行，因此新一轮启动前先等它结束再清除标志，
+    /// 否则新循环会被旧循环的收尾改写成「已结束」。
+    /// 该等待有上限：上一轮可能卡在不可取消的原生解码，不能让重建无限期悬停。
+    /// </remarks>
+    private void RestartDecodeLoopOnly()
+    {
+        if (_decodeRestarting)
+        {
+            // 重建链已在跑：这里只把运行态恢复成「未暂停」，不再起第二条重建链。
+            // 新解码循环会在有界等待之后自行启动，因此此刻不必也无法提前置存活标志。
+            _isPaused = false;
+            return;
+        }
+
+        _decodeRestarting = true;
+        Interlocked.Increment(ref _decodeRestartId);
+        _isPaused = false;
+        _decodeDone = false;
+        _eosReached = false;
+        _decodeTask = RestartDecodeLoopAsync(_decodeTask, Volatile.Read(ref _decodeRestartId));
+        StartFreezeWatchdog();
+    }
+
+    /// <summary>
+    /// 等上一轮解码循环收尾（有上限）后启动新一轮解码循环。
+    /// </summary>
+    /// <param name="previous">上一轮解码任务；可能仍停在不可取消的原生解码里。</param>
+    /// <param name="restartId">本次重建的序号，用于收尾时判断自己是否仍是最新一次重建。</param>
+    private async Task RestartDecodeLoopAsync(Task? previous, int restartId)
+    {
+        try
+        {
+            if (previous is not null && !previous.IsCompleted)
+            {
+                try
+                {
+                    // 有界等待：上一轮若卡在原生解码而永不收尾，新一轮也必须照常启动，
+                    // 否则「已在重建」会变成永久静默的零解码状态。
+                    await previous.WaitAsync(LoopStopTimeout).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    _logger.LogWarning("上一轮解码循环未在 {Timeout}ms 内退出，继续启动新一轮；其收尾动作由运行代号阻断",
+                        LoopStopTimeout.TotalMilliseconds);
+                }
+                catch (OperationCanceledException)
+                {
+                    // 旧循环因取消退出属正常路径。
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "上一轮解码循环收尾异常，继续重建");
+                }
+            }
+
+            // 本次重建可能已被定位复位或后来的一次重建取代：此时不得再启动解码循环，
+            // 否则会出现同一轮两条解码线程。
+            if (Volatile.Read(ref _decodeRestartId) != restartId)
+                return;
+
+            // 旧循环的收尾可能刚把这两个标志写回，启动新一轮前重新清除。
+            _decodeDone = false;
+            _eosReached = false;
+            // 到这里才真正有解码循环在跑：存活标志延迟到启动前后置位，避免重建窗口内自述健康。
+            _decodeLoopAlive = true;
+            _decodeRestarting = false;
+            await Task.Run(DecodeLoop).ConfigureAwait(false);
+        }
+        finally
+        {
+            // 只由最新一次重建落标记：旧链走到这里时新一轮可能已在重建中。
+            if (Volatile.Read(ref _decodeRestartId) == restartId)
+                _decodeRestarting = false;
         }
     }
 
@@ -677,6 +815,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     private void PipelineLoop()
     {
+        // 本轮循环的运行代号：定位复位后旧循环可能仍在收尾，其收尾动作与完成上报都必须
+        // 只对当轮生效，否则会把新一轮的状态改坏。
+        int runId = Volatile.Read(ref _runId);
         try
         {
 #if WINDOWS
@@ -687,12 +828,15 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 #endif
             while (!_cts.IsCancellationRequested)
             {
+                // 复位后旧轮作废：线程尚未退出也不得再呈现帧或消费队列。
+                if (Volatile.Read(ref _runId) != runId)
+                    break;
+
                 // 冻结看门狗心跳：每轮循环体入口打卡（含空队列自旋/等待分支返回）。
                 Interlocked.Exchange(ref _loopHeartbeatQpc, System.Diagnostics.Stopwatch.GetTimestamp());
 
                 if (_isPaused)
                 {
-                    _pauseAcknowledged = true;
                     _pauseAckTcs?.TrySetResult(true);
                     Thread.Sleep(10);
                     continue;
@@ -709,10 +853,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     {
                         if (_cts.IsCancellationRequested)
                             break;
-                        // 门控等待期间仍需应答 Flush 的暂停确认，避免 FlushAsync 白等 50ms 走慢速路径。
+                        // 门控等待期间仍需应答 定位复位 的暂停确认，避免 FlushAsync 白等 50ms 走慢速路径。
                         if (_isPaused)
                         {
-                            _pauseAcknowledged = true;
                             _pauseAckTcs?.TrySetResult(true);
                         }
                         if (System.Diagnostics.Stopwatch.GetElapsedTime(gateStart).TotalMilliseconds > AudioGateTimeoutMs)
@@ -792,7 +935,9 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                             _logger.LogInformation(
                                 "[VIDEO-EOS] 自然完成 masterTime={Master:g} 帧队列余量={Cnt} decodeDone={DecodeDone}",
                                 _synchronizer.GetCurrentMasterTime(), _frameQueue.Count, _decodeDone);
-                        _completedNaturally = true;
+                        // 只有当轮循环才能标记自然完成：复位后旧循环的判定不得污染新一轮。
+                        if (Volatile.Read(ref _runId) == runId)
+                            _completedNaturally = true;
                         break;
                     }
                     long emptyWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -804,7 +949,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     continue;
                 }
 
-                // 拷贝 PTS 到局部变量：Wait 期间若发生 Flush，队头帧可能经 FrameQueue.Clear 归还池
+                // 拷贝 PTS 到局部变量：Wait 期间若发生 定位复位，队头帧可能经 FrameQueue.Clear 归还池
                 // 后被复用并改写 Timestamp；使用进入本循环时拷贝的值，避免读到回收后的垃圾时间戳
                 // （同时消除旧 Wait 分支在帧所有权已转移后越界读 frame.Timestamp 的隐患）。
                 var headTimestamp = head.Timestamp;
@@ -888,10 +1033,14 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         }
         finally
         {
-            // 仅当流末自然耗尽时触发 Completed（取消退出不触发，避免 Stop/Dispose 误报 Ended）。
-            if (_completedNaturally)
-                Completed?.Invoke(this, EventArgs.Empty);
-            _isRunning = false;
+            // 已复位到新一轮：旧循环直接退场，既不报完成也不改动新一轮的运行状态。
+            if (Volatile.Read(ref _runId) == runId)
+            {
+                // 仅当流末自然耗尽时触发 Completed（取消退出不触发，避免 Stop/Dispose 误报 Ended）。
+                if (_completedNaturally)
+                    Completed?.Invoke(this, EventArgs.Empty);
+                _isRunning = false;
+            }
         }
     }
 
@@ -902,6 +1051,8 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     private async Task DecodeLoop()
     {
+        // 解码循环同样绑定运行代号：包通道被复位重建后，旧循环的收尾不得改动新一轮状态。
+        int runId = Volatile.Read(ref _runId);
         try
         {
 #if WINDOWS
@@ -911,6 +1062,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 #endif
             while (!_cts.IsCancellationRequested)
             {
+                // 复位后旧轮作废：线程尚未退出也不得再从包通道取包。
+                if (Volatile.Read(ref _runId) != runId)
+                    break;
+
                 // 解码循环心跳（冻结看门狗配套）：证明解码线程是否仍在循环。
                 Interlocked.Exchange(ref _decodeHeartbeatQpc, System.Diagnostics.Stopwatch.GetTimestamp());
                 _decodePhase = 0;
@@ -936,6 +1091,11 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                 }
                     catch (ChannelClosedException)
                     {
+                        // 包通道在复位重建时会被替换：旧循环读到的「通道已关闭」是更换通道的结果，
+                        // 不是流末。此时直接退场交给新一轮循环，避免把通道更换误判成播放完毕。
+                        if (Volatile.Read(ref _runId) != runId)
+                            break;
+
                         // EOS 意图已到达：提前置位，使下方 DRAIN 全窗口内 PipelineLoop 的
                         // Drop→Present 保护生效（否则 DRAIN 期间 eos 未置位，尾帧走真丢分支）。
                         _eosReached = true;
@@ -960,27 +1120,38 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     break;
                 }
 
-                // 解码 + 后处理（加锁防止与 Flush/Reset 竞态）
+                // 解码 + 后处理（加锁防止与 定位复位/Reset 竞态）
                 _decodePhase = DecodePhaseLock;
-                await _decodeLock.WaitAsync(_cts.Token);
+                try
+                {
+                    await _decodeLock.WaitAsync(_cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // 等锁期间被取消（定位复位会取消令牌，属常规路径）：包已取得但尚未交给解码器，
+                    // 此处释放，否则 MediaPacket 持有的原生缓冲随每次定位泄漏。
+                    // 锁未取得，因此不 Release（超发会让后续锁计数错乱）。
+                    packet.Dispose();
+                    throw;
+                }
                 VideoFrame? decodedFrame = null;
                 try
                 {
-                    // 隐患B修复：解码锁获取超时期间 Flush 可能跳过 Reset，此处补做
+                    // 隐患B修复：解码锁获取超时期间 定位复位 可能跳过 Reset，此处补做
                     if (_pendingDecoderReset)
                     {
                         _decoder.Reset();
                         _pendingDecoderReset = false;
                     }
 
-                    // 解码锁超时期间 Flush 可能跳过处理器重置，此处补做
+                    // 解码锁超时期间 定位复位 可能跳过处理器重置，此处补做
                     if (_pendingProcessorReset)
                     {
                         _processorReset?.Invoke();
                         _pendingProcessorReset = false;
                     }
 
-                    // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 Flush 暂停）
+                    // 双重检查：获取锁后确认未暂停（防止在等待锁期间被 定位复位 暂停）
                     if (_isPaused)
                     {
                         packet.Dispose();
@@ -1013,7 +1184,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
                     _decodeLock.Release();
                 }
 
-                // 入队在解码锁之外：避免持锁阻塞于满队列（与 Flush 死锁）；
+                // 入队在解码锁之外：避免持锁阻塞于满队列（与 定位复位 死锁）；
                 // 满时 BoundedChannelFullMode.Wait 自动背压。
                 if (decodedFrame != null)
                 {
@@ -1039,7 +1210,13 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         }
         finally
         {
-            _decodeDone = true;
+            // 只有当轮解码循环才能置这两个位：复位后旧循环退出时既不得让新一轮看起来已经解码完，
+            // 也不得把新一轮的存活标志落下。
+            if (Volatile.Read(ref _runId) == runId)
+            {
+                _decodeLoopAlive = false;
+                _decodeDone = true;
+            }
         }
     }
 
@@ -1293,7 +1470,7 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
 
             if (advancedMs < 0)
             {
-                // master 回跳 = 时间线重建（音频管线重启/Flush 后重锚点、Seek）的合法形态，
+                // master 回跳 = 时间线重建（音频管线重启/定位复位 后重锚点、Seek）的合法形态，
                 // 不是停摆：重锚累计，避免跨调用等待把合法跳变误判为停摆。
                 _stallWatchQpc = nowQpc;
                 _stallWatchMaster = master;

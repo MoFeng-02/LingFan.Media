@@ -33,8 +33,14 @@ public sealed class BufferManager : IBufferManager
     private int _videoTrackIndex = -1;
     private int _audioTrackIndex = -1;
 
-    // 流结束后包队列已 Complete，标记以便 StartAsync 重建
-    private bool _completed;
+    // 包通道是否已被关闭（流末或读取故障）。重建与否据此显式判断，不再依赖上一轮残留状态推断。
+    private bool _channelsClosed;
+
+    // 下一次 StartAsync 是否需要重建包通道：由 PrepareForSeek 在定位前按通道关闭状态显式设定。
+    private bool _rebuildChannelsOnStart;
+
+    // 定位进行中：直到读到定位后的首个包为止。用于区分「定位后读链路断裂」与「正常流末」。
+    private bool _seekPending;
 
     /// <summary>
     /// 初始化 <see cref="BufferManager"/> 的新实例。
@@ -111,6 +117,15 @@ public sealed class BufferManager : IBufferManager
     /// <inheritdoc />
     public event EventHandler<BufferProgressEventArgs>? BufferProgressChanged;
 
+    /// <summary>
+    /// 读取线程故障（非取消、非流结束的异常）。
+    /// </summary>
+    /// <remarks>
+    /// 触发时包队列已被标记 Complete（消费管线以 EOF 收场，不会永久等待），
+    /// 订阅方应将播放会话转入错误状态并对外报告。
+    /// </remarks>
+    public event EventHandler<Exception>? ReaderFaulted;
+
     /// <summary>视频数据包队列（供 VideoPipeline 消费）。</summary>
     public Channel<MediaPacket> VideoPacketQueue => _videoPacketQueue;
 
@@ -143,6 +158,19 @@ public sealed class BufferManager : IBufferManager
     }
 
     /// <inheritdoc />
+    /// <summary>
+    /// 定位前的显式状态准备：记录是否需要重建包通道，并进入「定位中」窗口。
+    /// </summary>
+    /// <remarks>
+    /// 播放中定位时通道仍然可写，无需重建；只有流已结束（通道曾关闭）时才需要重建。
+    /// 本方法必须在 <see cref="StartAsync"/> 之前调用，判断依据才会反映定位前的真实状态。
+    /// </remarks>
+    public void PrepareForSeek()
+    {
+        _seekPending = true;
+        _rebuildChannelsOnStart = _channelsClosed;
+    }
+
     public async Task StartAsync(CancellationToken ct = default)
     {
         // 停止旧的读取线程（Seek 场景）
@@ -155,12 +183,13 @@ public sealed class BufferManager : IBufferManager
         // 重建 CTS
         _cts = new CancellationTokenSource();
 
-        // Seek after stream end 场景——包队列已 Complete，
-        // 重建通道以恢复可写状态（同时重置字幕队列与缓冲状态）
-        if (_completed)
+        // 定位前由 PrepareForSeek 显式设定：播放中定位时通道仍然可写，不需要重建；
+        // 只有流已结束（通道曾关闭）时才重建，避免把仍在消费的管线连到已关闭的通道上。
+        if (_rebuildChannelsOnStart)
         {
+            _rebuildChannelsOnStart = false;
             ResetQueues();
-            _completed = false;
+            _channelsClosed = false;
         }
 
         lock (_stateLock)
@@ -193,6 +222,15 @@ public sealed class BufferManager : IBufferManager
                 var packet = await _demuxer.ReadPacketAsync(linkedCts.Token);
                 if (packet == null)
                 {
+                    // 定位后未读到任何包即遇流末：落点可能超出可解码范围，或读链路已经断开。
+                    // 照常关闭通道（否则读取线程悬挂、消费侧永久空转），但留下可定位的上下文，
+                    // 避免把「定位后读链路断裂」静默伪装成「播放完毕」。
+                    if (_seekPending)
+                    {
+                        _seekPending = false;
+                        _logger.LogWarning("定位后未读到任何包即遇流末（落点可能超出可解码范围，或读链路已断开）");
+                    }
+
                     // 流结束，标记队列完成
                     Complete();
                     lock (_stateLock)
@@ -204,6 +242,10 @@ public sealed class BufferManager : IBufferManager
                     readyTcs.TrySetResult(true);
                     return;
                 }
+
+                // 定位后已读到新包：定位窗口结束，后续流末按正常播放完毕处理。
+                if (_seekPending)
+                    _seekPending = false;
 
                 // 更新缓冲统计（在分发前，避免 Dispose 后访问已释放对象属性）
                 UpdateBufferStats(packet);
@@ -243,7 +285,11 @@ public sealed class BufferManager : IBufferManager
         catch (Exception ex)
         {
             _logger.LogError(ex, "缓冲管理器读取异常");
+            // 读线程已死、不会再有数据：队列必须 Complete，否则消费管线在空通道上永久等待。
+            // Complete 幂等（TryComplete），与正常流结束路径共用；错误本身经 ReaderFaulted 上报。
+            Complete();
             readyTcs.TrySetException(ex);
+            ReaderFaulted?.Invoke(this, ex);
         }
     }
 
@@ -282,7 +328,7 @@ public sealed class BufferManager : IBufferManager
     /// <summary>标记队列完成（流结束）。</summary>
     public void Complete()
     {
-        _completed = true;
+        _channelsClosed = true;
         _videoPacketQueue.Writer.TryComplete();
         _audioPacketQueue.Writer.TryComplete();
         _subtitlePacketQueue.Complete();
