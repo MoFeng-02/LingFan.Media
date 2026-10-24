@@ -309,16 +309,19 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
                     if (!QueryD3D11Aware())
                         throw new NotSupportedException("该解码 MFT 未声明 MF_SA_D3D11_AWARE（不支持 Direct3D 11 视频解码）");
 
+                    // (1b) 取设备句柄前先让 MF 自备上下文完成延迟创建（getter 不再隐式创建，契约要求无设备返回零句柄）。
+                    IntPtr d3d11Device = MfGpuDeviceContext.ResolveDeviceHandle(_gpuContext);
+
                     // (2) 多线程保护：解码 MFT 与渲染器分处不同线程共享同一 ID3D11Device，
                     //    未开保护时 D3D11 运行时不做内部同步 ⇒ 竞态/设备移除（MSDN 硬性要求）。
-                    if (!MfDxvaInterop.TryEnableMultithreadProtection(_gpuContext.DeviceHandle))
+                    if (!MfDxvaInterop.TryEnableMultithreadProtection(d3d11Device))
                         _logger.LogWarning("[DXVA-DIAG] D3D11 设备不支持 ID3D10Multithread，无法开启多线程保护（DXVA 下存在竞态风险）");
 
                     int dxhr = MfDxvaInterop.MFCreateDXGIDeviceManager(out _dxvaResetToken, out _dxvaManager);
                     Marshal.ThrowExceptionForHR(dxhr);
 
                     var resetDevice = MfVTable.Get<MfDxvaInterop.IMFDXGIDeviceManager_ResetDevice>(_dxvaManager, 4); // 绝对 7 = ResetDevice（vtable: CloseDeviceHandle=3,GetVideoService=4,LockDevice=5,OpenDeviceHandle=6,ResetDevice=7,TestDevice=8,UnlockDevice=9；MfVTable.Get 读 vtable+(3+slot)，故 slot=4）
-                    dxhr = resetDevice(_dxvaManager, _gpuContext.DeviceHandle, _dxvaResetToken);
+                    dxhr = resetDevice(_dxvaManager, d3d11Device, _dxvaResetToken);
                     Marshal.ThrowExceptionForHR(dxhr);
 
                     // (4) 设备能力真值探测（决定性判据）：共享 D3D11 设备能否为当前编码解码到 NV12 分配 DXGI 表面。
@@ -328,7 +331,7 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
                     //    「硬解激活=True 却 GPU零拷贝=0」的假绿（与消息号假绿同源）。
                     //    探测失败的处置：不阻断初始化，仅打告警，让后续真实输出行为说话。
                     var dxvaProfile = MfDxvaInterop.DxvaProfileForCodec(codec);
-                    if (!MfDxvaInterop.TryProbeDxvaSupport(_gpuContext.DeviceHandle, dxvaProfile, out bool dxvaCapable))
+                    if (!MfDxvaInterop.TryProbeDxvaSupport(d3d11Device, dxvaProfile, out bool dxvaCapable))
                         _logger.LogWarning("[DXVA-DIAG] 共享 D3D11 设备不支持 ID3D11VideoDevice（无视频解码能力）→ 零拷贝不可能，将走软解");
                     else if (!dxvaCapable)
                         _logger.LogWarning("[DXVA-DIAG] CheckVideoDecoderFormat(profile→NV12)=不支持 → 设备无法为 {Codec} 分配 DXGI 解码表面，MFT 将静默回落读回系统内存（半 DXVA），零拷贝不成立", codec);
@@ -342,14 +345,14 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
                         _logger.LogInformation("{Diag}", mgrDiag);
 
                     // (7) 枚举设备真实解码 profile + 逐个验证 NV12，避免 profile 不匹配致 CreateVideoDecoder 失败。
-                    string? profDiag = MfDxvaInterop.ProbeDecoderProfiles(_gpuContext.DeviceHandle);
+                    string? profDiag = MfDxvaInterop.ProbeDecoderProfiles(d3d11Device);
                     if (profDiag != null)
                         _logger.LogInformation("{Diag}", profDiag);
 
                     // (5) 适配器身份探针（第二道成因探针）：确认共享设备是否落在 WARP/错误适配器上。
                     // CheckVideoDecoderFormat 仅验格式、不验真实硬件解码引擎；若设备是 WARP，
                     // 格式查询仍可能通过，但解码器在真正解码时无法建立硬件视频解码会话 ⇒ 静默读回系统内存。
-                    string? adapterDiag = MfDxvaInterop.ProbeDeviceAdapter(_gpuContext.DeviceHandle);
+                    string? adapterDiag = MfDxvaInterop.ProbeDeviceAdapter(d3d11Device);
                     if (adapterDiag != null)
                         _logger.LogInformation("{Diag}", adapterDiag);
 

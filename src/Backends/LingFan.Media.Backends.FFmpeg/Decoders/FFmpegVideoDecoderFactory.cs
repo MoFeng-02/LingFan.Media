@@ -9,9 +9,11 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// 确保自绑定加载器就绪——只有真正使用 FFmpeg 后端时才要求原生库在场。</para>
 /// <para><b>异步策略</b>：</para>
 /// <list type="bullet">
-/// <item><see cref="Create"/>：同步，手动 new + <see cref="IVideoDecoder.Initialize"/>。</item>
-/// <item><see cref="CreateAsync"/>：接口契约，无 I/O，
-/// 返回 <see cref="Task.FromResult"/>。优先使用（支持 CT，未来硬解 GPU 设备初始化可能 I/O）。</item>
+/// <item><see cref="Create"/>：同步，手动 new + <see cref="IVideoDecoder.Initialize"/>。
+/// 不代为初始化 GPU 设备上下文——需要硬件解码且上下文尚未就绪时，调用方须先
+/// <see cref="IGpuDeviceContext.InitializeAsync"/>，否则句柄为零、解码器回退软件解码。</item>
+/// <item><see cref="CreateAsync"/>：先让 GPU 设备上下文就绪（<see cref="IGpuDeviceContext.InitializeAsync"/>）
+/// 再创建解码器，因此可能触发一次同步 native 设备创建。管线侧优先使用。</item>
 /// </list>
 /// </remarks>
 public sealed class FFmpegVideoDecoderFactory : IVideoDecoderFactory
@@ -40,6 +42,9 @@ public sealed class FFmpegVideoDecoderFactory : IVideoDecoderFactory
     }
 
     /// <inheritdoc/>
+    /// <remarks>不代为初始化 GPU 设备上下文：<see cref="IGpuDeviceContext"/> 的句柄 getter 在设备未创建时返回零值，
+    /// 同步路径无法 await 初始化。需要 D3D11VA / MediaCodec 等硬解时，调用方应先
+    /// <see cref="IGpuDeviceContext.InitializeAsync"/>，或用 <see cref="CreateAsync"/>。</remarks>
     public IVideoDecoder Create(VideoCodec codec, VideoSettings settings)
     {
         FFmpegBackend.EnsureNativeInitialized(_options);
@@ -49,13 +54,35 @@ public sealed class FFmpegVideoDecoderFactory : IVideoDecoderFactory
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// 接口契约：无 I/O（手动 new + 同步 Initialize），返回 <see cref="Task.FromResult"/>。
-    /// 优先使用此方法（支持 CT，未来硬解 GPU 设备初始化可能 I/O）。
-    /// </remarks>
-    public Task<IVideoDecoder> CreateAsync(VideoCodec codec, VideoSettings settings, CancellationToken ct = default)
+    /// <remarks>先让注入的 GPU 设备上下文就绪，再创建并初始化解码器；
+    /// 上下文初始化失败只告警不抛，解码器据零句柄回退软件解码。</remarks>
+    public async Task<IVideoDecoder> CreateAsync(VideoCodec codec, VideoSettings settings, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult<IVideoDecoder>(Create(codec, settings));
+        await EnsureGpuContextReadyAsync(ct).ConfigureAwait(false);
+        return Create(codec, settings);
+    }
+
+    /// <summary>
+    /// 让注入的 GPU 设备上下文就绪（未注入时直接返回）。
+    /// </summary>
+    /// <param name="ct">取消令牌。</param>
+    /// <remarks>硬解路径要求上下文提供有效句柄，而句柄 getter 不隐式创建设备，
+    /// 故就绪动作放在这个异步入口。初始化失败不致命：只告警，让解码器回退软件解码。</remarks>
+    private async Task EnsureGpuContextReadyAsync(CancellationToken ct)
+    {
+        if (_gpuContext is null) return;
+        try
+        {
+            await _gpuContext.InitializeAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _loggerFactory.CreateLogger<FFmpegVideoDecoderFactory>().LogWarning(ex, "GPU 设备上下文初始化失败，硬件解码将回退软件解码。");
+        }
     }
 }

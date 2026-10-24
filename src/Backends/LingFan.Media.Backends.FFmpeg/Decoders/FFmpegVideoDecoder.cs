@@ -262,7 +262,13 @@ internal sealed class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAware<VideoF
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "D3D11VA 硬件解码初始化失败，回退到软件解码");
+                // 句柄为零 = GPU 设备上下文未就绪（调用方未先 InitializeAsync），不是初始化本身失败；
+                // 两者都回退软件解码，但可据此判断是「没准备好」还是「真失败」。
+                if (_vaDeviceHandle == IntPtr.Zero || _vaContextHandle == IntPtr.Zero)
+                    _logger.LogWarning("D3D11VA 未能启用：GPU 设备上下文未就绪（设备或上下文句柄为零），回退到软件解码");
+                else
+                    _logger.LogWarning(ex, "D3D11VA 硬件解码初始化失败，回退到软件解码");
+
                 IsHardwareAccelerated = false;
             }
         }

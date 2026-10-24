@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.MediaFoundation.Interop;
+using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Backends.MediaFoundation;
 
@@ -22,61 +23,93 @@ namespace LingFan.Media.Backends.MediaFoundation;
 internal sealed class MfGpuDeviceContext : IGpuDeviceContext
 {
     private readonly object _lock = new();
+    private readonly ILogger<MfGpuDeviceContext> _logger;
     private IntPtr _device;      // ID3D11Device*
     private IntPtr _context;     // ID3D11DeviceContext*
-    private bool _created;
     private bool _disposed;
+
+    /// <summary>
+    /// 初始化 <see cref="MfGpuDeviceContext"/> 的新实例。
+    /// </summary>
+    /// <param name="logger">日志（设备创建失败在此告警，不抛异常）。</param>
+    public MfGpuDeviceContext(ILogger<MfGpuDeviceContext> logger)
+        => _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
     /// <inheritdoc/>
     public GPUApiType ApiType => GPUApiType.D3D11;
 
     /// <inheritdoc/>
-    public IntPtr DeviceHandle
-    {
-        get { EnsureDevice(); return _device; }
-    }
+    /// <remarks>契约（<see cref="IGpuDeviceContext"/>）：无设备时返回 <see cref="IntPtr.Zero"/>。
+    /// getter 不隐式创建设备——就绪由 <see cref="InitializeAsync"/> 或显式 <see cref="EnsureCreated"/> 完成。</remarks>
+    public IntPtr DeviceHandle => _device;
 
     /// <inheritdoc/>
-    public IntPtr ContextHandle
-    {
-        get { EnsureDevice(); return _context; }
-    }
+    /// <remarks>无上下文时返回 <see cref="IntPtr.Zero"/>；与 <see cref="DeviceHandle"/> 同步就绪。</remarks>
+    public IntPtr ContextHandle => _context;
 
     /// <inheritdoc/>
-    public bool IsInitialized
-    {
-        get { EnsureDevice(); return _created; }
-    }
+    /// <remarks>设备已创建即为 <see langword="true"/>；getter 本身不触发创建。</remarks>
+    public bool IsInitialized => _device != IntPtr.Zero;
 
-    private void EnsureDevice()
+    /// <summary>
+    /// 创建自备 D3D11 设备（幂等，唯一创建点）。
+    /// </summary>
+    /// <returns>设备可用返回 <see langword="true"/>；创建失败返回 <see langword="false"/>。</returns>
+    /// <remarks>设备创建失败不致命——解码器将回退软件解码，故此处只告警不抛异常：
+    /// 本类仅作能力查询用，抛异常会冒泡打断解码器初始化。
+    /// 已释放的实例（<see cref="Dispose"/> 之后）直接返回失败，不重建——重建会得到无人持有的新设备，
+    /// 且解码器随后的调用只会落到已释放的上下文字面上。</remarks>
+    internal bool EnsureCreated()
     {
-        if (_device != IntPtr.Zero) return;
+        if (_disposed) return false;
+        if (_device != IntPtr.Zero) return true;
         lock (_lock)
         {
-            if (_device != IntPtr.Zero) return; // double-check
+            if (_disposed) return false;
+            if (_device != IntPtr.Zero) return true; // double-check
             try
             {
                 MfDxvaInterop.CreateD3D11Device(out _device, out _context);
-                _created = _device != IntPtr.Zero;
             }
             catch (Exception ex)
             {
-                // 设备创建失败不致命：解码器将回退软件解码，IGpuDeviceContext 仅作能力查询用。
                 _device = IntPtr.Zero;
                 _context = IntPtr.Zero;
-                _created = false;
-                // 记录但不抛出——EnsureDevice 在属性 getter 中被调用，异常会冒泡到解码器初始化处被捕获。
-                throw new InvalidOperationException("MF 自备 D3D11 设备创建失败（DXVA 不可用，回退软件解码）。", ex);
+                _logger.LogWarning(ex, "MF 自备 D3D11 设备创建失败，DXVA 不可用，将回退软件解码。");
+                return false;
             }
+
+            if (_device == IntPtr.Zero)
+            {
+                _context = IntPtr.Zero;
+                _logger.LogWarning("MF 自备 D3D11 设备创建返回空设备，DXVA 不可用，将回退软件解码。");
+                return false;
+            }
+
+            return true;
         }
     }
 
+    /// <summary>
+    /// 取 <see cref="IGpuDeviceContext"/> 的 D3D11 设备句柄，必要时先让 MF 自备上下文完成延迟创建。
+    /// </summary>
+    /// <param name="context">GPU 设备上下文（渲染器注册的共享设备或本类实例）。</param>
+    /// <returns>ID3D11Device 指针；不可用时为 <see cref="IntPtr.Zero"/>。</returns>
+    /// <remarks>getter 不再隐式创建（契约要求无设备返回零句柄），故取句柄的调用方经此显式就绪。</remarks>
+    internal static IntPtr ResolveDeviceHandle(IGpuDeviceContext context)
+    {
+        if (context is MfGpuDeviceContext mf) mf.EnsureCreated();
+        return context.DeviceHandle;
+    }
+
     /// <inheritdoc/>
-    /// <remarks>接口契约：设备由 <see cref="EnsureDevice"/> 延迟创建（同步 native 调用，无 I/O await），返回 <see cref="Task.CompletedTask"/>。</remarks>
+    /// <remarks>异步外观、同步实现：设备创建是 native 同步调用（无 I/O 可等待），故在调用线程直接完成并返回
+    /// 已完成的 <see cref="Task.CompletedTask"/>，不用 <c>Task.Run</c> 伪装异步。
+    /// 创建失败不抛异常——解码器据零句柄回退软件解码；唯一会抛的是已取消的 <paramref name="ct"/>。</remarks>
     public Task InitializeAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        EnsureDevice();
+        EnsureCreated();
         return Task.CompletedTask;
     }
 
@@ -98,11 +131,17 @@ internal sealed class MfGpuDeviceContext : IGpuDeviceContext
     public uint GraphicsQueueFamilyIndex => uint.MaxValue;
 
     /// <inheritdoc/>
+    /// <remarks>整个释放序列（置已释放标志 + 释放两个句柄）在同一临界区内完成，与 <see cref="EnsureCreated"/>
+    /// 的锁内「判标志 → 建设备 → 赋句柄」互斥。若把置位留在锁外，创建线程可能已通过标志检查、随后把新建设备
+    /// 写入 <c>_device</c>，而此时 <c>_disposed</c> 已为真、再无调用方释放它——设备句柄永久泄漏。</remarks>
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        if (_context != IntPtr.Zero) { Marshal.Release(_context); _context = IntPtr.Zero; }
-        if (_device != IntPtr.Zero) { Marshal.Release(_device); _device = IntPtr.Zero; }
+        lock (_lock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (_context != IntPtr.Zero) { Marshal.Release(_context); _context = IntPtr.Zero; }
+            if (_device != IntPtr.Zero) { Marshal.Release(_device); _device = IntPtr.Zero; }
+        }
     }
 }

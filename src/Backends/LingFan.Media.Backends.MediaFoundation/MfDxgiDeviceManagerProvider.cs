@@ -82,7 +82,8 @@ public sealed class MfDxgiDeviceManagerProvider : IDisposable
             try
             {
                 // (1) 取 D3D11 设备（延迟创建；无头由 MfGpuDeviceContext 自备，有头复用渲染器设备 ⇒ 同设备才零拷贝）
-                IntPtr device = _gpuContext.DeviceHandle;
+                //     句柄 getter 不隐式创建设备（契约：无设备返回零句柄），故经 ResolveDeviceHandle 显式就绪。
+                IntPtr device = MfGpuDeviceContext.ResolveDeviceHandle(_gpuContext);
                 if (device == IntPtr.Zero)
                 {
                     _logger.LogWarning("[MF-D3D] IGpuDeviceContext 未提供 D3D11 设备 → SourceReader 硬解不可用，回落软解");
