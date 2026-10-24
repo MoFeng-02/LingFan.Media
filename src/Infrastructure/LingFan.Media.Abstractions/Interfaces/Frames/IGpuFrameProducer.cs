@@ -117,6 +117,10 @@ public interface IGpuFrameProducer
     /// 在 configure 到 ImageReader Surface 前判定 AHB 导入可行性），避免在注定失败的路径上消耗解码器
     /// 重建成本；<see cref="TryImport"/> 仍是运行时导入的行为判据（能力自报 + 行为副作用双判据，不假绿）。</para>
     /// <para>默认实现乐观返回 <see langword="true"/>（与既有消费方行为兼容：由 TryImport 运行时兜底）。</para>
+    /// <para><b>对生产者的要求</b>：默认 <see langword="true"/> 只是兼容既有实现的过渡口径，<b>不是</b>
+    /// 「全部类型都支持」的授权。新生产者必须按实际支持的 <see cref="GpuFrameImportKind"/> 覆写本方法；
+    /// 不覆写即视为向解码器承诺「所有类型都能零拷贝导入」，解码器会据此启用注定失败的路径，
+    /// 直到 TryImport 运行时返回 <see langword="false"/> 才回落——期间浪费的是解码器重建成本。</para>
     /// </remarks>
     /// <param name="kind">解码原生输出类型。</param>
     /// <returns><see langword="true"/>=支持导入该类型（可启用对应零拷贝路径）。</returns>

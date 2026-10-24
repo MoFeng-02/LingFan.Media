@@ -32,6 +32,10 @@ namespace LingFan.Media.Abstractions;
 /// （如共享设备开启多线程保护）。</para>
 /// <para><b>帧所有权</b>：<see cref="TryWriteFrame"/> 收到的 <c>VideoFrame</c> 为<b>只读借用</b>，
 /// 方法返回后即失效——实现必须在方法内同步完成读取，严禁留存引用。</para>
+/// <para><b>输出句柄的存活期</b>：<see cref="TryWriteFrame"/> 交出的描述符内句柄由本源持有，
+/// 有效期截至下一次 <see cref="TryWriteFrame"/> 或本源 <c>Dispose</c>（逐字段规则见
+/// <see cref="SharedGpuSurfaceDescriptor"/> 的句柄存活期条目）。消费方若要跨这两点持有
+/// （如缓存 fd / IOSurfaceRef），必须自行 dup / CFRetain 并承担对应释放责任。</para>
 /// </remarks>
 public interface ISharedGpuSurfaceSource : IDisposable
 {
@@ -50,9 +54,20 @@ public interface ISharedGpuSurfaceSource : IDisposable
     SharedGpuSyncMode SyncMode { get; }
 
     /// <summary>消费方<b>获取</b>表面时应使用的 keyed mutex 键（仅 <see cref="SharedGpuSyncMode.KeyedMutex"/> 模型有意义）。</summary>
+    /// <remarks>
+    /// <para><b>0 表示不使用</b>：值为 0 时消费方不做 keyed mutex 握手（非 KeyedMutex 模型一律返回 0）。</para>
+    /// <para><b>必须成对</b>：消费方用本键 Acquire、用 <see cref="ConsumerReleaseKey"/> Release；
+    /// 只 Acquire 不 Release 会让生产者永久阻塞在该表面上（表现为几十帧后画面定格），
+    /// 用错键则两边各自等待、同样定格。任何一方都不得单方面改变键值。</para>
+    /// </remarks>
     ulong ConsumerAcquireKey { get; }
 
     /// <summary>消费方<b>归还</b>表面时应使用的 keyed mutex 键（仅 <see cref="SharedGpuSyncMode.KeyedMutex"/> 模型有意义）。</summary>
+    /// <remarks>
+    /// <para><b>0 表示不使用</b>，语义同 <see cref="ConsumerAcquireKey"/>。</para>
+    /// <para>本键是「把表面交还生产者」的那一侧，与 <see cref="ConsumerAcquireKey"/> 成对出现；
+    /// 生产者在本键上等待、消费方在本键上 Release，次序不可颠倒。</para>
+    /// </remarks>
     ulong ConsumerReleaseKey { get; }
 
     /// <summary>

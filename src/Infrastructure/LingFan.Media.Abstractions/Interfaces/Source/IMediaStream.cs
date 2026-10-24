@@ -32,6 +32,12 @@ public interface IMediaStream
     /// <param name="buffer">目标 buffer。不接受空 buffer。</param>
     /// <param name="ct">取消令牌（网络流必须支持，本地文件可忽略）。</param>
     /// <returns>实际读取的字节数，0 表示流结束。</returns>
+    /// <remarks>
+    /// <para><b>建连语义</b>：<see cref="ReadAsync"/> 允许<b>隐式建连</b>（网络流首次读取时才真正
+    /// 连到对端），而同步 <c>Read</c> 必须工作在已建连状态——实现可在 Open 阶段预先建连，
+    /// 也可把建连推迟到首次 <see cref="ReadAsync"/>。</para>
+    /// <para>建连失败（DNS/连接/握手）须抛出 <see cref="System.IO.IOException"/>，不得返回 0 冒充流结束。</para>
+    /// </remarks>
     ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default);
 
     /// <summary>
@@ -66,6 +72,12 @@ public interface IMediaStream
     string? Location { get; }
 
     /// <summary>定位到指定偏移。</summary>
+    /// <remarks>
+    /// <para>不可定位的流（如不可 seek 的直播流）须抛 <see cref="NotSupportedException"/>，
+    /// 不得返回 0 或静默忽略。</para>
+    /// <para>目标位置越界时抛 <see cref="System.IO.IOException"/>（与读取端错误统一）。</para>
+    /// <para>已 <see cref="Close"/> 后调用抛 <see cref="ObjectDisposedException"/>。</para>
+    /// </remarks>
     long Seek(long offset, SeekOrigin origin);
 
     /// <summary>
@@ -80,5 +92,10 @@ public interface IMediaStream
     IReadOnlyDictionary<string, string>? SuggestedOpenHeaders { get; }
 
     /// <summary>关闭流。</summary>
+    /// <remarks>
+    /// <para><b>幂等</b>：重复调用不得抛异常（已关闭再关闭是空操作）。</para>
+    /// <para>关闭后 <see cref="ReadAsync"/> 与 <see cref="Seek"/> 抛 <see cref="ObjectDisposedException"/>。</para>
+    /// <para>关闭须释放底层连接与原生资源，且不等待未完成的读取返回。</para>
+    /// </remarks>
     void Close();
 }

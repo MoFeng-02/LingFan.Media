@@ -16,13 +16,25 @@ public interface IGpuDeviceContext
     /// <summary>GPU API 类型。</summary>
     GPUApiType ApiType { get; }
 
-    /// <summary>共享 GPU 设备原生句柄（如 ID3D11Device* 的指针）。无设备时为 <see cref="IntPtr.Zero"/>。</summary>
+    /// <summary>
+    /// 共享 GPU 设备原生句柄（如 ID3D11Device* 的指针）。无设备时为 <see cref="IntPtr.Zero"/>。
+    /// </summary>
+    /// <remarks>
+    /// <b>指针语义由 <see cref="ApiType"/> 决定</b>：本属性与 <see cref="ContextHandle"/> 只承诺
+    /// 「原生句柄的整数形态」，不承诺它指向哪种对象——消费方必须先按 <see cref="ApiType"/> 分派再解引用，
+    /// 不得按某个后端的形态硬解。
+    /// </remarks>
     IntPtr DeviceHandle { get; }
 
     /// <summary>
     /// 共享 GPU 设备上下文原生句柄（如 ID3D11DeviceContext* 指针）。
     /// 用于硬件解码器初始化（D3D11VA 需要 device + device_context）。无上下文时为 <see cref="IntPtr.Zero"/>。
     /// </summary>
+    /// <remarks>
+    /// <b>指针语义由 <see cref="ApiType"/> 决定</b>：D3D11 下是 device context；OpenGL 族后端下
+    /// 实际承载的是 <c>EGLDisplay</c>（GL 没有与 device context 对应的独立对象）。消费方须按
+    /// <see cref="ApiType"/> 分派后使用，不得跨后端套用同一解释。
+    /// </remarks>
     IntPtr ContextHandle { get; }
 
     /// <summary>

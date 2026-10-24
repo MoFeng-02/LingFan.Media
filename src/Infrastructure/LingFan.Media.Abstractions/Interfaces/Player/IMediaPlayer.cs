@@ -8,7 +8,8 @@ namespace LingFan.Media.Abstractions;
 /// <para>CancellationToken 传播策略：</para>
 /// <list type="bullet">
 /// <item>需要 CT 的方法：OpenAsync / StopAsync / SeekAsync</item>
-/// <item>不需要 CT 的方法：PlayAsync / PauseAsync（纯内存状态转换）</item>
+/// <item>不需要 CT 的方法：PlayAsync / PauseAsync——不接 CT 是有意为之：这两个方法签名上不提供取消，
+/// 实现内部可能仍含等待（seek 复位、管线启停），失败经 <see cref="ErrorOccurred"/> 上报而非靠取消令牌</item>
 /// </list>
 /// </remarks>
 public interface IMediaPlayer : IDisposable, IAsyncDisposable
@@ -22,10 +23,29 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <summary>暂停播放（纯内存状态转换，无 CT）。</summary>
     Task PauseAsync();
 
-    /// <summary>停止播放。支持取消（接口契约层，实现可返回 Task.CompletedTask）。</summary>
+    /// <summary>停止播放。不阻塞、不等待管线线程退出；<paramref name="ct"/> 当前不受理（保留位）。</summary>
+    /// <remarks>
+    /// <para><b>实现现状</b>：当前实现只下发停止请求并返回已完成的 Task，<b>完全忽略 <paramref name="ct"/></b>，
+    /// 也不等待解码/渲染线程真正退出——停止是异步完成的。保留该参数是为了将来支持「等待式停止」时不破坏签名。</para>
+    /// <para>因此调用方不得把本方法返回视为「管线线程已停」的凭据；需要该保证时应自行等待或重新
+    /// <see cref="OpenAsync"/>。</para>
+    /// </remarks>
     Task StopAsync(CancellationToken ct = default);
 
     /// <summary>定位到指定位置。支持取消。</summary>
+    /// <remarks>
+    /// <para><b>失败语义</b>：定位失败必须<b>抛异常</b>而不是静默返回——当前实现先触发
+    /// <see cref="ErrorOccurred"/>（<c>SeekFailed</c>）再抛出原异常，调用方据此可只处理异常、
+    /// 也可只订阅事件。</para>
+    /// <para><b>前置条件</b>：调用方不得在未打开媒体源或仍在打开中时调用——此时没有可定位的解封装器，
+    /// 定位无从执行。应有语义是抛 <see cref="InvalidOperationException"/>，不得静默成功。</para>
+    /// <para><b>实现现状</b>：当前实现<b>尚未设置该状态守卫</b>。未打开时内部解封装器为空，方法会跳过
+    /// 定位而继续推进时钟、刷新管线并重填缓冲，表现为「静默成功但不移动」。因此在实现补齐守卫之前，
+    /// 调用方<b>必须自行确认媒体源已成功打开</b>（<see cref="State"/> 不处于 <c>Opening</c> / <c>Error</c>
+    /// 等未就绪态），不得依赖本方法抛异常来发现误用。</para>
+    /// <para><b>精度</b>：上层只承诺「已下发定位请求」，落点精度由解封装器决定
+    /// （见 <c>IMediaDemuxer.SeekAsync</c> 的返回值语义）。</para>
+    /// </remarks>
     Task SeekAsync(TimeSpan position, CancellationToken ct = default);
 
     /// <summary>当前播放状态。</summary>
@@ -58,9 +78,17 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     IMediaSession? Session { get; }
 
     /// <summary>状态变更事件。</summary>
+    /// <remarks>只通报状态迁移，不承载错误细节；非法/被忽略的迁移不会触发本事件。</remarks>
     event EventHandler<MediaStateChangedEventArgs> StateChanged;
 
     /// <summary>错误事件。</summary>
+    /// <remarks>
+    /// <para>只通报错误，<b>不隐式改变状态</b>：订阅方收到后不得假定 <see cref="State"/> 已变为
+    /// <c>Error</c>。</para>
+    /// <para>致命错误另有通道——<see cref="OpenAsync"/> 会抛出异常并由实现把状态置为 <c>Error</c>，
+    /// 此时本事件与 <see cref="StateChanged"/> 都会出现，但<b>两者先后顺序不作保证</b>，
+    /// 订阅方须各自幂等处理，不得依赖次序推断因果。</para>
+    /// </remarks>
     event EventHandler<MediaErrorEventArgs> ErrorOccurred;
 
     /// <summary>位置变更事件。</summary>
