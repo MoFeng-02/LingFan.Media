@@ -376,6 +376,24 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
     private int _diagPacketDepthMin = int.MaxValue; // 窗口内音频包通道最小深度：≈0 → demux 供给不足；
                                                     // 有积压而产出仍不足 → 解码消费慢（二选一定位）
 
+    /// <summary>
+    /// 采样一次音频包通道的瞬时深度，并把它并入窗口内的最小值。
+    /// </summary>
+    /// <remarks>
+    /// 采样点必须覆盖所有「会在这一轮里取包或本可取包」的地方：解码阶段取首包之前、前瞻预取每取走
+    /// 一个包之后、以及提交阶段的每一轮次。只在解码阶段采一次会让该指标只高不低——前瞻连续取包与
+    /// 提交轮次的空档都不计入，读数被抬到「通道有积压」的假象上。
+    /// 判读：窗口内最小 ≈0 → 包通道被抽干，瓶颈在上游（demux/网络供给）；明显大于 0 而产出仍不足
+    /// → 包在通道里积压，瓶颈在解码或提交侧。
+    /// 开销是一次 <c>ChannelReader.Count</c>（O(1)）与一次比较，无锁、无分配、无日志。
+    /// </remarks>
+    private void SamplePacketDepth()
+    {
+        int depth = _packetQueue.Reader.Count;
+        if (depth < _diagPacketDepthMin)
+            _diagPacketDepthMin = depth;
+    }
+
     private async Task PipelineLoop()
     {
         // 本轮循环的运行代号：定位复位后旧循环可能仍在收尾，其收尾动作与完成上报都必须
@@ -434,6 +452,9 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 //    （解决诊断仪"假 stall"），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时、抗 decode 抖动）。
                 if (_sampleQueue.Count > 0)
                 {
+                    // 提交轮次同样要采样：采样队列有货而包通道已空，正是上游供给不足的典型形态，
+                    // 只在解码阶段采样会让这一类窗口整体缺席。
+                    SamplePacketDepth();
                     var subStart = Stopwatch.GetTimestamp();
                     if (!TrySubmitChunk(ct))
                         break;
@@ -449,9 +470,8 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 MediaPacket? packet;
                 try
                 {
-                    // 包通道水位采样（喂帧判据）：decode 消费前的通道深度。
-                    int depth = _packetQueue.Reader.Count;
-                    if (depth < _diagPacketDepthMin) _diagPacketDepthMin = depth;
+                    // 取包前的通道深度：TryRead 失败即说明通道已空，因此这一采样同时覆盖阻塞读的起点。
+                    SamplePacketDepth();
                     if (!_packetQueue.Reader.TryRead(out packet))
                     {
                         var readStart = Stopwatch.GetTimestamp();
@@ -499,6 +519,8 @@ public sealed class AudioPipeline : IAsyncDisposable, IDisposable
                 // 主时钟停走 → 视频帧卡顿）。穿插提交使在途水位全程 ≥6 缓冲，解码慢/抖不再欠载。
                 while (_sampleQueue.Count < PrerollFrames && _packetQueue.Reader.TryRead(out var next))
                 {
+                    // 每预取走一个包都要计入：这一轮 while 常连续取走多个包，漏采会把最小值抬高。
+                    SamplePacketDepth();
                     _supplyDecodedPackets++;
                     var pdStart = Stopwatch.GetTimestamp();
                     await DecodeAndEnqueueAsync(next, ct);
