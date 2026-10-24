@@ -8,7 +8,7 @@
 
 **LingFan.Media（灵泛媒体）** 是 .NET 平台的跨平台媒体基础设施（独立项目，非灵泛引擎子模块/衍生）。它提供一套模块化、DI 友好、AOT 就绪的抽象层，把核心播放逻辑与具体引擎（解码器、解封装器、渲染器、音频输出）解耦，使这些组件可以按平台或部署环境自由替换。
 
-> 状态：本库基于 **.NET 10** 活跃开发中。**Windows、Linux、Android** 均为已实测的支持目标——Windows 走 MediaFoundation / FFmpeg / LibVLC 后端；Linux 走 FFmpeg 后端（VAAPI 硬解 + Vulkan / OpenGL 渲染器，OpenAL 音频，已实测），LibVLC 后端在 Linux 已实现但尚未验证；Android 已真机实测（MediaCodec 硬解 + AHB 零拷贝上屏链路）；**macOS / iOS 暂缓——缺设备，暂时无法实现与测试，请等待**（见[平台与后端状态](#平台与后端状态)）。它尚不是一个功能完备、覆盖所有平台的媒体框架——但整体设计是为了在不破坏公开 API 的前提下逐步走到那里。**目前仅本地文件播放已端到端验证；网络源与流式播放虽已实现，但尚未在运行时验证。**
+> 状态：本库基于 **.NET 10** 活跃开发中。**Windows、Linux、Android** 均为已实测的支持目标——Windows 走 MediaFoundation / FFmpeg / LibVLC 后端；Linux 走 FFmpeg 后端（VAAPI 硬解 + Vulkan / OpenGL 渲染器，OpenAL 音频，已实测），LibVLC 后端在 Linux 已实现但尚未验证；Android 已真机实测（MediaCodec 硬解 + AHB 零拷贝上屏链路）；**macOS / iOS 暂缓——缺设备，暂时无法实现与测试，请等待**（见[平台与后端状态](#平台与后端状态)）。它尚不是一个功能完备、覆盖所有平台的媒体框架——但整体设计是为了在不破坏公开 API 的前提下逐步走到那里。**本地文件与网络源均已在 Windows 上端到端验证**：网络播放、Range 定位与播放中定位均对支持 `Accept-Ranges` 的 HTTP 源实测，每次都播到自然结束且零丢帧。
 
 ## 为什么再写一层媒体抽象
 
@@ -60,12 +60,12 @@
 | OpenSL ES / AAudio 音频输出（Android） | 已实现 |
 | Vulkan 渲染器（FFmpeg 零拷贝路径，Windows） | **已验证** |
 | OpenGL 渲染器（FFmpeg 零拷贝路径，Windows） | 已实现 |
-| 网络源（`NetworkMediaSource` + SSRF） | 已实现，待验证 |
-| 流式播放 | 已实现，待验证 |
+| 网络源（`NetworkMediaSource` + SSRF） | **已在 Windows 验证**（对支持 `Accept-Ranges` 的 HTTP 源，端到端） |
+| 流式播放 + HTTP Range 播放中定位 | **已在 Windows 验证**（播到自然结束，零丢帧） |
 | macOS / iOS | **暂缓（缺设备）**——Metal 渲染器、AVAudioEngine / AudioUnit 音频等已部分实现，待有设备后继续实现与测试 |
 | WebRTC / GStreamer | 不在范围 |
 
-> 已验证的 Windows 路径在本地文件上实测了核心抽象、渲染、音频输出与无头帧投递。网络源与流式播放虽已实现（含基于 DNS-pinning 的 SSRF 防护），但尚未端到端实测——在运行时验证之前，请按实验性对待。
+> 已验证的 Windows 路径在本地文件上实测了核心抽象、渲染、音频输出与无头帧投递。网络源也已在 Windows 上验证（含基于 DNS-pinning 的 SSRF 防护）：播放、Range 定位与播放中定位均对支持 `Accept-Ranges` 的 HTTP 源实测，每次都播到自然结束且零丢帧。
 
 > **硬件解码说明：** 在 Windows 上，Media Foundation 的解码器会把帧经由 CPU 内存交回（混合解码 / 半硬解）——这是平台 MFT 管线的固有特性，并非本库的缺陷。FFmpeg 与 LibVLC 后端均在 GPU 上解码。
 >
@@ -128,9 +128,9 @@ await player.DisposeAsync();
 
 `AddMediaFoundation()`（Windows）、`AddFFmpeg()`、`AddVLCNative()` 会把各自的工厂注册进 DI 容器。当注册了多个后端时，运行时按注册顺序选择一个；若某后端无法处理该源，则回退到下一个。要强制指定某个后端，可使用接受显式后端组的 `IMediaPlayerFactory.Create(...)` 重载。
 
-### 网络源（实验性，尚未验证）
+### 网络源
 
-`NetworkMediaSource` 已实现，并内置基于 DNS-pinning 的 SSRF 防护：构造期拒绝私有/回环/链路本地/保留(CGNAT)地址，且连接时对解析出的 IP 做 pinning，使重定向后的 URL 无法落到内网地址。但**网络源与流式播放尚未端到端验证**——目前只测过本地文件播放。在运行时验证之前，请将其视为实验性功能。
+`NetworkMediaSource` 已实现，并内置基于 DNS-pinning 的 SSRF 防护：构造期拒绝私有/回环/链路本地/保留(CGNAT)地址，且连接时对解析出的 IP 做 pinning，使重定向后的 URL 无法落到内网地址。网络流的定位不是靠 seek 底层套接字，而是以 HTTP `Range` 请求重开连接完成；服务器忽略 Range（回 `200` 而非 `206`）会被识别并拒绝，避免播放位置被静默挪到错处。打开头（User-Agent、用户自定义头、Cookie）汇总在流契约上，供地址式打开的后端透传。**网络播放已在 Windows 上端到端验证**：播放、Range 定位与播放中定位均对支持 `Accept-Ranges` 的 HTTP 源实测，每次都播到自然结束且零丢帧。
 
 ## 架构简述
 
