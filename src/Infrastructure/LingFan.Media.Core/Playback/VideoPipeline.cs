@@ -820,12 +820,11 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         int runId = Volatile.Read(ref _runId);
         try
         {
-#if WINDOWS
-            // 视频呈现是实时循环：提升专用线程优先级到 Highest，配合 Windows 多媒体调度显著降低
-            // OS/GC 抢占造成的帧间墙钟抖动（残余抖动成因）。LongRunning 专用线程上该优先级全程有效。
+            // 视频呈现是实时循环：提升专用线程优先级到 Highest，降低 OS/GC 抢占造成的帧间墙钟抖动。
+            // LongRunning 专用线程上该优先级全程有效；Thread.Priority 是跨平台 BCL API，各平台同样受益
+            // （设置失败静默降级，与 AudioPipeline 喂帧线程同款处理）。
             try { System.Threading.Thread.CurrentThread.Priority = System.Threading.ThreadPriority.Highest; }
             catch { }
-#endif
             while (!_cts.IsCancellationRequested)
             {
                 // 复位后旧轮作废：线程尚未退出也不得再呈现帧或消费队列。
@@ -1067,11 +1066,10 @@ public sealed class VideoPipeline : IAsyncDisposable, IDisposable
         int runId = Volatile.Read(ref _runId);
         try
         {
-#if WINDOWS
             // 解码生产者同样提升优先级，避免被 OS 调度抢占导致前向缓冲断供、呈现侧饿死。
+            // 跨平台生效（Thread.Priority 为 BCL API），设置失败静默降级。
             try { System.Threading.Thread.CurrentThread.Priority = System.Threading.ThreadPriority.Highest; }
             catch { }
-#endif
             while (!_cts.IsCancellationRequested)
             {
                 // 复位后旧轮作废：线程尚未退出也不得再从包通道取包。
