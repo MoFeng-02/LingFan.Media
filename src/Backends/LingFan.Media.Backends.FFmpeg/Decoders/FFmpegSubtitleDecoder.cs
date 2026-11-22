@@ -134,7 +134,7 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
                 if (ret < 0 || gotSub == 0)
                     return null;
 
-                return CreateSubtitleFrameFromAVSubtitle(&avSub);
+                return CreateSubtitleFrameFromAVSubtitle(&avSub, packet.Timestamp, packet.Duration);
             }
             finally
             {
@@ -186,7 +186,7 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
     // 辅助方法
 
     /// <summary>从 AVSubtitle 创建 SubtitleFrame（文本字幕路径）。</summary>
-    private static unsafe SubtitleFrame? CreateSubtitleFrameFromAVSubtitle(AVSubtitle* avSub)
+    private static unsafe SubtitleFrame? CreateSubtitleFrameFromAVSubtitle(AVSubtitle* avSub, TimeSpan packetTimestamp, TimeSpan packetDuration)
     {
         // 拼接各 rect 文本
         var sb = new StringBuilder();
@@ -218,9 +218,14 @@ internal sealed class FFmpegSubtitleDecoder : ISubtitleDecoder
         if (string.IsNullOrEmpty(text))
             return null;
 
-        // 时间信息（FFmpeg 毫秒 → TimeSpan）
-        TimeSpan start = TimeSpan.FromMilliseconds(avSub->start_display_time);
-        TimeSpan end = TimeSpan.FromMilliseconds(avSub->end_display_time);
+        // 时间信息：start/end_display_time 是相对包 PTS 的毫秒偏移（libavcodec 契约），
+        // 须加包时间戳换算为绝对时间轴；否则所有字幕 Start≈0，播放位置越过窗口后永不匹配。
+        // 文本字幕（SRT/ASS）解码器常把 end_display_time 置 0（时长由容器包 duration 承载），
+        // 此时回落包时长；两者皆无则给默认显示时长，避免零宽窗口永不命中。
+        TimeSpan start = packetTimestamp + TimeSpan.FromMilliseconds(avSub->start_display_time);
+        TimeSpan end = packetTimestamp + TimeSpan.FromMilliseconds(avSub->end_display_time);
+        if (end <= start)
+            end = packetDuration > TimeSpan.Zero ? packetTimestamp + packetDuration : start + TimeSpan.FromSeconds(3);
 
         return new SubtitleFrame(text, start, end, style);
     }

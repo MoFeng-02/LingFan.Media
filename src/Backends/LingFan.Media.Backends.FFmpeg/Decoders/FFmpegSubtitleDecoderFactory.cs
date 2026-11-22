@@ -10,8 +10,8 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// 确保自绑定加载器就绪——只有真正使用 FFmpeg 后端时才要求原生库在场。</para>
 /// <para><b>异步策略</b>（与 Video/Audio 工厂对称）：</para>
 /// <list type="bullet">
-/// <item><see cref="Create"/>：同步，手动 new + <see cref="FFmpegSubtitleDecoder.BindStream"/>。</item>
-/// <item><see cref="CreateAsync"/>：接口契约，无 I/O，返回 <see cref="Task.FromResult"/>。</item>
+/// <item><see cref="Create"/>：同步，手动 new + <see cref="FFmpegSubtitleDecoder.BindStream"/>（同步边界不初始化）。</item>
+/// <item><see cref="CreateAsync"/>：首选入口，BindStream 后 await InitializeAsync，返回已初始化解码器。</item>
 /// </list>
 /// </remarks>
 public sealed class FFmpegSubtitleDecoderFactory : ISubtitleDecoderFactory
@@ -42,13 +42,18 @@ public sealed class FFmpegSubtitleDecoderFactory : ISubtitleDecoderFactory
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 接口契约：无 I/O（手动 new + BindStream），返回 <see cref="Task.FromResult"/>。
-    /// 优先使用此方法（支持 CT，对称一致性 + 未来网络字幕加载 I/O）。
+    /// 与 Video/Audio 工厂对称：CreateAsync 返回已初始化的解码器。
+    /// InitializeAsync 当前无 I/O（avcodec_alloc_context3 + open2 同步完成），await 为未来
+    /// 网络字幕加载等真实 I/O 预留；同步 Create 保持只 BindStream（同步边界无法 await）。
     /// </remarks>
-    public Task<ISubtitleDecoder> CreateAsync(MediaTrack track, CancellationToken ct = default)
+    public async Task<ISubtitleDecoder> CreateAsync(MediaTrack track, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(track);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult<ISubtitleDecoder>(Create(track));
+        FFmpegBackend.EnsureNativeInitialized(_options);
+        var decoder = new FFmpegSubtitleDecoder(_loggerFactory.CreateLogger<FFmpegSubtitleDecoder>());
+        decoder.BindStream(track);
+        await decoder.InitializeAsync(ct).ConfigureAwait(false);
+        return decoder;
     }
 }
