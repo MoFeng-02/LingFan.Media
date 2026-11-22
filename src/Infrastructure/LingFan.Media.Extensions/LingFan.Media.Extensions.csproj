@@ -2,6 +2,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+		<ProjectReference Include="..\LingFan.Media.Composition\LingFan.Media.Composition.csproj" />
 		<ProjectReference Include="..\LingFan.Media.Core\LingFan.Media.Core.csproj" />
 		<ProjectReference Include="..\LingFan.Media.Sources\LingFan.Media.Sources.csproj" />
 		<ProjectReference Include="..\LingFan.Media.Formats\LingFan.Media.Formats.csproj" />

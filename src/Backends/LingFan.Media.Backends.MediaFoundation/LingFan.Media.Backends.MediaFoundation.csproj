@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!-- MediaFoundation 仅 Windows 可用，程序集级标注使所有代码默认 Windows-only -->
@@ -14,7 +14,7 @@
     <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.D3D11\LingFan.Media.GPUShare.D3D11.csproj" />
     <!-- COM vtable 槽位读取唯一实现（MfVTable 薄壳委托）。 -->
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Interop\LingFan.Media.Interop.csproj" />
-    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Composition\LingFan.Media.Composition.csproj" />
     <!-- MfD3D11TextureResource.ReadbackToCpu：MF DXVA 硬解纹理 CPU 回读（NV12→BGRA），
          供 Skia 软渲染兜底路径消费（保持 GPU 解码，打通控件内 WriteableBitmap 上屏）。 -->
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />

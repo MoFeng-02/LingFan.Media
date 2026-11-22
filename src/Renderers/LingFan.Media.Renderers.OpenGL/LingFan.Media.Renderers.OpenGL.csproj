@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!-- 零反射原生绑定（GLNative）使用 unsafe 上下文 + [LibraryImport]，必须开启。 -->
@@ -23,7 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
 		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Android\LingFan.Media.GPUShare.Android.csproj" />
-    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Composition\LingFan.Media.Composition.csproj" />
     <ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
     <!-- EGL 互操作唯一真源（中性名 "EGL" 解析 / dma_buf 导入常量与符号）：GPUShare.EGL。 -->
     <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.EGL\LingFan.Media.GPUShare.EGL.csproj" />

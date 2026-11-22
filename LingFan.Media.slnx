@@ -2,6 +2,7 @@
   <Folder Name="/Infrastructure/">
     <Project Path="src/Infrastructure/LingFan.Media.Abstractions/LingFan.Media.Abstractions.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Audio/LingFan.Media.Audio.csproj" />
+    <Project Path="src/Infrastructure/LingFan.Media.Composition/LingFan.Media.Composition.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Consumers/LingFan.Media.Consumers.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Core/LingFan.Media.Core.csproj" />
     <Project Path="src/Infrastructure/LingFan.Media.Extensions/LingFan.Media.Extensions.csproj" />

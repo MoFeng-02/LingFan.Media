@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- 组合共享叶子：插件注册面（MediaBuilder/MediaOptions/LazySupport/平台注册钩子）。
+	     仅依赖 Abstractions + MS DI 抽象，供各后端/渲染器/输出引用，
+	     避免插件反向引用组合根 Extensions（依赖方向唯一向下）。
+	     DI 为 Microsoft.Extensions.DependencyInjection 原生容器，手动注册。 -->
+	<ItemGroup>
+		<ProjectReference Include="..\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- MediaBuilder 的 internal 构造与变换链属性仅供组合根 Extensions 访问 -->
+		<InternalsVisibleTo Include="LingFan.Media.Extensions" />
+	</ItemGroup>
+
+	<PropertyGroup>
+		<IsPackable>true</IsPackable>
+	</PropertyGroup>
+
+</Project>
