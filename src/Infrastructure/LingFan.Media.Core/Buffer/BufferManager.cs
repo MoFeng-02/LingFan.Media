@@ -177,7 +177,11 @@ public sealed class BufferManager : IBufferManager
         _cts.Cancel();
         if (_readerTask != null)
         {
-            try { await _readerTask; } catch { }
+            // 取消是预期退出；其余异常说明读线程已因真实 I/O 故障死亡——留痕供诊断，
+            // 不在此抛出（启动编排继续，故障由 ReaderFaulted 事件链路上报）。
+            try { await _readerTask; }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { _logger.LogWarning(ex, "旧读取线程非取消退出（Seek 重启前），故障详情见 ReaderFaulted 链路"); }
         }
 
         // 重建 CTS

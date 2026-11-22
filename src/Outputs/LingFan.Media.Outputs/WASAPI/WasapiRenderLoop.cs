@@ -214,7 +214,9 @@ internal sealed class WasapiRenderLoop
 
     /// <summary>
     /// 批量提交：把多帧音频投递给渲染线程（在渲染线程内连续写入，消除逐帧跨线程往返开销）。
-    /// 单帧提交失败（缓冲区超时/参数异常）仅丢弃该帧并继续后续帧，不会中断整批。不接管帧所有权。
+    /// 仅<b>背压超时</b>（<see cref="TimeoutException"/>）降级为丢弃该帧并继续后续帧；
+    /// 参数类错误（声道/尺寸不匹配等 <see cref="ArgumentException"/>）原样冒泡、中断该批（契约要求，不得吞掉）。
+    /// 不接管帧所有权。
     /// </summary>
     public void SubmitBatch(IEnumerable<AudioFrame> frames) => SubmitBatch(frames, CancellationToken.None);
 
@@ -377,8 +379,8 @@ internal sealed class WasapiRenderLoop
                 }
             });
         }
-        // 忽略 timeout 任务自身的取消异常（ct 取消时静默收尾）
-        try { await timeout; } catch { }
+        // timeout 是 Task.Delay：只会以取消结束（ct 触发），不会故障——仅豁免取消，其余异常照抛。
+        try { await timeout; } catch (OperationCanceledException) { }
     }
 
     /// <inheritdoc cref="WasapiOutput.Flush"/>

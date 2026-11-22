@@ -587,7 +587,11 @@ public sealed class MediaPlayer : IMediaPlayer
             _bufferManager?.Stop();
             if (_bufferManager?.ReaderTask != null)
             {
-                try { await _bufferManager.ReaderTask; } catch { }
+                // 取消是预期退出；其余异常说明读线程已因真实 I/O 故障死亡——留痕供诊断，
+                // 定位编排继续（demuxer 位置未动，后续步骤自会暴露或收敛）。
+                try { await _bufferManager.ReaderTask; }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { _logger.LogWarning(ex, "定位前读取线程非取消退出，故障详情见 ReaderFaulted 链路"); }
             }
 
             // 2. 清空缓冲队列（移到 Flush 之前，确保管线恢复后包队列已空，不会处理旧包）
