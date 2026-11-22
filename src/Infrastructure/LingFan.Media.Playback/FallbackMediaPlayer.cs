@@ -181,7 +181,9 @@ public sealed class FallbackMediaPlayer : IMediaPlayer
     }
 
     /// <inheritdoc />
-    public Task PlayAsync() => _active?.PlayAsync() ?? Task.CompletedTask;
+    public Task PlayAsync()
+        => _active?.PlayAsync()
+           ?? throw new InvalidOperationException("尚未打开媒体源，不允许播放（须先成功调用 OpenAsync）。");
 
     /// <inheritdoc />
     public Task PauseAsync() => _active?.PauseAsync() ?? Task.CompletedTask;
@@ -191,7 +193,8 @@ public sealed class FallbackMediaPlayer : IMediaPlayer
 
     /// <inheritdoc />
     public Task SeekAsync(TimeSpan position, CancellationToken ct = default)
-        => _active?.SeekAsync(position, ct) ?? Task.CompletedTask;
+        => _active?.SeekAsync(position, ct)
+           ?? throw new InvalidOperationException("尚未打开媒体源，不允许定位（须先成功调用 OpenAsync）。");
 
     /// <inheritdoc />
     public event EventHandler<MediaStateChangedEventArgs> StateChanged = delegate { };

@@ -18,6 +18,13 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     Task OpenAsync(IMediaSource source, CancellationToken ct = default);
 
     /// <summary>开始播放（纯内存状态转换，无 CT）。</summary>
+    /// <remarks>
+    /// <para><b>前置条件</b>：媒体源须已成功打开，且状态处于就绪（Idle）/Paused/Stopped/Ended；
+    /// 未打开、Opening/Buffering/Error 态调用抛 <see cref="InvalidOperationException"/>（不启动管线、不改状态）。</para>
+    /// <para><b>幂等</b>：Playing 态重复调用直接返回，不重启管线。</para>
+    /// <para><b>失败语义</b>：守卫拒绝抛异常（不发错误事件）；启动过程中的失败经
+    /// <see cref="ErrorOccurred"/> 上报、不抛出（与既有行为一致）。</para>
+    /// </remarks>
     Task PlayAsync();
 
     /// <summary>暂停播放（纯内存状态转换，无 CT）。</summary>
@@ -37,12 +44,9 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <para><b>失败语义</b>：定位失败必须<b>抛异常</b>而不是静默返回——当前实现先触发
     /// <see cref="ErrorOccurred"/>（<c>SeekFailed</c>）再抛出原异常，调用方据此可只处理异常、
     /// 也可只订阅事件。</para>
-    /// <para><b>前置条件</b>：调用方不得在未打开媒体源或仍在打开中时调用——此时没有可定位的解封装器，
-    /// 定位无从执行。应有语义是抛 <see cref="InvalidOperationException"/>，不得静默成功。</para>
-    /// <para><b>实现现状</b>：当前实现<b>尚未设置该状态守卫</b>。未打开时内部解封装器为空，方法会跳过
-    /// 定位而继续推进时钟、刷新管线并重填缓冲，表现为「静默成功但不移动」。因此在实现补齐守卫之前，
-    /// 调用方<b>必须自行确认媒体源已成功打开</b>（<see cref="State"/> 不处于 <c>Opening</c> / <c>Error</c>
-    /// 等未就绪态），不得依赖本方法抛异常来发现误用。</para>
+    /// <para><b>前置条件</b>：媒体源须已成功打开且状态非 Opening/Error——此时没有可定位的解封装器，
+    /// 定位无从执行。违反前置条件抛 <see cref="InvalidOperationException"/>（守卫拒绝，不发错误事件、
+    /// 不动时钟与缓冲）。</para>
     /// <para><b>精度</b>：上层只承诺「已下发定位请求」，落点精度由解封装器决定
     /// （见 <c>IMediaDemuxer.SeekAsync</c> 的返回值语义）。</para>
     /// </remarks>

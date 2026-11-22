@@ -433,7 +433,7 @@ public sealed class MediaPlayer : IMediaPlayer
             // 9. 字幕轨道（条件创建，仅有字幕轨道时）
             if (subtitleTrack != null && _subtitleDecoderFactory != null)
             {
-                _subtitleDecoder = _subtitleDecoderFactory.Create(subtitleTrack);
+                _subtitleDecoder = await _subtitleDecoderFactory.CreateAsync(subtitleTrack, ct);
                 _subtitleProcessor = new SubtitleProcessor(
                     _subtitleDecoder, _bufferManager.SubtitlePacketQueue, _clock,
                     _loggerFactory.CreateLogger<SubtitleProcessor>());
@@ -485,6 +485,16 @@ public sealed class MediaPlayer : IMediaPlayer
     /// <inheritdoc />
     public async Task PlayAsync()
     {
+        // 状态前置守卫（先于任何管线/时钟动作）：
+        //   Playing → 幂等早退（重复 Play 不重启管线、不重走启动编排）；
+        //   Opening/Buffering/Error/未打开 → 抛 InvalidOperationException，不得静默启动管线
+        //   造成「状态标签与管线真实状况相反」的半态。
+        var state = _controller.CurrentState;
+        if (state == MediaState.Playing)
+            return;
+        if (!_controller.CanPlay(_demuxer != null))
+            throw new InvalidOperationException($"当前状态 {state} 不允许播放（须先成功打开媒体源，且处于就绪/暂停/停止/结束态）。");
+
         try
         {
             if (_controller.CurrentState == MediaState.Ended)
@@ -566,6 +576,11 @@ public sealed class MediaPlayer : IMediaPlayer
     /// <inheritdoc />
     public async Task SeekAsync(TimeSpan position, CancellationToken ct = default)
     {
+        // 状态前置守卫（先于停读线程/清缓冲等任何动作）：未打开或 Opening/Error 态没有可定位的
+        // 解封装器，定位无从执行——抛 InvalidOperationException，不得静默推进时钟/重填缓冲。
+        if (!_controller.CanSeek(_demuxer != null))
+            throw new InvalidOperationException($"当前状态 {_controller.CurrentState} 不允许定位（须先成功打开媒体源）。");
+
         try
         {
             // 1. 先停 BufferManager 读取线程（防止与 Demuxer.SeekAsync 竞争）
@@ -682,15 +697,14 @@ public sealed class MediaPlayer : IMediaPlayer
     {
         if (!ClockTuning.HighPrecisionTimer || _hpTimerActive)
             return;
-        try
+        // winmm 返回非 0 = 失败（不抛异常），须按返回值判定，不能把失败当成功置位。
+        uint result = WinMm.TimeBeginPeriod(1);
+        if (result != 0)
         {
-            WinMm.TimeBeginPeriod(1);
-            _hpTimerActive = true;
+            _logger.LogWarning("开启高精度定时器失败（winmm 返回 {Result}），帧等待将退回默认 15.6ms 分辨率", result);
+            return;
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "开启高精度定时器失败，帧等待将退回默认 15.6ms 分辨率");
-        }
+        _hpTimerActive = true;
     }
 
     /// <summary>
@@ -700,18 +714,11 @@ public sealed class MediaPlayer : IMediaPlayer
     {
         if (!_hpTimerActive)
             return;
-        try
-        {
-            WinMm.TimeEndPeriod(1);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "关闭高精度定时器失败");
-        }
-        finally
-        {
-            _hpTimerActive = false;
-        }
+        // winmm 返回非 0 = 失败（不抛异常）；无论成败都复位标志，避免后续重复配对。
+        uint result = WinMm.TimeEndPeriod(1);
+        if (result != 0)
+            _logger.LogWarning("关闭高精度定时器失败（winmm 返回 {Result}）", result);
+        _hpTimerActive = false;
     }
 
     /// <inheritdoc />

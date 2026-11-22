@@ -26,31 +26,38 @@ public sealed class PlaybackController
         get { lock (_lock) return _currentState; }
     }
 
-    /// <summary>是否可进入播放（State == Idle/Paused/Ended）。</summary>
-    /// <remarks>MediaState 枚举无 Ready 值，缓冲完成后回到 Idle 状态。</remarks>
-    public bool CanPlay
+    /// <summary>是否可进入播放（Idle/Paused/Stopped/Ended 且媒体源已打开）。</summary>
+    /// <remarks>
+    /// <para>MediaState 枚举无 Ready 值，缓冲完成后回到 Idle 状态；Idle 同时表示「从未打开」，
+    /// 故仅凭状态不足以判定可播——还须媒体源已成功打开（由播放器以解封装器就位为准传入
+    /// <paramref name="sourceOpened"/>）。</para>
+    /// <para>Playing 不在集合内：重复 Play 由播放器按幂等早退处理，不经本判定。</para>
+    /// </remarks>
+    /// <param name="sourceOpened">媒体源是否已成功打开（解封装器就位）。</param>
+    public bool CanPlay(bool sourceOpened)
     {
-        get
+        lock (_lock)
         {
-            lock (_lock)
-            {
-                return _currentState is MediaState.Idle
-                    or MediaState.Paused
-                    or MediaState.Ended;
-            }
+            if (!sourceOpened)
+                return false;
+            return _currentState is MediaState.Idle
+                or MediaState.Paused
+                or MediaState.Stopped
+                or MediaState.Ended;
         }
     }
 
-    /// <summary>是否可定位（非直播流且非 Opening/Error 状态）。</summary>
-    public bool CanSeek
+    /// <summary>是否可定位（媒体源已打开且非 Opening/Error 状态）。</summary>
+    /// <remarks>直播流的不可定位由解封装器/流的 CanSeek 判定，不在状态机职责内。</remarks>
+    /// <param name="sourceOpened">媒体源是否已成功打开（解封装器就位）。</param>
+    public bool CanSeek(bool sourceOpened)
     {
-        get
+        lock (_lock)
         {
-            lock (_lock)
-            {
-                return _currentState is not MediaState.Opening
-                    and not MediaState.Error;
-            }
+            if (!sourceOpened)
+                return false;
+            return _currentState is not MediaState.Opening
+                and not MediaState.Error;
         }
     }
 
