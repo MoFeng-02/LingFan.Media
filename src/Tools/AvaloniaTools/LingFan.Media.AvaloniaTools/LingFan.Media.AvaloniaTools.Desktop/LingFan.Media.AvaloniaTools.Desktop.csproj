@@ -13,8 +13,8 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
-		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
+		<PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
 	</ItemGroup>
 
 	<ItemGroup>

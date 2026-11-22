@@ -11,9 +11,9 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia.Android" Version="12.1.2" />
+		<PackageReference Include="Avalonia.Android" Version="12.1.6" />
 		<!-- VulkanOptions / IVulkanInstance / IVulkanDevice 所在程序集显式直引（IgnoresAccessChecksTo 对传递引用不生效） -->
-		<PackageReference Include="Avalonia.Skia" Version="12.1.2" />
+		<PackageReference Include="Avalonia.Skia" Version="12.1.6" />
 	</ItemGroup>
 
 	<ItemGroup>
