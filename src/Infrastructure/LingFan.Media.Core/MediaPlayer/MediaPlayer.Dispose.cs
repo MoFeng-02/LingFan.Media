@@ -227,4 +227,5 @@ public sealed partial class MediaPlayer
         try { _stream?.Close(); } catch { }
         try { _bufferManager?.Clear(); } catch { }
     }
+
 }
