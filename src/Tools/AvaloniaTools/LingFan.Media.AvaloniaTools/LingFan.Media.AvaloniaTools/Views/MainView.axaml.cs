@@ -28,30 +28,48 @@ public partial class MainView : UserControl
     /// 打开文件按钮：经 TopLevel.StorageProvider 调起跨平台文件选择器（Windows 原生 / Android 系统选择器）。
     /// 选中后将路径交给 ViewModel 的 OpenFileCommand 完成打开与播放。
     /// </summary>
-    private async void OnOpenClick(object? sender, RoutedEventArgs e)
+    /// <remarks>
+    /// UI 事件回调是 void 签名（框架约束），不可改为 async Task；异步主体拆到
+    /// <see cref="OnOpenClickAsync"/>，本壳同步调用并兜底全部异常——
+    /// 避免 async void 异常逃逸导致进程崩溃（仓内 async void 禁令的边界豁免形态）。
+    /// </remarks>
+    private void OnOpenClick(object? sender, RoutedEventArgs e)
     {
-        var topLevel = TopLevel.GetTopLevel(this);
-        if (topLevel is null)
-            return;
+        _ = OnOpenClickAsync();
+    }
 
-        var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+    private async Task OnOpenClickAsync()
+    {
+        try
         {
-            Title = "选择媒体文件",
-            AllowMultiple = false,
-            FileTypeFilter = new[]
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel is null)
+                return;
+
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
             {
-                new FilePickerFileType("视频文件")
+                Title = "选择媒体文件",
+                AllowMultiple = false,
+                FileTypeFilter = new[]
                 {
-                    Patterns = new[] { "*.mp4", "*.mkv", "*.webm", "*.mov", "*.avi" }
-                },
-                new FilePickerFileType("所有文件") { Patterns = new[] { "*" } },
-            }
-        });
+                    new FilePickerFileType("视频文件")
+                    {
+                        Patterns = new[] { "*.mp4", "*.mkv", "*.webm", "*.mov", "*.avi" }
+                    },
+                    new FilePickerFileType("所有文件") { Patterns = new[] { "*" } },
+                }
+            });
 
-        if (files.Count > 0 && DataContext is MainViewModel vm)
+            if (files.Count > 0 && DataContext is MainViewModel vm)
+            {
+                // LocalPath 在桌面平台即文件系统路径；移动平台为 content URI，后续按需改为流方式打开。
+                vm.OpenFileCommand.Execute(files[0].Path.LocalPath);
+            }
+        }
+        catch (Exception ex)
         {
-            // LocalPath 在桌面平台即文件系统路径；移动平台为 content URI，后续按需改为流方式打开。
-            vm.OpenFileCommand.Execute(files[0].Path.LocalPath);
+            if (DataContext is MainViewModel vm)
+                vm.Status = $"打开文件失败：{ex.Message}";
         }
     }
 
