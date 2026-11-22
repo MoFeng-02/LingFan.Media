@@ -46,4 +46,10 @@
 		<None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="\" />
 		<None Include="$(MSBuildThisFileDirectory)THIRD_PARTY_NOTICES.md" Pack="true" PackagePath="\" />
 	</ItemGroup>
+
+	<!-- AOT 工具链版本覆盖（仅 PublishAot 工程生效）：钉住已修复漏洞的 ILCompiler。
+	     经 CustomAfterMicrosoftCommonTargets 在 SDK BundledVersions 之后注入，见 Targets/Aot/ILCompilerVersion.targets -->
+	<PropertyGroup>
+		<CustomAfterMicrosoftCommonTargets>$(MSBuildThisFileDirectory)Targets\Aot\ILCompilerVersion.targets</CustomAfterMicrosoftCommonTargets>
+	</PropertyGroup>
 </Project>

@@ -1,0 +1,10 @@
+<Project>
+  <!-- AOT 探针 ILCompiler 版本钉住：SDK 10.0.204 bundled 的 10.0.8 有已知高危漏洞
+       （GHSA-p3jp-9v83-76w9，NuGetAudit 报 NU1903 且 TreatWarningsAsErrors 升级为错误）。
+       此处把 PublishAot 工程的 ILCompiler 包版本覆盖为已修复的 10.0.15。
+       须经 CustomAfterMicrosoftCommonTargets 注入（在 SDK 的 BundledVersions 之后求值），
+       由 Directory.Build.props 设置该属性；仅影响 AOT 编译工具链版本，不改变目标框架与运行时。 -->
+  <ItemGroup Condition="'$(PublishAot)' == 'true'">
+    <KnownILCompilerPack Update="Microsoft.DotNet.ILCompiler" ILCompilerPackVersion="10.0.15" />
+  </ItemGroup>
+</Project>
