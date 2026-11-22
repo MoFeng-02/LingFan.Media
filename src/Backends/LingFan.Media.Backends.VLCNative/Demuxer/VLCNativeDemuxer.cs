@@ -84,6 +84,9 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
     // 突发被缓冲吸收、停产被缓冲覆盖，WASAPI 得连续供给、消除间隙。后端内作用域，不影响 MF/FFmpeg。
     private readonly ConcurrentQueue<MediaPacket> _audioJitter = new();
     private const int AudioJitterMaxPackets = 2000; // ~40s@44.1k 上限，防失控增长
+    // 同步 Close 等待音频释放线程排空的宽限上限：超时即放弃等待继续释放，
+    // 避免 Close 被释放线程无限阻塞（同步边界兜底，正常排空远小于此值）。
+    private const int AudioReleaseDrainTimeoutMs = 500;
     private CancellationTokenSource? _audioReleaseCts;
     private Task? _audioReleaseTask;
     private readonly object _audioReleaseLock = new();
@@ -346,7 +349,7 @@ internal sealed class VLCNativeDemuxer : IMediaDemuxer
 
         // 取消音频释放线程并等待排空（避免与 VLC 回调并发写通道）
         try { _audioReleaseCts?.Cancel(); } catch { }
-        try { _audioReleaseTask?.Wait(TimeSpan.FromMilliseconds(500)); } catch { }
+        try { _audioReleaseTask?.Wait(TimeSpan.FromMilliseconds(AudioReleaseDrainTimeoutMs)); } catch { }
         try { _audioReleaseCts?.Dispose(); } catch { }
         _audioReleaseCts = null;
         _audioReleaseTask = null;
