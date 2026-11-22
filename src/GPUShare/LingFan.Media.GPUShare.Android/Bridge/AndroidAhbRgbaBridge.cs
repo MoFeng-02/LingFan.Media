@@ -316,79 +316,6 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         return req.Tcs.Task.Result;
     }
 
-    /// <summary>
-    /// 在 GL 线程上建 EGL 上下文与全部 GL/SurfaceTexture 资源；末尾保持上下文 current（不释放）。
-    /// 任何一步失败抛异常 → 由 <see cref="GlThreadEntry"/> 捕获并回退。
-    /// </summary>
-    private void SetupGlOnThisThread()
-    {
-        _eglDisplay = EglGetDisplay(EglDefaultDisplay);
-        if (_eglDisplay == nint.Zero)
-            throw new NotSupportedException("[ANDROID-AHB] eglGetDisplay 失败。");
-        if (EglInitialize(_eglDisplay, null, null) == 0)
-            throw new NotSupportedException($"[ANDROID-AHB] eglInitialize 失败 0x{EglGetError():X8}。");
-
-        ResolveExtensions();
-
-        int[] cfgAttrs =
-        {
-            EglSurfaceType, EglPbufferBit,
-            EglRenderableType, EglOpenglEs2Bit,
-            EglRedSize, 8, EglGreenSize, 8, EglBlueSize, 8,
-            EglNone,
-        };
-        nint config = nint.Zero;
-        int numConfigs = 0;
-        fixed (int* a = cfgAttrs)
-        {
-            if (EglChooseConfig(_eglDisplay, a, &config, 1, &numConfigs) == 0 || numConfigs == 0)
-                throw new NotSupportedException($"[ANDROID-AHB] eglChooseConfig 失败 0x{EglGetError():X8}。");
-        }
-
-        EglBindApi(EglOpenglEsApi);
-        int[] ctxAttrs = { EglContextClientVersion, 2, EglNone };
-        fixed (int* c = ctxAttrs)
-            _eglContext = EglCreateContext(_eglDisplay, config, EglNoContext, c);
-        if (_eglContext == nint.Zero)
-            throw new NotSupportedException($"[ANDROID-AHB] eglCreateContext 失败 0x{EglGetError():X8}。");
-
-        int[] pbufAttrs = { EglWidth, 1, EglHeight, 1, EglNone };
-        fixed (int* p = pbufAttrs)
-            _eglSurface = EglCreatePbufferSurface(_eglDisplay, config, p);
-        if (_eglSurface == nint.Zero)
-            throw new NotSupportedException($"[ANDROID-AHB] eglCreatePbufferSurface 失败 0x{EglGetError():X8}。");
-
-        if (EglMakeCurrent(_eglDisplay, _eglSurface, _eglSurface, _eglContext) == 0)
-            throw new NotSupportedException($"[ANDROID-AHB] eglMakeCurrent 失败 0x{EglGetError():X8}。");
-
-        // OES 外部纹理（SurfaceTexture 将绑定到此纹理名；纹理归属本 GL 线程的上下文）。
-        uint oes = 0;
-        GlGenTextures(1, &oes);
-        _oesTex = oes;
-        GlBindTexture(GlTextureExternalOes, _oesTex);
-        GlTexParameteri(GlTextureExternalOes, GlTextureMinFilter, (int)GlLinear);
-        GlTexParameteri(GlTextureExternalOes, GlTextureMagFilter, (int)GlLinear);
-        GlTexParameteri(GlTextureExternalOes, GlTextureWrapS, (int)GlClampToEdge);
-        GlTexParameteri(GlTextureExternalOes, GlTextureWrapT, (int)GlClampToEdge);
-
-        // SurfaceTexture 消费 MediaCodec 输出（其 GL 纹理须在本 EGL 上下文创建 —— 正是上面 _oesTex）。
-        _surfaceTexture = new SurfaceTexture((int)_oesTex);
-        _surfaceTexture.SetDefaultBufferSize(_width, _height);
-        _surface = new Surface(_surfaceTexture);
-
-        // 编译直通 shader（OES 外部纹理 → RGBA 输出）。
-        BuildProgram();
-
-        // 复用纹理/FBO（每帧仅重绑 EGLImage）。
-        uint st = 0, fb = 0;
-        GlGenTextures(1, &st);
-        _scratchTex = st;
-        GlGenFramebuffers(1, &fb);
-        _fbo = fb;
-
-        // 上下文保持 current：GL 线程常驻持有，不在此释放。
-    }
-
     /// <summary>在 GL 线程上闩取最新帧并渲染进 RGBA AHardwareBuffer。上下文此时已 current（建上下文后从未释放），
     /// 故此处<b>不做</b> eglMakeCurrent / 不做 finally 释放上下文——仅失败路径清理本帧的 AHB / EGLImage 资源。</summary>
     private nint ProduceFrameOnThisThread()
@@ -511,113 +438,6 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         }
     }
 
-    // 私有：shader 管线
-    private void BuildProgram()
-    {
-        uint vs = CompileShader(GlVertexShader, VertexSource);
-        uint fs = CompileShader(GlFragmentShader, FragmentSource);
-        uint prog = GlCreateProgram();
-        GlAttachShader(prog, vs);
-        GlAttachShader(prog, fs);
-        GlLinkProgram(prog);
-        int linked = 0;
-        GlGetProgramIv(prog, GlLinkStatus, &linked);
-        if (linked == 0)
-        {
-            _logger?.LogWarning("[ANDROID-AHB] 着色器链接失败。");
-            throw new NotSupportedException("[ANDROID-AHB] GL 程序链接失败。");
-        }
-        GlDeleteShader(vs);
-        GlDeleteShader(fs);
-        _program = prog;
-        _uTexTransform = GlGetUniformLocation(prog, "uTexTransform");
-        _uTex = GlGetUniformLocation(prog, "uTex");
-
-        // 全屏 quad VBO（pos.xy + uv.xy 交错，TRIANGLE_STRIP 4 顶点）。
-        // pos.y 相对常规 GL 全屏 quad 翻转：GL 帧缓冲内存行序底左（y 向上），而 AHB 的后续
-        // 消费方（Vulkan 导入/Skia 采样）按顶左（y 向下）读内存行——不翻转则画面上下镜像
-        // （权威：GL 与 Vulkan 帧缓冲附件的 Y 轴约定相反，Veldrid "API-specific rendering differences"）。
-        float[] quad =
-        {
-            -1f,  1f, 0f, 0f,
-             1f,  1f, 1f, 0f,
-            -1f, -1f, 0f, 1f,
-             1f, -1f, 1f, 1f,
-        };
-        uint vbo = 0;
-        GlGenBuffers(1, &vbo);
-        _vbo = vbo;
-        GlBindBuffer(GlArrayBuffer, _vbo);
-        fixed (float* q = quad)
-            GlBufferData(GlArrayBuffer, quad.Length * sizeof(float), q, GlStaticDraw);
-        GlBindBuffer(GlArrayBuffer, 0);
-        _aPosLoc = GlGetAttribLocation(prog, "aPos");
-        _aUvLoc = GlGetAttribLocation(prog, "aUV");
-    }
-
-    private uint CompileShader(uint type, string src)
-    {
-        uint sh = GlCreateShader(type);
-        byte[] bytes = Encoding.UTF8.GetBytes(src + "\0");
-        fixed (byte* p = bytes)
-        {
-            nint pStr = (nint)p;
-            int len = -1;
-            GlShaderSource(sh, 1, &pStr, &len);
-        }
-        GlCompileShader(sh);
-        int ok = 0;
-        GlGetShaderIv(sh, GlCompileStatus, &ok);
-        if (ok == 0)
-            _logger?.LogWarning("[ANDROID-AHB] 着色器编译失败（type=0x{Type:X}）。", type);
-        return sh;
-    }
-
-    private void ResolveExtensions()
-    {
-        nint p;
-        p = EglGetProcAddress("eglGetNativeClientBufferANDROID");
-        if (p == nint.Zero) throw new NotSupportedException("[ANDROID-AHB] 缺失 eglGetNativeClientBufferANDROID。");
-        _eglGetNativeClientBufferAndroid = (delegate* unmanaged[Cdecl]<nint, nint>)p;
-
-        p = EglGetProcAddress("eglCreateImageKHR");
-        if (p == nint.Zero) throw new NotSupportedException("[ANDROID-AHB] 缺失 eglCreateImageKHR。");
-        _eglCreateImageKhr = (delegate* unmanaged[Cdecl]<nint, nint, uint, nint, nint, nint>)p;
-
-        p = EglGetProcAddress("eglDestroyImageKHR");
-        if (p == nint.Zero) throw new NotSupportedException("[ANDROID-AHB] 缺失 eglDestroyImageKHR。");
-        _eglDestroyImageKhr = (delegate* unmanaged[Cdecl]<nint, nint, uint>)p;
-
-        p = EglGetProcAddress("glEGLImageTargetTexture2DOES");
-        if (p == nint.Zero) throw new NotSupportedException("[ANDROID-AHB] 缺失 glEGLImageTargetTexture2DOES。");
-        _glEglImageTargetTexture2Does = (delegate* unmanaged[Cdecl]<uint, nint, void>)p;
-    }
-
-    // GLSL 硬性要求：#version 必须是源码绝对第一行（列 0、无前导空白），否则驱动忽略→默认按 ES 1.00 编译，
-    // 导致 gl_VertexIndex undeclared、samplerExternalOES 扩展名错配。故用字符串拼接而非原始字面量（后者会残留缩进空格）。
-    // 采用 Android 最稳的 GLES 2.0 / ES 1.00 范式（ExoPlayer/Grafika 同款）：全屏 quad 走顶点属性，不依赖 gl_VertexIndex（GLES3-only）。
-    // 省略 #version 即默认 ES 1.00；samplerExternalOES 在 ES 1.00 下用 GL_OES_EGL_image_external 扩展（非 _essl3）。
-    private const string VertexSource =
-        "attribute vec2 aPos;\n"
-      + "attribute vec2 aUV;\n"
-      + "uniform mat4 uTexTransform;\n"
-      + "varying vec2 vUV;\n"
-      + "void main() {\n"
-      + "    vUV = (uTexTransform * vec4(aUV, 0.0, 1.0)).xy;\n"
-      // aPos 已是 NDC [-1,1]（VBO 注释同款），直传 gl_Position。
-      // 误写 aPos*2.0-1.0 会把 quad 放大 3 倍 → 可见区只剩中央 1/3 裁切放大（实测）。
-      + "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
-      + "}\n";
-
-    private const string FragmentSource =
-        "#extension GL_OES_EGL_image_external : require\n"
-      + "precision mediump float;\n"
-      + "uniform samplerExternalOES uTex;\n"
-      + "varying vec2 vUV;\n"
-      + "void main() {\n"
-      + "    gl_FragColor = texture2D(uTex, vUV);\n"
-      + "}\n";
-
     public void Dispose()
     {
         if (_disposed) return;
@@ -646,30 +466,6 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         _surfaceTexture?.Dispose();
         _surface = null;
         _surfaceTexture = null;
-    }
-
-    /// <summary>在 GL 线程上销毁全部 GL 对象并终止 EGL（上下文此时 current）。</summary>
-    /// <remarks><b>幂等</b>：每项销毁后立即清零字段——异常路径可能二次进入（stop 分支清理中抛异常 →
-    /// GlThreadEntry catch 再次调用），重入时不得重复 EglTerminate（display 引用计数会多减）。</remarks>
-    private void TeardownGlOnThisThread()
-    {
-        if (_program != 0) { GlDeleteProgram(_program); _program = 0; }
-        if (_vbo != 0) { uint vb = _vbo; GlDeleteBuffers(1, &vb); _vbo = 0; }
-        // 取字段副本入局部再取地址（跨环境安全写法：本机 Roslyn 对 &字段 报 CS0212，须走局部变量）。
-        if (_scratchTex != 0) { uint sTex = _scratchTex; GlDeleteTextures(1, &sTex); _scratchTex = 0; }
-        if (_oesTex != 0) { uint oTex = _oesTex; GlDeleteTextures(1, &oTex); _oesTex = 0; }
-        if (_fbo != 0) { uint fb = _fbo; GlDeleteFramebuffers(1, &fb); _fbo = 0; }
-
-        if (_eglDisplay != nint.Zero)
-        {
-            // 线程即将退出，上下文随之消亡；显式解绑再销毁，符合 EGL 规范。
-            EglMakeCurrent(_eglDisplay, nint.Zero, nint.Zero, nint.Zero);
-            if (_eglContext != nint.Zero) { EglDestroyContext(_eglDisplay, _eglContext); _eglContext = nint.Zero; }
-            if (_eglSurface != nint.Zero) { EglDestroySurface(_eglDisplay, _eglSurface); _eglSurface = nint.Zero; }
-            EglTerminate(_eglDisplay);
-            _eglDisplay = nint.Zero;
-        }
-        _logger?.LogInformation("[ANDROID-AHB] GL 线程已销毁上下文并退出。");
     }
 
     // AHardwareBuffer 描述结构（与 NDK AHardwareBuffer_Desc 二进制兼容）
@@ -838,4 +634,29 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
 
     [LibraryImport("libandroid.so", EntryPoint = "AHardwareBuffer_release")]
     private static partial void AHardwareBufferRelease(nint buffer);
+
+    // GLSL 硬性要求：#version 必须是源码绝对第一行（列 0、无前导空白），否则驱动忽略→默认按 ES 1.00 编译，
+    // 导致 gl_VertexIndex undeclared、samplerExternalOES 扩展名错配。故用字符串拼接而非原始字面量（后者会残留缩进空格）。
+    // 采用 Android 最稳的 GLES 2.0 / ES 1.00 范式（ExoPlayer/Grafika 同款）：全屏 quad 走顶点属性，不依赖 gl_VertexIndex（GLES3-only）。
+    // 省略 #version 即默认 ES 1.00；samplerExternalOES 在 ES 1.00 下用 GL_OES_EGL_image_external 扩展（非 _essl3）。
+    private const string VertexSource =
+        "attribute vec2 aPos;\n"
+      + "attribute vec2 aUV;\n"
+      + "uniform mat4 uTexTransform;\n"
+      + "varying vec2 vUV;\n"
+      + "void main() {\n"
+      + "    vUV = (uTexTransform * vec4(aUV, 0.0, 1.0)).xy;\n"
+      // aPos 已是 NDC [-1,1]（VBO 注释同款），直传 gl_Position。
+      // 误写 aPos*2.0-1.0 会把 quad 放大 3 倍 → 可见区只剩中央 1/3 裁切放大（实测）。
+      + "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
+      + "}\n";
+
+    private const string FragmentSource =
+        "#extension GL_OES_EGL_image_external : require\n"
+      + "precision mediump float;\n"
+      + "uniform samplerExternalOES uTex;\n"
+      + "varying vec2 vUV;\n"
+      + "void main() {\n"
+      + "    gl_FragColor = texture2D(uTex, vUV);\n"
+      + "}\n";
 }

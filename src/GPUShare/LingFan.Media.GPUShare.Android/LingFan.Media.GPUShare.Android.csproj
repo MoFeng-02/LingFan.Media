@@ -28,6 +28,7 @@
   <!-- 仅 android TFM 资产：解码侧 GLES/EGL→AHB 桥接（依赖 Android.Graphics/Views 托管绑定，纯 net10.0 不可编译）。 -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
     <Compile Include="Bridge\AndroidAhbRgbaBridge.cs" />
+    <Compile Include="Bridge\AndroidAhbRgbaBridge.GlSetup.cs" />
   </ItemGroup>
 
 </Project>
