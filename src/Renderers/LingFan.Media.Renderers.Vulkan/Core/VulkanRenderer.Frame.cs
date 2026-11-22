@@ -425,7 +425,7 @@ internal sealed unsafe partial class VulkanRenderer
     }
 
     /// <summary>
-    /// VK-ZERO：Vulkan GPU 纹理零拷贝 Present 路径。
+    /// Vulkan GPU 纹理零拷贝 Present 路径。
     /// 将 <see cref="VulkanImageResource"/> 的 <c>VkImage</c> blit/copy 到 SwapChain 图像。
     /// </summary>
     /// <remarks>
@@ -436,7 +436,7 @@ internal sealed unsafe partial class VulkanRenderer
     /// <para>AOT 兼容：无反射、无新增 P/Invoke（复用 Vortice 源生成 <c>LibraryImport</c> 绑定）。</para>
     /// </remarks>
     /// <summary>
-    /// VK-ZERO：Vulkan GPU 纹理零拷贝 Present 路径（VulkanImageResource 重载）。
+    /// Vulkan GPU 纹理零拷贝 Present 路径（VulkanImageResource 重载）。
     /// 将 <see cref="VulkanImageResource"/> 的 <c>VkImage</c> blit/copy 到 SwapChain 图像。
     /// </summary>
     internal void BlitVulkanImageResource(VulkanImageResource src, Image dstImage)
@@ -446,7 +446,7 @@ internal sealed unsafe partial class VulkanRenderer
     }
 
     /// <summary>
-    /// VK-ZERO：Vulkan GPU 纹理零拷贝 Present 路径（原始 Image 重载）。
+    /// Vulkan GPU 纹理零拷贝 Present 路径（原始 Image 重载）。
     /// 将任意 RGBA 单平面 <c>VkImage</c> blit/copy 到 SwapChain 图像。
     /// 供硬解 NV12→RGBA 转换结果（<see cref="VulkanNv12ToRgbaConverter"/> 产出，已处 TransferSrcOptimal）上屏复用。
     /// 多平面 / 24 位格式（NV12/NV21/YUV*/RGB24）Vulkan blit 不支持，须先经 Shader 转码为 RGBA。

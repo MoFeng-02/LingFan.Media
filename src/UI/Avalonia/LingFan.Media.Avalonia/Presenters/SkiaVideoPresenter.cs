@@ -503,9 +503,8 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
             using var clip = drawingContext.PushClip(new Rect(0, 0, _targetW, _targetH));
             // 插值模式按**设备缩放比**选择，不能一律 HighQuality：
             // HighQuality（三次插值，逐像素 16 taps）只在重度缩小时才需要（抑制摩尔纹），
-            // 而在 1:1 贴块时是纯粹的浪费 —— 实测 1080x1920 位图以 scale=3 绘进 360x640 DIP 的
-            // destRect，设备像素正好 1080x1920，比值=1.0，此时每帧为 2M 像素白付三次插值开销，
-            // 是渲染线程只能跑到 ~15fps（管线的一半）的主要嫌疑。
+            // 而在 1:1 贴块时是纯粹的浪费——位图设备像素与 destRect 设备像素相等（比值=1.0）时，
+            // 每帧为全分辨率像素白付三次插值开销，可把渲染线程拖到远低于管线能力。
             using var opts = drawingContext.PushRenderOptions(new RenderOptions
             {
                 BitmapInterpolationMode = ChooseInterpolation(destRect),

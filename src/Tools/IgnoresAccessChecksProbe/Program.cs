@@ -1,4 +1,4 @@
-// R2 前置验证探针：IgnoresAccessChecksTo + NativeAOT 能否访问 Avalonia.Vulkan 的 internal 类型。
+﻿// 前置验证探针：IgnoresAccessChecksTo + NativeAOT 能否访问 Avalonia.Vulkan 的 internal 类型。
 // 三个验证点：
 //   1) 编译期：internal 类型（VulkanOptions / IVulkanDevice）能否在源码中直接书写；
 //   2) PublishAot：AOT 编译是否接受跨程序集 internal 访问；

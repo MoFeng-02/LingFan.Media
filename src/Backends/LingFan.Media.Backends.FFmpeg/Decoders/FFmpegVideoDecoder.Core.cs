@@ -292,7 +292,7 @@ internal sealed partial class FFmpegVideoDecoder
         //   随后 Dispose 旧 _hwDeviceCtx 归还自身引用销毁设备，最后 Initialize 重新 AddRef + 重建。
         //   旧解码器仍被在途帧(D3D11HardwareFrameResource 持有的 av_frame_clone 引用)保活的纹理，
         //   待那些帧归还池后由 ffmpeg 引用计数自动释放，安全。
-        //   ⚠ avcodec_free_context 会 av_freep(&avctx->extradata)——其后必须清 _extradataBuffer，
+        //   注意：avcodec_free_context 会 av_freep(&avctx->extradata)——其后必须清 _extradataBuffer，
         //   否则 Initialize→SetExtradata 的"先释放旧缓冲"对已释放指针二次 av_free（重播原生死亡）。
         try
         {

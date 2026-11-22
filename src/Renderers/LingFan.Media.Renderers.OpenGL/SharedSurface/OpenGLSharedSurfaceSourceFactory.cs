@@ -5,7 +5,7 @@ namespace LingFan.Media.Renderers.OpenGL.SharedSurface;
 /// <see cref="ISharedGpuSurfaceSourceFactory"/> 集合，呈现兼容性由宿主呈现适配器按描述符判别。
 /// </summary>
 /// <remarks>
-/// <para><b>M1 简化</b>：测试纹理尺寸为固定值（与验收样片一致），M2 接解码桥后由桥产物决定尺寸。
+/// <para><b>当前简化</b>：测试纹理尺寸为固定值（与验收样片一致），接入解码桥后由桥产物决定尺寸。
 /// <see cref="IsAvailable"/> 为轻量平台判定，不触碰原生资源（开箱即用原则）。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，public ctor（DI 直接激活），零反射。</para>
 /// </remarks>
@@ -13,7 +13,7 @@ public sealed class OpenGLSharedSurfaceSourceFactory : ISharedGpuSurfaceSourceFa
 {
     private readonly ILoggerFactory _loggerFactory;
 
-    // M1 测试表面尺寸（与验收样片一致）；M2 起由解码桥产物尺寸决定。
+    // 测试表面尺寸（与验收样片一致）；接入解码桥后由桥产物尺寸决定。
     private const int ProbeWidth = 1080;
     private const int ProbeHeight = 1920;
 
