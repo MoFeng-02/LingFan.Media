@@ -15,12 +15,10 @@
   <Folder Name="/Backends/">
     <Project Path="src/Backends/LingFan.Media.Backends.Apple/LingFan.Media.Backends.Apple.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.FFmpeg/LingFan.Media.Backends.FFmpeg.csproj" />
-    <Project Path="src/Backends/LingFan.Media.Backends.GStreamer/LingFan.Media.Backends.GStreamer.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.MediaCodec/LingFan.Media.Backends.MediaCodec.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.MediaFoundation/LingFan.Media.Backends.MediaFoundation.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj" />
     <Project Path="src/Backends/LingFan.Media.Backends.VulkanVideo/LingFan.Media.Backends.VulkanVideo.csproj" />
-    <Project Path="src/Backends/LingFan.Media.Backends.WebRTC/LingFan.Media.Backends.WebRTC.csproj" />
   </Folder>
   <Folder Name="/Presenters/">
     <Project Path="src/Presenters/LingFan.Media.GpuPresenter/LingFan.Media.GpuPresenter.csproj" />

@@ -1,21 +1,22 @@
 namespace LingFan.Media.Extensions;
 
 /// <summary>
-/// GStreamer 后端桩 DI 扩展方法。
+/// 不支持后端的桩 DI 扩展方法（GStreamer / WebRTC）。
 /// </summary>
 /// <remarks>
-/// <para>VLC / MediaFoundation / WebRTC 后端已有真实实现，
-/// 分别迁移至各自的后端项目（LingFan.Media.Backends.VLCNative / .MediaFoundation / .WebRTC），
-/// 使用 <c>AddVLCNative()</c> / <c>AddMediaFoundation()</c> / <c>AddWebRTC()</c> 扩展方法注册。</para>
-/// <para>GStreamer 后端<b>决定不支持</b>（决策依据）：GStreamer 过于复杂，
-/// 且 Linux 上已有 VLC 和 FFmpeg 作为充分的后端选择，无需 GStreamer。
-/// 调用 <c>AddGStreamer()</c> 抛出 <see cref="NotSupportedException"/>。</para>
+/// <para>VLC / MediaFoundation 后端已有真实实现，
+/// 分别迁移至各自的后端项目（LingFan.Media.Backends.VLCNative / .MediaFoundation），
+/// 使用 <c>AddVLCNative()</c> / <c>AddMediaFoundation()</c> 扩展方法注册。</para>
+/// <para>GStreamer 与 WebRTC <b>决定不支持</b>（GStreamer 过于复杂且 Linux 已有 VLC/FFmpeg 充分覆盖；
+/// WebRTC 不在当前范围）。两者统一为<b>注册期 fail-fast</b>：调用 <c>AddGStreamer()</c> / <c>AddWebRTC()</c>
+/// 立即抛 <see cref="NotSupportedException"/>，不做「注册成功、运行时才抛」的延迟失败——
+/// 消费方在装配阶段即得知不支持，而非播放中途。</para>
 /// <para>所有方法为同步配置（config 分类），无 I/O。</para>
 /// </remarks>
 public static class BackendStubs
 {
     /// <summary>
-    /// 注册 GStreamer 后端（不支持）。
+    /// 注册 GStreamer 后端（不支持，注册期即抛）。
     /// </summary>
     /// <param name="builder">媒体构建器。</param>
     /// <param name="configure">GStreamer 配置（未使用）。</param>
@@ -28,6 +29,21 @@ public static class BackendStubs
             "GStreamer 后端不支持。Linux 上请使用 FFmpeg 或 VLC 作为后端。" +
             "Windows 上可使用 FFmpeg / VLC / MediaFoundation。");
     }
+
+    /// <summary>
+    /// 注册 WebRTC 后端（不支持，注册期即抛）。
+    /// </summary>
+    /// <param name="builder">媒体构建器。</param>
+    /// <param name="configure">WebRTC 配置（未使用）。</param>
+    /// <exception cref="NotSupportedException">WebRTC 后端不在当前范围。</exception>
+    public static MediaBuilder AddWebRTC(
+        this MediaBuilder builder,
+        Action<WebRTCOptions>? configure = null)
+    {
+        throw new NotSupportedException(
+            "WebRTC 后端不在当前范围。请使用 FFmpeg / VLC / MediaFoundation（Windows）" +
+            "或 MediaCodec（Android）等已支持后端。");
+    }
 }
 
 /// <summary>
@@ -38,6 +54,15 @@ public sealed class GStreamerOptions
     /// <summary>插件搜索路径（可为 null，使用默认）。</summary>
     public string? PluginPath { get; set; }
 
+    /// <summary>是否启用硬件解码（默认 true）。</summary>
+    public bool EnableHardwareDecode { get; set; } = true;
+}
+
+/// <summary>
+/// WebRTC 后端配置选项（桩，保留供 API 兼容）。
+/// </summary>
+public sealed class WebRTCOptions
+{
     /// <summary>是否启用硬件解码（默认 true）。</summary>
     public bool EnableHardwareDecode { get; set; } = true;
 }
