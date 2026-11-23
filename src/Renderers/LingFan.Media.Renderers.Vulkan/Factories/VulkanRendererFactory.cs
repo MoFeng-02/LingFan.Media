@@ -90,8 +90,9 @@ public sealed unsafe partial class VulkanRendererFactory : IVideoRendererFactory
 
     /// <summary>
     /// 零拷贝跨 API 导入对齐（自动路径）开关：为 <see langword="true"/> 时，
-    /// <see cref="EnsureDeviceCreated"/> 内将自动查询默认 D3D11 适配器 LUID 并注入
-    /// <see cref="PreferredAdapterLuid"/>（与手动 set <see cref="PreferredAdapterLuid"/> 二选一，手动优先）。
+    /// <see cref="EnsureDeviceCreated"/> 内将自动查询解码侧首选适配器（独显优先，与 FFmpeg D3D11VA
+    /// 自有设备同策略）的 LUID 并注入 <see cref="PreferredAdapterLuid"/>
+    /// （与手动 set <see cref="PreferredAdapterLuid"/> 二选一，手动优先）。
     /// </summary>
     /// <remarks>仅 Windows 生效；非 Windows 跳过（无 DXGI LUID 概念）。默认 <see langword="false"/>。</remarks>
     public bool AlignToD3D11DefaultAdapter

@@ -70,40 +70,8 @@ internal static partial class Program
         return null;
     }
 
-    // 零拷贝跨 GPU 对齐：取默认 D3D11 适配器 LUID
-    // 以与 ffmpeg 零拷贝分支完全相同的 D3D11CreateDevice(DriverType.Hardware) 创建一次性设备，
-    // 经 IDXGIDevice 查其所属适配器，返回 LUID（8 字节）。该 LUID 即 D3D11VA 共享纹理所在 GPU，
-    // 用于对齐 Vulkan 物理设备选择（跨 GPU/厂商导入 D3D11 共享句柄会被驱动拒绝）。
-
-    /// <summary>取「默认 D3D11 适配器」LUID（8 字节），用于对齐 Vulkan 物理设备选择到零拷贝共享纹理所在 GPU。</summary>
-    private static unsafe byte[]? QueryDefaultD3D11AdapterLuid()
-    {
-        try
-        {
-            // 与 FFmpegVideoDecoder 的 ffmpeg 自有设备路径同构：D3D11CreateDevice(DriverType.Hardware) 不指定适配器
-            // → 默认适配器，正是 D3D11VA 共享纹理（NV12→RGBA 转换器）所在 GPU。
-            using ID3D11Device dev = D3D11.D3D11CreateDevice(DriverType.Hardware, DeviceCreationFlags.BgraSupport);
-            using IDXGIDevice dxgiDev = dev.QueryInterface<IDXGIDevice>();
-            if (dxgiDev.GetAdapter(out IDXGIAdapter? adapter) != 0 || adapter is null)
-                return null;
-            using (adapter)
-            {
-                // Vortice.DXGI 3.8.3：适配器描述经属性暴露，无 GetDesc1 方法。
-                // IDXGIAdapter1.Description1 返回 AdapterDescription1，其 Luid 字段为 Vortice.Luid(LowPart:uint, HighPart:int)。
-                using IDXGIAdapter1 adapter1 = adapter.QueryInterface<IDXGIAdapter1>();
-                AdapterDescription1 desc = adapter1.Description1;
-                byte[] luid = new byte[8];
-                BinaryPrimitives.WriteUInt32LittleEndian(luid.AsSpan(0), desc.Luid.LowPart);
-                BinaryPrimitives.WriteInt32LittleEndian(luid.AsSpan(4), desc.Luid.HighPart);
-                return luid;
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[HEADFUL-GPUALIGN] 查询默认 D3D11 适配器 LUID 异常: {ex.Message}");
-            return null;
-        }
-    }
+    // 零拷贝跨 GPU 对齐已收敛到 GPUShare.D3D11 的 D3D11AdapterLuid.QueryPreferredAdapter()
+    // （独显优先，与 FFmpeg D3D11VA 自有设备同策略），本探针不再自带 LUID 查询副本。
 
     // VLC 原生库定位（libvlc.dll 所在目录）：仅 --backend vlc 时用于前置 PATH
     // 复制自 VlcHeadfulPlaybackProbe，使本探针可独立定位 libvlc（不依赖 D3D11 渲染探针）。

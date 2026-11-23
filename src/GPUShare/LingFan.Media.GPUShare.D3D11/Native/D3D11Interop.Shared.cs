@@ -170,6 +170,18 @@ public static unsafe partial class D3D11Interop
         }
     }
 
+    /// <summary>
+    /// 读适配器的 vendor 与描述（IDXGIAdapter1::GetDesc1，绝对槽位 10）。
+    /// 供跨 API 对齐诊断确认「首选适配器是哪张卡」。
+    /// </summary>
+    /// <param name="adapter1Ptr">IDXGIAdapter1 接口指针。</param>
+    /// <returns>VendorId 与适配器描述字符串。</returns>
+    public static (uint Vendor, string Description) GetAdapterVendorAndDescription(IntPtr adapter1Ptr)
+    {
+        var info = GetAdapterDesc1Info(adapter1Ptr);
+        return (info.Vendor, info.Description);
+    }
+
     /// <summary>IDXGIFactory1::EnumAdapters1（绝对槽位 12）。返回 HRESULT（DXGI_ERROR_NOT_FOUND=无更多）。</summary>
     private static int EnumAdapters1(IntPtr factoryPtr, uint adapterIndex, out IntPtr ppAdapter)
     {

@@ -85,23 +85,23 @@ internal static partial class Program
             // 故本探针恒强制软件解码（见下方 AddMediaFoundation 的 EnableHardwareDecoding/EnableDxva=false）。
             var vulkanFactory = new VulkanRendererFactory(loggerFactory);
             vulkanFactory.ScaleMode = scaleMode;
-            // 零拷贝跨 GPU 对齐：ffmpeg 的 D3D11VA 共享纹理由「默认 D3D11 适配器」创建
-            // （D3D11CreateDevice(DriverType.Hardware) 不指定适配器 → 默认适配器），而 Vulkan 渲染器
-            // 默认「独显优先」。在 AMD 集显 + 3060 这类混合显卡上二者会落到不同 GPU，
-            // 跨 GPU/厂商导入 D3D11 共享句柄会被驱动拒绝（vkAllocateMemory ErrorOutOfDeviceMemory）。
-            // 取默认 D3D11 适配器 LUID 注入工厂，强制 Vulkan 选同一张卡使零拷贝成立。
+            // 零拷贝跨 GPU 对齐：ffmpeg 自有 D3D11VA 设备按「独显优先」策略创建
+            // （FindPreferredAdapter：跳过软件适配器取 DedicatedVideoMemory 最大者），
+            // 共享纹理落在该 GPU 上。Vulkan 渲染器须选同一张卡——跨 GPU/厂商导入 D3D11 共享句柄
+            // 会被驱动拒绝（vkAllocateMemory 失败）。故对齐目标取「首选适配器」LUID 而非
+            // 「默认适配器」（后者是主显示器所在 GPU，混合显卡上常为核显，与解码 GPU 不同卡）。
             // 纯软解（无 --hw）无 D3D11 互操作，无需对齐，跳过以免改变纯 Vulkan 性能选择。
             if (hwMode)
             {
-                byte[]? d3d11Luid = QueryDefaultD3D11AdapterLuid();
-                if (d3d11Luid is not null)
+                var preferred = LingFan.Media.GPUShare.D3D11.D3D11AdapterLuid.QueryPreferredAdapter();
+                if (preferred is { } pa)
                 {
-                    vulkanFactory.PreferredAdapterLuid = d3d11Luid;
-                    Console.WriteLine("[HEADFUL-GPUALIGN] 已对齐 Vulkan 物理设备选择到 D3D11 默认适配器 LUID（零拷贝跨 GPU 修复）");
+                    vulkanFactory.PreferredAdapterLuid = pa.Luid;
+                    Console.WriteLine($"[HEADFUL-GPUALIGN] 已对齐 Vulkan 到解码侧首选适配器（独显优先）：{pa.Description} vendor=0x{pa.Vendor:X4} luid={Convert.ToHexString(pa.Luid)}");
                 }
                 else
                 {
-                    Console.WriteLine("[HEADFUL-GPUALIGN] 取 D3D11 默认适配器 LUID 失败，零拷贝对齐跳过（纯独显机器通常无需对齐）");
+                    Console.WriteLine("[HEADFUL-GPUALIGN] 查询首选适配器失败，零拷贝对齐跳过（单卡机器通常无需对齐）");
                 }
             }
             countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir);

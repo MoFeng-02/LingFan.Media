@@ -82,4 +82,49 @@ public static class D3D11AdapterLuid
             return null;
         }
     }
+
+    /// <summary>
+    /// 查询「首选适配器」（独显优先，与 <see cref="D3D11Interop.FindPreferredAdapter"/> 同一策略）的
+    /// LUID（8 字节小端）与描述。失败返回 <c>null</c>。
+    /// </summary>
+    /// <remarks>
+    /// 与 <see cref="QueryDefaultAdapterLuid"/> 的区别：后者取「默认适配器」（主显示器所在 GPU，
+    /// 混合显卡上常为核显）；本方法取「独显优先」适配器——FFmpeg D3D11VA 自有设备与 OpenGL 桥接
+    /// 设备均按此策略创建，跨 API 零拷贝导入须与它们对齐到同一 GPU，而非默认适配器。
+    /// </remarks>
+    /// <returns>LUID 与适配器描述（含 vendor）；无可用适配器或查询异常返回 <c>null</c>。</returns>
+    public static (byte[] Luid, uint Vendor, string Description)? QueryPreferredAdapter()
+    {
+        IntPtr adapter = IntPtr.Zero;
+        try
+        {
+            adapter = D3D11Interop.FindPreferredAdapter();
+            if (adapter == IntPtr.Zero)
+                return null;
+
+            IntPtr adapter1 = D3D11Interop.QueryInterface(adapter, D3D11Interop.IID_IDXGIAdapter1);
+            try
+            {
+                D3D11Interop.GetDesc1Luid(adapter1, out uint low, out int high);
+                byte[] luid = new byte[8];
+                BinaryPrimitives.WriteUInt32LittleEndian(luid.AsSpan(0), low);
+                BinaryPrimitives.WriteInt32LittleEndian(luid.AsSpan(4), high);
+                var (vendor, desc) = D3D11Interop.GetAdapterVendorAndDescription(adapter1);
+                return (luid, vendor, desc);
+            }
+            finally
+            {
+                D3D11Interop.Release(adapter1);
+            }
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        finally
+        {
+            if (adapter != IntPtr.Zero)
+                D3D11Interop.Release(adapter);
+        }
+    }
 }

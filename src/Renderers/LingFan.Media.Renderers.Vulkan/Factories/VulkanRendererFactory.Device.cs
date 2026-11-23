@@ -133,19 +133,21 @@ public sealed unsafe partial class VulkanRendererFactory
                 VulkanNative.InitInstance(instance);
 
                 // 零拷贝跨 GPU 对齐（自动路径）：启用且 Windows 且尚未手动指定 LUID 时，
-                // 查询默认 D3D11 适配器 LUID 并注入，强制 Vulkan 选与 D3D11VA 共享纹理同 GPU。
+                // 查询解码侧「首选适配器」（独显优先，与 FFmpeg D3D11VA 自有设备同策略）LUID 并注入，
+                // 强制 Vulkan 选与 D3D11VA 共享纹理同 GPU。不取「默认适配器」——那是主显示器所在 GPU，
+                // 混合显卡上常为核显，与独显优先的解码设备不同卡，跨厂商导入会被驱动拒绝。
                 if (_alignToD3D11DefaultAdapter && OperatingSystem.IsWindows() && _preferredAdapterLuid is null)
                 {
-                    byte[]? luid = D3D11AdapterLuid.QueryDefaultAdapterLuid();
-                    if (luid is not null)
+                    var preferred = D3D11AdapterLuid.QueryPreferredAdapter();
+                    if (preferred is { } pa)
                     {
-                        _preferredAdapterLuid = luid;
-                        _logger.LogInformation("零拷贝跨 GPU 对齐：已对齐 Vulkan 物理设备选择到 D3D11 默认适配器 LUID（{LuidHex}）",
-                            Convert.ToHexString(luid));
+                        _preferredAdapterLuid = pa.Luid;
+                        _logger.LogInformation("零拷贝跨 GPU 对齐：已对齐 Vulkan 到解码侧首选适配器（{Description} vendor=0x{Vendor:X4}）",
+                            pa.Description, pa.Vendor);
                     }
                     else
                     {
-                        _logger.LogWarning("零拷贝跨 GPU 对齐：查询默认 D3D11 适配器 LUID 失败，跳过对齐（单卡/独显机器通常无需对齐）");
+                        _logger.LogWarning("零拷贝跨 GPU 对齐：查询首选适配器失败，跳过对齐（单卡/独显机器通常无需对齐）");
                     }
                 }
 
