@@ -313,31 +313,10 @@ internal static partial class Program
                 if (visible || verbose)
                     Console.WriteLine($"  t={poll.Elapsed.TotalSeconds:F1}s pos={player.Position:g} " +
                                       $"present={presentCount} state={player.State}");
-                // 音频间隙检测：主时钟位置 vs 已提交音频时长
-                if (doAudio && sampleRate > 0 && player.State == MediaState.Playing)
-                {
-                    double subSec = submittedSamples / (double)sampleRate;
-                    double posSec = player.Position.TotalSeconds;
-                    double backlogMs = (posSec - subSec) * 1000.0;
-                    if (backlogMs > maxAudioBacklogMs) maxAudioBacklogMs = backlogMs;
-                    if (backlogMs > 150)
-                    {
-                        audioGapCount++;
-                        if (verbose)
-                            Console.WriteLine($"  [HEADFUL-AUDIO-GAP] t={poll.Elapsed.TotalSeconds:F1}s " +
-                                              $"backlog={backlogMs:F0}ms（音频落后主时钟，疑似断音/欠载）");
-                    }
-                    // 提交停滞：主时钟前进 >100ms 但采样数未变（prevSubmitted!=0 跳过首轮误报）
-                    if (prevSubmitted != 0 && submittedSamples == prevSubmitted && posSec > prevPosSec + 0.1)
-                    {
-                        audioStallCount++;
-                        if (verbose)
-                            Console.WriteLine($"  [HEADFUL-AUDIO-GAP] STALL t={poll.Elapsed.TotalSeconds:F1}s " +
-                                              $"提交停滞，主时钟已前进 {(posSec - prevPosSec) * 1000:F0}ms（批量提交节奏，非欠载；以 backlog 为准）");
-                    }
-                    prevSubmitted = submittedSamples;
-                    prevPosSec = posSec;
-                }
+                if (doAudio)
+                    DetectAudioGap(player, poll, verbose, submittedSamples, sampleRate,
+                        ref maxAudioBacklogMs, ref audioGapCount, ref audioStallCount,
+                        ref prevSubmitted, ref prevPosSec);
                 if (fullPlayback)
                 {
                     // --full：播到播放器自然发出的 Ended 为止。
