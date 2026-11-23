@@ -518,3 +518,4 @@ ThirdParty/
 
 # 审计与协作临时产物（不入库：含审查叙事与裁定过程，见跨项目去敏纪律）
 /.audit
+/.box-agent-scratch

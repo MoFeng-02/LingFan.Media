@@ -7,7 +7,7 @@ lang: zh
 
 # 许可
 
-LingFan.Media 自有代码以 **Apache-2.0** 许可。可选原生后端（FFmpeg、LibVLC）为 **LGPL 2.1+**，仅经动态链接使用，因此基于 LingFan.Media 构建的产品在 LGPL 2.1 §6 下不构成这些库的衍生作品。
+LingFan.Media 自有代码以 **Apache-2.0** 许可。可选原生后端（FFmpeg、LibVLC）为 **LGPL 2.1+**，仅经动态链接使用，因此基于 LingFan.Media 构建的产品依据 LGPL 2.1 第 6 条，不构成这些库的衍生作品。
 
 ## 原生库的使用方式
 

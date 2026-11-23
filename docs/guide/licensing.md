@@ -10,7 +10,7 @@ lang: en
 LingFan.Media's own code is licensed under **Apache-2.0**. The optional native
 backends (FFmpeg, LibVLC) are **LGPL 2.1+** and are used through dynamic linking
 only, so a product built on LingFan.Media is not a derivative work of those
-libraries under LGPL 2.1 §6.
+libraries under LGPL 2.1 Section 6.
 
 ## How the native libraries are used
 

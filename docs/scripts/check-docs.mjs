@@ -192,6 +192,7 @@ function checkGuidePages(manifest, sourceWords) {
 
 // ---------- 5: desensitization ----------
 const DESENSITIZE = [
+  { name: 'section symbol', re: /\u00A7/g },
   { name: 'absolute path', re: /\b[A-Za-z]:[\\/]/g },
   { name: 'crash hex code', re: /\b0x[8C][0-9A-Fa-f]{7}\b/g },
   {
