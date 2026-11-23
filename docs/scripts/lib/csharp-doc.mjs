@@ -316,7 +316,10 @@ function collectMemberNames(lines, bodyStart, bodyEnd, kind) {
 /** Parse one .cs file into { relSource, namespace, hash, types[] }. */
 export function parseCsFile(absPath, repoRoot) {
   const rawText = fs.readFileSync(absPath, 'utf8');
-  const text = stripBom(rawText);
+  // Normalize BOM and line endings to LF so the source hash is identical on every
+  // platform. Git may check out CRLF on Windows and LF on Linux; hashing the raw
+  // bytes would make the freshness gate report phantom drift across operating systems.
+  const text = stripBom(rawText).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const lines = text.split(/\r?\n/);
   const relSource = path.relative(repoRoot, absPath).split(path.sep).join('/');
   const nsMatch = text.match(/namespace\s+([\w.]+)\s*[;{]/);

@@ -873,7 +873,7 @@
         "VideoFrameAvailable",
         "VideoDroppedFrames"
       ],
-      "sourceHash": "309e5e0db6e029748a760875b4262ad88b35829b8113f0ca1523f3af07a361d9",
+      "sourceHash": "52a7626cbcc464167d17fa94cd35e580715c5186d396373c0ede417c7c7a6d35",
       "project": "abstractions"
     },
     {
@@ -1980,7 +1980,7 @@
         "AddGStreamer",
         "AddWebRTC"
       ],
-      "sourceHash": "82aae607a7b7a1215d48f94d0a30be9d0e135d0745b529c3d02a2b63e24a9651",
+      "sourceHash": "09fbceb536f80b05e06c9b756a62a2e5e306f994ed403312f039707a0253e9bc",
       "project": "extensions"
     },
     {
@@ -1995,7 +1995,7 @@
         "PluginPath",
         "EnableHardwareDecode"
       ],
-      "sourceHash": "82aae607a7b7a1215d48f94d0a30be9d0e135d0745b529c3d02a2b63e24a9651",
+      "sourceHash": "09fbceb536f80b05e06c9b756a62a2e5e306f994ed403312f039707a0253e9bc",
       "project": "extensions"
     },
     {
@@ -2024,7 +2024,7 @@
       "pageZh": "zh/api/extensions/moduleextensions",
       "symbol": "LingFan.Media.Extensions.ModuleExtensions",
       "members": [],
-      "sourceHash": "ebe981f1d8cf2b26c3708731027fd87f25b38d751ae69f19dd3b9abb2a1cbe7a",
+      "sourceHash": "5c7882d89bbc2f42ddaba1137b67e551fb8205db7de0a7e5c52c4439c307cfea",
       "project": "extensions"
     },
     {
@@ -2039,7 +2039,7 @@
         "AddLingFanMedia",
         "AddLingFanMedia"
       ],
-      "sourceHash": "454e611a6c49b5f7b1b6ba6ade994775f5e0d85111fe82fab2430466ca82d0a3",
+      "sourceHash": "66d5786ce201bf7f683b0b5b55d9b165dddb50abf90b8374970a614179e356a6",
       "project": "extensions"
     },
     {
@@ -2053,7 +2053,7 @@
       "members": [
         "EnableHardwareDecode"
       ],
-      "sourceHash": "82aae607a7b7a1215d48f94d0a30be9d0e135d0745b529c3d02a2b63e24a9651",
+      "sourceHash": "09fbceb536f80b05e06c9b756a62a2e5e306f994ed403312f039707a0253e9bc",
       "project": "extensions"
     }
   ],
@@ -2677,7 +2677,7 @@
       "page": "api/abstractions/interfaces-player-imediaplayer",
       "pageZh": "zh/api/abstractions/interfaces-player-imediaplayer",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs",
-      "sourceHash": "309e5e0db6e029748a760875b4262ad88b35829b8113f0ca1523f3af07a361d9",
+      "sourceHash": "52a7626cbcc464167d17fa94cd35e580715c5186d396373c0ede417c7c7a6d35",
       "project": "abstractions",
       "types": [
         "IMediaPlayer"
@@ -3052,7 +3052,7 @@
       "page": "api/extensions/backendstubs",
       "pageZh": "zh/api/extensions/backendstubs",
       "source": "src/Infrastructure/LingFan.Media.Extensions/BackendStubs.cs",
-      "sourceHash": "82aae607a7b7a1215d48f94d0a30be9d0e135d0745b529c3d02a2b63e24a9651",
+      "sourceHash": "09fbceb536f80b05e06c9b756a62a2e5e306f994ed403312f039707a0253e9bc",
       "project": "extensions",
       "types": [
         "BackendStubs",
@@ -3074,7 +3074,7 @@
       "page": "api/extensions/moduleextensions",
       "pageZh": "zh/api/extensions/moduleextensions",
       "source": "src/Infrastructure/LingFan.Media.Extensions/ModuleExtensions.cs",
-      "sourceHash": "ebe981f1d8cf2b26c3708731027fd87f25b38d751ae69f19dd3b9abb2a1cbe7a",
+      "sourceHash": "5c7882d89bbc2f42ddaba1137b67e551fb8205db7de0a7e5c52c4439c307cfea",
       "project": "extensions",
       "types": [
         "ModuleExtensions"
@@ -3084,7 +3084,7 @@
       "page": "api/extensions/servicecollectionextensions",
       "pageZh": "zh/api/extensions/servicecollectionextensions",
       "source": "src/Infrastructure/LingFan.Media.Extensions/ServiceCollectionExtensions.cs",
-      "sourceHash": "454e611a6c49b5f7b1b6ba6ade994775f5e0d85111fe82fab2430466ca82d0a3",
+      "sourceHash": "66d5786ce201bf7f683b0b5b55d9b165dddb50abf90b8374970a614179e356a6",
       "project": "extensions",
       "types": [
         "ServiceCollectionExtensions"
