@@ -177,83 +177,10 @@ internal static partial class Program
             return 2;
         }
 
-        var loggerFactory = LoggerFactory.Create(b => b
-            .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "[HH:mm:ss.fff] "; })
-            .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
-
-        var services = new ServiceCollection();
-        services.AddSingleton<ILoggerFactory>(loggerFactory);
-        // AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
-        // 必须接在 builder 链上调用，不能对 ServiceCollection 直接调用。
-        // 后端选择由 --backend 决定（mf/ffmpeg/vlc），三者均强制软件解码，使帧恒为 CPU SoftwareFrameResource，
-        // OpenGL 渲染器走「CPU 软解帧 → GL 纹理上传 → 着色器上屏」路径。
-        MediaBuilder builder = (backendArg switch
-        {
-            "ffmpeg" => services.AddLingFanMedia().AddFFmpeg(o =>
-            {
-                // --hw 时开启 D3D11VA 零拷贝：ffmpeg 产 NV12→RGBA 共享句柄，OpenGLGpuFrameProducer 导入为 GL 纹理零拷贝上屏；
-                // 默认关闭硬件加速使帧恒为 CPU SoftwareFrameResource。
-                o.FFmpegLibraryPath = AppContext.BaseDirectory;
-                o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
-                o.HardwareAcceleration = hwMode;
-            }),
-            "vlc" => services.AddLingFanMedia().AddVLCNative(o =>
-            {
-                // VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
-                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；--hw 时 EnableHardwareDecoding 注入 --avcodec-hw=any
-                // （有头 D3D11VA 真硬解但仍回拷 CPU BGRA32，设计上恒非零拷贝），由下方 OpenGL 渲染器上传上屏。
-                o.EnableHardwareDecoding = hwMode;
-                o.Headless = true;
-            }),
-            _ => services.AddLingFanMedia().AddMediaFoundation(o =>
-            {
-                // --hw 时开启 DXVA（半硬解：硬解激活但 MFT 把纹理读回系统内存，非真零拷贝）；
-                // 默认关闭硬件解码使帧恒为 CPU SoftwareFrameResource。
-                o.EnableHardwareDecoding = hwMode;
-                o.EnableDxva = hwMode;
-            }),
-        }).AddOpenGLRenderer();
-
-        // —— 视频侧 ——
-        if (doVideo)
-        {
-            // 复用 AddOpenGLRenderer() 已注册的 OpenGLRendererFactory DI 单例（含工厂级离屏 GL 设备上下文单例），
-            // 以 CountingVideoRendererFactory 装饰器包裹注册为 IVideoRendererFactory。
-            // 关键：生产者(IGpuFrameProducer)与 on-screen 渲染器必须共享【同一】OpenGLOffscreenDeviceContext
-            // （GL 共享组所有者），零拷贝导入的 GL 纹理才对渲染器可见。若此处另 new 一个 OpenGLRendererFactory，
-            // 会产生第二个离屏上下文 → (1) RegisterClassExW 同名类重复注册报 1410；(2) 两个 GL 共享组互不连通 → 黑屏。
-            // 故此处经 DI 单例解析同一工厂，仅用装饰器加计数（countingFactory 引用在 BuildServiceProvider 后取出）。
-            builder.Services.AddSingleton<IVideoRendererFactory>(sp =>
-            {
-                var glFactory = sp.GetRequiredService<OpenGLRendererFactory>();
-                glFactory.ScaleMode = scaleMode;
-                return new CountingVideoRendererFactory(glFactory, saveFrames, saveDir);
-            });
-        }
-        else
-        {
-            // 纯音频用例：用 NoOp 视频渲染器隔离变量
-            builder.AddHeadlessRenderer();
-        }
-
-        // —— 音频侧 ——
-        if (doAudio)
-            builder.AddWasapiOutput(o =>
-            {
-                o.EnableBackgroundCapableSession = enableCategory;
-                o.ExclusiveMode = exclusiveMode;       // --exclusive 强制独占
-                o.EventDrivenMode = !pollingMode;       // --polling 退回轮询模式
-            });
-        else
-            builder.AddSilentAudioOutput();
-
-        await using var sp = services.BuildServiceProvider();
-        // countingFactory 引用：IVideoRendererFactory 经 DI 解析为「装饰器包裹的 OpenGLRendererFactory 单例」，
-        // 与生产者(IGpuFrameProducer)共享同一 OpenGLOffscreenDeviceContext（GL 共享组）。doAudio 用例不建视频工厂。
-        CountingVideoRendererFactory? countingFactory = doVideo
-            ? (CountingVideoRendererFactory)sp.GetRequiredService<IVideoRendererFactory>()
-            : null;
-        var player = sp.GetRequiredService<IMediaPlayer>();
+        var (sp, player, countingFactory) = BuildPlayer(
+            backendArg, hwMode, verbose, doVideo, doAudio,
+            enableCategory, exclusiveMode, pollingMode, saveFrames, saveDir, scaleMode);
+        await using var _sp = sp;
 
         // 音频进度观测量：累计进入提交链的采样数（区分「真丢帧」与「时钟 lag」）
         long submittedSamples = 0;
@@ -382,31 +309,10 @@ internal static partial class Program
                 if (visible || verbose)
                     Console.WriteLine($"  t={poll.Elapsed.TotalSeconds:F1}s pos={player.Position:g} " +
                                       $"present={presentCount} state={player.State}");
-                // 音频间隙检测：主时钟位置 vs 已提交音频时长
-                if (doAudio && sampleRate > 0 && player.State == MediaState.Playing)
-                {
-                    double subSec = submittedSamples / (double)sampleRate;
-                    double posSec = player.Position.TotalSeconds;
-                    double backlogMs = (posSec - subSec) * 1000.0;
-                    if (backlogMs > maxAudioBacklogMs) maxAudioBacklogMs = backlogMs;
-                    if (backlogMs > 150)
-                    {
-                        audioGapCount++;
-                        if (verbose)
-                            Console.WriteLine($"  [HEADFUL-AUDIO-GAP] t={poll.Elapsed.TotalSeconds:F1}s " +
-                                              $"backlog={backlogMs:F0}ms（音频落后主时钟，疑似断音/欠载）");
-                    }
-                    // 提交停滞：主时钟前进 >100ms 但采样数未变（prevSubmitted!=0 跳过首轮误报）
-                    if (prevSubmitted != 0 && submittedSamples == prevSubmitted && posSec > prevPosSec + 0.1)
-                    {
-                        audioStallCount++;
-                        if (verbose)
-                            Console.WriteLine($"  [HEADFUL-AUDIO-GAP] STALL t={poll.Elapsed.TotalSeconds:F1}s " +
-                                              $"提交停滞，主时钟已前进 {(posSec - prevPosSec) * 1000:F0}ms（批量提交节奏，非欠载；以 backlog 为准）");
-                    }
-                    prevSubmitted = submittedSamples;
-                    prevPosSec = posSec;
-                }
+                if (doAudio)
+                    DetectAudioGap(player, poll, verbose, submittedSamples, sampleRate,
+                        ref maxAudioBacklogMs, ref audioGapCount, ref audioStallCount,
+                        ref prevSubmitted, ref prevPosSec);
                 if (fullPlayback)
                 {
                     // --full：播到播放器自然发出的 Ended 为止。
@@ -429,82 +335,14 @@ internal static partial class Program
 
             var playedSec = (player.Position - startPos).TotalSeconds;
 
-            if (doVideo)
-            {
-                if (countingFactory?.Last is not null)
-                    presentCount = countingFactory.Last.PresentCount;
-                videoPass = presentCount >= 5;
-                Console.WriteLine($"[HEADFUL-VIDEO] glPresentCount={presentCount}  => " +
-                                  $"{(videoPass ? "PASS" : "FAIL (present<5)")}");
-                // 诊断：视频丢帧数。与 present 计数对照可判断尾帧是被 Synchronizer 判定丢弃还是已呈现。
-                Console.WriteLine($"[HEADFUL-VIDEO-DROP] droppedFrames={player.VideoDroppedFrames} present={presentCount}");
-                // —— 全链路零拷贝判定（出餐端实测，仅 --hw 有意义）——
-                if (hwMode)
-                {
-                    Console.WriteLine($"[HEADFUL-ZEROCOPY] GPU纹理帧={gpuServed} CPU内存帧={cpuServed}");
-                    if (backendArg == "ffmpeg")
-                        Console.WriteLine($"[HEADFUL-ZEROCOPY] ffmpeg硬解零拷贝 => {(gpuServed > 0 ? "PASS" : "FAIL (无 GPU 纹理帧，已回落 CPU)")}");
-                    else
-                        Console.WriteLine($"[HEADFUL-ZEROCOPY] 注：--backend {backendArg} 设计上不走零拷贝（VLC 恒回拷 CPU / MF 半 DXVA），仅作计数参考");
-                }
-            }
-            if (doAudio)
-            {
-                int sr = sampleRate > 0 ? sampleRate : 44100;
-                double subSec = submittedSamples / (double)sr;
-                double minPlayed = Math.Max(2.0, seconds - 1.0);
-                audioPass = playedSec >= minPlayed;
-                Console.WriteLine($"[HEADFUL-AUDIO] played={playedSec:F1}s submitted≈{subSec:F1}s  => " +
-                                  $"{(audioPass ? "PASS" : $"FAIL (played<{minPlayed:F0}s)")}");
-                bool realAudioGap = maxAudioBacklogMs > 150;
-                Console.WriteLine($"[HEADFUL-AUDIO-GAP] maxBacklog={maxAudioBacklogMs:F0}ms " +
-                                  $"gaps(>150ms)={audioGapCount} stalls={audioStallCount} " +
-                                  $"=> {(realAudioGap ? "检测到音频间隙（真欠载）" : "未检测到间隙")}");
-                if (audioStallCount > 0 && !realAudioGap)
-                    Console.WriteLine($"  [HEADFUL-AUDIO-GAP] 注：stalls={audioStallCount} 均发生在 backlog=0 的连续播放中，" +
-                                      $"属批量提交节奏（非欠载/断音）；真欠载以 backlog>150ms 为准。");
-            }
+            (videoPass, audioPass) = EvaluateResults(
+                player, countingFactory, doVideo, doAudio, hwMode, backendArg,
+                playedSec, seconds, gpuServed, cpuServed,
+                submittedSamples, sampleRate, maxAudioBacklogMs,
+                audioGapCount, audioStallCount, ref presentCount);
 
-            // —— 重播：Ended→Playing 无缝从头（--repeat/--full 启用，--no-replay 关闭）——
             if (replayTest)
-            {
-                Console.WriteLine();
-                Console.WriteLine("[HEADFUL-REPLAY] 第一次播放已 Ended，立即二次 PlayAsync 验证重播无缝从头…");
-                int presentBeforeReplay = presentCount;
-                double posBeforeReplay = player.Position.TotalSeconds;
-                await player.PlayAsync();
-                double posAfterReplay = player.Position.TotalSeconds;
-                Console.WriteLine($"  [HEADFUL-REPLAY] 二次 PlayAsync 后：state={player.State} " +
-                                  $"pos={player.Position:g}（重播前 pos={posBeforeReplay:F2}s）");
-                bool replayStateOk = player.State == MediaState.Playing && posAfterReplay < 1.0;
-
-                var replayPoll = Stopwatch.StartNew();
-                while (true)
-                {
-                    await Task.Delay(500);
-                    if (doVideo && countingFactory?.Last is not null)
-                        presentCount = countingFactory.Last.PresentCount;
-                    if (visible || verbose)
-                        Console.WriteLine($"  [REPLAY] t={replayPoll.Elapsed.TotalSeconds:F1}s " +
-                                          $"pos={player.Position:g} present={presentCount} state={player.State}");
-                    if (player.State == MediaState.Ended) break;
-                    double cap = player.Duration.TotalSeconds + 8;
-                    if (replayPoll.Elapsed.TotalSeconds > cap)
-                    {
-                        Console.WriteLine("  [HEADFUL-REPLAY] 超时未收到第二次 Ended（兜底退出）");
-                        break;
-                    }
-                }
-                int presentAfterReplay = presentCount;
-                int replayPresentDelta = presentAfterReplay - presentBeforeReplay;
-                // 无视频用例跳过呈现计数判定
-                bool replayPresentOk = !doVideo || replayPresentDelta >= 5;
-                replayPass = replayStateOk && replayPresentOk;
-                Console.WriteLine($"  [HEADFUL-REPLAY] 二次播放结束 state={player.State} " +
-                                  $"present 增量={replayPresentDelta} Duration={player.Duration:g}");
-                Console.WriteLine($"  [HEADFUL-REPLAY] => {(replayPass ? "PASS" : "FAIL")} " +
-                                  $"(state重启={replayStateOk}, 二次呈现≈{replayPresentDelta}{(doVideo ? "" : "[无视频跳过计数]")})");
-            }
+                replayPass = await RunReplayAsync(player, countingFactory, doVideo, visible, verbose, presentCount);
 
             await player.StopAsync(CancellationToken.None);
         }
