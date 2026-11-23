@@ -301,23 +301,6 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     /// <summary>交付序列检测到的 pts 空洞数（解码器吞帧的直接证据）。</summary>
     private int _releaseGaps;
 
-    // 帧间差分探测器（坏帧探针）
-    // 正常相邻帧的亮度采样平均绝对差（MAD）平稳；参考帧损坏产生的宏块 garbage 会让 MAD 出现尖峰。
-    // 用途：区分「帧丢了」（MAD 平稳，只是 pts 跳变）与「解码器输出了坏帧」（MAD 尖峰且持续若干帧）。
-    // 分块覆盖全画面：12 行 × 8 段 × 8 字节 = 768 字节，共 96 个块位。
-    // 早期版本只采 8 行 × 64 字节（占 Y 平面 0.025%），宏块 garbage 绝大多数落在采样点之外，
-    // 产生「假阴性」（画面肉眼花屏但探针报告零突变）。必须按块覆盖整幅画面。
-    private const int DeltaRows = 12;
-    private const int DeltaCols = 8;
-    private const int DeltaBytesPerBlock = 8;
-    private const int DeltaSampleLen = DeltaRows * DeltaCols * DeltaBytesPerBlock;
-    /// <summary>单块平均绝对差超过该值即计入「坏块」。</summary>
-    private const double DeltaBlockBadThreshold = 25.0;
-    private readonly byte[] _prevYSample = new byte[DeltaSampleLen];
-    private bool _hasPrevSample;
-    private double _madBase;
-    private int _spikeFrames;
-
     // 平面提取统一由 ExtractI420FromImage（Image.Plane，按 pixelStride/rowStride + CropRect 可见区）承担，见上方。
 
     private void EnsureInitialized()
