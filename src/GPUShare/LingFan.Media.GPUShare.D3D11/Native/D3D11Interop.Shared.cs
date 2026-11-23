@@ -182,6 +182,77 @@ public static unsafe partial class D3D11Interop
         return (info.Vendor, info.Description);
     }
 
+    /// <summary>DXGI_ADAPTER_DESC1.Flags 的软件适配器位（Microsoft Basic Render Driver）。</summary>
+    public const uint DxgiAdapterFlagSoftware = DXGI_ADAPTER_FLAG_SOFTWARE;
+
+    /// <summary>创建 IDXGIFactory1（失败抛 COMException）。调用方负责 <see cref="Release"/>。</summary>
+    /// <param name="iid">IDXGIFactory1 的 IID（<see cref="IID_IDXGIFactory1"/>）。</param>
+    /// <returns>工厂接口指针。</returns>
+    public static IntPtr CreateDXGIFactory1(Guid iid)
+    {
+        int hr = CreateDXGIFactory1Native(ref iid, out IntPtr factory);
+        if (hr < 0 || factory == IntPtr.Zero)
+            throw new COMException($"CreateDXGIFactory1 失败 (0x{hr:X8})", hr);
+        return factory;
+    }
+
+    /// <summary>枚举第 <paramref name="index"/> 个 DXGI 适配器；无更多或失败返回 <see cref="IntPtr.Zero"/>。
+    /// 成功时调用方负责 <see cref="Release"/>。</summary>
+    /// <param name="factoryPtr">IDXGIFactory1 接口指针。</param>
+    /// <param name="index">适配器序号（从 0 起）。</param>
+    /// <returns>适配器接口指针；无更多为 Zero。</returns>
+    public static IntPtr TryEnumAdapter1(IntPtr factoryPtr, uint index)
+    {
+        int hr = EnumAdapters1(factoryPtr, index, out IntPtr adapter);
+        return hr < 0 ? IntPtr.Zero : adapter;
+    }
+
+    /// <summary>读适配器摘要（vendor / 描述 / 专用显存 / Flags），供选卡与对齐匹配。</summary>
+    /// <param name="adapterPtr">IDXGIAdapter（1）接口指针。</param>
+    /// <returns>四元组摘要。</returns>
+    public static (uint Vendor, string Description, ulong DedicatedVideoMemory, uint Flags) GetAdapterSummary(IntPtr adapterPtr)
+        => GetAdapterDesc1Info(adapterPtr);
+
+    /// <summary>按 LUID（8 字节小端）查找 DXGI 适配器；未命中返回 <see cref="IntPtr.Zero"/>。
+    /// 成功时调用方负责 <see cref="Release"/>。</summary>
+    /// <param name="luid">目标适配器 LUID。</param>
+    /// <returns>适配器接口指针；未命中为 Zero。</returns>
+    public static IntPtr FindAdapterByLuid(byte[] luid)
+    {
+        if (luid is not { Length: 8 })
+            return IntPtr.Zero;
+        uint wantLow = BinaryPrimitives.ReadUInt32LittleEndian(luid.AsSpan(0));
+        int wantHigh = BinaryPrimitives.ReadInt32LittleEndian(luid.AsSpan(4));
+        IntPtr factory = CreateDXGIFactory1(IID_IDXGIFactory1);
+        try
+        {
+            for (uint i = 0; ; i++)
+            {
+                IntPtr adapter = TryEnumAdapter1(factory, i);
+                if (adapter == IntPtr.Zero)
+                    return IntPtr.Zero;
+                IntPtr adapter1 = QueryInterface(adapter, IID_IDXGIAdapter1);
+                bool hit;
+                try
+                {
+                    GetDesc1Luid(adapter1, out uint low, out int high);
+                    hit = low == wantLow && high == wantHigh;
+                }
+                finally
+                {
+                    Release(adapter1);
+                }
+                if (hit)
+                    return adapter;
+                Release(adapter);
+            }
+        }
+        finally
+        {
+            Release(factory);
+        }
+    }
+
     /// <summary>IDXGIFactory1::EnumAdapters1（绝对槽位 12）。返回 HRESULT（DXGI_ERROR_NOT_FOUND=无更多）。</summary>
     private static int EnumAdapters1(IntPtr factoryPtr, uint adapterIndex, out IntPtr ppAdapter)
     {
