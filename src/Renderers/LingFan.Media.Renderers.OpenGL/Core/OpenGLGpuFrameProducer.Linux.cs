@@ -15,15 +15,18 @@ public sealed partial class OpenGLGpuFrameProducer
         // 须先建立并绑定 EGL/GL 上下文：EGL 扩展函数经 eglGetProcAddress 解析，仅当 EGL 上下文 current 时返回有效指针。
         // 可用性探测必须发生在 MakeCurrent 之后，否则误判"不可用"并经静态缓存永久禁用零拷贝路径。
         // 整个 EGL 段须在同一锁内串行（同 WGL 路径：共享组所有者上下文不能并发 current 于两线程）。
-        _glContext.EnsureCreated();
+        // 上下文就绪/绑定在 try 内：这两步自身抛异常时 fd 尚未被消费，由 catch 统一关闭防泄漏。
         lock (_glContext.GlAccessLock)
         {
-            _glContext.MakeCurrent();
             nint eglImageY = nint.Zero, eglImageUV = nint.Zero;
             uint texY = 0, texUV = 0;
             int fd = source.Handle == IntPtr.Zero ? -1 : (int)source.Handle;
+            bool currentHeld = false;
             try
             {
+                _glContext.EnsureCreated();
+                _glContext.MakeCurrent();
+                currentHeld = true;
                 if (!EglDmaBufImport.IsEglDmaBufImportAvailable())
                 {
                     _logger?.LogWarning("[OPENGL-ZEROCOPY] EGL_EXT_image_dma_buf_import 不可用，回落软件解码。");
@@ -125,7 +128,9 @@ public sealed partial class OpenGLGpuFrameProducer
             }
             finally
             {
-                _glContext.ReleaseCurrent();
+                // 仅在 MakeCurrent 成功后才解绑（同 Win32 分部：上下文就绪/绑定自身失败时无 current 可解）。
+                if (currentHeld)
+                    _glContext.ReleaseCurrent();
             }
         }
     }

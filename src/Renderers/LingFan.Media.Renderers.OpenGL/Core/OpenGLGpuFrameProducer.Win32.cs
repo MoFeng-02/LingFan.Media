@@ -94,14 +94,18 @@ public sealed partial class OpenGLGpuFrameProducer
         // 在 owner 离屏上下文上完成能力自报 + 行为副作用验证：扩展可用、桥接设备可创建、共享句柄可打开。
         // 真正的 WGL register/lock 推迟到 on-screen 渲染上下文绘制时执行（见 OpenGLShaderPipeline.PresentWglInteropTexture），
         // 以规避 owner 上下文注册的对象在 on-screen 上下文上可能无法正确 lock/采样的驱动实现问题。
-        _glContext.EnsureCreated();
+        // 上下文就绪/绑定在 try 内：这两步自身抛异常（驱动异常/上下文创建失败）时句柄尚未被消费，
+        // 由 catch 统一关闭——放在 try 外会让该罕见路径泄漏句柄。
         lock (_glContext.GlAccessLock)
         {
-        _glContext.MakeCurrent();
         ID3D11Device1? device1 = null;
         ID3D11Texture2D? d3dTex = null;
+        bool currentHeld = false;
         try
         {
+            _glContext.EnsureCreated();
+            _glContext.MakeCurrent();
+            currentHeld = true;
             if (!GLNative.IsWglDxInteropAvailable())
             {
                 _logger?.LogWarning("[OPENGL-ZEROCOPY] WGL_NV_DX_interop2 不可用，回落软件解码。");
@@ -162,7 +166,10 @@ public sealed partial class OpenGLGpuFrameProducer
         finally
         {
             device1?.Dispose();
-            _glContext.ReleaseCurrent();
+            // 仅在 MakeCurrent 成功后才解绑：EnsureCreated/MakeCurrent 自身失败时无 current 可解，
+            // 无条件 ReleaseCurrent 会对未绑定上下文调用 wglMakeCurrent（无害但语义错误）。
+            if (currentHeld)
+                _glContext.ReleaseCurrent();
         }
         }
     }
@@ -240,6 +247,13 @@ public sealed partial class OpenGLGpuFrameProducer
 
             nint p = GLNative.glGetString(GLNative.GlRenderer);
             string renderer = Marshal.PtrToStringAnsi(p) ?? string.Empty;
+
+            // GL_RENDERER 为空 = 本线程此刻无 current 上下文（glGetString 返回 null），不是 GPU 不一致。
+            // 多会话/重播窗口内另一线程可能瞬时解绑共享上下文——此时做不了判定，保守放行本帧
+            // （导入只是 OpenSharedResource1，纯 D3D 操作不依赖 GL current；真正的 WGL 注册在
+            // on-screen 上下文绘制时执行，彼处有自己的上下文保障）。误判不一致会把整段会话打成 CPU 回落。
+            if (renderer.Length == 0)
+                return true;
 
             bool bridgeIsNvidia = bridgeVendorId == 0x10DE;
             bool bridgeIsAmd = bridgeVendorId == 0x1002;
