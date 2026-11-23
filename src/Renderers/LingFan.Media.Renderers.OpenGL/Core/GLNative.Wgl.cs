@@ -27,12 +27,6 @@ internal static unsafe partial class GLNative
     [LibraryImport("opengl32", EntryPoint = "wglDeleteContext")]
     public static partial int wglDeleteContext(nint hglrc);
 
-    [LibraryImport("opengl32", EntryPoint = "wglGetCurrentContext")]
-    public static partial nint wglGetCurrentContext();
-
-    [LibraryImport("opengl32", EntryPoint = "wglGetCurrentDC")]
-    public static partial nint wglGetCurrentDC();
-
     // SwapBuffers 属 GDI32（opengl32 不导出），故库名用 "gdi32"。
     [LibraryImport("gdi32", EntryPoint = "SwapBuffers")]
     public static partial int SwapBuffers(nint hdc);
@@ -43,9 +37,6 @@ internal static unsafe partial class GLNative
 
     [LibraryImport("gdi32", EntryPoint = "SetPixelFormat")]
     public static partial int SetPixelFormat(nint hdc, int pixelFormat, void* ppfd);
-
-    [LibraryImport("gdi32", EntryPoint = "DescribePixelFormat")]
-    public static partial int DescribePixelFormat(nint hdc, int pixelFormat, uint nBytes, void* ppfd);
 
     // USER32：取/释放窗口 DC（HWND → HDC）
     [LibraryImport("user32", EntryPoint = "GetDC")]
@@ -88,7 +79,4 @@ internal static unsafe partial class GLNative
 
     [LibraryImport("gdi32", EntryPoint = "GetStockObject")]
     public static partial nint GetStockObject(int i);
-
-    [LibraryImport("user32", EntryPoint = "LoadCursorW")]
-    public static partial nint LoadCursorW(nint hInstance, nint lpCursorName);
 }

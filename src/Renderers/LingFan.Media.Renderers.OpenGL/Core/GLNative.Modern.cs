@@ -8,7 +8,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// <remarks>
 /// <para>每个封装方法在调用前经 <see cref="EnsureModern"/> 校验 <see cref="GLNative.LoadModern"/> 已执行，
 /// 防止在 GL 上下文建立前误用现代函数（届时函数指针为 <see langword="null"/>）。</para>
-/// <para>字符串参数（<see cref="GetAttribLocation"/> / <see cref="GetUniformLocation"/>）在托管侧编码为
+/// <para>字符串参数（<see cref="GetUniformLocation"/>）在托管侧编码为
 /// NUL 终止 UTF-8 字节后传入，不依赖运行期 marshaller，AOT 安全。</para>
 /// </remarks>
 internal static unsafe partial class GLNative
@@ -41,12 +41,6 @@ internal static unsafe partial class GLNative
     {
         EnsureModern();
         _glBufferData(target, size, data, usage);
-    }
-
-    public static unsafe void BufferSubData(uint target, nint offset, nuint size, void* data)
-    {
-        EnsureModern();
-        _glBufferSubData(target, offset, size, data);
     }
 
     public static unsafe void DeleteBuffers(int n, uint* buffers)
@@ -143,17 +137,6 @@ internal static unsafe partial class GLNative
         _glUseProgram(program);
     }
 
-    public static unsafe int GetAttribLocation(uint program, string name)
-    {
-        EnsureModern();
-        byte[] bytes = Encoding.UTF8.GetBytes(name);
-        byte[] withNull = new byte[bytes.Length + 1];
-        global::System.Buffer.BlockCopy(bytes, 0, withNull, 0, bytes.Length);
-        withNull[bytes.Length] = 0;
-        fixed (byte* p = withNull)
-            return _glGetAttribLocation(program, p);
-    }
-
     public static unsafe int GetUniformLocation(uint program, string name)
     {
         EnsureModern();
@@ -181,12 +164,6 @@ internal static unsafe partial class GLNative
     {
         EnsureModern();
         _glUniform1i(location, v);
-    }
-
-    public static unsafe void UniformMatrix4fv(int location, int count, bool transpose, float* value)
-    {
-        EnsureModern();
-        _glUniformMatrix4fv(location, count, (byte)(transpose ? 1 : 0), value);
     }
 
     public static unsafe void GenVertexArrays(int n, uint* arrays)

@@ -21,8 +21,6 @@ internal static unsafe partial class GLNative
 {
     // WGL_NV_DX_interop2 常量
     internal const int WglAccessReadOnlyNV = 0x0000;     // WGL_ACCESS_READ_ONLY_NV
-    internal const int WglAccessReadWriteNV = 0x0001;    // WGL_ACCESS_READ_WRITE_NV
-    internal const int WglAccessWriteDiscardNV = 0x0002; // WGL_ACCESS_WRITE_DISCARD_NV
 
     // WGL_NV_DX_interop2 函数指针（Windows 调用；x64/arm64 下原生 ABI 即 WINAPI，无需 [Winapi] 调用约定后缀）
     private static unsafe delegate* unmanaged<void*, nint> _wglDXOpenDeviceNV;

@@ -68,21 +68,6 @@ internal static unsafe partial class GLNative
     public static partial void glViewport(int x, int y, int width, int height);
 
     [LibraryImport("GL")]
-    public static partial void glEnable(uint cap);
-
-    [LibraryImport("GL")]
-    public static partial void glDisable(uint cap);
-
-    [LibraryImport("GL")]
-    public static partial uint glGetError();
-
-    [LibraryImport("GL")]
-    public static partial void glFlush();
-
-    [LibraryImport("GL")]
-    public static partial void glFinish();
-
-    [LibraryImport("GL")]
     public static partial nint glGetString(uint name);
 
     // 查询（GL 1.1 基线，加载期解析）
@@ -119,19 +104,6 @@ internal static unsafe partial class GLNative
     [LibraryImport("GL")]
     public static partial void glDrawArrays(uint mode, int first, int count);
 
-    // 即时模式（legacy）：仅作最小测试路径备用，真实渲染走着色器管线。
-    [LibraryImport("GL")]
-    public static partial void glBegin(uint mode);
-
-    [LibraryImport("GL")]
-    public static partial void glEnd();
-
-    [LibraryImport("GL")]
-    public static partial void glVertex2f(float x, float y);
-
-    [LibraryImport("GL")]
-    public static partial void glTexCoord2f(float s, float t);
-
     // GL 1.2+ 现代函数：运行时经 GetProcAddress 解析（需当前上下文）
 
     private static bool _modernLoaded;
@@ -140,7 +112,6 @@ internal static unsafe partial class GLNative
     private static unsafe delegate* unmanaged<int, uint*, void> _glGenBuffers;
     private static unsafe delegate* unmanaged<uint, uint, void> _glBindBuffer;
     private static unsafe delegate* unmanaged<uint, nuint, void*, uint, void> _glBufferData;
-    private static unsafe delegate* unmanaged<uint, nint, nuint, void*, void> _glBufferSubData;
     private static unsafe delegate* unmanaged<int, uint*, void> _glDeleteBuffers;
     private static unsafe delegate* unmanaged<uint, uint> _glCreateShader;
     private static unsafe delegate* unmanaged<uint, int, byte**, int*, void> _glShaderSource;
@@ -155,12 +126,10 @@ internal static unsafe partial class GLNative
     private static unsafe delegate* unmanaged<uint, int, int*, byte*, void> _glGetProgramInfoLog;
     private static unsafe delegate* unmanaged<uint, void> _glDeleteProgram;
     private static unsafe delegate* unmanaged<uint, void> _glUseProgram;
-    private static unsafe delegate* unmanaged<uint, byte*, int> _glGetAttribLocation;
     private static unsafe delegate* unmanaged<uint, byte*, int> _glGetUniformLocation;
     private static unsafe delegate* unmanaged<uint, void> _glEnableVertexAttribArray;
     private static unsafe delegate* unmanaged<uint, int, uint, byte, int, void*, void> _glVertexAttribPointer;
     private static unsafe delegate* unmanaged<int, int, void> _glUniform1i;
-    private static unsafe delegate* unmanaged<int, int, byte, float*, void> _glUniformMatrix4fv;
     private static unsafe delegate* unmanaged<int, uint*, void> _glGenVertexArrays;
     private static unsafe delegate* unmanaged<uint, void> _glBindVertexArray;
     private static unsafe delegate* unmanaged<int, uint*, void> _glDeleteVertexArrays;
@@ -197,7 +166,6 @@ internal static unsafe partial class GLNative
         _glGenBuffers = (delegate* unmanaged<int, uint*, void>)GetProcAddress("glGenBuffers");
         _glBindBuffer = (delegate* unmanaged<uint, uint, void>)GetProcAddress("glBindBuffer");
         _glBufferData = (delegate* unmanaged<uint, nuint, void*, uint, void>)GetProcAddress("glBufferData");
-        _glBufferSubData = (delegate* unmanaged<uint, nint, nuint, void*, void>)GetProcAddress("glBufferSubData");
         _glDeleteBuffers = (delegate* unmanaged<int, uint*, void>)GetProcAddress("glDeleteBuffers");
         _glCreateShader = (delegate* unmanaged<uint, uint>)GetProcAddress("glCreateShader");
         _glShaderSource = (delegate* unmanaged<uint, int, byte**, int*, void>)GetProcAddress("glShaderSource");
@@ -212,12 +180,10 @@ internal static unsafe partial class GLNative
         _glGetProgramInfoLog = (delegate* unmanaged<uint, int, int*, byte*, void>)GetProcAddress("glGetProgramInfoLog");
         _glDeleteProgram = (delegate* unmanaged<uint, void>)GetProcAddress("glDeleteProgram");
         _glUseProgram = (delegate* unmanaged<uint, void>)GetProcAddress("glUseProgram");
-        _glGetAttribLocation = (delegate* unmanaged<uint, byte*, int>)GetProcAddress("glGetAttribLocation");
         _glGetUniformLocation = (delegate* unmanaged<uint, byte*, int>)GetProcAddress("glGetUniformLocation");
         _glEnableVertexAttribArray = (delegate* unmanaged<uint, void>)GetProcAddress("glEnableVertexAttribArray");
         _glVertexAttribPointer = (delegate* unmanaged<uint, int, uint, byte, int, void*, void>)GetProcAddress("glVertexAttribPointer");
         _glUniform1i = (delegate* unmanaged<int, int, void>)GetProcAddress("glUniform1i");
-        _glUniformMatrix4fv = (delegate* unmanaged<int, int, byte, float*, void>)GetProcAddress("glUniformMatrix4fv");
         _glGenVertexArrays = (delegate* unmanaged<int, uint*, void>)GetProcAddress("glGenVertexArrays");
         _glBindVertexArray = (delegate* unmanaged<uint, void>)GetProcAddress("glBindVertexArray");
         _glDeleteVertexArrays = (delegate* unmanaged<int, uint*, void>)GetProcAddress("glDeleteVertexArrays");
@@ -252,12 +218,10 @@ internal static unsafe partial class GLNative
         Check("glGetProgramInfoLog", (nint)_glGetProgramInfoLog);
         Check("glDeleteProgram", (nint)_glDeleteProgram);
         Check("glUseProgram", (nint)_glUseProgram);
-        Check("glGetAttribLocation", (nint)_glGetAttribLocation);
         Check("glGetUniformLocation", (nint)_glGetUniformLocation);
         Check("glEnableVertexAttribArray", (nint)_glEnableVertexAttribArray);
         Check("glVertexAttribPointer", (nint)_glVertexAttribPointer);
         Check("glUniform1i", (nint)_glUniform1i);
-        Check("glUniformMatrix4fv", (nint)_glUniformMatrix4fv);
         Check("glGenVertexArrays", (nint)_glGenVertexArrays);
         Check("glBindVertexArray", (nint)_glBindVertexArray);
         Check("glDeleteVertexArrays", (nint)_glDeleteVertexArrays);
