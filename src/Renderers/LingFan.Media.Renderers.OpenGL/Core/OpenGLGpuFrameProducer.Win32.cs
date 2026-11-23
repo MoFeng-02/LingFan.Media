@@ -17,6 +17,71 @@ public sealed partial class OpenGLGpuFrameProducer
     // 桥接设备厂商与当前 GL 上下文所在 GPU 是否一致（首次不匹配已通告标志）。
     private bool _gpuMismatchAnnounced;
 
+    // 解码设备对齐提示缓存（一次性判定）：WGL 上下文钉在窗口所在 GPU，解码设备须反向对齐到这张卡。
+    // null=尚未判定；判定后即使是「无提示」也缓存（_decodeHintResolved），避免逐帧重复枚举 DXGI。
+    private byte[]? _decodeAdapterHint;
+    private bool _decodeHintResolved;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// WGL 的 GL 上下文绑定窗口所在显示器的 GPU（平台约束，渲染器无法选卡），故本生产者
+    /// 向解码器声明「共享句柄应产自窗口所在 GPU」：按离屏 GL 上下文的 GL_RENDERER 字符串
+    /// 匹配 DXGI 适配器（同厂商唯一命中才给提示）。解码器验证该卡解码能力后决定是否采纳；
+    /// 无解码引擎的核显会被解码器拒绝采纳并回落自身策略（CPU 传输），不会在注定失败的设备上初始化。
+    /// </remarks>
+    public byte[]? DecodeAdapterLuidHint
+    {
+        get
+        {
+            if (_decodeHintResolved)
+                return _decodeAdapterHint;
+            lock (_lock)
+            {
+                if (_decodeHintResolved)
+                    return _decodeAdapterHint;
+                _decodeAdapterHint = ResolveDecodeAdapterHint();
+                _decodeHintResolved = true;
+                return _decodeAdapterHint;
+            }
+        }
+    }
+
+    /// <summary>在离屏 GL 上下文上读 GL_RENDERER 并匹配 DXGI 适配器（须持 _lock；GL 访问再套 GlAccessLock）。</summary>
+    private byte[]? ResolveDecodeAdapterHint()
+    {
+        if (!OperatingSystem.IsWindows())
+            return null;
+        try
+        {
+            _glContext.EnsureCreated();
+            lock (_glContext.GlAccessLock)
+            {
+                _glContext.MakeCurrent();
+                try
+                {
+                    nint p = GLNative.glGetString(GLNative.GlRenderer);
+                    string renderer = Marshal.PtrToStringAnsi(p) ?? string.Empty;
+                    byte[]? luid = LingFan.Media.GPUShare.D3D11.D3D11AdapterByGlRenderer.TryMatchAdapterLuid(renderer);
+                    if (luid != null)
+                        _logger?.LogInformation("[OPENGL-ZEROCOPY] 解码对齐提示：GL 上下文所在 GPU「{Renderer}」→ 建议解码设备同卡（LUID={Luid}）",
+                            renderer, Convert.ToHexString(luid));
+                    else
+                        _logger?.LogInformation("[OPENGL-ZEROCOPY] 解码对齐提示不可判定（GL 渲染器「{Renderer}」无唯一同厂商适配器），解码器沿用自身选卡", renderer);
+                    return luid;
+                }
+                finally
+                {
+                    _glContext.ReleaseCurrent();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[OPENGL-ZEROCOPY] 解码对齐提示解析失败，解码器沿用自身选卡");
+            return null;
+        }
+    }
+
     /// <summary>关闭 DXGI 共享 NT 句柄（导入完成/失败后由生产者负责关闭，防内核句柄泄漏）。</summary>
     [LibraryImport("kernel32")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -115,12 +180,18 @@ public sealed partial class OpenGLGpuFrameProducer
             _glContext.EnsureCreated();
 
             // 桥接 D3D11 设备：仅用于把解码侧共享句柄打开为纹理并与 GL 互操作，不参与呈现（呈现由 on-screen GL 上下文完成）。
-            // 关键：若 D3D11CreateDevice(DriverType.Hardware) 不指定适配器 → 默认落在主显示器 GPU，
-            //    而 ffmpeg 解码设备是 FindPreferredAdapter 独显优先 → 跨 GPU 打开共享句柄 OpenSharedResource1 必失败。
-            //    改与解码器同源：FindPreferredAdapter + D3D11CreateDeviceOnAdapter（独显优先），保证桥接设备与解码设备同一 GPU。
-            //    注意：此处不打开 WGL 互操作设备——WGL interop 句柄强关联「打开它的 GL 上下文」，必须在 on-screen 渲染上下文
+            // 选卡与解码设备同源：优先「解码对齐提示」适配器（GL 上下文所在 GPU——解码器采纳提示时
+            //    共享句柄产自这张卡，桥接设备必须同卡才能 OpenSharedResource1 + WGL 互操作）；
+            //    无提示或按提示找不到适配器时回落 FindPreferredAdapter（独显优先，与解码器默认策略一致）。
+            //    若解码器未采纳提示（提示卡无解码引擎），桥接与解码仍同落独显，由下方 GPU 一致性守卫拦下跨卡导入。
+            // 注意：此处不打开 WGL 互操作设备——WGL interop 句柄强关联「打开它的 GL 上下文」，必须在 on-screen 渲染上下文
             //    （OpenGLShaderPipeline.EnsureWglInteropDevice）上现场打开，否则在离屏 owner 上下文打开的 interop 句柄在 on-screen 上无法正确注册/lock。
-            IntPtr adapter = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindPreferredAdapter();
+            IntPtr adapter = IntPtr.Zero;
+            byte[]? hint = DecodeAdapterLuidHint;
+            if (hint != null)
+                adapter = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindAdapterByLuid(hint);
+            if (adapter == IntPtr.Zero)
+                adapter = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindPreferredAdapter();
             if (adapter != IntPtr.Zero)
             {
                 try

@@ -170,10 +170,35 @@ internal sealed partial class FFmpegVideoDecoder
                     // 转换/导出共享句柄亦用此同一设备；该设备由本解码器创建并持有（_vaOwnedDevice），Dispose 释放。
                     // 必须带 VideoSupport：NV12→RGBA 的 VideoProcessor 输出视图要求设备具视频能力，
                     //    缺该标志 CreateVideoProcessorOutputView 报 E_INVALIDARG。
-                    // 独显优先（不绑定厂商/型号）：枚举 DXGI 选首选适配器
+                    // 选卡策略（两级）：
+                    // 1) 生产者对齐提示（IGpuFrameProducer.DecodeAdapterLuidHint）：渲染上下文被平台钉在
+                    //    特定 GPU 时（如 WGL 绑定窗口所在显示器 GPU），解码设备须反向对齐到该卡零拷贝才成立。
+                    //    提示是建议——先在该卡上验证真实解码能力（CheckVideoDecoderFormat），无解码引擎
+                    //    （混合显卡笔记本的显示核显常见）则拒绝采纳，回落自身策略，绝不在注定失败的设备上初始化。
+                    // 2) 独显优先（不绑定厂商/型号）：枚举 DXGI 选首选适配器
                     //    （跳过软件适配器，DedicatedVideoMemory 最大者；无独显退化为集显），
                     //    再在其上创建 D3D11 设备；未找到回退默认适配器（Hardware）。
-                    IntPtr preferredAdapter = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindPreferredAdapter();
+                    IntPtr preferredAdapter = IntPtr.Zero;
+                    byte[]? hint = _gpuProducer.DecodeAdapterLuidHint;
+                    if (hint != null)
+                    {
+                        IntPtr hinted = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindAdapterByLuid(hint);
+                        if (hinted != IntPtr.Zero)
+                        {
+                            if (ProbeAdapterDecodeCapability(hinted, codec))
+                            {
+                                preferredAdapter = hinted;
+                                _logger.LogInformation("ffmpeg 自有 D3D11 设备选卡: 采纳渲染侧对齐提示（渲染上下文所在 GPU，解码能力已验证）");
+                            }
+                            else
+                            {
+                                LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(hinted);
+                                _logger.LogInformation("ffmpeg 自有 D3D11 设备选卡: 对齐提示适配器无 {Codec} 解码引擎，回落独显优先（跨卡时零拷贝按设计回落 CPU）", codec);
+                            }
+                        }
+                    }
+                    if (preferredAdapter == IntPtr.Zero)
+                        preferredAdapter = LingFan.Media.GPUShare.D3D11.D3D11Interop.FindPreferredAdapter();
                     if (preferredAdapter != IntPtr.Zero)
                     {
                         try
@@ -186,7 +211,7 @@ internal sealed partial class FFmpegVideoDecoder
                             // 自有指针，Vortice Dispose 语义正确，无需 AddRef）。
                             _vaOwnedDevice = new Vortice.Direct3D11.ID3D11Device(_vaDeviceHandle);
                             _vaOwnedContext = new Vortice.Direct3D11.ID3D11DeviceContext(_vaContextHandle);
-                            _logger.LogInformation("ffmpeg 自有 D3D11 设备创建: 首选适配器(独显优先)");
+                            _logger.LogInformation("ffmpeg 自有 D3D11 设备创建: 选定适配器（对齐提示或独显优先）");
                         }
                         finally
                         {
@@ -312,5 +337,47 @@ internal sealed partial class FFmpegVideoDecoder
         // 首启也打印前 4 帧 pts——CPU 回落链路的时间戳健康度直接可见。
         _decodeDiagCount = 4;
         _logger.LogInformation("视频解码器初始化: {Codec}, 硬件加速={HwAccel}", codec, IsHardwareAccelerated);
+    }
+
+    /// <summary>
+    /// 在候选适配器上创建临时 D3D11 设备并验证真实解码能力（profile→NV12 表面分配）。
+    /// 供「渲染侧对齐提示」采纳前把关：提示卡无解码引擎时返回 false，调用方回落自身选卡策略。
+    /// </summary>
+    /// <param name="adapterPtr">候选 DXGI 适配器指针（所有权不变，本方法不释放）。</param>
+    /// <param name="codec">要解码的视频编码（决定验证哪个 DXVA profile）。</param>
+    /// <returns>该适配器具备此编码的硬解能力时为 <see langword="true"/>。</returns>
+    private bool ProbeAdapterDecodeCapability(IntPtr adapterPtr, VideoCodec codec)
+    {
+        IntPtr device = IntPtr.Zero;
+        IntPtr context = IntPtr.Zero;
+        try
+        {
+            LingFan.Media.GPUShare.D3D11.D3D11Interop.D3D11CreateDeviceOnAdapter(adapterPtr, out device, out context);
+            Guid profile = codec switch
+            {
+                VideoCodec.H265 => LingFan.Media.GPUShare.D3D11.D3D11DecodeCapability.ProfileHevcVldMain,
+                _ => LingFan.Media.GPUShare.D3D11.D3D11DecodeCapability.ProfileH264VldNoFgt,
+            };
+            bool supported = LingFan.Media.GPUShare.D3D11.D3D11DecodeCapability.SupportsDecodeToNv12(device, profile);
+            if (!supported && codec == VideoCodec.H265)
+            {
+                // Main 不支持再试 Main10：部分设备只暴露 10bit profile（能力面随驱动而异）。
+                supported = LingFan.Media.GPUShare.D3D11.D3D11DecodeCapability.SupportsDecodeToNv12(
+                    device, LingFan.Media.GPUShare.D3D11.D3D11DecodeCapability.ProfileHevcVldMain10);
+            }
+            return supported;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "对齐提示适配器解码能力探测失败，按不支持处理");
+            return false;
+        }
+        finally
+        {
+            if (context != IntPtr.Zero)
+                LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(context);
+            if (device != IntPtr.Zero)
+                LingFan.Media.GPUShare.D3D11.D3D11Interop.Release(device);
+        }
     }
 }
