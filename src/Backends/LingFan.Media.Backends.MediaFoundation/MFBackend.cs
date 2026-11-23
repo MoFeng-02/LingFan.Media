@@ -36,7 +36,7 @@ public sealed class MFBackend : IDisposable
         try
         {
             // 经 MFPlatform 引用计数封装：真正的 MFShutdown 仅在所有消费者（解封装器 + 解码器）全部释放后才触发，
-            // 避免一侧先释放把仍 in-flight 的原生 ReadSample 踩成 AV（MF 冷启动偶发崩溃的成因与规避点）。
+            // 避免一侧先释放拆掉平台、踩坏仍 in-flight 的原生 ReadSample（原生访问违规）。
             MFPlatform.Startup();
             _initialized = true;
             _logger.LogDebug("MediaFoundation 平台初始化完成");
@@ -65,34 +65,42 @@ public sealed class MFBackend : IDisposable
         if (!OperatingSystem.IsWindows() || string.IsNullOrEmpty(sampleUrl))
             return;
 
-        // 平台已在构造函数经 MFPlatform.Startup() 启动；此处再确保（幂等，引用计数 +1）。
+        // 防御性再取一份平台引用（计数 +1，覆盖 Dispose 后调用等极端情形），
+        // 与本次预热同进退：下方 finally 配对归还，真正的 MFShutdown 仍只在最后一个消费者释放时触发。
         MFPlatform.Startup();
-
-        int hr = MFInterop.MFCreateSourceReaderFromURL(sampleUrl!, IntPtr.Zero, out IntPtr reader);
-        if (hr < 0 || reader == IntPtr.Zero)
-        {
-            _logger.LogDebug("MF 预热跳过：MFCreateSourceReaderFromURL 失败 HRESULT=0x{HR:X8}", hr);
-            return;
-        }
-
         try
         {
-            // 强制激活解码器 MFT：首次 ReadSample 会触发 H.264/AAC 解码器实例初始化，
-            // 进程首次冷启动主要花在解码器 DLL 加载 + MFT 初始化上。提前付出，
-            // 使正式 OpenAsync 复用已加载的解码器，把卡顿挪到窗口出现之前。
-            // MF_SOURCE_READER_FIRST_VIDEO_STREAM = 0xFFFFFFFC（无视频流时该流读取失败属正常，下方 catch 吞掉）。
-            var readSample = MfVTable.Get<IMFSourceReader_ReadSample>(reader, 6);
-            readSample(reader, 0xFFFFFFFCu, 0, out _, out _, out long _, out IntPtr sample);
-            if (sample != IntPtr.Zero)
-                Marshal.Release(sample);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            _logger.LogDebug(ex, "MF 预热读样例外（忽略，不影响正式打开）");
+            int hr = MFInterop.MFCreateSourceReaderFromURL(sampleUrl!, IntPtr.Zero, out IntPtr reader);
+            if (hr < 0 || reader == IntPtr.Zero)
+            {
+                _logger.LogDebug("MF 预热跳过：MFCreateSourceReaderFromURL 失败 HRESULT=0x{HR:X8}", hr);
+                return;
+            }
+
+            try
+            {
+                // 强制激活解码器 MFT：首次 ReadSample 会触发 H.264/AAC 解码器实例初始化，
+                // 进程首次冷启动主要花在解码器 DLL 加载 + MFT 初始化上。提前付出，
+                // 使正式 OpenAsync 复用已加载的解码器，把卡顿挪到窗口出现之前。
+                // MF_SOURCE_READER_FIRST_VIDEO_STREAM = 0xFFFFFFFC（无视频流时该流读取失败属正常，下方 catch 吞掉）。
+                var readSample = MfVTable.Get<IMFSourceReader_ReadSample>(reader, 6);
+                readSample(reader, 0xFFFFFFFCu, 0, out _, out _, out long _, out IntPtr sample);
+                if (sample != IntPtr.Zero)
+                    Marshal.Release(sample);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogDebug(ex, "MF 预热读样例外（忽略，不影响正式打开）");
+            }
+            finally
+            {
+                Marshal.Release(reader);
+            }
         }
         finally
         {
-            Marshal.Release(reader);
+            // 归还预热持有的平台引用（计数 −1），兑现 MFPlatform「引用与原生对象同进退」不变量。
+            MFPlatform.Shutdown();
         }
     }
 

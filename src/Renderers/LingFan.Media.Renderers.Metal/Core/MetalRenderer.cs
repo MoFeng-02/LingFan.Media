@@ -28,7 +28,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// UI 线程 Detach 的竞态（与 D3D11/OpenGL/GLES 同源）。Metal 命令队列线程安全，无 GLES 式上下文线程亲和，
 /// 故 Present 无需 MakeCurrent/ReleaseCurrent，仅以 autorelease 池包裹每帧原生对象创建。</para>
 /// <para><b>上下文生命周期</b>：Metal 上下文在 <see cref="Attach"/> 时建立（非工厂共享 Device 单例），工厂保持薄。
-/// 当前无工厂级离屏设备上下文（GPU 纹理零拷贝属 C 线未来增强），故工厂不注册 <see cref="IGpuDeviceContext"/>。</para>
+/// 当前无工厂级离屏设备上下文（GPU 纹理零拷贝为未来增强），故工厂不注册 <see cref="IGpuDeviceContext"/>。</para>
 /// <para><b>异步策略</b>：公开异步方法均为真异步签名但无 I/O 阻塞——<see cref="InitializeAsync"/> 返回
 /// <see cref="Task.CompletedTask"/>、<see cref="DisposeAsync"/> 委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>，
 /// 二者皆非伪异步（无 <c>Task.Run</c> 包同步、无 await 硬阻塞）。</para>
@@ -229,10 +229,10 @@ public sealed class MetalRenderer : IVideoRenderer
                         break;
 
                     case IGpuTextureResource:
-                        // Metal GPU 纹理零拷贝路径属 C 线未来增强（需共享设备上下文 + IOSurface 桥接）。
+                        // Metal GPU 纹理零拷贝路径为未来增强（需共享设备上下文 + IOSurface 桥接）。
                         throw new NotSupportedException(
                             "Metal 渲染器当前不支持 GPU 纹理零拷贝路径（IGpuTextureResource）。" +
-                            "该路径属未来 C 线增强。");
+                            "该路径属未来零拷贝增强。");
 
                     default:
                         throw new NotSupportedException(

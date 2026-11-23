@@ -16,6 +16,22 @@ public sealed unsafe partial class VulkanGpuFrameProducer
             CloseFd((int)source.Handle);
     }
 
+    /// <summary>
+    /// 关闭早退/不支持端点路径上未被消费的原生共享句柄（单一责任人契约的兜底出口）。
+    /// 仅关闭语义明确的句柄形态：Windows NT HANDLE（D3D11SharedHandle）/ Linux dma_buf fd（LinuxDmaBufFd）；
+    /// AHardwareBuffer 为借用指针（所有权不转移），绝不在此释放；其余未知形态不触碰。
+    /// 各导入分部（Win32/Linux/NV12/AHB）内部出口已自行关闭句柄，本方法不与其重叠，避免双关。
+    /// </summary>
+    private static void CloseUnconsumedHandle(GpuFrameImportSource source)
+    {
+        if (source.Handle == IntPtr.Zero) return;
+        if (source.Kind == GpuFrameImportKind.AndroidHardwareBuffer) return;
+        if (OperatingSystem.IsWindows() && source.Kind == GpuFrameImportKind.D3D11SharedHandle)
+            CloseHandle(source.Handle);
+        else if (OperatingSystem.IsLinux() && source.Kind == GpuFrameImportKind.LinuxDmaBufFd)
+            CloseFd((int)source.Handle);
+    }
+
     /// <summary>关闭 Linux dma_buf 文件描述符（导入完成后由导入方负责关闭，防 fd 泄漏）。</summary>
     [LibraryImport("libc")]
     private static partial int close(int fd);

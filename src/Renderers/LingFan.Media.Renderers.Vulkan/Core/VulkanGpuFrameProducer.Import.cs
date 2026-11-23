@@ -13,6 +13,7 @@ public sealed unsafe partial class VulkanGpuFrameProducer
         if (!TryMapFormat(source.Format, out Format vkFormat))
         {
             if (_diagRemain > 0) { _diagRemain--; _logger?.LogWarning($"[VKFDIAG] TryMapFormat 失败: fmt={source.Format}"); }
+            CloseHandle(source.Handle); // 失败出口：句柄尚未被消费，须关闭防泄漏（单一责任人）
             return false;
         }
 
@@ -47,6 +48,8 @@ public sealed unsafe partial class VulkanGpuFrameProducer
             return false;
         }
 
+        // memory 提升到 try 外：catch 需据其是否已分配决定是否 FreeMemory（防异常路径内存泄漏）
+        DeviceMemory memory = default;
         try
         {
             var req = QueryImageMemoryRequirements(image);
@@ -74,7 +77,6 @@ public sealed unsafe partial class VulkanGpuFrameProducer
                 MemoryTypeIndex = ExternalCompatibleMemoryType(req.MemoryTypeBits),
             };
 
-            DeviceMemory memory;
             Result allocResult = VulkanNative.AllocateMemory(_device, &ai, null, out memory);
             if (allocResult != Result.Success)
             {
@@ -108,6 +110,7 @@ public sealed unsafe partial class VulkanGpuFrameProducer
         }
         catch
         {
+            if (memory.Handle != 0) VulkanNative.FreeMemory(_device, memory, null); // 异常出口：已分配内存须释放防泄漏
             VulkanNative.DestroyImage(_device, image, null);
             CloseHandle(source.Handle);
             throw;
@@ -118,7 +121,10 @@ public sealed unsafe partial class VulkanGpuFrameProducer
     {
         texture = null;
         if (!TryMapFormat(source.Format, out Format vkFormat))
+        {
+            CloseFd((int)source.Handle); // 失败出口：fd 尚未被消费，须关闭防泄漏（单一责任人）
             return false;
+        }
 
         var extMem = new ExternalMemoryImageCreateInfo
         {
@@ -144,8 +150,13 @@ public sealed unsafe partial class VulkanGpuFrameProducer
 
         Image image;
         if (VulkanNative.CreateImage(_device, &ci, null, out image) != Result.Success)
+        {
+            CloseFd((int)source.Handle); // 失败出口：fd 尚未被消费，须关闭防泄漏（单一责任人）
             return false;
+        }
 
+        // memory 提升到 try 外：catch 需据其是否已分配决定是否 FreeMemory（防异常路径内存泄漏）
+        DeviceMemory memory = default;
         try
         {
             var req = QueryImageMemoryRequirements(image);
@@ -171,7 +182,6 @@ public sealed unsafe partial class VulkanGpuFrameProducer
                 MemoryTypeIndex = ExternalCompatibleMemoryType(req.MemoryTypeBits),
             };
 
-            DeviceMemory memory;
             if (VulkanNative.AllocateMemory(_device, &ai, null, out memory) != Result.Success)
             {
                 VulkanNative.DestroyImage(_device, image, null);
@@ -194,7 +204,9 @@ public sealed unsafe partial class VulkanGpuFrameProducer
         }
         catch
         {
+            if (memory.Handle != 0) VulkanNative.FreeMemory(_device, memory, null); // 异常出口：已分配内存须释放防泄漏
             VulkanNative.DestroyImage(_device, image, null);
+            CloseFd((int)source.Handle); // 异常出口：fd 须关闭防泄漏（单一责任人）
             throw;
         }
     }

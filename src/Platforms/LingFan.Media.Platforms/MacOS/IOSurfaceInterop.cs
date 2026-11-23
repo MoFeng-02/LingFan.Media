@@ -8,9 +8,9 @@ namespace LingFan.Media.Platforms.MacOS;
 /// 与 Metal 纹理之间的零拷贝桥梁。IOSurface 是 macOS 上跨进程 GPU 资源共享的标准机制。</para>
 /// <para><b>GPU 零拷贝路径</b>：
 /// VideoToolbox → CVPixelBuffer → IOSurface → MTLTexture → MetalRenderer → CAMetalLayer → Display</para>
-/// <para>桩——所有方法抛出 <see cref="NotSupportedException"/>。
-/// IOSurface 互操作属 Phase 2-3 目标（macOS）。</para>
-/// <para><b>异步策略</b>：全部同步（sync 分类）——IOSurface C API 调用是同步边界，无 I/O。
+/// <para>桩——方法抛出 <see cref="NotSupportedException"/>。
+/// IOSurface 互操作尚未实现（macOS）。</para>
+/// <para><b>异步策略</b>：全部同步——IOSurface C API 调用是同步边界，无 I/O。
 /// 若改为 <c>async</c> 方法体内无 <c>await</c> 则为伪异步。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
 /// </remarks>
@@ -22,7 +22,7 @@ public sealed class IOSurfaceInterop
     /// <param name="pixelBuffer">CVPixelBuffer 句柄。</param>
     /// <returns>IOSurface 句柄（不转移所有权，CVPixelBuffer 释放后失效）。</returns>
     public nint GetIOSurfaceFromCVPixelBuffer(nint pixelBuffer)
-        => throw new NotSupportedException("IOSurface 互操作尚未实现。Phase 2-3 目标。");
+        => throw new NotSupportedException("IOSurface 互操作尚未实现（macOS）。");
 
     /// <summary>
     /// 锁定 IOSurface 用于 CPU 访问。

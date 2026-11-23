@@ -1,6 +1,5 @@
 using System.Buffers;
 using LingFan.Media.Renderers.D3D11.DirectComposition;
-using LingFan.Media.Renderers.D3D11.SafeHandles;
 using LingFan.Media.Renderers.D3D11.Shaders;
 
 namespace LingFan.Media.Renderers.D3D11;
@@ -29,7 +28,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <para>软件帧支持 GPU Shader 缩放（帧尺寸 ≠ 目标尺寸）与
 /// YUV 像素格式（YUV420P/YUV422P/YUV444P/NV12/NV21，PS 内 BT.601 全范围转换）——
 /// 经 <see cref="D3D11ShaderPipeline"/>。BGRA32/RGBA32 且尺寸一致仍走 CopyResource 快路径。
-/// GPU 纹理帧（D3D11TextureResource）维持 CopyResource 尺寸一致要求（硬解纹理无 SRV 绑定保证）。</para>
+/// GPU 纹理帧（硬解共享纹理）维持 CopyResource 尺寸一致要求（硬解纹理无 SRV 绑定保证）。</para>
 /// </remarks>
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 internal sealed partial class D3D11Renderer : IVideoRenderer
@@ -373,7 +372,7 @@ internal sealed partial class D3D11Renderer : IVideoRenderer
             }
 
             // 交换 SwapChain（SyncInterval 默认 1；LINGFAN_D3D11_SYNC=0 可二分「阻塞式 Present 造成的卡顿/延迟」）
-            // B-DEVLOST: 检查 Present 返回值——DEVICE_REMOVED/RESET（TDR/驱动崩溃/GPU 拔出）
+            // 检查 Present 返回值——DEVICE_REMOVED/RESET（TDR/驱动崩溃/GPU 拔出）
             // 时设备及全部资源永久失效，抛中立 GpuDeviceLostException 供会话层重建。
             var presentResult = _swapChain.Present(D3D11Diagnostics.SyncInterval, PresentFlags.None);
             ThrowIfDeviceLost(presentResult, "Present");
@@ -381,7 +380,7 @@ internal sealed partial class D3D11Renderer : IVideoRenderer
     }
 
     /// <summary>
-    /// B-DEVLOST: 识别设备丢失类 HRESULT 并抛 <see cref="GpuDeviceLostException"/>。
+    /// 识别设备丢失类 HRESULT 并抛 <see cref="GpuDeviceLostException"/>。
     /// 附带 <c>GetDeviceRemovedReason</c> 诊断（DXGI_ERROR_DEVICE_HUNG/DRIVER_INTERNAL_ERROR 等）。
     /// </summary>
     private void ThrowIfDeviceLost(SharpGen.Runtime.Result result, string operation)
@@ -413,7 +412,7 @@ internal sealed partial class D3D11Renderer : IVideoRenderer
             _context.ClearRenderTargetView(_renderTargetView, new Color4(0, 0, 0, 0));
 
             // 呈现清除后的画面（SyncInterval=0 立即显示，不等 VSync）
-            // B-DEVLOST: 同 Present——设备丢失须以类型化异常上抛
+            // 同 Present——设备丢失须以类型化异常上抛
             var clearResult = _swapChain.Present(0u, PresentFlags.None);
             ThrowIfDeviceLost(clearResult, "Clear/Present");
         }

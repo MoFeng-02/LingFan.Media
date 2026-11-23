@@ -16,7 +16,7 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <see cref="TryImport"/> 返回 <see langword="false"/>，调用方回落软解并计入 CPU 拷贝统计，绝不报"已就绪"假绿。</para>
 /// <para><b>AOT</b>：VulkanNative 为零反射绑定（vkGetDeviceProcAddr 解析外部内存函数指针）；
 /// 无 [DllImport]/[ComImport]/反射；跨平台经 OperatingSystem.IsXxx() 运行时分发，无 #if。</para>
-/// <para><b>v1 范围</b>：Windows(D3D11→VK) + Linux(VAAPI→VK) + Android(AHB→VK，外部格式 YCbCr 采样转换)。
+/// <para><b>支持范围</b>：Windows(D3D11→VK) + Linux(VAAPI→VK) + Android(AHB→VK，外部格式 YCbCr 采样转换)。
 /// Apple(IOSurface) 为后续端点，当前返回 false（调用方回落软解），不阻断播放。</para>
     /// <para><b>多切片</b>：按 <see cref="GpuFrameImportSource.ArrayLayers"/> 创建整数组 VkImage，并据
     /// <see cref="GpuFrameImportSource.SubresourceIndex"/> 在 <see cref="VulkanRenderer.BlitVulkanImageResource"/>
@@ -43,7 +43,7 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
     private CommandBuffer _cmdBuffer;         // 默认 Handle==0：未创建
     private uint _graphicsQueueFamily = uint.MaxValue;
 
-    // RGBA GPU→CPU 回读（Android Tier2：Skia 合成路径消费 GPU 帧）
+    // RGBA GPU→CPU 回读（Android Skia 合成路径消费 GPU 帧）
     // 独立命令池/命令缓冲/栅栏/staging buffer：与解码线程的 YCbCr/NV12 转换命令资源完全隔离。
     // 提交共用同一图形队列 —— VkQueue 非线程安全（vkQueueSubmit/QueueWaitIdle 须宿主同步），
     // 故与转换路径共享 _queueGate 串行化提交段（两段均为毫秒级，30fps 下无争用压力）。
@@ -56,19 +56,18 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
     private void* _readbackStagingMapped;
     private ulong _readbackStagingSize;
 
-    // 零拷贝导入诊断：仅首帧打印具体失败步骤 + Vulkan Result 码，避免逐帧刷屏（详见 FFmpeg 侧 warn 同步定位）。
+    // 零拷贝导入诊断：仅前 3 次导入失败打印具体失败步骤 + Vulkan Result 码，避免逐帧刷屏。
     private int _diagRemain = 3;
-    // AHB 首帧进入日志（与解码器侧 [AHB-TRACE] 括号定位原生崩溃的具体 vk 步骤）
+    // AHB 首帧进入日志标记：仅首帧打印一次，与解码器侧 [AHB-TRACE] 日志对照可判断导入进行到的阶段（避免逐帧刷屏）。
     private bool _ahbEntryLogged;
 
     /// <inheritdoc/>
     public GPUApiType ApiType => GPUApiType.Vulkan;
 
     /// <summary>
-    /// 预检导入能力（解码器据此决定是否启用对应零拷贝路径，如 Android Tier2 的 ImageReader Surface configure）。
+    /// 预检导入能力（解码器据此决定是否启用对应零拷贝路径，如 Android ImageReader Surface configure）。
     /// Android AHB 双判据：VK_ANDROID_external_memory_android_hardware_buffer 扩展已启用（函数可解析）
     /// <b>且</b> samplerYcbcrConversion 特性已在设备创建期启用（HasSamplerYcbcrConversion 双判据——
-
     /// 特性未启用时 YCbCr 采样属规范违规，驱动未定义行为可致进程级原生崩溃，绝不可走）。
     /// </summary>
     public bool IsImportSupported(GpuFrameImportKind kind) => kind switch
@@ -81,6 +80,10 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
         _ => false,
     };
 
+    /// <summary>初始化 <see cref="VulkanGpuFrameProducer"/> 的新实例。</summary>
+    /// <param name="device">共享 Vulkan 逻辑设备（借用引用，本生产者 Dispose 不销毁）。</param>
+    /// <param name="physicalDevice">共享 Vulkan 物理设备（借用引用，本生产者 Dispose 不销毁）。</param>
+    /// <param name="logger">可选日志器。</param>
     public VulkanGpuFrameProducer(Device device, PhysicalDevice physicalDevice, ILogger? logger = null)
     {
         _device = device;
@@ -94,8 +97,13 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
         texture = null;
         try
         {
-            if (source.Handle == IntPtr.Zero || source.Width <= 0 || source.Height <= 0)
+            if (source.Handle == IntPtr.Zero)
                 return false;
+            if (source.Width <= 0 || source.Height <= 0)
+            {
+                CloseUnconsumedHandle(source); // 早退出口：句柄未被消费，须关闭防泄漏（单一责任人；AHB 借用例外）
+                return false;
+            }
 
             // Android AHB（YUV 外部格式）：先于 NV12 格式分支——AHB 句柄经
             // VK_ANDROID_external_memory_android_hardware_buffer 导入（UNDEFINED + externalFormat + YCbCr 采样），
@@ -114,6 +122,7 @@ public sealed unsafe partial class VulkanGpuFrameProducer : IGpuFrameProducer, I
                 return TryImportLinux(source, out texture);
 
             // iOS：后续端点（IOSurface），当前回落软解。
+            CloseUnconsumedHandle(source); // 不支持端点出口：句柄未被消费，须关闭防泄漏（单一责任人；AHB 借用例外）
             return false;
         }
         catch (Exception ex)

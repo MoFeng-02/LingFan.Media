@@ -4,8 +4,9 @@ namespace LingFan.Media.Outputs.Alsa;
 /// ALSA 音频输出。桩实现（Linux）。
 /// </summary>
 /// <remarks>
-/// <para>桩——所有方法抛出 <see cref="NotSupportedException"/>。
-/// ALSA 输出为 Phase 2 目标（Linux）。</para>
+/// <para>桩——播放相关方法（InitializeAsync/Initialize/Submit/Pause/Resume/Flush/
+/// GetPlaybackPosition/Latency）抛出 <see cref="NotSupportedException"/>；
+/// Volume 为空属性，Dispose/DisposeAsync 为空操作。ALSA 输出尚未实现（Linux）。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
 /// </remarks>
 public sealed class AlsaOutput : IAudioOutput
@@ -13,7 +14,7 @@ public sealed class AlsaOutput : IAudioOutput
     /// <inheritdoc/>
     public Task InitializeAsync(CancellationToken ct = default)
         => throw new NotSupportedException(
-            "ALSA 输出尚未实现。ALSA 为 Phase 2 目标（Linux）。");
+            "ALSA 输出尚未实现（Linux）。");
 
     /// <inheritdoc/>
     public void Initialize(int sampleRate, int channels)

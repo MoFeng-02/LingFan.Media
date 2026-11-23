@@ -25,7 +25,7 @@ namespace LingFan.Media.Renderers.OpenGLES;
 /// <para><b>线程安全</b>：<c>_gate</c> 锁串行化 Attach/Detach/Present/Clear/Dispose，化解管线线程 Present 与
 /// UI 线程 Detach 的竞态（与 D3D11/桌面 OpenGL 同源）。</para>
 /// <para><b>上下文生命周期</b>：GLES 上下文在 <see cref="Attach"/> 时建立（非工厂共享 Device 单例），工厂保持薄。
-/// 当前无工厂级离屏 GLES 设备上下文（GPU 纹理零拷贝属 C 线未来增强），故工厂不注册 <see cref="IGpuDeviceContext"/>。</para>
+/// 当前无工厂级离屏 GLES 设备上下文（GPU 纹理零拷贝为未来增强），故工厂不注册 <see cref="IGpuDeviceContext"/>。</para>
 /// <para><b>异步策略</b>：公开异步方法均为真异步签名但无 I/O 阻塞——<see cref="InitializeAsync"/> 返回
 /// <see cref="Task.CompletedTask"/>、<see cref="DisposeAsync"/> 委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>，
 /// 二者皆非伪异步（无 <c>Task.Run</c> 包同步、无 await 硬阻塞）。</para>
@@ -190,10 +190,10 @@ public sealed class OpenGLESRenderer : IVideoRenderer
                         break;
 
                     case IGpuTextureResource:
-                        // GLES GPU 纹理零拷贝路径属 C 线未来增强（GLES 离屏设备上下文 + 共享组具备后再补）。
+                        // GLES GPU 纹理零拷贝路径为未来增强（GLES 离屏设备上下文 + 共享组具备后再补）。
                         throw new NotSupportedException(
                             "OpenGLES 渲染器当前不支持 GPU 纹理零拷贝路径（IGpuTextureResource）。" +
-                            "该路径属未来 C 线增强。");
+                            "该路径属未来零拷贝增强。");
 
                     default:
                         throw new NotSupportedException(

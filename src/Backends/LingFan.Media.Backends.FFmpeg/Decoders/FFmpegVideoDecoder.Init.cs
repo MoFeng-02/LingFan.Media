@@ -27,8 +27,8 @@ internal sealed partial class FFmpegVideoDecoder
 
         // 硬解开关是「两级与」：会话级 VideoSettings.EnableHardwareAcceleration
         // 与后端级 FFmpegOptions.HardwareAcceleration 任一为 false 即禁用。
-        // 此前 FFmpegOptions.HardwareAcceleration 声明了却从未被任何代码读取——宿主写
-        // AddFFmpeg(o => o.HardwareAcceleration = false) 毫无效果（静默失效）。
+        // 防回归：FFmpegOptions.HardwareAcceleration 必须在此被读取，否则宿主写
+        // AddFFmpeg(o => o.HardwareAcceleration = false) 会静默失效。
         // options 为 null（直接 new 解码器、未走 DI）时按 true 处理，保持既有行为。
         bool hwEnabled = settings.EnableHardwareAcceleration && (_options?.HardwareAcceleration ?? true);
 
@@ -141,7 +141,7 @@ internal sealed partial class FFmpegVideoDecoder
         {
             // Linux VAAPI 硬件解码（真实零拷贝路径）：
             // 有匹配 GPU 生产者(_gpuProducer) → VA Surface 经 dma_buf 零拷贝导入 GL/Vulkan；
-            // 无生产者（如 Phase 1 无头探针）→ 硬解 + CPU 回读（仍属硬解，仅非零拷贝）。
+            // 无生产者（如无头探针）→ 硬解 + CPU 回读（仍属硬解，仅非零拷贝）。
             try
             {
                 InitializeVAAPI(ctx);
@@ -229,11 +229,13 @@ internal sealed partial class FFmpegVideoDecoder
             }
             else
             {
-                // Linux/macOS：GPU 零拷贝需 VAAPI→GPU（VaApiInterop 为 Phase 2 桩，未实现）→ 软解。
+                // 非 Windows 且未命中上方 VAAPI 分支（Linux 未注册 AddVaApi()，或 macOS 无 VAAPI）：
+                // 本分支的 D3D11VA→共享句柄互操作仅 Windows 可用 → 软解。
+                // （Linux 的 VAAPI→GL/Vulkan 零拷贝由上方 VAAPI 分支承担，VaApiInterop 已实现，不在此处。）
                 // 不进入 _gpuImportMode，避免运行时每帧都尝试不可用的导入。
                 IsHardwareAccelerated = false;
                 _logger.LogWarning(
-                    "已请求 GPU 零拷贝，但当前平台不支持硬解→GPU 互操作（VAAPI 为 Phase 2），" +
+                    "已请求 GPU 零拷贝，但当前平台/注册不支持硬解→GPU 互操作（Linux 需注册 AddVaApi() 启用 VAAPI 零拷贝；macOS 暂无该路径），" +
                     "本次{Codec}将全程软件解码（CPU 拷贝）。", codec);
             }
         }
@@ -307,7 +309,7 @@ internal sealed partial class FFmpegVideoDecoder
         }
 
         _initialized = true;
-        // 首启也打印前 4 帧 pts（此前仅 Reset() 后触发）——CPU 回落链路的时间戳健康度直接可见。
+        // 首启也打印前 4 帧 pts——CPU 回落链路的时间戳健康度直接可见。
         _decodeDiagCount = 4;
         _logger.LogInformation("视频解码器初始化: {Codec}, 硬件加速={HwAccel}", codec, IsHardwareAccelerated);
     }

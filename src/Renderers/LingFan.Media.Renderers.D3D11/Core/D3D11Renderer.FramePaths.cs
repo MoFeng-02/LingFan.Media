@@ -1,6 +1,5 @@
 using System.Buffers;
 using LingFan.Media.Renderers.D3D11.DirectComposition;
-using LingFan.Media.Renderers.D3D11.SafeHandles;
 using LingFan.Media.Renderers.D3D11.Shaders;
 
 namespace LingFan.Media.Renderers.D3D11;

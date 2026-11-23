@@ -25,7 +25,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// 属运行期验收项（设计假设，由宿主 probe 验证）。</para>
 /// <para><b>AOT</b>：GL/WGL/EGL 互操作函数指针经 <see cref="GLNative"/> 零反射解析；D3D11 桥接设备经 Vortice 类型安全 API；
 /// 无 [DllImport]/[ComImport]/反射；跨平台经 OperatingSystem.IsXxx() 运行时分发，无 #if。</para>
-/// <para><b>v1 范围</b>：Windows(D3D11→GL) 与 Linux(VAAPI→GL) 均为已启用主路径。
+/// <para><b>支持范围</b>：Windows(D3D11→GL) 与 Linux(VAAPI→GL) 均为已启用主路径。
 /// Linux 路径：VAAPI 解出 VA Surface → <c>vaExportSurfaceHandle(DRM_PRIME_2, COMPOSED_LAYERS)</c> 导出单 fd 双平面 NV12 dma_buf
 /// → 拆为 Y(R8) / UV(GR88) 两 EGLImage → 两 GL 纹理 → NV12 shader 零拷贝上屏。Android(AHardwareBuffer)/Apple(IOSurface) 为后续端点，当前返回 false。</para>
 /// <para><b>异步策略</b>：<see cref="TryImport"/> 为同步（native 分类）——GPU 纹理导入是同步原生调用，无 I/O await；
@@ -62,8 +62,13 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
         texture = null;
         try
         {
-            if (source.Handle == IntPtr.Zero || source.Width <= 0 || source.Height <= 0)
+            if (source.Handle == IntPtr.Zero)
                 return false;
+            if (source.Width <= 0 || source.Height <= 0)
+            {
+                CloseUnconsumedHandle(source); // 早退出口：句柄未被消费，须关闭防泄漏（单一责任人）
+                return false;
+            }
 
             if (OperatingSystem.IsWindows() && source.Kind == GpuFrameImportKind.D3D11SharedHandle)
                 return TryImportWin32D3D11(source, out texture);
@@ -71,6 +76,7 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
                 return TryImportLinuxVaApi(source, out texture);
 
             // Android / iOS：后续端点（AHardwareBuffer / IOSurface），当前回落软解。
+            CloseUnconsumedHandle(source); // 不支持端点出口：句柄未被消费，须关闭防泄漏（单一责任人）
             return false;
         }
         catch (Exception ex)
@@ -81,6 +87,22 @@ public sealed partial class OpenGLGpuFrameProducer : IGpuFrameProducer, IDisposa
             texture = null;
             return false;
         }
+    }
+
+    /// <summary>
+    /// 关闭早退/不支持端点路径上未被消费的原生共享句柄（单一责任人契约的兜底出口）。
+    /// 仅关闭语义明确的句柄形态：Windows NT HANDLE（D3D11SharedHandle）/ Linux dma_buf fd（LinuxDmaBufFd）；
+    /// AHardwareBuffer 为借用指针（所有权不转移），绝不在此释放；其余未知形态不触碰。
+    /// 平台导入分部（Win32/Linux）内部各出口已自行关闭句柄，本方法不与其重叠，避免双关。
+    /// </summary>
+    private static void CloseUnconsumedHandle(GpuFrameImportSource source)
+    {
+        if (source.Handle == IntPtr.Zero) return;
+        if (source.Kind == GpuFrameImportKind.AndroidHardwareBuffer) return;
+        if (OperatingSystem.IsWindows() && source.Kind == GpuFrameImportKind.D3D11SharedHandle)
+            CloseHandle(source.Handle);
+        else if (OperatingSystem.IsLinux() && source.Kind == GpuFrameImportKind.LinuxDmaBufFd)
+            CloseFd((int)source.Handle);
     }
 
     /// <inheritdoc/>

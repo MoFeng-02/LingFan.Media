@@ -22,7 +22,7 @@ internal sealed partial class MFDemuxer
     /// 永远返回 CPU buffer，用它做零拷贝在原理上注定失败。</para>
     /// <para><b>路径(2)（回落）</b>：样本不是 DXGI buffer（=「半 DXVA」：驱动内部把帧读回了系统内存）时，
     /// 走 <c>ConvertToContiguousBuffer</c> 取 NV12 字节，配 <c>Width/Height/Stride</c> 交给下游直通成 <c>VideoFrame</c>。
-    /// 仍比改造前好——至少省掉了 MFVideoDecoder 的第二次 MFT 解码。</para>
+    /// 收益：省掉 MFVideoDecoder 的第二次 MFT 解码。</para>
     /// <para><b>诊断</b>：首帧一次性打印命中的是哪条路径 + 失败 HRESULT，避免逐帧刷屏又不至于静默失效。</para>
     /// </remarks>
     private MediaPacket? ExtractDecodedVideoPacket(IntPtr samplePtr, int streamIndex, long sampleTimeTicks)
@@ -81,12 +81,12 @@ internal sealed partial class MFDemuxer
                         "驱动内部把帧读回了系统内存。回落 NV12 CPU 直通（仍省掉一次 MFT 解码）。", exHr);
                 }
 
-                // 路径(1)-A：IMF2DBuffer2 真值行跨度紧凑化（半 DXVA 治本）
+                // 路径(1)-A：IMF2DBuffer2 真值行跨度紧凑化（半 DXVA 读回场景）
                 //   IMFDXGIBuffer 失败后，MS H264 MFT 内部把帧读回 Direct3DSurface9-backed 2D 内存，
                 //   实际 pitch 是 16 字节对齐（典型 1080→1088）。ConvertToContiguousBuffer 把整段当 1D 摊平，
                 //   但 IMFMediaBuffer.GetCurrentLength 返回的是 MFT 内部 allocate 的整段长度（含尾部对齐 padding），
                 //   反推 stride/codedH 必错 → 紧凑拷贝时 UV 平面偏移错位 → 画面下半段色度错行/横纹。
-                //   治本：QI IMF2DBuffer2，Lock2D 取真值 pitch + scanline0，逐行拷成紧凑布局。
+                //   正确做法：QI IMF2DBuffer2，Lock2D 取真值 pitch + scanline0，逐行拷成紧凑布局。
                 //   若 Lock2D 失败（极少见：旧版 MFT 不实现 2D 路径），再走路径(2) ConvertToContiguousBuffer 兜底。
                 int hr2d = Marshal.QueryInterface(rawBuffer, in MFConstants.IID_IMF2DBuffer2, out IntPtr b2d);
                 if (hr2d >= 0 && b2d != IntPtr.Zero)
@@ -142,8 +142,8 @@ internal sealed partial class MFDemuxer
                                             pitch % 64 == 0 ? 64 : pitch % 32 == 0 ? 32 :
                                             pitch % 16 == 0 ? 16 : 1;
                                         _logger.LogInformation(
-                                            "[MF-D3D] 半 DXVA 治本：IMF2DBuffer2.Lock2D 拿到真值 pitch={P}（display={W}，驱动行距对齐≈{Align}B，填充 {Pad}B/行）" +
-                                            " → 逐行拷成紧凑 {Total}B，路径(2) ConvertToContiguousBuffer 跳过（治本，不再依赖 curLen 反推）。" +
+                                            "[MF-D3D] 半 DXVA 读回：IMF2DBuffer2.Lock2D 拿到真值 pitch={P}（display={W}，驱动行距对齐≈{Align}B，填充 {Pad}B/行）" +
+                                            " → 逐行拷成紧凑 {Total}B，路径(2) ConvertToContiguousBuffer 跳过（不再依赖 curLen 反推）。" +
                                             "pitch 带 GPU 对齐痕迹 ⇒ 硬解确已发生，仅最后一步被读回系统内存",
                                             pitch, width, alignGuess, pitch - width, dstLen);
                                     }

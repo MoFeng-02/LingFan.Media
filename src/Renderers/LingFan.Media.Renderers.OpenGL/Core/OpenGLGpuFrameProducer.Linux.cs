@@ -27,6 +27,7 @@ public sealed partial class OpenGLGpuFrameProducer
                 if (!EglDmaBufImport.IsEglDmaBufImportAvailable())
                 {
                     _logger?.LogWarning("[OPENGL-ZEROCOPY] EGL_EXT_image_dma_buf_import 不可用，回落软件解码。");
+                    CloseFd(fd); // 失败出口：fd 尚未被消费，须关闭防泄漏（单一责任人）
                     return false;
                 }
 
@@ -42,6 +43,7 @@ public sealed partial class OpenGLGpuFrameProducer
                 {
                     _logger?.LogWarning(
                         "[OPENGL-ZEROCOPY] 离屏显示缺 EGL_EXT_image_dma_buf_import —— 本显示不支持 dma_buf 导入，回落软件解码。");
+                    CloseFd(fd); // 失败出口：fd 尚未被消费，须关闭防泄漏（单一责任人）
                     return false;
                 }
 
@@ -62,6 +64,7 @@ public sealed partial class OpenGLGpuFrameProducer
                         "[OPENGL-ZEROCOPY] Y 平面带 modifier 导入被拒（eglErr=0x{Err:X8}，modifier=0x{Mod:X16}）——本显示不支持该 tiling 组合，回落 CPU 传输（画面正确，无零拷贝）。",
                         EglNative.eglGetError(), source.DrmModifier);
                     LogDisplayDmaBufModifiers(display, 0x20203852);
+                    CloseFd(fd); // 失败出口：fd 尚未被消费，须关闭防泄漏（单一责任人）
                     return false;
                 }
                 if (eglImageY == nint.Zero)
@@ -70,6 +73,7 @@ public sealed partial class OpenGLGpuFrameProducer
                         "[OPENGL-ZEROCOPY] eglCreateImageKHR(Y 平面) 失败 eglErr=0x{Err:X8} —— fourcc=0x{Fourcc:X8} modifier=0x{Mod:X16} pitch={Pitch} offset={Offset} 尺寸={W}x{H} display=0x{Dsp:X8}，回落软件解码。",
                         EglNative.eglGetError(), (uint)source.DrmFourcc, source.DrmModifier, yPitch, yOffset,
                         source.Width, source.Height, display);
+                    CloseFd(fd); // 失败出口：fd 尚未被消费，须关闭防泄漏（单一责任人）
                     return false;
                 }
 
@@ -84,6 +88,9 @@ public sealed partial class OpenGLGpuFrameProducer
                     _logger?.LogWarning(
                         "[OPENGL-ZEROCOPY] eglCreateImageKHR(UV 平面) 失败 eglErr=0x{Err:X8} useModifier={UseModifier}，回落软件解码。",
                         EglNative.eglGetError(), hasModifier);
+                    // 失败出口：Y 平面 EGLImage 已建须销毁；fd 尚未被消费，须关闭防泄漏（单一责任人）
+                    EglDmaBufImport.EglDestroyImageKHR(display, eglImageY);
+                    CloseFd(fd);
                     return false;
                 }
 
