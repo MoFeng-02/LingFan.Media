@@ -22,7 +22,7 @@ internal static class D3D11SharedHandle
 {
     /// <summary>从 D3D11 纹理导出 DXGI 共享 NT 句柄。</summary>
     /// <param name="texturePtr">源纹理裸指针（须带 SharedNTHandle）。</param>
-    /// <returns>共享句柄；导出失败抛 <see cref="InvalidOperationException"/> 或 <see cref="COMException"/>。</returns>
+    /// <returns>共享句柄；导出失败抛 <see cref="InvalidOperationException"/> 或 <see cref="System.Runtime.InteropServices.COMException"/>。</returns>
     public static IntPtr GetSharedHandle(IntPtr texturePtr)
     {
         if (texturePtr == IntPtr.Zero)

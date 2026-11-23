@@ -180,11 +180,11 @@ public static unsafe partial class D3D11Interop
     private delegate void PFN_CopySubresourceRegion(IntPtr self, IntPtr pDstResource, uint dstSubresource,
         uint dstX, uint dstY, uint dstZ, IntPtr pSrcResource, uint srcSubresource, IntPtr pSrcBox);
 
-    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     /// <summary>
     /// IDXGIResource1::CreateSharedHandle（绝对槽位 13）。
     /// 原生签名：<c>HRESULT CreateSharedHandle(pAttributes, dwAccess, lpName, pHandle)</c>——4 参 + This = 5 总参。
     /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int PFN_CreateSharedHandle(IntPtr self, IntPtr pAttributes, uint dwAccess, IntPtr lpName, out IntPtr pHandle);
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
