@@ -375,6 +375,7 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
         }
         _decodeDone = false;
         _eosReached = false;
+        _finalePending = false;
         // 重播正确性：若本次 Start 是从自然排干(Ended)态重启，必须清零自然完成标志，
         // 否则残留 true 会在后续 Stop/Dispose 的 finally 中误触发 Completed → 错误发出 Ended。
         _completedNaturally = false;
@@ -449,7 +450,47 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
         _isRunning = false;
         _isPaused = false;
         _cts.Cancel();
+        // 解码循环可能在取消生效前已从包通道读到「通道关闭」并进入 EOS 排空分支——
+        // 排空的 EnqueueAsync 不响应取消（通道关闭后写入立即返回），会持续入队直到解码器排干。
+        // 显式关闭帧队列使排空入队立即抛 ChannelClosedException 中断（排空 catch 已兜底），
+        // 保证解码循环及时退出；呈现循环按「队空 + decodeDone」自然收尾并触发 Completed。
+        _frameQueue.Complete();
     }
+
+    /// <summary>
+    /// 时长收尾（由 <see cref="MediaPipelineHost"/> 的时长门控在宽限期到期时调用）：
+    /// 主时钟已到达媒体时长、音频已自然收尾，而视频解码仍未追完（超实时解码能力的软解素材）。
+    /// 停止两条消费循环并按「自然完成」收尾——剩余未解码内容对应的呈现计为放弃，
+    /// 播放按时结束（Ended）而不是拖延数倍时长。与 <see cref="Stop"/> 的区别：
+    /// Stop 是用户主动停止（不触发 Completed），本方法是播放时间线意义上的自然结束。
+    /// </summary>
+    /// <remarks>
+    /// 线程安全：可在线程池定时器回调上调用。收尾走与流末排干相同的标志与事件路径
+    /// （_completedNaturally → finally 触发 Completed），受运行代号保护——若调用瞬间
+    /// 恰逢 seek 复位/新一轮启动，旧代号不匹配则本次收尾自动作废，不污染新一轮。
+    /// 帧队列立即 Complete：呈现循环排空队内残留帧（末帧覆盖规则保证不丢已过判定窗口的帧）后退出。
+    /// </remarks>
+    public void FinishAtDuration()
+    {
+        lock (_finaleStateLock)
+        {
+            if (_finalePending || !_isRunning)
+                return;
+            _finalePending = true;
+        }
+
+        _logger.LogInformation(
+            "[VIDEO-EOS] 时长收尾：主时钟已到媒体时长而解码未追完，按自然完成收尾（已呈={Presented} 累计丢={Dropped}）",
+            _presentedCount, Interlocked.Read(ref _droppedFrames));
+
+        // 只发「收尾意图」，不动运行状态：呈现循环在自己的循环体内执行收尾
+        // （清残留帧→置自然完成标志→退出→finally 触发 Completed），与流末排干同路径。
+        // 不在此取消 CTS/关队列：那会让呈现循环走取消分支而吞掉自然完成事件。
+    }
+
+    // 时长收尾意图标志与互斥（FinishAtDuration 可被定时器重复调用，只受理一次）。
+    private volatile bool _finalePending;
+    private readonly object _finaleStateLock = new();
 
     /// <summary>
     /// 释放管线资源（解码锁和 CTS）。

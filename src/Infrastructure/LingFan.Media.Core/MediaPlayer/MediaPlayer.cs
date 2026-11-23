@@ -189,6 +189,12 @@ public sealed partial class MediaPlayer : IMediaPlayer
             _synchronizer.RealTimeSync = (_mode == ProcessingMode.RealTime);
         if (_audioOutput is IRealtimePacedOutput paced)
             paced.PaceRealTime = (_mode == ProcessingMode.RealTime);
+        // 模式切换同步时长收尾门控：最快模式不判丢帧、无收尾拖延问题，门控应随模式关闭/开启。
+        if (_pipelineHost != null && _session != null)
+            _pipelineHost.ConfigureDurationFinale(
+                _session.IsLive ? TimeSpan.Zero : _session.Duration,
+                () => _synchronizer?.CurrentMasterTime ?? TimeSpan.Zero,
+                enabled: _mode == ProcessingMode.RealTime);
     }
 
     /// <inheritdoc />

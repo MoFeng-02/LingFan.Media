@@ -226,6 +226,12 @@ public sealed partial class MediaPlayer
             _pipelineHost = new MediaPipelineHost();
             _pipelineHost.Attach(_videoPipeline, _audioPipeline, _subtitleProcessor);
             _pipelineHost.PlaybackCompleted += OnPlaybackCompleted;
+            // 时长收尾门控：实时模式 + 确定时长（非直播）时，主时钟到时长后限期收尾，
+            // 避免超实时解码能力的软解素材把 Ended 拖延数倍时长。主时钟读取与同步器同源。
+            _pipelineHost.ConfigureDurationFinale(
+                isLive ? TimeSpan.Zero : duration,
+                () => _synchronizer?.CurrentMasterTime ?? TimeSpan.Zero,
+                enabled: _mode == ProcessingMode.RealTime);
 
             // 11. 配置网络流缓冲
             if (isLive)

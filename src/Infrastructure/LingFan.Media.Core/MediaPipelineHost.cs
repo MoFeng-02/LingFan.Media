@@ -33,6 +33,18 @@ public sealed class MediaPipelineHost
     private bool _audioCompleted;
     private bool _completionRaised;
 
+    // 时长收尾门控（仅实时模式的有限时长媒体启用）：主时钟到达时长后，给解码侧一个限期收尾窗口，
+    // 到期强制视频管线按自然完成收尾——避免超实时解码能力的素材把 Ended 拖延数倍时长。
+    private TimeSpan _mediaDuration;
+    private bool _durationFinaleEnabled;
+    private Func<TimeSpan>? _masterClockReader;
+    private Timer? _durationFinaleTimer;
+    private long _finaleArmQpc;
+    private bool _finaleForced;
+
+    /// <summary>时长收尾宽限：主时钟越过时长后等待解码自然收尾的最长时间，到期强制收尾。</summary>
+    private static readonly TimeSpan DurationFinaleGrace = TimeSpan.FromSeconds(2);
+
     /// <summary>
     /// 绑定管线（由 MediaPlayer 在创建管线后调用）。
     /// </summary>
@@ -51,6 +63,25 @@ public sealed class MediaPipelineHost
     }
 
     /// <summary>
+    /// 配置时长收尾门控（由 MediaPlayer 在 OpenAsync 装配后调用）。
+    /// 实时模式下，若媒体有确定时长（非直播），主时钟到达时长后启动限期收尾窗口：
+    /// 窗口内解码自然收尾则走正常完成聚合；到期仍未收尾（典型为超实时解码能力的软解素材，
+    /// 解码吞吐远低于播放速率）则强制视频管线按自然完成收尾，使播放按时结束而非拖延数倍时长。
+    /// </summary>
+    /// <param name="duration">媒体时长；<see cref="TimeSpan.Zero"/> 或负值表示未知/直播，禁用门控。</param>
+    /// <param name="masterClockReader">主时钟位置读取委托（与同步器同源）；null 时禁用门控。</param>
+    /// <param name="enabled">是否启用（仅实时处理模式应为 true；最快模式不判丢帧、无收尾拖延问题）。</param>
+    public void ConfigureDurationFinale(TimeSpan duration, Func<TimeSpan>? masterClockReader, bool enabled)
+    {
+        lock (_completionLock)
+        {
+            _mediaDuration = duration;
+            _masterClockReader = masterClockReader;
+            _durationFinaleEnabled = enabled && duration > TimeSpan.Zero && masterClockReader != null;
+        }
+    }
+
+    /// <summary>
     /// 启动两条管线（异步编排：视频先起 → 预滚动 → 放行首帧门控并等首帧上屏 → 再启动音频，见方法体注释）。
     /// 同时重置完成门控标志，使重播（Ended → Playing）能再次正确触发 PlaybackCompleted。
     /// </summary>
@@ -61,7 +92,14 @@ public sealed class MediaPipelineHost
             _videoCompleted = false;
             _audioCompleted = false;
             _completionRaised = false;
+            _finaleForced = false;
+            _finaleArmQpc = 0;
         }
+        // 时长收尾巡检（见 EnsureDurationFinaleTimer）只处理「音频已完成、视频解码追赶不及」。
+        // 无音频轨媒体没有音频完成信号，由视频管线在呈现追平时长时自行收尾（见 PresentLoop）。
+        if (_videoPipeline == null)
+            return;
+        EnsureDurationFinaleTimer();
 
         // 启动编排（A/V 启动顺序）：
         //   (1) 视频管线先 Start —— 呈现循环被「首帧门控」挡住，**一帧都不上屏**，
@@ -127,6 +165,66 @@ public sealed class MediaPipelineHost
     }
 
     /// <summary>
+    /// 确保时长收尾巡检定时器在运行（幂等；未启用门控时不创建）。
+    /// 巡检周期 250ms：主时钟越过时长即记录武装时刻，宽限期内解码自然收尾则无事发生；
+    /// 宽限期到期仍未收尾则强制视频管线收尾。纯内存判定 + 线程池回调，不占用管线线程。
+    /// </summary>
+    private void EnsureDurationFinaleTimer()
+    {
+        lock (_completionLock)
+        {
+            if (!_durationFinaleEnabled || _durationFinaleTimer != null)
+                return;
+            _durationFinaleTimer = new Timer(OnDurationFinaleTick, null,
+                TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
+        }
+    }
+
+    /// <summary>
+    /// 时长收尾巡检（线程池线程）。主时钟到达时长后启动宽限窗口；到期强制视频收尾。
+    /// 时钟回退（用户 seek 回跳）时解除武装，等待下一次自然到达时长。
+    /// </summary>
+    private void OnDurationFinaleTick(object? state)
+    {
+        VideoPipeline? videoToFinish = null;
+        lock (_completionLock)
+        {
+            if (!_durationFinaleEnabled || _completionRaised || _finaleForced)
+                return;
+            // 音频侧尚未自然收尾时不武装：时长收尾只解决「音频已完、视频解码仍在追赶」的拖延。
+            if (_audioPipeline != null && !_audioCompleted)
+                return;
+
+            TimeSpan master;
+            try { master = _masterClockReader!(); }
+            catch { return; }
+
+            if (master < _mediaDuration)
+            {
+                // 时钟未达时长（含 seek 回跳）：解除武装。
+                _finaleArmQpc = 0;
+                return;
+            }
+
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (_finaleArmQpc == 0)
+            {
+                _finaleArmQpc = now;
+                return;
+            }
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(_finaleArmQpc) < DurationFinaleGrace)
+                return;
+
+            // 宽限期到期：视频仍未自然收尾（超实时能力软解的典型场景），强制按自然完成收尾。
+            _finaleForced = true;
+            videoToFinish = _videoPipeline;
+        }
+
+        // 锁外调用：FinishAtDuration 内部会停解码循环并触发 Completed → OnPipelineCompleted 重入本锁。
+        videoToFinish?.FinishAtDuration();
+    }
+
+    /// <summary>
     /// 暂停两条管线（纯内存：设标志位）。
     /// </summary>
     public void Pause()
@@ -141,6 +239,12 @@ public sealed class MediaPipelineHost
     /// </summary>
     public void Stop()
     {
+        lock (_completionLock)
+        {
+            _finaleArmQpc = 0;
+            _durationFinaleTimer?.Dispose();
+            _durationFinaleTimer = null;
+        }
         _videoPipeline?.Stop();
         _audioPipeline?.Stop();
         _subtitleProcessor?.Stop();
@@ -163,6 +267,8 @@ public sealed class MediaPipelineHost
             _videoCompleted = false;
             _audioCompleted = false;
             _completionRaised = false;
+            _finaleForced = false;
+            _finaleArmQpc = 0;
         }
 
         if (_videoPipeline != null)
@@ -189,6 +295,12 @@ public sealed class MediaPipelineHost
     /// </summary>
     public void Detach()
     {
+        lock (_completionLock)
+        {
+            _durationFinaleTimer?.Dispose();
+            _durationFinaleTimer = null;
+            _durationFinaleEnabled = false;
+        }
         _videoPipeline = null;
         _audioPipeline = null;
         _subtitleProcessor = null;

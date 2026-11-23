@@ -36,6 +36,20 @@ public sealed partial class VideoPipeline
                 if (Volatile.Read(ref _runId) != runId)
                     break;
 
+                // 时长收尾意图（MediaPipelineHost 门控触发）：主时钟已到媒体时长而解码未追完。
+                // 在本循环线程内执行收尾——清残留帧、置自然完成标志后退出，finally 触发 Completed。
+                // 与流末排干同路径；剩余未解码内容按放弃计（已计入 dropped 的帧不重复计）。
+                if (_finalePending)
+                {
+                    _frameQueue.Clear(_framePool);
+                    _frameQueue.Complete();
+                    if (Volatile.Read(ref _runId) == runId)
+                        _completedNaturally = true;
+                    // 解码循环随 CTS 取消退出（finally 按代号落存活标志，不再入队）。
+                    _cts.Cancel();
+                    break;
+                }
+
                 // 冻结看门狗心跳：每轮循环体入口打卡（含空队列自旋/等待分支返回）。
                 Interlocked.Exchange(ref _loopHeartbeatQpc, System.Diagnostics.Stopwatch.GetTimestamp());
 

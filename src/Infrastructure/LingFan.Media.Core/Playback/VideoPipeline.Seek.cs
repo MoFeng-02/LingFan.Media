@@ -113,6 +113,7 @@ public sealed partial class VideoPipeline
         // 完成标志统一在复位动作之后清除：先清会被仍在收尾的上一轮循环重新置位。
         _decodeDone = false;
         _eosReached = false;
+        _finalePending = false;
         _completedNaturally = false;
         _isPaused = true;
         _isRunning = false;
@@ -160,6 +161,7 @@ public sealed partial class VideoPipeline
         _isPaused = false;
         _decodeDone = false;
         _eosReached = false;
+        _finalePending = false;
         _decodeTask = RestartDecodeLoopAsync(_decodeTask, Volatile.Read(ref _decodeRestartId));
         StartFreezeWatchdog();
     }
@@ -204,6 +206,7 @@ public sealed partial class VideoPipeline
             // 旧循环的收尾可能刚把这两个标志写回，启动新一轮前重新清除。
             _decodeDone = false;
             _eosReached = false;
+            _finalePending = false;
             // 到这里才真正有解码循环在跑：存活标志延迟到启动前后置位，避免重建窗口内自述健康。
             _decodeLoopAlive = true;
             _decodeRestarting = false;

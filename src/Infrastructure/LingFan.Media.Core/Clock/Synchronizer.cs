@@ -132,6 +132,13 @@ public sealed class Synchronizer
 
     /// <summary>
     /// 当前主时钟时间（与 <see cref="CheckVideoFrame"/> 内部计算**完全一致**）。
+    /// 供视频管线做帧精确等待时复用同一时间源，避免判据分裂；
+    /// 亦供管线宿主的时长收尾门控读取（同源判定，不另立时钟）。
+    /// </summary>
+    public TimeSpan CurrentMasterTime => GetCurrentMasterTime();
+
+    /// <summary>
+    /// 当前主时钟时间（与 <see cref="CheckVideoFrame"/> 内部计算**完全一致**）。
     /// 供视频管线做帧精确等待时复用同一时间源，避免判据分裂。
     /// </summary>
     internal TimeSpan GetCurrentMasterTime()
