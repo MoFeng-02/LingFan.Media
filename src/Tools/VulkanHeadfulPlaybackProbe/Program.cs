@@ -191,104 +191,10 @@ internal static partial class Program
             return 2;
         }
 
-        var loggerFactory = LoggerFactory.Create(b => b
-            .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "[HH:mm:ss.fff] "; })
-            .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
-
-        var services = new ServiceCollection();
-        services.AddSingleton<ILoggerFactory>(loggerFactory);
-        // AddHeadlessRenderer / AddWasapiOutput / AddSilentAudioOutput 都是 MediaBuilder 的扩展，
-        // 必须接在 builder 链上调用，不能对 ServiceCollection 直接调用。
-        // 后端选择由 --backend 决定（mf/ffmpeg/vlc）。默认（无 --hw）三者强制软件解码，使帧恒为 CPU SoftwareFrameResource，
-        // Vulkan 渲染器走「CPU 软解帧 → VkImage 上传 → SwapChain 上屏」路径（GPU shader 做 YUV→RGB + 缩放）。
-        // --hw 时：ffmpeg 经 D3D11VA 产 NV12 → 共享句柄由 VulkanGpuFrameProducer 导入零拷贝上屏；
-        // VLC 恒回拷 CPU / MF 半 DXVA 不走零拷贝（仅作 GPU/CPU 计数参考，不判 PASS）。
-        MediaBuilder builder = backendArg switch
-        {
-            "ffmpeg" => services.AddLingFanMedia().AddFFmpeg(o =>
-            {
-                // --hw 时开启 D3D11VA 硬解：产 NV12 → 共享句柄由 VulkanGpuFrameProducer 导入零拷贝上屏；
-                // 无 --hw 则强制软解，帧恒为 CPU SoftwareFrameResource，Vulkan 走「VkImage 上传」路径上屏。
-                o.FFmpegLibraryPath = AppContext.BaseDirectory;
-                o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
-                o.HardwareAcceleration = hwMode;
-            }),
-            "vlc" => services.AddLingFanMedia().AddVLCNative(o =>
-            {
-                // VLC 经 SetVideoCallbacks 内存捕获已解码帧，自身不依赖原生窗口。
-                // Headless=true 注入 --vout=dummy 禁止 VLC 自建窗口；即便 --hw 置 EnableHardwareDecoding=true，
-                // 本仓 VLCVideoDecoder.IsHardwareAccelerated 硬编码 false、帧恒包成 CPU BGRA32（设计如此，非缺陷），
-                // 故 Vulkan 仍走「VkImage 上传」路径（非零拷贝）——本探针仅作 GPU/CPU 计数参考，不判 PASS。
-                o.EnableHardwareDecoding = hwMode;
-                o.Headless = true;
-            }),
-            _ => services.AddLingFanMedia().AddMediaFoundation(o =>
-            {
-                // MF 为半 DXVA（硬解激活但 MFT 把纹理读回系统内存，GPU 零拷贝=0），非真零拷贝，故本探针不判 PASS。
-                // --hw 时开启 EnableHardwareDecoding/EnableDxva 作对照，帧仍回拷 CPU；无 --hw 则纯软解。
-                o.EnableHardwareDecoding = hwMode;
-                o.EnableDxva = hwMode;
-            }),
-        };
-
-        // —— 视频侧 ——
-        CountingVideoRendererFactory? countingFactory = null;
-        if (doVideo)
-        {
-            // 必须显式注册 Vulkan 工厂（装饰器包裹）。AddLingFanMedia 只注册契约骨架，
-            // 不注册具体渲染器；缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
-            // 装饰器包裹真实 VulkanRendererFactory 以精确统计 Present 调用。
-            // Vulkan 走「CPU 软解帧 → VkImage 上传 → SwapChain 上屏」，无法消费 D3D11 DXVA 纹理，
-            // 故本探针恒强制软件解码（见下方 AddMediaFoundation 的 EnableHardwareDecoding/EnableDxva=false）。
-            var vulkanFactory = new VulkanRendererFactory(loggerFactory);
-            vulkanFactory.ScaleMode = scaleMode;
-            // 零拷贝跨 GPU 对齐：ffmpeg 的 D3D11VA 共享纹理由「默认 D3D11 适配器」创建
-            // （D3D11CreateDevice(DriverType.Hardware) 不指定适配器 → 默认适配器），而 Vulkan 渲染器
-            // 默认「独显优先」。在 AMD 集显 + 3060 这类混合显卡上二者会落到不同 GPU，
-            // 跨 GPU/厂商导入 D3D11 共享句柄会被驱动拒绝（vkAllocateMemory ErrorOutOfDeviceMemory）。
-            // 取默认 D3D11 适配器 LUID 注入工厂，强制 Vulkan 选同一张卡使零拷贝成立。
-            // 纯软解（无 --hw）无 D3D11 互操作，无需对齐，跳过以免改变纯 Vulkan 性能选择。
-            if (hwMode)
-            {
-                byte[]? d3d11Luid = QueryDefaultD3D11AdapterLuid();
-                if (d3d11Luid is not null)
-                {
-                    vulkanFactory.PreferredAdapterLuid = d3d11Luid;
-                    Console.WriteLine("[HEADFUL-GPUALIGN] 已对齐 Vulkan 物理设备选择到 D3D11 默认适配器 LUID（零拷贝跨 GPU 修复）");
-                }
-                else
-                {
-                    Console.WriteLine("[HEADFUL-GPUALIGN] 取 D3D11 默认适配器 LUID 失败，零拷贝对齐跳过（纯独显机器通常无需对齐）");
-                }
-            }
-            countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir);
-            builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
-            // 保住 IGpuDeviceContext 注册：AddVulkanRenderer() 原本会注册它（cast 回 VulkanRendererFactory），
-            // 手动装饰时必须补回，否则依赖它的层拿不到 GPU 能力上下文。
-            builder.Services.AddSingleton<IGpuDeviceContext>(sp => vulkanFactory.Context);
-            // 零拷贝关键：注册 IGpuFrameProducer，否则 ffmpeg 的 _gpuProducer 为 null → --hw 回落软解。
-            // 这与 AddVulkanRenderer()/OpenGLExtensions 的注册同源（vulkanFactory.CreateFrameProducer()）。
-            builder.Services.AddSingleton<IGpuFrameProducer>(sp => vulkanFactory.CreateFrameProducer());
-        }
-        else
-        {
-            // 纯音频用例：用 NoOp 视频渲染器隔离变量
-            builder.AddHeadlessRenderer();
-        }
-
-        // —— 音频侧 ——
-        if (doAudio)
-            builder.AddWasapiOutput(o =>
-            {
-                o.EnableBackgroundCapableSession = enableCategory;
-                o.ExclusiveMode = exclusiveMode;       // --exclusive 强制独占
-                o.EventDrivenMode = !pollingMode;       // --polling 退回轮询模式
-            });
-        else
-            builder.AddSilentAudioOutput();
-
-        await using var sp = services.BuildServiceProvider();
-        var player = sp.GetRequiredService<IMediaPlayer>();
+        var (sp, player, countingFactory) = BuildPlayer(
+            backendArg, hwMode, verbose, doVideo, doAudio,
+            enableCategory, exclusiveMode, pollingMode, saveFrames, saveDir, scaleMode);
+        await using var _sp = sp;
 
         // 音频进度观测量：累计进入提交链的采样数（区分「真丢帧」与「时钟 lag」）
         long submittedSamples = 0;
@@ -523,51 +429,8 @@ internal static partial class Program
                                       $"属批量提交节奏（非欠载/断音）；真欠载以 backlog>150ms 为准。");
             }
 
-            // —— 重播：Ended→Playing 无缝从头（--repeat/--full 启用，--no-replay 关闭）——
-            // 第一次自然结束后立即二次 PlayAsync，验证：
-            //   (a) 状态机 Ended→Playing 的合法转换；
-            //   (b) 时钟归零、位置回绕到 0（PlayAsync 在 Ended 态走 SeekAsync(0) + 时钟重置分支）；
-            //   (c) 双管线从排干态重启，present 从 0 重新开始累计。
             if (replayTest)
-            {
-                Console.WriteLine();
-                Console.WriteLine("[HEADFUL-REPLAY] 第一次播放已 Ended，立即二次 PlayAsync 验证重播无缝从头…");
-                int presentBeforeReplay = presentCount;
-                double posBeforeReplay = player.Position.TotalSeconds;
-                await player.PlayAsync();
-                double posAfterReplay = player.Position.TotalSeconds;
-                Console.WriteLine($"  [HEADFUL-REPLAY] 二次 PlayAsync 后：state={player.State} " +
-                                  $"pos={player.Position:g}（重播前 pos={posBeforeReplay:F2}s）");
-                // 重播合法 + 位置已归零（非 Ended 态遗留的末尾位置）
-                bool replayStateOk = player.State == MediaState.Playing && posAfterReplay < 1.0;
-
-                var replayPoll = Stopwatch.StartNew();
-                while (true)
-                {
-                    await Task.Delay(500);
-                    if (doVideo && countingFactory?.Last is not null)
-                        presentCount = countingFactory.Last.PresentCount;
-                    if (visible || verbose)
-                        Console.WriteLine($"  [REPLAY] t={replayPoll.Elapsed.TotalSeconds:F1}s " +
-                                          $"pos={player.Position:g} present={presentCount} state={player.State}");
-                    if (player.State == MediaState.Ended) break;
-                    double cap = player.Duration.TotalSeconds + 8;
-                    if (replayPoll.Elapsed.TotalSeconds > cap)
-                    {
-                        Console.WriteLine("  [HEADFUL-REPLAY] 超时未收到第二次 Ended（兜底退出）");
-                        break;
-                    }
-                }
-                int presentAfterReplay = presentCount;
-                int replayPresentDelta = presentAfterReplay - presentBeforeReplay;
-                // 无视频用例跳过呈现计数判定
-                bool replayPresentOk = !doVideo || replayPresentDelta >= 900;
-                replayPass = replayStateOk && replayPresentOk;
-                Console.WriteLine($"  [HEADFUL-REPLAY] 二次播放结束 state={player.State} " +
-                                  $"present 增量={replayPresentDelta} Duration={player.Duration:g}");
-                Console.WriteLine($"  [HEADFUL-REPLAY] => {(replayPass ? "PASS" : "FAIL")} " +
-                                  $"(state重启={replayStateOk}, 二次呈现≈{replayPresentDelta}{(doVideo ? "" : "[无视频跳过计数]")})");
-            }
+                replayPass = await RunReplayAsync(player, countingFactory, doVideo, visible, verbose, presentCount);
 
             await player.StopAsync(CancellationToken.None);
         }
