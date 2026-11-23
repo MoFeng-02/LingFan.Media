@@ -362,7 +362,7 @@
         "IOSurface",
         "VulkanImage"
       ],
-      "sourceHash": "cabaa4fbf21c1f738620b050a6b24da68b544389a751589e3471b21b95f2e400",
+      "sourceHash": "f418ebe2ace960e1715264f05e94b695e20f7a9739277f5a09ce7e029a3caec8",
       "project": "abstractions"
     },
     {
@@ -389,7 +389,7 @@
         "PlaneOffsets",
         "PlanePitches"
       ],
-      "sourceHash": "cabaa4fbf21c1f738620b050a6b24da68b544389a751589e3471b21b95f2e400",
+      "sourceHash": "f418ebe2ace960e1715264f05e94b695e20f7a9739277f5a09ce7e029a3caec8",
       "project": "abstractions"
     },
     {
@@ -722,9 +722,10 @@
       "members": [
         "ApiType",
         "TryImport",
-        "IsImportSupported"
+        "IsImportSupported",
+        "null"
       ],
-      "sourceHash": "cabaa4fbf21c1f738620b050a6b24da68b544389a751589e3471b21b95f2e400",
+      "sourceHash": "f418ebe2ace960e1715264f05e94b695e20f7a9739277f5a09ce7e029a3caec8",
       "project": "abstractions"
     },
     {
@@ -2553,7 +2554,7 @@
       "page": "api/abstractions/interfaces-frames-igpuframeproducer",
       "pageZh": "zh/api/abstractions/interfaces-frames-igpuframeproducer",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuFrameProducer.cs",
-      "sourceHash": "cabaa4fbf21c1f738620b050a6b24da68b544389a751589e3471b21b95f2e400",
+      "sourceHash": "f418ebe2ace960e1715264f05e94b695e20f7a9739277f5a09ce7e029a3caec8",
       "project": "abstractions",
       "types": [
         "GpuFrameImportKind",

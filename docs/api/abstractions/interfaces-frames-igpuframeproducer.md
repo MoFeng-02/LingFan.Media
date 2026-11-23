@@ -5,7 +5,7 @@ namespace: "LingFan.Media.Abstractions"
 source: "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuFrameProducer.cs"
 generated: true
 generator: "scripts/gen-api.mjs"
-symbols: ["IGpuFrameProducer", "ApiType", "TryImport", "IsImportSupported"]
+symbols: ["IGpuFrameProducer", "ApiType", "TryImport", "IsImportSupported", "null"]
 lang: "en-US"
 ---
 # IGpuFrameProducer
@@ -85,3 +85,25 @@ bool IsImportSupported(GpuFrameImportKind kind) => true;
 - `kind`: 解码原生输出类型。
 
 **Returns**: `true`=支持导入该类型（可启用对应零拷贝路径）。
+
+### null
+
+```csharp
+byte[]? DecodeAdapterLuidHint => null;
+```
+
+解码设备对齐提示（可选）：生产者声明「解码侧共享句柄应产自哪张 GPU」，供解码器在创建
+自有解码设备前对齐适配器，使跨 API 导入落在同一 GPU 上。
+
+**为什么需要它**：跨 GPU/跨厂商导入共享句柄会被驱动拒绝。多数渲染器可自由选卡
+（如 Vulkan 按 LUID 对齐到解码卡）；但有的渲染上下文被平台钉死在特定 GPU——典型是
+Windows WGL：GL 上下文绑定窗口所在显示器的 GPU，渲染器无法搬走。此时对齐方向必须反转：
+解码设备向渲染上下文所在 GPU 靠拢。本属性就是该反向对齐的中立通道。
+
+**语义**：返回 8 字节适配器 LUID（小端，与 DXGI_ADAPTER_DESC1.LUID 一致）表示
+「建议解码设备落在该适配器」；返回 `null` 表示无对齐要求（解码器沿用自身选卡策略）。
+提示是**建议而非强制**：解码器须先验证目标适配器具备所需解码能力，不具备时忽略提示并按自身策略回落。
+
+**异步策略**：同步属性（纯查询或轻量原生调用，无 I/O await）。
+
+默认实现返回 `null`（无对齐要求，与既有生产者行为兼容）。
