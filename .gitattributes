@@ -1,0 +1,45 @@
+# Line-ending policy: normalize all text files to LF in the repository and on
+# checkout, on every platform. This roots out cross-platform CRLF/LF drift:
+# Windows editors and tools may write CRLF into a file, but git normalizes line
+# endings when diffing and committing, so diffs stay minimal (no whole-file
+# CRLF churn) and the Linux CI checkout matches the stored LF blobs byte-for-byte.
+* text=auto eol=lf
+
+# Binary assets — never apply line-ending normalization.
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.tif binary
+*.tiff binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.lib binary
+*.pdb binary
+*.exe binary
+*.nupkg binary
+*.snupkg binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.7z binary
+*.mp3 binary
+*.mp4 binary
+*.mkv binary
+*.avi binary
+*.mov binary
+*.wav binary
+*.flac binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.eot binary
+*.snk binary
+*.pfx binary
+*.pdf binary
