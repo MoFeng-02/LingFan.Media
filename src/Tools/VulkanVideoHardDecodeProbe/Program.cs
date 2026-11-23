@@ -152,67 +152,9 @@ internal static partial class Program
             return 2;
         }
 
-        var loggerFactory = LoggerFactory.Create(b => b
-            .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "[HH:mm:ss.fff] "; })
-            .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
-
-        var services = new ServiceCollection();
-        services.AddSingleton<ILoggerFactory>(loggerFactory);
-        // AddVulkanVideo / AddFFmpeg / AddWasapiOutput 都是 MediaBuilder 的扩展，
-        // 必须接在 builder 链上调用，不能对 ServiceCollection 直接调用。
-        // 解码后端注册顺序即运行时回退优先级：VulkanVideo → FFmpeg。
-        //    VulkanVideo 经 VK_KHR_video_decode_h264 硬解出 NV12 VkImage，与渲染器同设备 → 零拷贝上屏；
-        //    仅 H.264，且要求 IGpuDeviceContext.VideoQueueFamilyIndex 有效（设备启用 video-decode 扩展）；
-        //    不满足（非 H.264 / GPU 无 video-decode）时 Initialize 抛 NotSupportedException 由管线回落 FFmpeg。
-        //    FFmpeg 作下家：解封装 + 音频解码 + H.264 软解回退（VulkanVideo 不可用时）。
-        var builder = services.AddLingFanMedia().AddVulkanVideo().AddFFmpeg(options => options.FFmpegLibraryPath = AppContext.BaseDirectory);
-
-        // —— 视频侧 ——
-        CountingVideoRendererFactory? countingFactory = null;
-        IGpuDeviceContext? gpuCtx = null;
-        if (doVideo)
-        {
-            // 必须显式注册 Vulkan 工厂（装饰器包裹）。AddLingFanMedia / AddVulkanRenderer 默认不注册具体渲染器；
-            // 缺失会在解析 IMediaPlayer 时抛 "No service for type 'IVideoRendererFactory'"。
-            // 装饰器包裹真实 VulkanRendererFactory 以精确统计 Present 调用。
-            // 关键：渲染器 Context 实现 IGpuDeviceContext，须注册为单例供 VulkanVideoDecoder 注入——
-            // 两者共用同一 VkDevice + video-decode 队列族，零拷贝闭环成立。
-            // （本探针手动注册，不调 AddVulkanRenderer()，以免与下方 IVideoRendererFactory 双重注册冲突。）
-            var vulkanFactory = new VulkanRendererFactory(loggerFactory);
-            vulkanFactory.ScaleMode = scaleMode;
-            gpuCtx = vulkanFactory.Context;
-            countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir);
-            builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
-            builder.Services.AddSingleton<IGpuDeviceContext>(gpuCtx);
-        }
-        else
-        {
-            // 纯音频用例：用 NoOp 视频渲染器隔离变量
-            builder.AddHeadlessRenderer();
-        }
-
-        // —— 音频侧 ——
-        if (doAudio)
-            builder.AddWasapiOutput(o =>
-            {
-                o.EnableBackgroundCapableSession = enableCategory;
-                o.ExclusiveMode = exclusiveMode;       // --exclusive 强制独占
-                o.EventDrivenMode = !pollingMode;       // --polling 退回轮询模式
-            });
-        else
-            builder.AddSilentAudioOutput();
-
-        // —— 硬解能力诊断（先于 OpenAsync）：直接读渲染器设备的 VideoQueueFamilyIndex ——
-        if (doVideo && gpuCtx is not null)
-        {
-            bool videoDecodeCapable = gpuCtx.VideoQueueFamilyIndex != uint.MaxValue;
-            Console.WriteLine($"[HEADFUL-VULKANVIDEO] 渲染器设备 VideoQueueFamilyIndex={gpuCtx.VideoQueueFamilyIndex} " +
-                              $"video-decode 能力={(videoDecodeCapable ? "有效（硬解零拷贝可期）" : "无效（将回落 FFmpeg 软件解码）")}");
-            Console.WriteLine($"[HEADFUL-VULKANVIDEO] 组合根：AddVulkanVideo() 先于 AddFFmpeg() → H.264 优先走 VK_KHR_video_decode_h264 硬解");
-        }
-
-        await using var sp = services.BuildServiceProvider();
-        var player = sp.GetRequiredService<IMediaPlayer>();
+        var (sp, player, countingFactory) = BuildPlayer(
+            verbose, doVideo, doAudio, enableCategory, exclusiveMode, pollingMode, saveFrames, saveDir, scaleMode);
+        await using var _sp = sp;
 
         // 音频进度观测量：累计进入提交链的采样数（区分「真丢帧」与「时钟 lag」）
         long submittedSamples = 0;
@@ -406,45 +348,8 @@ internal static partial class Program
                                       $"属批量提交节奏（非欠载/断音）；真欠载以 backlog>150ms 为准。");
             }
 
-            // —— 重播：Ended→Playing 无缝从头（--repeat/--full 启用，--no-replay 关闭）——
             if (replayTest)
-            {
-                Console.WriteLine();
-                Console.WriteLine("[HEADFUL-REPLAY] 第一次播放已 Ended，立即二次 PlayAsync 验证重播无缝从头…");
-                int presentBeforeReplay = presentCount;
-                double posBeforeReplay = player.Position.TotalSeconds;
-                await player.PlayAsync();
-                double posAfterReplay = player.Position.TotalSeconds;
-                Console.WriteLine($"  [HEADFUL-REPLAY] 二次 PlayAsync 后：state={player.State} " +
-                                  $"pos={player.Position:g}（重播前 pos={posBeforeReplay:F2}s）");
-                bool replayStateOk = player.State == MediaState.Playing && posAfterReplay < 1.0;
-
-                var replayPoll = Stopwatch.StartNew();
-                while (true)
-                {
-                    await Task.Delay(500);
-                    if (doVideo && countingFactory?.Last is not null)
-                        presentCount = countingFactory.Last.PresentCount;
-                    if (visible || verbose)
-                        Console.WriteLine($"  [REPLAY] t={replayPoll.Elapsed.TotalSeconds:F1}s " +
-                                          $"pos={player.Position:g} present={presentCount} state={player.State}");
-                    if (player.State == MediaState.Ended) break;
-                    double cap = player.Duration.TotalSeconds + 8;
-                    if (replayPoll.Elapsed.TotalSeconds > cap)
-                    {
-                        Console.WriteLine("  [HEADFUL-REPLAY] 超时未收到第二次 Ended（兜底退出）");
-                        break;
-                    }
-                }
-                int presentAfterReplay = presentCount;
-                int replayPresentDelta = presentAfterReplay - presentBeforeReplay;
-                bool replayPresentOk = !doVideo || replayPresentDelta >= 900;
-                replayPass = replayStateOk && replayPresentOk;
-                Console.WriteLine($"  [HEADFUL-REPLAY] 二次播放结束 state={player.State} " +
-                                  $"present 增量={replayPresentDelta} Duration={player.Duration:g}");
-                Console.WriteLine($"  [HEADFUL-REPLAY] => {(replayPass ? "PASS" : "FAIL")} " +
-                                  $"(state重启={replayStateOk}, 二次呈现≈{replayPresentDelta}{(doVideo ? "" : "[无视频跳过计数]")})");
-            }
+                replayPass = await RunReplayAsync(player, countingFactory, doVideo, visible, verbose, presentCount);
 
             await player.StopAsync(CancellationToken.None);
         }
