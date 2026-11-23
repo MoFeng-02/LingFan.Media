@@ -47,8 +47,8 @@ internal static class MFConstants
     internal static readonly Guid MF_MT_SUBTYPE = new(0xf7e34c9a, 0x42e8, 0x4714, 0xb7, 0x4b, 0xcb, 0x29, 0xd7, 0x2c, 0x35, 0xe5);
     // H264/H265 解码必需：out-of-band SPS+PPS（Annex-B 序列头），设到输入媒体类型。
     // mfapi.h 权威值 {3C036DE7-3AD0-4C9E-9216-EE6D6AC21CB3}（对照 Windows SDK 头文件原文）。
-    // 误写 C8BF26B0-...（错误 GUID）：SetBlob 写到了一个 MFT 完全不认识的键 → 序列头形同虚设，
-    //    且 TryGetBlob 恒 MF_E_ATTRIBUTENOTFOUND，由此得出的「MF 媒体源不填此属性」结论无效，勿再引用。
+    // 防回归：GUID 写错时 SetBlob 写到 MFT 完全不认识的键 → 序列头形同虚设，
+    //    且 TryGetBlob 恒 MF_E_ATTRIBUTENOTFOUND（勿据此误判「MF 媒体源不填此属性」）。
     internal static readonly Guid MF_MT_MPEG_SEQUENCE_HEADER = new(0x3c036de7, 0x3ad0, 0x4c9e, 0x92, 0x16, 0xee, 0x6d, 0x6a, 0xc2, 0x1c, 0xb3);
 
     /// <summary>MF_MT_MINIMUM_DISPLAY_APERTURE {D7388766-18FE-48C6-A177-EE894867C8C4}（mfapi.h）：
@@ -164,24 +164,21 @@ internal static class MFConstants
     // MFT_CATEGORY_VIDEO_EFFECT（mfapi.h:1882 权威值 {12E17C21-532C-4A6E-8A1C-40825A736397}）
     internal static readonly Guid MFT_CATEGORY_VIDEO_EFFECT = new(0x12e17c21, 0x532c, 0x4a6e, 0x8a, 0x1c, 0x40, 0x82, 0x5a, 0x73, 0x63, 0x97);
     // IMF2DBuffer2（mfobjects.h:1642 MIDL_INTERFACE 权威值 {33AE5EA6-4316-436F-8DDD-D73D22F829EC}）
-    // 半 DXVA 的治本处理：MS H264 MFT 半 DXVA 时把帧读回 Direct3DSurface9-backed 2D 内存，
+    // 半 DXVA 场景：MS H264 MFT 半 DXVA 时把帧读回 Direct3DSurface9-backed 2D 内存，
     //    实际 pitch 是 16 字节对齐（如 1080→1088），用 ConvertToContiguousBuffer 拿不到真值→按紧凑 stride 拷贝→画面横纹错位。
     //    必须 QI 此 IID 后 Lock2D 取真值 stride 与 scanline0，逐行拷贝到紧凑布局，下游渲染器零分支。
     internal static readonly Guid IID_IMF2DBuffer2 = new(0x33ae5ea6, 0x4316, 0x436f, 0x8d, 0xdd, 0xd7, 0x3d, 0x22, 0xf8, 0x29, 0xec);
     // MF_MT_VIDEO_NOMINAL_RANGE（mfapi.h 权威值 {C21B8EE5-B956-4071-917B-3894AA8DB48B}）
     internal static readonly Guid MF_MT_VIDEO_NOMINAL_RANGE = new(0xc21b8ee5, 0xb956, 0x4071, 0x91, 0x7b, 0x38, 0x94, 0xaa, 0x8d, 0xb4, 0x8b);
     // MF_MT_DEFAULT_STRIDE {644B4E48-1E02-4516-B0EB-C01CA9D49AC6}（UINT32 存 INT32，可为负=bottom-up；单位字节）
-    // 逐字节核对修正：原值写作 {644B4424-1063-42B4-B200-E6970237AD6B}（注释还标着"mfapi.h 权威值"），
-    //    但该 GUID 在整个 Windows SDK 头文件里【根本不存在】——属无效 GUID。以 SDK 头文件实物为准：
-    //    mfapi.h:3276 DEFINE_GUID(MF_MT_DEFAULT_STRIDE,
-    //    0x644b4e48, 0x1e02, 0x4516, 0xb0, 0xeb, 0xc0, 0x1c, 0xa9, 0xd4, 0x9a, 0xc6);
-    //    旧值只被 DXVA 深度诊断字符串引用 ⇒ 表现为 "DefaultStride=缺失" 恒真（静默失效，非崩溃），
-    //    但 A 方案的 NV12 CPU 回落要靠它算行跨度，写错会直接花屏，故必须修。
+    // 权威出处：mfapi.h:3276 DEFINE_GUID(MF_MT_DEFAULT_STRIDE,
+    //    0x644b4e48, 0x1e02, 0x4516, 0xb0, 0xeb, 0xc0, 0x1c, 0xa9, 0xd4, 0x9a, 0xc6)。
+    // 防回归：NV12 CPU 回落靠它算行跨度，值写错会直接花屏。
     internal static readonly Guid MF_MT_DEFAULT_STRIDE = new(0x644b4e48, 0x1e02, 0x4516, 0xb0, 0xeb, 0xc0, 0x1c, 0xa9, 0xd4, 0x9a, 0xc6);
 
     // H264 DXVA 设备能力真值探测（决定性判据：区分「半 DXVA 读回」与「真 DXGI 零拷贝」）
     // ID3D11VideoDevice（d3d11.h:13727 MIDL_INTERFACE 权威值 {10EC4D5B-975A-4689-B9E4-D0AAC30FE333}）
-    // 历史误记的 1F010207-... 是 ID3D11VideoContext，非 VideoDevice——务必以 SDK 实物为准。
+    // 注意：1F010207-... 是 ID3D11VideoContext 的 IID，不是 VideoDevice——务必以 SDK 实物为准。
     internal static readonly Guid IID_ID3D11VideoDevice = new(0x10ec4d5b, 0x975a, 0x4689, 0xb9, 0xe4, 0xd0, 0xaa, 0xc3, 0x0f, 0xe3, 0x33);
     // D3D11_DECODER_PROFILE_H264_VLD_NOFGT（d3d11.h:10039 DEFINE_GUID 权威值 {1B81BE68-A0C7-11D3-B984-00C04F2E73C5}）
     // 标准 H264 主/高规 VLD 解码 profile（无 film grain）。勿用错误的 42EE2D3C-...（那是 DXVA2 其它 profile）。
@@ -204,8 +201,8 @@ internal static class MFConstants
     //    NOTIFY_*=0x10000000..0x10000008 / COMMAND_MARKER=0x20000000。
     //    D3D9(DXVA2) 与 D3D11(DXGI) **共用本消息**，区别仅在 ulParam 传 IDirect3DDeviceManager9*
     //    还是 IMFDXGIDeviceManager*（MSDN "Supporting Direct3D 11 Video Decoding in Media Foundation"）。
-    //    若将消息号误写作 0x80000013：MFT 对未知消息按约定返回 S_OK 静默忽略 ⇒ 日志「硬解已激活」
-    //    却全程软解（GPU零拷贝=0、每帧 QI(IMFDXGIBuffer) 得 E_NOINTERFACE）。此为「假绿」的成因。
+    //    若消息号写错：MFT 对未知消息按约定返回 S_OK 静默忽略 ⇒ 表面「硬解已激活」
+    //    却全程软解（无 DXGI 零拷贝、每帧 QI(IMFDXGIBuffer) 得 E_NOINTERFACE）。
     internal const int MFT_MESSAGE_SET_D3D_MANAGER = 0x00000002;
 
     // MFT_TRANSFORM_FLAGS_Attribute（mfapi.h:1640 权威值 {9359BB7E-6275-46C4-A025-1C01E45F1A86}）：UINT32 属性，
@@ -215,7 +212,7 @@ internal static class MFConstants
     // MFT 设置类型标志
     internal const int MFT_SET_TYPE_TEST_ONLY = 0x00000001;
 
-    // SourceReader 自带硬解 + DXGI 出样（A 方案：官方验证的 MF 零拷贝正路）所需属性键
+    // SourceReader 自带硬解 + DXGI 出样（官方验证的 MF 零拷贝正路）所需属性键
     //
     // 背景：直连 MFT（MFTEnumEx → ActivateObject → SET_D3D_MANAGER → ProcessInput/Output）在部分
     // GPU/驱动组合上会在内部 CreateVideoDecoder 阶段静默回落软件解码 —— MFT 仍报 PROVIDES_SAMPLES=True，

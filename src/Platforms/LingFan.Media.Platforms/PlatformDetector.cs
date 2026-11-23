@@ -6,7 +6,7 @@ namespace LingFan.Media.Platforms;
 /// <remarks>
 /// <para>使用 <see cref="OperatingSystem"/> 静态方法检测当前运行平台，
 /// 供后端、渲染器、输出等模块按平台选择实现。</para>
-/// <para><b>异步策略</b>：全部同步（config 分类）——<see cref="OperatingSystem"/> 静态方法是纯内存查询，
+/// <para><b>异步策略</b>：全部同步——<see cref="OperatingSystem"/> 静态方法是纯内存查询，
 /// 无 I/O，无需异步化。若改为 <c>async</c> 方法体内无 <c>await</c> 则为伪异步。</para>
 /// <para>AOT 兼容：static 类，编译期确定所有分支，无反射。</para>
 /// </remarks>

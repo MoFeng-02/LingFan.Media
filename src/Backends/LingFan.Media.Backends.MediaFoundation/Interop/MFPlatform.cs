@@ -8,15 +8,14 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// 任意一处 <c>MFShutdown</c> 都会把整个 MF 平台（含所有仍存活的 <c>IMFSourceReader</c>/MFT 的内部原生状态）拆除。
 /// 本引擎有三个互不协调的调用者：<see cref="MFBackend"/>（后端入口，构造 Startup / Dispose Shutdown）、
 /// <see cref="LingFan.Media.Backends.MediaFoundation.Decoders.MFVideoDecoder"/>（解码侧，Initialize Startup / ReleaseComObjects Shutdown）
-/// 与 <c>MFDemuxer</c>（解封装侧，OpenCore Startup / ReleaseNativeResources Shutdown；后续补入——
-/// 此前它只持有 <see cref="MFBackend"/> 的<b>对象引用</b>，那只防 GC、不防对方被 Dispose，
-/// 于是「有意泄漏」路径护住了 IMFSourceReader 却护不住平台本身）。
+/// 与 <c>MFDemuxer</c>（解封装侧，OpenCore Startup / ReleaseNativeResources Shutdown）。
+/// 注意：仅持有 <see cref="MFBackend"/> 的<b>对象引用</b>只防 GC、不防对方被 Dispose，
+/// 故解封装侧必须自持平台引用（「有意泄漏」路径护得住 IMFSourceReader，护不住平台本身）。
 /// <b>不变量</b>：凡持有 MF 原生对象者，必须自己持一份平台引用，且该引用与其原生对象<b>同进退</b>——
 /// 释放路径成对递减，泄漏路径一律不递减。
-/// <see cref="MediaPlayer"/> 释放顺序为「先 Dispose 解码器（→Shutdown）→ 后 Close 解封装器」，导致解码器那次
-/// <c>MFShutdown</c> 在解封装器读取线程仍可能有 in-flight 原生 <c>ReadSample</c> 时拆掉平台 →
-/// 原生访问违规（ACCESS_VIOLATION）→ <c>COR_E_EXECUTIONENGINE</c>（原生堆损坏）非确定性崩溃
-/// （MF 冷启动偶发崩溃的成因，<c>AssemblyInfo</c> 的 <c>DisableTestParallelization</c> 只防跨测试、防不住此竞态）。</para>
+/// <see cref="MediaPlayer"/> 释放顺序为「先 Dispose 解码器（→Shutdown）→ 后 Close 解封装器」；
+/// 若解码器释放即直接拆平台，解封装器读取线程可能仍有 in-flight 原生 <c>ReadSample</c>，
+/// 会触发原生访问违规（非确定性的原生堆损坏）。</para>
 /// <para>本封装把 Startup/Shutdown 做成引用计数：仅当<b>最后一个</b>消费者释放（计数归 0）时才真正 <c>MFShutdown</c>。
 /// 因此解码器释放只让计数 −1、不拆平台，in-flight 的 <c>ReadSample</c> 安全；平台只在解封装器也释放后才拆除。
 /// 同时修复真实多播放器场景（两个 MediaPlayer 并存，关闭其一不应拆掉另一个仍在用的 MF）。</para>
@@ -41,7 +40,8 @@ internal static class MFPlatform
     /// </remarks>
     private static IntPtr _mtaCookie;
 
-    /// <summary>获取一次 MF 平台引用。计数从 0→1 时锁定 MTA 并真正 <c>MFStartup</c>；后续仅计数 +1（幂等）。</summary>
+    /// <summary>获取一次 MF 平台引用。计数从 0→1 时锁定 MTA 并真正 <c>MFStartup</c>；后续调用仅计数 +1。
+    /// 每次成功调用都必须配对一次 <see cref="Shutdown"/>（引用计数语义，非幂等开关）。</summary>
     /// <exception cref="InvalidOperationException"><c>MFStartup</c> 失败。</exception>
     internal static void Startup()
     {

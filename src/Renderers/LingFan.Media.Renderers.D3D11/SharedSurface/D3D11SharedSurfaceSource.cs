@@ -9,7 +9,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// 跨设备共享 D3D11 纹理（keyed mutex 保护），从而实现「无空域、纯控件级」的 GPU 上屏。
 /// </summary>
 /// <remarks>
-/// <para><b>这是渲染器层唯一碰 D3D11 具体 API 的地方</b>。其余层（Avalonia <c>CompositionVideoRenderer</c>）
+/// <para><b>这是共享表面路径中唯一碰 D3D11 具体 API 的地方</b>。其余层（Avalonia <c>CompositionVideoRenderer</c>）
 /// 只看到 <see cref="SharedGpuSurfaceDescriptor"/>（共享句柄 + 互斥键），<b>不引用任何 GPU 库</b>，
 /// 从而达成「不绑定具体 GPU、低耦合」的架构诉求。</para>
 /// <para><b>零拷贝路径</b>：解码侧 GPU 硬解（FFmpeg D3D11VA / MF DXVA）产出的 NV12/BGRA 纹理，
@@ -146,7 +146,7 @@ internal sealed class D3D11SharedSurfaceSource : ISharedGpuSurfaceSource
             }
 
             // 以同一 COM 指针构造 Vortice 包装（不 AddRef、不 Dispose，SafeHandle 持有引用，
-            // 与 D3D11TextureResource.ReadbackToCpu 同源做法）。
+            // 与解码后端 D3D11 帧资源 ReadbackToCpu 同源做法）。
             srcGpu = new ID3D11Texture2D(nativeTexture);
             w = gpu.Width;
             h = gpu.Height;

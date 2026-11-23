@@ -23,17 +23,29 @@ public static unsafe partial class D3D11Interop
 
     // IID（逐字节核对，勿改）
 
+    /// <summary>ID3D11Device 的 IID。</summary>
     public static readonly Guid IID_ID3D11Device = new("db6f6ddb-ac77-4e88-8253-819df9bbf140");
+    /// <summary>ID3D11DeviceContext 的 IID。</summary>
     public static readonly Guid IID_ID3D11DeviceContext = new("c0bfa96c-e089-44fb-8eaf-26f8796190da");
+    /// <summary>ID3D11DeviceChild 的 IID。</summary>
     public static readonly Guid IID_ID3D11DeviceChild = new("1841e5c8-16b0-489b-bcc8-44cfb0d5deae");
+    /// <summary>ID3D11Resource 的 IID。</summary>
     public static readonly Guid IID_ID3D11Resource = new("dc8e63f3-d12b-4952-b47b-5e45026a862d");
+    /// <summary>ID3D11Texture2D 的 IID。</summary>
     public static readonly Guid IID_ID3D11Texture2D = new("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
+    /// <summary>ID3D11VideoDevice 的 IID。</summary>
     public static readonly Guid IID_ID3D11VideoDevice = new("10ec4d5b-975a-4689-b9e4-d0aac30fe333");
+    /// <summary>ID3D11VideoContext 的 IID。</summary>
     public static readonly Guid IID_ID3D11VideoContext = new("61f21c45-3c0e-4a74-9cea-67100d9ad5e4");
+    /// <summary>IDXGIObject 的 IID。</summary>
     public static readonly Guid IID_IDXGIObject = new("aec22fb8-76f3-4639-9be0-28eb43a67a2e");
+    /// <summary>IDXGIDevice 的 IID。</summary>
     public static readonly Guid IID_IDXGIDevice = new("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
+    /// <summary>IDXGIAdapter1 的 IID。</summary>
     public static readonly Guid IID_IDXGIAdapter1 = new("29038f61-3839-4626-91fd-086879011a05");
+    /// <summary>IDXGIResource1 的 IID。</summary>
     public static readonly Guid IID_IDXGIResource1 = new("30961379-4609-4a41-998e-54fe567ee0c1");
+    /// <summary>IDXGIKeyedMutex 的 IID。</summary>
     public static readonly Guid IID_IDXGIKeyedMutex = new("9d8e1289-d7b3-465f-8126-250e349af85d");
 
     /// <summary>ID3D11InfoQueue 的 IID（调试层消息队列）。</summary>

@@ -19,6 +19,9 @@ public readonly struct MediaFormatProfile
     /// <summary>主视频编码（探测不到为 <see cref="VideoCodec.Unknown"/>）。</summary>
     public readonly VideoCodec Video;
 
+    /// <summary>初始化格式组合画像。</summary>
+    /// <param name="container">容器格式。</param>
+    /// <param name="video">主视频编码（探测不到时为 <see cref="VideoCodec.Unknown"/>）。</param>
     public MediaFormatProfile(ContainerFormat container, VideoCodec video)
     {
         Container = container;

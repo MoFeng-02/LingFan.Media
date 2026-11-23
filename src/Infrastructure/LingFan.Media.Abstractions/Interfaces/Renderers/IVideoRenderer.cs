@@ -14,6 +14,7 @@ namespace LingFan.Media.Abstractions;
 public interface IVideoRenderer : IMediaComponent
 {
     /// <summary>绑定渲染目标。UI 线程调用。</summary>
+    /// <param name="target">渲染目标。</param>
     void Attach(IRenderTarget target);
 
     /// <summary>解绑渲染目标。UI 线程调用。</summary>
@@ -24,6 +25,7 @@ public interface IVideoRenderer : IMediaComponent
     /// Present 为同步消费——Renderer 在返回前完成 GPU 资源上传/拷贝，
     /// 调用方即可安全释放帧；若某 Renderer 需异步保留帧，应由该 Renderer 自行接管所有权。
     /// </summary>
+    /// <param name="frame">待呈现的视频帧；返回后调用方即可释放（除非该 Renderer 文档声明接管所有权）。</param>
     void Present(VideoFrame frame);
 
     /// <summary>清除当前画面。渲染线程调用。</summary>

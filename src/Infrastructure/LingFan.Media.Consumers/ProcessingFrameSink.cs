@@ -5,7 +5,7 @@ using LingFan.Media.Abstractions;
 namespace LingFan.Media.Consumers;
 
 /// <summary>
-/// 无头帧处理 Sink（无头 A 形态）：把视频帧以零拷贝 / 零分配方式交给下游计算，不渲染、不显示。
+/// 无头帧处理 Sink：把视频帧以零拷贝 / 零分配方式交给下游计算，不渲染、不显示。
 /// 订阅 <see cref="IMediaPlayer.VideoFrameAvailable"/>，按资源类型分发：
 /// <list type="bullet">
 /// <item>GPU 硬解纹理（<see cref="IGpuTextureResource"/>）→ 原生句柄直给（零拷贝路径），不 Readback。</item>

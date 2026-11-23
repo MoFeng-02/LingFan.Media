@@ -20,6 +20,10 @@ public sealed class AudioEffectParameter
     /// <summary>
     /// 初始化 <see cref="AudioEffectParameter"/> 的新实例。
     /// </summary>
+    /// <param name="name">参数名（如 "Frequency"、"Gain"）。</param>
+    /// <param name="value">参数值。</param>
+    /// <param name="minValue">最小值。</param>
+    /// <param name="maxValue">最大值。</param>
     public AudioEffectParameter(string name, float value, float minValue, float maxValue)
     {
         Name = name;

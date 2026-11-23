@@ -8,7 +8,7 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂。WasapiOutput 是 Session 级对象，由工厂 Create() 每次新建。</para>
 /// <para>此工厂持有 <see cref="WasapiOptions"/> 配置快照，所有创建的实例共享同一配置。</para>
-/// <para>Create() 为同步（sync 分类），手动 new，无 I/O。</para>
+/// <para>Create() 为同步操作，手动 new，无 I/O。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal sealed class WasapiOutputFactory : IAudioOutputFactory

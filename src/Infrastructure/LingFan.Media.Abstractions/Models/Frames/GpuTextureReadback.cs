@@ -7,9 +7,9 @@ namespace LingFan.Media.Abstractions;
 /// <para>由 <see cref="IGpuTextureResource.ReadbackToCpu"/> 返回，承载紧凑 BGRA32 像素数据
 /// （stride = 宽 × 4，无行内填充），供 SkiaVideoPresenter 直接写入 WriteableBitmap。</para>
 /// <para><b>生命周期</b>：回读数据为托管 <see cref="byte"/>[] 快照，与原生 GPU 纹理解耦；
-/// 调用方以 <c>using</c> 释放即可。设计上不持有原生句柄，避免与帧资源（D3D11TextureResource）双重释放——
+/// 调用方以 <c>using</c> 释放即可。设计上不持有原生句柄，避免与 GPU 帧资源双重释放——
 /// 帧所有权始终由 VideoPipeline 的 ReturnFrame 闭环。</para>
-/// <para><b>B-CTR2 池化支持</b>：生产者可经池化构造传入 <see cref="System.Buffers.ArrayPool{T}"/> 租借数组，
+/// <para><b>池化支持</b>：生产者可经池化构造传入 <see cref="System.Buffers.ArrayPool{T}"/> 租借数组，
 /// <see cref="Dispose"/> 时自动归还——消除每帧回读的大数组分配（1080p ≈ 8MB/帧 → LOH 压力）。
 /// <see cref="System.Buffers.ArrayPool{T}"/> 为 BCL 中立类型，契约层零外部引用约束不受影响。
 /// 消费方必须在 <c>using</c> 作用域内完成对 <see cref="Data"/> 的读取（归还后数据失效）。</para>
@@ -48,7 +48,7 @@ public sealed class GpuTextureReadback : IDisposable
     }
 
     /// <summary>
-    /// B-CTR2: 池化构造——包装 <see cref="System.Buffers.ArrayPool{T}"/> 租借数组
+    /// 池化构造——包装 <see cref="System.Buffers.ArrayPool{T}"/> 租借数组
     /// （租借数组通常比所需更长，经 <paramref name="dataLength"/> 截取有效区间），
     /// <see cref="Dispose"/> 时自动归还池。
     /// </summary>
@@ -75,7 +75,7 @@ public sealed class GpuTextureReadback : IDisposable
     public void Dispose()
     {
         // 非池化：数据为托管 byte[]，GC 自动回收；本类不持有原生句柄，无双重释放风险。
-        // 池化（B-CTR2）：归还 ArrayPool，幂等（二次 Dispose 为 no-op）。
+        // 池化：归还 ArrayPool，幂等（二次 Dispose 为 no-op）。
         var arr = _pooledArray;
         if (arr is not null)
         {

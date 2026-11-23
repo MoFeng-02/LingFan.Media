@@ -18,7 +18,7 @@ internal sealed unsafe partial class AudioUnitEngine
     private int _writePos;
     private int _count;
 
-    /// <summary>提交音频帧：软件增益后写入环形缓冲（满时阻塞背压，2 秒超时）。同步边界（native 分类）；不接管帧所有权（规则）。</summary>
+    /// <summary>提交音频帧：软件增益后写入环形缓冲（满时阻塞背压，2 秒超时）。同步边界（原生调用）；不接管帧所有权。</summary>
     internal void Submit(AudioFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);

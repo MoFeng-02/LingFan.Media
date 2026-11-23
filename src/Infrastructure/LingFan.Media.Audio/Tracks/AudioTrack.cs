@@ -5,7 +5,7 @@ namespace LingFan.Media.Audio;
 /// </summary>
 /// <remarks>
 /// <para><see cref="Info"/> 类型为基类型 <see cref="MediaTrack"/>，
-/// 与 <see cref="IMediaPlayer.AudioTracks"/>（<c>IReadOnlyList&lt;MediaTrack&gt;</c>）一致；
+/// 与 <see cref="IMediaSession.AudioTracks"/>（<c>IReadOnlyList&lt;MediaTrack&gt;</c>）一致；
 /// 音频专属参数在 <see cref="MediaTrack.AudioInfo"/>（<see cref="AudioTrackInfo"/>）中，
 /// 本类不重复定义，保持 Audio 模块与 Abstractions 的松散耦合。</para>
 /// <para>非线程安全（激活/停用由 MediaPlayer 在 UI 线程或同步上下文中调用）。</para>

@@ -3,9 +3,11 @@ using LingFan.Media.Core.Platform;
 
 namespace LingFan.Media.Core;
 
-// MediaPlayer 的 Open 职责段（部分类，由 MediaPlayer.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/PlayAsync/PauseAsync/StopAsync/SeekAsync/DisposeAsync/Dispose）在主文件；
-// 本段为 OpenAsync 会话装配（流/Demuxer/解码器/管线/缓冲创建），真异步 I/O 边界。
+/// <summary>
+/// MediaPlayer 的 Open 职责段（部分类，由 MediaPlayer.cs 按职责拆分，编译期等价）。
+/// 字段与核心编排（ctor/PlayAsync/PauseAsync/StopAsync/SeekAsync/DisposeAsync/Dispose）在主文件；
+/// 本段为 OpenAsync 会话装配（流/Demuxer/解码器/管线/缓冲创建），真异步 I/O 边界。
+/// </summary>
 public sealed partial class MediaPlayer
 {
     /// <inheritdoc />
@@ -35,7 +37,7 @@ public sealed partial class MediaPlayer
             _frameQueue = new FrameQueue();
             _sampleQueue = new SampleQueue();
             _synchronizer = new Synchronizer(_clock);
-            // 解决方案（LINGFAN_CLOCK_AUDIO_POS=1）：用音频设备真实播放游标驱动视频主时钟，
+            // LINGFAN_CLOCK_AUDIO_POS=1 时：用音频设备真实播放游标驱动视频主时钟，
             // 取代批提交内逐帧 SyncTo 的突发锯齿。闭包延后读取 _audioOutput（此时尚未 Create，调用时已就绪）。
             if (ClockTuning.UseAudioPlaybackClock)
                 _synchronizer.SetMasterClockProvider(() => _audioOutput?.GetPlaybackPositionDirect() ?? TimeSpan.Zero);
@@ -107,7 +109,7 @@ public sealed partial class MediaPlayer
             if (audioTrack != null && audioTrack.AudioCodec.HasValue)
             {
                 // 从 MediaPlayerOptions 透传音频目标配置：任一字段为 null 时
-                // FFmpegAudioDecoder 回退到源媒体参数，B11 重采样仅在显式配置目标时触发。
+                // FFmpegAudioDecoder 回退到源媒体参数，重采样仅在显式配置目标时触发。
                 var audioSettings = new AudioSettings
                 {
                     OutputSampleRate = _options.AudioOutputSampleRate,

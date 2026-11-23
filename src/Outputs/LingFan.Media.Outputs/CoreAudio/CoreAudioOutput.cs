@@ -13,11 +13,11 @@ namespace LingFan.Media.Outputs.CoreAudio;
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，平台校验后返回 <see cref="Task.CompletedTask"/>。
 /// 无 I/O 可 await，<b>非伪异步</b>（不加 <c>async</c> 关键字、方法体无 <c>await</c>）。</item>
-/// <item><see cref="Initialize"/>：同步（sync 分类），创建 AudioUnit、设格式、注册渲染回调并启动。全部为同步原生调用。</item>
-/// <item><see cref="Submit"/>：同步边界（native 分类），写入环形缓冲，满时阻塞背压（2 秒超时）。</item>
-/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），AudioOutputUnitStop/Start/清缓冲。</item>
+/// <item><see cref="Initialize"/>：同步，创建 AudioUnit、设格式、注册渲染回调并启动。全部为同步原生调用。</item>
+/// <item><see cref="Submit"/>：同步边界（原生调用），写入环形缓冲，满时阻塞背压（2 秒超时）。</item>
+/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步，AudioOutputUnitStop/Start/清缓冲。</item>
 /// <item><see cref="GetPlaybackPosition"/>：同步，渲染回调累计消费帧数换算时间。</item>
-/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），Stop + Uninitialize + Dispose AudioUnit。</item>
+/// <item><see cref="Dispose"/>：同步快速释放，Stop + Uninitialize + Dispose AudioUnit。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。</item>
 /// </list>
 /// <para><b>音量</b>：软件增益（S16 样本缩放），与 AAudio 一致。</para>

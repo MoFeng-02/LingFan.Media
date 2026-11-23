@@ -44,7 +44,7 @@ internal sealed partial class WasapiRenderLoop
 
                 unsafe
                 {
-                    // 修复：ppClosestMatch 传 IntPtr.Zero（按值），避免 WASAPI 分配 CoTaskMem 内存后泄漏
+                    // ppClosestMatch 传 IntPtr.Zero（按值），避免 WASAPI 分配 CoTaskMem 内存后泄漏
                     hr = _audioClientIsFormatSupported!(
                         _audioClientPtr,
                         WasapiInterop.AUDCLNT_SHAREMODE_SHARED,
@@ -65,9 +65,9 @@ internal sealed partial class WasapiRenderLoop
             }
 
             // 4. 共享模式：以【客户端（解码器）采样率 / 声道数】+ 设备 mix 的采样格式打开。
-            // 原返回 BuildWaveFormat(_mixSampleRate, _mixChannels, ...)，
-            //    即拿设备 mix format 打开设备，而 Submit 侧按解码器格式写入 → 44.1kHz 解码流被 48kHz 设备按 48kHz 播放
-            //    （音高偏高约 8.8%）。修法：格式改回客户端参数 + 共享模式加 AUTOCONVERTPCM|SRC_DEFAULT_QUALITY。
+            //    不可拿设备 mix 的采样率/声道数打开设备——Submit 侧按解码器格式写入，
+            //    两者不一致会使流被按错误速率播放（音高偏移）。客户端与 mix 参数不一致时
+            //    加 AUTOCONVERTPCM|SRC_DEFAULT_QUALITY，由音频引擎重采样 / 混音。
             if (sampleRate != _mixSampleRate || channels != _mixChannels)
             {
                 _logger.LogDebug(
@@ -140,9 +140,9 @@ internal sealed partial class WasapiRenderLoop
     ///                   Stop(11) Reset(12) SetEventHandle(13) GetService(14)   —— 共 12 个方法
     ///   IAudioClient2 : IsOffloadCapable(15) SetClientProperties(16) GetBufferSizeLimits(17)
     /// 故 SetClientProperties 绝对槽 = 16，ComVTable slotIndex = 16 - 3 = 13。
-        /// 若误写为 slotIndex=12（绝对槽 15），实际调到 IsOffloadCapable —— 它有 3 个参数
-        /// (self, Category, BOOL* pbOffloadCapable)，本处只传 2 个，x64 下 R8 是未初始化垃圾值，
-        /// 原生侧向该野地址写 BOOL ⇒ 确定性原生访问违规。
+    /// 若误写为 slotIndex=12（绝对槽 15），实际调到 IsOffloadCapable —— 它有 3 个参数
+    /// (self, Category, BOOL* pbOffloadCapable)，本处只传 2 个，x64 下 R8 是未初始化垃圾值，
+    /// 原生侧向该野地址写 BOOL ⇒ 确定性原生访问违规。
     /// 释放时调用 IUnknown.Release（绝对槽 2）。
     /// </remarks>
     private void TrySetSessionCategory(IntPtr audioClientPtr)
@@ -153,7 +153,7 @@ internal sealed partial class WasapiRenderLoop
                 return; // 用户显式选择不设置
 
             // QI 用 BCL Marshal.QueryInterface（稳健，避免手搓 vtable 调用出错）。
-            // 仅在 IAudioClient2 可用时继续；否则静默跳过（退回旧行为）。
+            // 仅在 IAudioClient2 可用时继续；否则静默跳过（不设置会话分类）。
             var iid2 = WasapiInterop.IID_IAudioClient2;
             int hrQi = Marshal.QueryInterface(audioClientPtr, in iid2, out IntPtr pClient2);
             if (hrQi < 0 || pClient2 == IntPtr.Zero)

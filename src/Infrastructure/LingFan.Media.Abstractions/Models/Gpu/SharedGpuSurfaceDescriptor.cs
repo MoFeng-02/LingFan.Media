@@ -11,7 +11,7 @@ namespace LingFan.Media.Abstractions;
 /// 适配器实现 <see cref="ISharedGpuSurfaceSource"/> 即可插入，渲染器层无需改动。</para>
 /// <para><b>每个成员该填哪些描述符字段</b>（Handle / NativeImage / NativeDeviceMemory / MemorySize /
 /// MemoryOffset）见 <see cref="SharedGpuSurfaceDescriptor"/> 的字段语义表——该表是本枚举与描述符之间的
-/// 唯一约定，缺了它各实现只能自行猜测填法（同一字段被赋成两种含义是已发生过的事故来源）。</para>
+/// 唯一约定，缺了它各实现只能自行猜测填法；同一字段不得承载两种含义，否则消费端无法正确分派。</para>
 /// </remarks>
 public enum SharedGpuHandleKind
 {
@@ -141,6 +141,7 @@ public enum SharedGpuSurfaceFormat
 /// <param name="NativeQueueFamilyIndex">图像当前所属队列族索引（Exclusive 模式；须与消费采样队列同族）。</param>
 /// <param name="NativeImageUsage">图像 <c>VkImageUsageFlags</c> 数值（须含 Sampled 位）。</param>
 /// <param name="NativeImageTiling">图像 <c>VkImageTiling</c> 数值（Optimal）。</param>
+/// <param name="RotationDegrees">显示旋转（度，0/90/180/270，来自容器元数据）；共享图像像素本身不旋转，消费端须按此角度旋转呈现。</param>
 /// <remarks>
 /// <para><b>纯数据</b>：不持有所有权，不可释放——底层纹理/内存生命周期归产出它的
 /// <see cref="ISharedGpuSurfaceSource"/> 管理。</para>
@@ -200,8 +201,7 @@ public readonly record struct SharedGpuSurfaceDescriptor(
     /// <summary>是否携带同 device 直采样所需的全套原生参数（VkImage + VkDeviceMemory + 格式 + 布局）。</summary>
     /// <remarks>
     /// <para><b>用途</b>：供消费方在导入前做守卫——为 <see langword="false"/> 表示描述符不足以走
-    /// <see cref="SharedGpuHandleKind.VulkanNativeImage"/> 直采样路径，应回退到导出/导入路径。
-    /// 当前消费侧仍按 <see cref="Kind"/> 分派，暂无调用方；它是契约约定的守卫，不属于可删死码。</para>
+    /// <see cref="SharedGpuHandleKind.VulkanNativeImage"/> 直采样路径，应回退到导出/导入路径。</para>
     /// <para><b>判据只看上述四个字段、不看 <see cref="Kind"/> </b>：按字段语义表，非
     /// <see cref="SharedGpuHandleKind.VulkanNativeImage"/> 的 Kind 不应填这些字段，故结果自然为
     /// <see langword="false"/>。</para>

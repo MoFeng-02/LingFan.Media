@@ -4,7 +4,7 @@ namespace LingFan.Media.Extensions;
 /// 媒体全局配置选项。
 /// </summary>
 /// <remarks>
-/// <para>由 <see cref="ServiceCollectionExtensions.AddLingFanMedia"/> 读取并注册到
+/// <para>由 <c>AddLingFanMedia()</c> 读取并注册到
 /// <c>IOptions&lt;MediaOptions&gt;</c>。</para>
 /// <para>日志配置（<see cref="EnableLogging"/> / <see cref="LogLevel"/>）存储在此对象中，
 /// 由消费方应用的 Host 读取后配置实际日志基础设施（<c>AddLogging()</c>）。

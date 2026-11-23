@@ -100,12 +100,15 @@ public sealed unsafe partial class VulkanRendererFactory : IVideoRendererFactory
         set => _alignToD3D11DefaultAdapter = value;
     }
 
+    /// <summary>初始化 <see cref="VulkanRendererFactory"/> 的新实例。</summary>
+    /// <param name="loggerFactory">日志器工厂（创建本工厂及其派生资源的日志器）。</param>
     public VulkanRendererFactory(ILoggerFactory loggerFactory)
     {
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = _loggerFactory.CreateLogger<VulkanRendererFactory>();
     }
 
+    /// <summary>共享渲染上下文（首次访问触发 <see cref="EnsureDeviceCreated"/> 延迟创建 Vulkan 设备）。</summary>
     public RenderContext Context
     {
         get

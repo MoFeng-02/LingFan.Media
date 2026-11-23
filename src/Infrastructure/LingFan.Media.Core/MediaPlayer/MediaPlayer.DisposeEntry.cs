@@ -2,8 +2,10 @@ using Microsoft.Extensions.Logging;
 using LingFan.Media.Core.Platform;
 namespace LingFan.Media.Core;
 
-// MediaPlayer 的释放入口职责段（部分类，按职责拆分，编译期等价）。
-// DisposeAsync 11 步编排与同步 Dispose 兜底；Step_* 各步实现在 Dispose 主段。
+/// <summary>
+/// MediaPlayer 的释放入口职责段（部分类，按职责拆分，编译期等价）。
+/// DisposeAsync 分步释放编排与同步 Dispose 兜底；Step_* 各步实现在 Dispose 主段。
+/// </summary>
 public sealed partial class MediaPlayer
 {
     /// <inheritdoc />
@@ -14,7 +16,7 @@ public sealed partial class MediaPlayer
 
         _positionTimer?.Dispose();
 
-        // 11 步释放，每步独立 try-catch 不中断。
+        // 分步释放（下方步骤 1~13），每步独立 try-catch 不中断。
         // 逐步耗时观测：退出缓慢（秒级）问题的定位手段——静默步骤（5~11）的耗时从此可见，
         // 任一步骤 >300ms 立即告警点名，收尾输出全明细（与 [SYNC]/[FREEZE] 诊断风格一致）。
         long disposeStart = System.Diagnostics.Stopwatch.GetTimestamp();

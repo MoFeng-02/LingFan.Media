@@ -86,11 +86,11 @@ public partial class App : Application
         // Android 无空域 GPU 合成上屏（CompositionVideoRenderer）：Vulkan 离屏图像按合成器要求导出为
         // opaque fd（VulkanOpaquePosixFileDescriptor = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT，即 dma_buf），
         // 交 Avalonia 合成器直接导入、作为控件子视觉无空域零拷贝上屏（不走 Skia CPU 回读）。
-        // 该句柄类型与 Linux 完全一致（实测 Android Vulkan 合成器支持 [VulkanOpaquePosixFileDescriptor]）；
+        // 该句柄类型与 Linux 完全一致（Android Vulkan 合成器支持 [VulkanOpaquePosixFileDescriptor]）；
         // 解码侧 MediaCodec 帧经 AHB 导入本设备（VulkanGpuFrameProducer）与此正交。源工厂按 ExternalSharingEnabled
         // （VK_KHR_external_memory_fd）把关，能力不满足时 Attach 经导入自检失败干净回退 Skia。
         // 注意：CompositionVideoRenderer.Attach 仅做轻量挂载并 Post 一个 UI 线程 ResolveAsync 异步解析
-        // TryGetCompositionGpuInterop（不阻塞 UI 线程），避免了此前在 Android UI 线程死锁（卡 logo）的问题，
+        // TryGetCompositionGpuInterop（不阻塞 UI 线程）；在此同步等待合成器会死锁 Android UI 线程（启动卡死），
         // 故此注册在 Android 安全启用。
         if (OperatingSystem.IsAndroid())
             builder.AddCompositionRenderer();

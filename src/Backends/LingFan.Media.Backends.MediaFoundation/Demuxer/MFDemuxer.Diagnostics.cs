@@ -10,13 +10,13 @@ namespace LingFan.Media.Backends.MediaFoundation.Demuxer;
 internal sealed partial class MFDemuxer
 {
     /// <summary>
-    /// 构造带「D3D 设备管理器 + 允许硬件 MFT」的 SourceReader 创建属性（A 方案零拷贝前置）。
+    /// 构造带「D3D 设备管理器 + 允许硬件 MFT」的 SourceReader 创建属性（零拷贝直通前置）。
     /// </summary>
     /// <param name="hardwareRequested">是否成功表达了硬解意图（决定后续是否协商 NV12 直通）。</param>
     /// <returns>IMFAttributes*（调用方用后 <see cref="Marshal.Release"/>）；不可用返回 <see cref="IntPtr.Zero"/>。</returns>
     /// <remarks>
     /// <para>失败绝不抛异常：任一步不成即返回 <see cref="IntPtr.Zero"/>，
-    /// <c>MFCreateSourceReaderFromURL</c> 以空属性创建 ⇒ 完全等价改造前行为（压缩裸流 + MFT 自解码）。
+    /// <c>MFCreateSourceReaderFromURL</c> 以空属性创建 ⇒ 即「压缩裸流 + MFT 自解码」的默认行为。
     /// 这是「硬解优先、软解兜底」设计原则在打开阶段的落点。</para>
     /// <para><b>刻意不设</b> <c>MF_SOURCE_READER_ENABLE_(ADVANCED_)VIDEO_PROCESSING</c>：
     /// 插入 Video Processor MFT 会把样本落回系统内存，直接毁掉零拷贝。</para>
@@ -122,7 +122,7 @@ internal sealed partial class MFDemuxer
             bool sawVideoDecoder = false;
             bool decoderIsHardwareMft = false;
 
-            // dwTransformIndex 从 0 递增枚举，越界返回 MF_E_INVALIDINDEX(0xC00D36B3)。上限 8 防御异常实现死循环。
+            // dwTransformIndex 从 0 递增枚举，越界返回 MF_E_INVALIDINDEX。上限 8 防御异常实现死循环。
             for (uint i = 0; i < 8; i++)
             {
                 int hr = getTransform(readerEx, (uint)streamIndex, i, out Guid category, out IntPtr transform);

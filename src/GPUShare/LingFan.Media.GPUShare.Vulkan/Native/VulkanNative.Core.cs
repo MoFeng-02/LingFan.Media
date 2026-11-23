@@ -7,6 +7,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 // 函数指针字段与三阶段初始化在 VulkanNative.cs；签名对齐 Silk.NET Vk / Khr*，调用点仅改名。
 public static unsafe partial class VulkanNative
 {
+    /// <summary>创建 Vulkan 实例（vkCreateInstance；须先完成 <c>InitBootstrap</c>）。</summary>
     public static unsafe Result CreateInstance(ref InstanceCreateInfo pCreateInfo, AllocationCallbacks* pAllocator, out Instance pInstance)
     {
         fixed (InstanceCreateInfo* p = &pCreateInfo)
@@ -18,8 +19,10 @@ public static unsafe partial class VulkanNative
         }
     }
 
+    /// <summary>销毁 Vulkan 实例（vkDestroyInstance；其下设备/表面须已先行销毁）。</summary>
     public static unsafe void DestroyInstance(Instance instance, AllocationCallbacks* pAllocator) => _destroyInstance(instance, pAllocator);
 
+    /// <summary>枚举实例级扩展属性（vkEnumerateInstanceExtensionProperties；两段式：先取数量再取列表）。</summary>
     public static unsafe Result EnumerateInstanceExtensionProperties(byte* pLayerName, uint* pPropertyCount, ExtensionProperties* pProperties)
         => _enumerateInstanceExtensionProperties(pLayerName, pPropertyCount, pProperties);
 

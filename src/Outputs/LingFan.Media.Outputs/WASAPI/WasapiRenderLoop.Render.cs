@@ -194,8 +194,8 @@ internal sealed partial class WasapiRenderLoop
             writtenFrames += (int)toWrite;
             _submittedSamples += toWrite;   // 诊断：累计成功提交的采样帧数
 
-            // 治本(1)（起播静默窗）：首段真实 PCM 落入设备缓冲后立即启动引擎，抓取的是真实数据而非静音。
-            // 提前到「每段写入后」而非「整帧写完后」，保证后续分段等待时引擎已在消费，等待必有进展。
+            // 消除起播静默窗：首段真实 PCM 落入设备缓冲后立即启动引擎，抓取的是真实数据而非静音。
+            // 在每段写入后检查（而非整帧写完后），保证后续分段等待时引擎已在消费，等待必有进展。
             TryStartPreroll();
         }
 
@@ -278,9 +278,6 @@ internal sealed partial class WasapiRenderLoop
         return !_shutdownEvent.Wait(BufferPollIntervalMs);
     }
 
-    /// <summary>
-    /// 等待 WASAPI 缓冲区有足够空间（COM 背压）。事件驱动模式使用 EventWaitHandle.WaitOne 替代 Sleep 轮询。
-    /// </summary>
     /// <summary>
     /// 读取设备缓冲里「尚未渲染到 DAC」的帧数（= 真实可闻延迟的帧表示）。
     /// 主时钟据此减去 pending 帧对应的秒数，得到用户此刻实际听到的位置。

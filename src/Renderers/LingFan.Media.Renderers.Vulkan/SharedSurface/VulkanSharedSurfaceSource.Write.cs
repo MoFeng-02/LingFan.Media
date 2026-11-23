@@ -71,7 +71,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource
             h = ahb.Height;
 
             // Android RGBA 直采样捷径（0 队列提交）：导入图像直接交 Skia 采样，不再由本源做转换+拷贝
-            // 双提交。防回归：我方提交与 Skia 帧提交共用同一 VkQueue 时，逐帧 AHB 导入+双提交在 Adreno 上
+            // 双提交。防回归：本源提交与 Skia 帧提交共用同一 VkQueue 时，逐帧 AHB 导入+双提交在 Adreno 上
             // 会以极低频率随机触发 vkQueueSubmit ErrorInitializationFailed（规范外错误码），并殃及同队列的
             // Skia 提交 → Avalonia 渲染循环停摆 → 画面永久定格。
             // 导入是纯 CPU 调用（无队列命令），不产生该错误触发源。失败或 YCbCr 外部格式 → 落回旧转换路径。
@@ -124,8 +124,9 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource
             }
 
             // 生产者等待消费方归还（ConsumerSignal）→ 写完后 signal 消费方等待（ConsumerWait）。
-            // None 模型（Android）：移动端驱动不支持二进制外部信号量导出，提交不带信号量，
-            // 由 Avalonia 合成器（UpdateAsync）自管跨端同步；仅以 Fence 保证自身 GPU 写完成。
+            // None 模型（Android 默认 VulkanNativeImage 形态）：生产与消费共用同一 VkDevice、同一图形队列，
+            // 同队列提交天然按提交序串行，无需跨端信号量握手；仅以 Fence 保证自身 GPU 写完成，
+            // 末屏障使写入对后续采样可见（见 CopyToSharedImage）。
             Fence fence = _frameFence;
             CommandBuffer cmdBuf = _commandBuffer;
             VulkanNative.ResetFences(_device, 1, &fence);

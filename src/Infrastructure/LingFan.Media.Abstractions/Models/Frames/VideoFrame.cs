@@ -35,7 +35,7 @@ public sealed class VideoFrame : IDisposableFrame
     /// <summary>是否关键帧。</summary>
     public bool KeyFrame { get; internal set; }
 
-    /// <summary>帧的色彩空间描述（可空；渲染端据此选 YUV→RGB 矩阵，null 时用默认。</summary>
+    /// <summary>帧的色彩空间描述（可空；渲染端据此选 YUV→RGB 矩阵，null 时用默认矩阵，见 <see cref="VideoColorInfo"/>）。</summary>
     public VideoColorInfo? ColorInfo { get; set; }
 
     /// <summary>显示旋转（度，0/90/180/270）。由容器元数据（如 MP4 tkhd 旋转矩阵）给出，
@@ -48,6 +48,15 @@ public sealed class VideoFrame : IDisposableFrame
     /// <summary>
     /// 初始化 <see cref="VideoFrame"/> 的新实例。
     /// </summary>
+    /// <param name="width">帧宽度（像素）。</param>
+    /// <param name="height">帧高度（像素）。</param>
+    /// <param name="format">像素格式。</param>
+    /// <param name="resource">帧资源（CPU 内存或 GPU 纹理）。</param>
+    /// <param name="timestamp">显示时间戳（PTS）。</param>
+    /// <param name="duration">帧持续时间。</param>
+    /// <param name="keyFrame">是否关键帧。</param>
+    /// <param name="colorInfo">色彩空间描述（可空）。</param>
+    /// <param name="rotationDegrees">显示旋转角度（0/90/180/270）。</param>
     public VideoFrame(int width, int height, PixelFormat format, IFrameResource resource,
         TimeSpan timestamp, TimeSpan duration, bool keyFrame, VideoColorInfo? colorInfo = null,
         int rotationDegrees = 0)
@@ -89,6 +98,8 @@ public sealed class VideoFrame : IDisposableFrame
     /// <param name="timestamp">显示时间戳。</param>
     /// <param name="duration">帧持续时间。</param>
     /// <param name="keyFrame">是否关键帧。</param>
+    /// <param name="colorInfo">色彩空间描述（可空）。</param>
+    /// <param name="rotationDegrees">显示旋转角度（0/90/180/270）。</param>
     public void Reset(int width, int height, PixelFormat format, IFrameResource? resource,
         TimeSpan timestamp, TimeSpan duration, bool keyFrame, VideoColorInfo? colorInfo = null,
         int rotationDegrees = 0)

@@ -9,7 +9,7 @@ namespace LingFan.Media.Playback;
 /// </summary>
 /// <remarks>
 /// <para>每个播放独立：本实例只持有一个 <c>_active</c> 后端 player，不共享状态。</para>
-/// <para>无头优先 / 出餐：video 经 <see cref="VideoFrameAvailable"/>、audio 经 <see cref="AudioDataAvailable"/> 出餐，与有头无头无关——有头即 UI 控件级 Present Sink 订阅消费。</para>
+/// <para>帧/数据输出通道：video 经 <see cref="VideoFrameAvailable"/>、audio 经 <see cref="AudioDataAvailable"/> 对外分发，与有头无头无关——有头即 UI 控件级 Present Sink 订阅消费。</para>
 /// </remarks>
 public sealed class FallbackMediaPlayer : IMediaPlayer
 {
@@ -23,6 +23,11 @@ public sealed class FallbackMediaPlayer : IMediaPlayer
     private float _playbackRate = 1f;
     private ProcessingMode _mode = ProcessingMode.RealTime;
 
+    /// <summary>
+    /// 初始化 <see cref="FallbackMediaPlayer"/> 的新实例（尚未打开，后端选择推迟到 <see cref="OpenAsync"/>）。
+    /// </summary>
+    /// <param name="owner">所属回退调度工厂；提供后端组列表与选择缓存。</param>
+    /// <param name="logger">可选日志器。</param>
     public FallbackMediaPlayer(BackendFallbackMediaPlayerFactory owner, ILogger? logger)
     {
         _owner = owner;

@@ -16,8 +16,10 @@ namespace LingFan.Media.Abstractions;
 public interface IFramePool<T> where T : class
 {
     /// <summary>租用一个帧实例。</summary>
+    /// <returns>可复用的帧实例（池空时为新实例）；所有权归调用方，用毕须 <see cref="Return"/>。</returns>
     T Rent();
 
     /// <summary>归还帧实例到池中。</summary>
+    /// <param name="frame">此前从本池 <see cref="Rent"/> 的帧；归还后不得再访问。</param>
     void Return(T frame);
 }

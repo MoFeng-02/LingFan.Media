@@ -23,8 +23,8 @@ internal static partial class FF
     /// <summary>libavutil/error.h AVERROR_EXTERNAL = FFERRTAG('E','X','T','2')——非分类的原生/IO 错误（与 EOF 严格区分）。</summary>
     public const int AVERROR_EXTERNAL = unchecked((int)0xCDABA7BB);
 
-    // 平台 errno EAGAIN：直接取自既有 AutoGen 绑定（ffmpeg.EAGAIN == 11，对应 Windows MSVC 构建的 FFmpeg）。
-    // 固定此值可保证 AVERROR(EAGAIN) 判别行为与迁移前完全一致，避免硬解/软解回退时误判"再试"。
+    // 平台 errno EAGAIN = 11（对应 Windows MSVC 构建的 FFmpeg）。
+    // 固定此值保证 AVERROR(EAGAIN) 判别稳定，避免硬解/软解回退时误判"再试"。
     public const int EAGAIN = 11;
 
     /// <summary>FFmpeg 错误宏 AVERROR(x) = -x（等价于 ffmpeg.AVERROR）。</summary>

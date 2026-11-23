@@ -43,7 +43,7 @@ internal sealed unsafe partial class VulkanVideoDecoder
         //   当 videoCodecOperation 为 VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR 时，
         //   pCapabilities 的 pNext 链【必须】含 VkVideoDecodeH264CapabilitiesKHR。
         // VUID-...-07183：任何 decode 操作时，pNext 链【必须】含 VkVideoDecodeCapabilitiesKHR。
-        // 缺失则驱动/验证层返回 VK_ERROR_INITIALIZATION_FAILED（此前崩溃的直接原因）。
+        // 缺失则驱动/验证层返回 VK_ERROR_INITIALIZATION_FAILED。
         // 结构体在栈帧存活至本次调用返回，取地址安全。
         VideoDecodeH264CapabilitiesKHR h264Caps;
         h264Caps.SType = StructureType.VideoDecodeH264CapabilitiesKhr;

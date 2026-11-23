@@ -74,18 +74,18 @@ internal sealed partial class MFDemuxer : IMediaDemuxer
     private readonly Dictionary<int, MediaPacket> _pendingPackets = new();
     private readonly HashSet<int> _exhaustedStreams = new();
 
-    // A 方案：SourceReader 自带硬解 + DXGI 出样（零拷贝直通）状态
+    // SourceReader 自带硬解 + DXGI 出样（零拷贝直通）状态
     // 命中时本 demuxer 变成「解封装 + 解码一体」：ReadSample 直接吐已解码帧
     // （GPU 纹理 → MediaPacket.DecodedFrameResource；退化时 NV12 CPU 字节 → Data+Width/Height/Stride），
     // 下游 MFVideoDecoder 退化为直通适配器，不再跑自己的 MFT。
-    // -1 = 未启用（视频流仍输出压缩裸流，走原 MFVideoDecoder MFT 路径，行为与改造前完全一致）。
+    // -1 = 未启用（视频流仍输出压缩裸流，走 MFVideoDecoder MFT 路径）。
     private int _decodedVideoStreamIndex = -1;
     private int _decodedVideoWidth;
     private int _decodedVideoHeight;
     private int _decodedVideoStride;     // NV12 CPU 回落时的行跨度（<=0 表示按紧凑 width 处理）
     private bool _loggedVideoPathOnce;   // 首帧一次性诊断：真零拷贝 vs 半 DXVA 回落
     // 路径(1)-A（IMF2DBuffer2）必须用**独立**闸门：半 DXVA 回落的 warning 会先把 _loggedVideoPathOnce
-    //    置位，若共用则「Lock2D 治本成功」的日志永远打不出来 —— 表现为「代码在跑但看不见证据」，
+    //    置位，若共用则 [MF-D3D] IMF2DBuffer2 路径的成功日志永远打不出来 —— 表现为「代码在跑但看不见证据」，
     //    极易让人以为改动未生效。诊断闸门与它守护的分支必须一一对应。
     private bool _loggedVideo2DPathOnce; // 首帧一次性诊断：IMF2DBuffer2 真值 pitch 紧凑化路径
     private long _videoZeroCopyFrames;
@@ -100,7 +100,7 @@ internal sealed partial class MFDemuxer : IMediaDemuxer
     /// <param name="dxgiManagerProvider">
     /// DXGI 设备管理器提供者（Singleton）。用于在 SourceReader 上挂 <c>MF_SOURCE_READER_D3D_MANAGER</c>，
     /// 令其内部解码 MFT 在共享 D3D11 设备上分配输出表面 ⇒ ReadSample 直接吐 GPU 纹理。
-    /// 传 <see langword="null"/> 或其返回 <see cref="IntPtr.Zero"/> 时静默回落「压缩裸流 + MFVideoDecoder 自解码」老路径。
+    /// 传 <see langword="null"/> 或其返回 <see cref="IntPtr.Zero"/> 时静默回落「压缩裸流 + MFVideoDecoder 自解码」路径。
     /// </param>
     /// <param name="logger">日志器。</param>
     /// <param name="options">
@@ -185,7 +185,7 @@ internal sealed partial class MFDemuxer : IMediaDemuxer
         catch
         {
             // OpenCore 可能已在创建 _sourceReader 后抛异常（如 ParseTracks 失败）。
-            // 原逻辑仅 Dispose 调度器会泄漏 _sourceReader。此处改走两阶段关闭协议：此时无在途原生调用，
+            // 仅 Dispose 调度器会泄漏 _sourceReader，故走两阶段关闭协议：此时无在途原生调用，
             // drain 立即可成功，_sourceReader 被安全释放。
             CloseSync();
 
@@ -228,10 +228,10 @@ internal sealed partial class MFDemuxer : IMediaDemuxer
                 _mfStartupAcquired = true;
             }
 
-            // A 方案：把 IMFDXGIDeviceManager 挂到 SourceReader 的创建属性上
+            // 把 IMFDXGIDeviceManager 挂到 SourceReader 的创建属性上
             // SourceReader 拿到管理器后会自行完成「选硬件 MFT → 发 MFT_MESSAGE_SET_D3D_MANAGER →
             // 分配 DXGI 输出表面池」的全套编排（这正是直连 MFT 时会静默回落软件的那一段）。
-            // 失败语义：任何一步不成都返回 IntPtr.Zero，等价改造前的「无属性」行为 ⇒ 压缩裸流 + MFVideoDecoder 自解码。
+            // 失败语义：任何一步不成都返回 IntPtr.Zero，等价「无属性」创建 ⇒ 压缩裸流 + MFVideoDecoder 自解码。
             IntPtr readerAttributes = TryCreateHardwareReaderAttributes(out bool hardwareRequested);
             _hardwareReaderRequested = hardwareRequested;
 
@@ -262,7 +262,7 @@ internal sealed partial class MFDemuxer : IMediaDemuxer
             sw.Restart();
 
             // 实查容器时长：MF 不自动填时长，须从 presentation descriptor 取 MF_PD_DURATION。
-            // 这是完整播放「几秒假完成」现象的成因修复点——此前硬编码 TimeSpan.Zero 使 player.Duration 恒 0。
+            // 硬编码 TimeSpan.Zero 会使 player.Duration 恒 0，基于时长的完成判定会假完成。
             var duration = QueryContainerDuration(_sourceReader);
 
             // 解析轨道（携带容器时长，供各轨 VideoInfo/AudioInfo.Duration 与容器保持一致）
@@ -439,13 +439,11 @@ internal sealed partial class MFDemuxer : IMediaDemuxer
     // → (4) 之后才 Shutdown 调度器（放行 CoUninitialize）→ (5) 托管收尾。任一环节失败即有意泄漏。
     //
     // 步骤顺序原则（**勿把 (2) 与 (4) 换回来**）：
-    //    旧顺序为「(1) → Shutdown 调度器 → WaitDrain → Release」，即**先让专用线程退出**（其 Loop 的 finally
-    //    执行 CoUninitialize）**再在关闭线程上 Marshal.Release**。而 _sourceReader 是 OpenCore 在专用线程上
-    //    经 MFCreateSourceReaderFromURL 创建的：CoUninitialize 会关闭该线程的 COM 库、卸载它加载的 in-proc
+    //    若先让专用线程退出（其 Loop 的 finally 执行 CoUninitialize）再在关闭线程上 Marshal.Release：
+    //    _sourceReader 是 OpenCore 在专用线程上经 MFCreateSourceReaderFromURL 创建的，
+    //    CoUninitialize 会关闭该线程的 COM 库、卸载它加载的 in-proc
     //    server（mfreadwrite/mfplat 等），并在它是最后一个 MTA 成员时拆除整个 MTA。此后那次 Release 跳进
-    //    已失效的 vtable ⇒ 原生访问违例 ⇒ `Fatal error. Internal CLR error.`（CLR 原生堆损坏）。
-    //    该失败是**确定性**的（每次关闭顺序固定），表现为 MF 测试程序集首跑即崩，与此前的 flaky 竞态无关。
-    //    基线（无 CoUninitialize）下旧顺序侥幸安全，加入 CoUninitialize 后即刻暴露。
+    //    已失效的 vtable ⇒ 原生访问违例 ⇒ 确定性的原生堆损坏（关闭顺序固定，非 flaky 竞态）。
     //    ⇒ 不变量（COM 单元）：**在专用单元线程上创建的 COM 对象，其 Release 必须在同一线程、且先于该线程 CoUninitialize。**
     //
     // 重入互斥：CloseSync / CloseAsync 共用 _closeStarted 这一 Interlocked 令牌，
@@ -460,8 +458,8 @@ internal sealed partial class MFDemuxer : IMediaDemuxer
     /// </summary>
     private static string? ExtractUrl(IMediaStream stream)
     {
-        // 修复：原实现错误地把 stream 当作 FileStream（实际为 FileMediaStream，永不命中）导致所有文件均返回 null 而 OpenAsync 抛异常。
-        // 改为读取 IMediaStream 中性 Location（文件流返回路径、网络流返回 URL；无地址返回 null）。
+        // 读取 IMediaStream 中性 Location（文件流返回路径、网络流返回 URL；无地址返回 null）。
+        // 勿把 stream 强转 FileStream——实际类型为 FileMediaStream，永不命中，所有文件都会返回 null。
         return stream.Location;
     }
 

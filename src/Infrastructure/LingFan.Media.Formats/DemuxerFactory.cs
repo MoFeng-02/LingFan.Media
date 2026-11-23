@@ -7,7 +7,7 @@ namespace LingFan.Media.Formats;
 /// </summary>
 /// <remarks>
 /// <para>Singleton 工厂，无状态。每次 <see cref="Create"/> 返回新的 Demuxer 实例（每次播放新建）。</para>
-/// <para>使用 <see cref="FormatDetector"/> 探测容器格式，探测到的格式信息用于日志和未来优化。
+/// <para>使用 <see cref="FormatDetector"/> 探测容器格式，探测到的格式信息仅用于日志。
 /// 简化方案：始终委托给后端后备工厂创建实际 Demuxer 实例。</para>
 /// <para>实际 Demuxer 实现（FFmpegDemuxer 等）由 Backends 模块通过 DI 注册。</para>
 /// <para>如果后端通过 <c>AddFFmpeg()</c> 覆盖 <see cref="IMediaDemuxerFactory"/> 注册，
@@ -44,7 +44,7 @@ public sealed class DemuxerFactory : IMediaDemuxerFactory
     {
         ArgumentNullException.ThrowIfNull(stream);
 
-        // 探测容器格式（用于日志和未来优化）
+        // 探测容器格式（用于日志）
         ContainerFormat format;
         try
         {
@@ -82,7 +82,7 @@ public sealed class DemuxerFactory : IMediaDemuxerFactory
     {
         ArgumentNullException.ThrowIfNull(stream);
 
-        // 探测容器格式（用于日志和未来优化）
+        // 探测容器格式（用于日志）
         ContainerFormat format;
         try
         {

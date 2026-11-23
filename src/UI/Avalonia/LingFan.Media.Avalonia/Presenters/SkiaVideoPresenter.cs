@@ -15,11 +15,10 @@ namespace LingFan.Media.Avalonia;
 /// <remarks>
 /// <para><b>关键原则</b>：不独立引用 SkiaSharp NuGet 包，通过 Avalonia 的 WriteableBitmap
 /// 复用底层 SkiaSharp 渲染实例，避免版本冲突、原生库冲突和 AOT 部署问题。</para>
-/// <para><b>线程模型修正（修复不出画/冻屏成因）</b>：</para>
+/// <para><b>线程模型</b>：</para>
 /// <list type="bullet">
 /// <item>WriteableBitmap 有线程亲缘性——<b>创建 / Lock 写入 / DrawImage 必须发生在同一线程</b>（Avalonia 渲染线程）。
-/// 旧实现在管线线程创建并写入位图、渲染线程 DrawImage，跨线程访问抛 InvalidOperationException 致渲染线程崩溃，
-/// 表现为「不出画 + 应用冻死（播几秒音乐就没动静）」。</item>
+/// 跨线程访问会抛 InvalidOperationException 致渲染线程崩溃，故位图绝不能在管线线程创建或写入。</item>
 /// <item>本实现将帧像素拷贝与位图绘制解耦：<see cref="Present"/>（管线线程）仅把帧像素转换/拷贝进线程安全的
 /// <c>_staging</c> 缓冲（跨线程只读借用，不碰 WriteableBitmap）；<see cref="Render"/>（渲染线程）在锁定内
 /// 于<b>渲染线程</b>创建/更新 WriteableBitmap 并 DrawImage。两者经 <c>_gate</c> 同步，规避跨线程亲缘性。</item>
@@ -42,12 +41,10 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
     /// </summary>
     /// <remarks>
     /// <b>为何不能沿用双缓冲 ping-pong</b>：位图 <c>Lock()</c> 与像素拷贝必须留在 <c>_gate</c> 之外
-    /// （<c>Lock()</c> 在 Android 上会等 GPU/合成器完成上一帧，被 vsync 节流，实测可达数十 ms；
+    /// （<c>Lock()</c> 在 Android 上会等 GPU/合成器完成上一帧，被 vsync 节流，耗时可达一个刷新周期量级以上；
     /// 留在锁内会让管线线程阻塞等 vsync，呈现耗时显著抬高、帧率明显下降）。
     /// 但只有两块缓冲时，锁外的拷贝期间管线线程足足可以写满两帧 ——
     /// <b>Present #(n+2) 写的正是 Render #n 还在读的那一块</b>，于是半帧被覆写，画面花屏。
-    /// 日志佐证：同一帧序号的写入指纹与渲染指纹同址不同值（相邻字节各差 1），即渲染线程读到的
-    /// 已不是本帧写入的内容。
     /// <para>归还式所有权把缓冲的生命周期与「拷贝是否结束」绑定：渲染线程未归还前，
     /// Present 在结构上不可能拿到它。多缓冲（3+1）确保管线线程领先渲染线程时也只是丢帧，
     /// 而绝不会写坏正在上屏的像素。</para>
@@ -83,8 +80,8 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
     // 分体计时（仅诊断，不影响算法）：累计 YUV→BGRA 转换耗时，周期报平均，定位卡顿瓶颈。
     private int _convertSamples;
     private long _convertTicks;
-    // 转换性能采样间隔。原为 64，但呈现帧率极低的场景（CPU 软渲）下 64 帧阈值永远达不到，
-    // 诊断形同虚设。降到 8，使早期即可
+    // 转换性能采样间隔。取小值 8：呈现帧率极低的场景（CPU 软渲）下大阈值永远达不到，
+    // 诊断形同虚设；小间隔使早期即可
     // 拿到 YUV→BGRA 真实耗时（用于区分「转换慢」vs「等时钟/等队列」）。
     private const int ConvertLogInterval = 8;
     // 位图 Lock+拷贝耗时诊断（区分「像素转换慢」与「位图上传/等 vsync 慢」）。
@@ -93,7 +90,7 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
     private const int UploadLogInterval = 30;
     // 渲染线程整帧计时：Render() 自身的耗时、DrawImage 耗时，以及两次 Render 的调用间隔。
     // 三者的关系直接回答「上屏 fps 是谁限的」：间隔大而自身耗时小 ⇒ 合成器/调度在等；
-    // 自身耗时长 ⇒ 渲染线程自己就是瓶颈（此前只测了 Lock+拷贝，DrawImage 一直没测）。
+    // 自身耗时长 ⇒ 渲染线程自己就是瓶颈。
     private int _renderSamples;
     private long _renderTicks;
     private long _drawTicks;
@@ -102,7 +99,7 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
     private const int RenderLogInterval = 30;
     private static bool _diagOnce;
     private static ILogger? _diagLogger;
-    /// <summary>首帧渲染输出 BGRA 统计一次性标志（验证 YUV→BGRA 转换结果，二分定位「糊」在解码侧还是渲染侧）。</summary>
+    /// <summary>首帧渲染输出 BGRA 统计一次性标志（验证 YUV→BGRA 转换结果）。</summary>
     private static bool _renderDiagLogged;
     private readonly ILogger? _logger;
 
@@ -110,7 +107,7 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
     private int _fpSeq;
     private int _fpRenderSeq;
 
-    /// <summary>指纹采样节流：前 6 帧全采（覆盖「开播花屏期」），之后每 60 帧一采。</summary>
+    /// <summary>指纹采样节流：前 6 帧全采（覆盖起播瞬态），之后每 60 帧一采。</summary>
     private static bool FpDue(int seq) => seq < 6 || (seq % 60) == 0;
 
     // 帧水印诊断
@@ -153,7 +150,7 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
     /// <summary>宽高比模式。</summary>
     public AspectRatioMode AspectRatioMode { get; set; } = AspectRatioMode.Uniform;
 
-    /// <summary>测试可见：当前 WriteableBitmap（无帧时为 null）。</summary>
+    /// <summary>诊断访问：当前 WriteableBitmap（无帧时为 null）。</summary>
     internal WriteableBitmap? DebugBitmap => _bitmap;
 
     /// <inheritdoc/>
@@ -200,9 +197,9 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
 
         // 阶段 1（临界区，必须极短）
         // 仅做「取走待渲染帧」。绝不在锁内调用 WriteableBitmap.Lock()：
-        // 它在 Android 上会等待 GPU/合成器完成上一帧（被 vsync 节流，实测数十 ms），
+        // 它在 Android 上会等待 GPU/合成器完成上一帧（被 vsync 节流，耗时可达刷新周期量级以上），
         // 一旦留在锁内，管线线程的 Present 就会阻塞等 vsync —— 呈现耗时会大幅抬高、
-        // 帧率显著下降（≈60Hz/3，每 3 个 vsync 才出一帧），瓶颈正源于此。
+        // 帧率显著下降。
         byte[]? snapshot = null;
         int sw = 0, sh = 0;
         lock (_gate)
@@ -335,8 +332,8 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
             // - WriteableBitmap 的 DPI 已固定为 96（见 EnsureBitmap），故其逻辑尺寸 = 物理像素尺寸，
             //   即 _bitmapW/_bitmapH 可直接当作 DIP 帧尺寸参与布局计算。
             // - _targetW/_targetH 来自 OnSizeChanged 的 e.NewSize（DIP），无需再乘 scale。
-            // 旧实现把「物理像素帧」与「DIP target」直接混算，且 bitmap DPI 设 96*scale，
-            // 导致 DrawImage 再按 DPI 缩放一次 → 实际绘制放大 scale 倍、只显示左上角局部（溢出）。
+            // 禁止把「物理像素帧」与「DIP target」混算、或把 bitmap DPI 设为 96*scale：
+            // DrawImage 会再按 DPI 缩放一次 → 实际绘制放大 scale 倍、只显示左上角局部（溢出）。
             var destRect = CalculateDestRect(_bitmapW, _bitmapH, _targetW, _targetH, AspectRatioMode);
 
             // 一次性诊断（溢出定位）：目标区/位图/目标矩形/模式/scale。destRect 必须落在
@@ -366,7 +363,7 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
         }
 
         // 渲染线程整帧诊断：区分「渲染线程自己慢」与「合成器调用频率低」。
-        // 实测未渲染被顶掉持续为正 ⇒ 上屏 fps 只有管线的一半（~15 vs 30），必须先定位瓶颈归属。
+        // 未渲染被顶掉的计数持续为正 ⇒ 上屏 fps 低于管线 fps，须结合本组计时定位瓶颈归属。
         _renderSamples++;
         _renderTicks += Stopwatch.GetElapsedTime(renderStart).Ticks;
         _renderGapTicks += gap;
@@ -397,8 +394,8 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
     /// <b>DPI 固定 96（=1.0 逻辑缩放）</b>：Avalonia 的 <see cref="WriteableBitmap"/> 逻辑尺寸 =
     /// <c>PixelSize / Dpi * 96</c>；DPI 设为 96 时逻辑尺寸 == 物理像素尺寸，与
     /// <see cref="CalculateDestRect"/> 传入的 DIP 帧/目标尺寸单位完全一致，<c>DrawImage</c>
-    /// 不会再二次缩放。旧实现用 <c>96 * _scale</c> 使 bitmap 逻辑尺寸缩小为 1/scale，与 DIP 目标
-    /// 混算后被 DrawImage 再放大 scale 倍，导致画面只显示左上角局部（溢出观感）。
+    /// 不会再二次缩放。禁止把 DPI 设为 <c>96 * _scale</c>：那会使 bitmap 逻辑尺寸缩小为 1/scale，与 DIP 目标
+    /// 混算后被 DrawImage 再放大 scale 倍，画面只显示左上角局部（溢出观感）。
     /// </remarks>
     private void EnsureBitmap(int width, int height, global::Avalonia.Platform.PixelFormat format)
     {

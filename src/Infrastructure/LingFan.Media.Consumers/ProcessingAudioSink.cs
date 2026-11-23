@@ -5,9 +5,9 @@ using LingFan.Media.Abstractions;
 namespace LingFan.Media.Consumers;
 
 /// <summary>
-/// 无头音频处理 Sink（无头 A 形态）：把音频帧（PCM）以只读借用方式交给下游计算，不播放到设备。
+/// 无头音频处理 Sink：把音频帧（PCM）以只读借用方式交给下游计算，不播放到设备。
 /// 订阅 <see cref="IMediaPlayer.AudioDataAvailable"/>，供频谱分析 / 音量检测 / 转码前处理 / ML 推理喂 PCM 等
-/// 无头后端数据处理（无头核心竞争力）。
+/// 无界面进程的后端数据处理。
 /// 帧为只读借用（管线在回调返回后释放），本类不在回调外持有帧引用、不 Dispose 外部帧。
 /// </summary>
 /// <remarks>

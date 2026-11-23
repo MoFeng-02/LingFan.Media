@@ -9,7 +9,7 @@ namespace LingFan.Media.Renderers.OpenGLES;
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂。<see cref="Create"/> 返回 <see cref="OpenGLESRenderer"/> 实例。</para>
 /// <para><b>与桌面 OpenGL / Vulkan / D3D11 的差异</b>：本工厂<b>不注册</b> <see cref="IGpuDeviceContext"/> 与
-/// <see cref="IGpuFrameProducer"/>——GLES 当前无工厂级离屏设备上下文（零拷贝共享组尚未建立，属 C 线未来增强），
+/// <see cref="IGpuFrameProducer"/>——GLES 当前无工厂级离屏设备上下文（零拷贝共享组尚未建立，为未来增强），
 /// 故解码后端经此接口获取不到 GLES 设备句柄，仅走软帧上屏（非"假绿"：软解回退是明确契约行为，非 S_OK≠被接受的误判）。</para>
 /// <para>宽高比缩放：<see cref="ScaleMode"/>（契约层 <see cref="AspectRatioMode"/>）下传创建的渲染器，默认 <see cref="AspectRatioMode.Uniform"/>（信箱）。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>

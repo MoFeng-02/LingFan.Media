@@ -21,7 +21,7 @@ internal sealed partial class WasapiRenderLoop
             if (hr < 0)
                 return TimeSpan.Zero;
 
-            // 修复（真 bug）：devicePosition 的单位由设备定义，【不是】帧数。
+            // devicePosition 的单位由设备定义，【不是】帧数。
             // 官方换算：秒 = position / frequency（IAudioClock::GetFrequency，见 _audioClockFrequency）。
             if (_audioClockFrequency > 0)
                 return TimeSpan.FromSeconds((double)devicePosition / _audioClockFrequency);
@@ -40,9 +40,6 @@ internal sealed partial class WasapiRenderLoop
     /// <remarks>
     /// <para><b>为什么不需要跨线程</b>：<c>IAudioClock::GetPosition</c> 按 MSDN 可由任意线程调用，
     /// 它只读设备维护的原生播放游标，且只被设备自身写入；读取是稳定的单值读取。</para>
-    /// <para><b>为什么用它是合适方案</b>：该游标随真实播放平滑前进，且音频缓冲耗尽时天然停摆 ——
-    /// 不会像"已提交末端时间"那样在批提交时被瞬间预支、又在两批间自由运行超调后猛拽回退。
-    /// 视频主时钟应以此为准（</para>
     /// <para><b>为什么用它</b>：该游标随真实播放平滑前进，且音频缓冲耗尽时天然停摆 ——
     /// 不会像"已提交末端时间"那样在批提交时被瞬间预支、又在两批间自由运行超调后猛拽回退。
     /// 视频主时钟应以此为准。</para>
@@ -63,8 +60,8 @@ internal sealed partial class WasapiRenderLoop
             return TimeSpan.Zero;
 
         // WASAPI 回传 pu64QPCPosition（QPC 计数，100ns ticks），是本次 devicePosition 读数时刻的高精度
-        // 时间锚点。用 QPC 插值出「现在」的平滑播放位置，消除音频引擎刷新周期的离散量化阶梯——
-        // 之前丢弃该值(out _)导致主时钟按引擎周期跳变，直接钉死 WaitUntilDue 的呈现时刻相位（残留墙钟抖动成因）。
+        // 时间锚点。用 QPC 插值出「现在」的平滑播放位置，消除音频引擎刷新周期的离散量化阶梯；
+        // 若丢弃该值，主时钟会按引擎周期跳变，钉死 WaitUntilDue 的呈现时刻相位并引入墙钟抖动。
         int hr = getPos(clockPtr, out ulong devicePosition, out ulong qpcPosition);
         if (hr < 0)
             return TimeSpan.Zero;
@@ -79,9 +76,9 @@ internal sealed partial class WasapiRenderLoop
         // 音画同步校准：共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」
         // （Start 后瞬间预取一段数据进系统混音缓冲）。该领先对 GetCurrentPadding（仅本 IAudioClient
         // 设备缓冲，≤bufferSize≈100ms）与 GetStreamLatency（返回 0）均不可见，故直接减锚点/
-        // 填充/延迟整段无效。现以墙钟为锚：引擎领先稳定后（起播 >100ms）锁定 bias = rawSec -
+        // 填充/延迟整段无效。现以墙钟为锚：引擎领先稳定后（起播瞬态过后，CalibMinSec = 300ms）锁定 bias = rawSec -
         // wallElapsed（引擎领先+常偏），主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。
-        // 瞬态期（≤100ms）devicePosition≈墙钟，直接以墙钟为准，避免相位跳变。
+        // 瞬态期（wallElapsed < CalibMinSec）devicePosition≈墙钟，直接以墙钟为准，避免相位跳变。
         // 稳态锁定引擎领先：若在「devicePosition 尚未与墙钟锁步」的起播瞬态就捕获 bias 并永久减回，
         // 此刻 devicePosition 落后墙钟一个瞬态量（bias 为负）→ 减负数 = 变相给主时钟加上该量 →
         // 音频时钟比真实可闻位置快同一量 → 视频按此时钟提前呈现。因此必须等偏差稳定后再锁定：
@@ -139,17 +136,17 @@ internal sealed partial class WasapiRenderLoop
         // 主时钟武装：本遍播放音频已 Start，GetPlaybackPositionDirect 自此返回真实可闻位置。
         // （重播起点经 ResetPlaybackClock 置 false，确保预滚动/门控窗口内主时钟恒定=0。）
         _clockArmed = true;
-        // LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
-        // 此处音频时钟保持纯可闻位置，不再做任何前移补偿。
+        // 音频时钟保持纯可闻位置，不做任何前移补偿；
+        // LINGFAN_SYNC_LEAD_MS 的提前量补偿由 VideoPipeline 作用在「呈现延迟」变量上。
         _logger.LogInformation("[WASAPI-ANCHOR] 启动墙钟基准已记录（用于校准引擎领先偏移）");
     }
 
     /// <summary>
     /// 重播（Ended→Playing）主时钟归零：解除武装并清校准，使 <see cref="GetPlaybackPositionDirect"/>
     /// 在音频重新 Start 之前恒定返回 0。
-    /// <para><b>成因</b>：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），<c>_startStopwatch</c>
-    /// 持续累计（未随 Ended 归零）；而重播的视频门控（MediaPipelineHost.StartAsync 第(3)步 SignalAudioReady）早于音频
-    /// Start（第(5)步），预滚动窗口内同步器据此读到的主时钟是陈旧值，把 PTS=0 重播首帧判为「落后过多 → Drop」，
+    /// <para><b>为什么需要</b>：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），<c>_startStopwatch</c>
+    /// 持续累计（未随 Ended 归零）；而重播时视频门控在 MediaPipelineHost.StartAsync 发出音频就绪信号（SignalAudioReady）后即开放，
+    /// 早于音频实际 Start，预滚动窗口内同步器据此读到的主时钟是陈旧值，把 PTS=0 重播首帧判为「落后过多 → Drop」，
     /// 直到解码器把流推进、首帧追上主时钟才切入。</para>
     /// <para>本方法在 MediaPlayer 重播分支（SeekAsync 后、StartAsync 前）调用，使该窗口主时钟=0，首帧立即呈现，无缝重播。</para>
     /// </summary>

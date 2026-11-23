@@ -9,7 +9,7 @@ namespace LingFan.Media.Sources;
 /// <remarks>
 /// <para>Singleton 工厂。持有 <see cref="IHttpClientFactory"/> 引用用于创建 <see cref="NetworkMediaStream"/>。</para>
 /// <para>使用 pattern matching switch（AOT 友好，无反射）。</para>
-/// <para><see cref="CreateAsync"/> 为网络流场景的优先入口：在 DNS 解析后做 SSRF 校验（L20-L22），
+/// <para><see cref="CreateAsync"/> 为网络流场景的优先入口：在 DNS 解析后做 SSRF 校验，
 /// 属真实 I/O（<c>Dns.GetHostAddressesAsync</c>），必须 <c>await</c>，绝非伪异步；同步 <see cref="Create"/> 保留为原生同步边界（连接延迟到首次 Read）。</para>
 /// </remarks>
 public sealed class MediaStreamFactory : IMediaStreamFactory
@@ -39,7 +39,7 @@ public sealed class MediaStreamFactory : IMediaStreamFactory
         ct.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(source);
 
-        // 网络流：真实异步建立网络连接（DNS 解析），并在解析后做 SSRF 校验（L20-L22）。
+        // 网络流：真实异步建立网络连接（DNS 解析），并在解析后做 SSRF 校验。
         // DNS 重绑定防护要求在校验通过后再建立连接，故校验点必须位于 DNS 解析之后。
         if (source.Type == MediaSourceType.Network && source is NetworkMediaSource netSource)
         {

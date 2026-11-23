@@ -5,7 +5,7 @@ namespace LingFan.Media.Abstractions;
 /// Vulkan <c>VK_ERROR_DEVICE_LOST</c> 等）。
 /// </summary>
 /// <remarks>
-/// <para><b>B-DEVLOST</b>：设备丢失由驱动崩溃/重置（TDR）、GPU 移除（外接显卡拔出）、
+/// <para><b>成因</b>：设备丢失由驱动崩溃/重置（TDR）、GPU 移除（外接显卡拔出）、
 /// 驱动升级等引起——设备及其全部资源（纹理/缓冲/交换链）永久失效，任何后续调用都会失败。</para>
 /// <para><b>语义</b>：渲染器检测到设备丢失时抛出本异常（替代泛化的 <see cref="InvalidOperationException"/>），
 /// 使上层能以类型区分「可通过重建设备恢复的故障」与「逻辑错误」。</para>

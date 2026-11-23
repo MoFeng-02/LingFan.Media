@@ -6,11 +6,11 @@ namespace LingFan.Media.Consumers;
 
 /// <summary>
 /// 无头 / 服务端场景的空音频输出：不打开音频设备、不初始化 WASAPI、<see cref="Submit"/> 为 no-op。
-/// 供无 <c>VideoView</c> / 无音频设备场景替代具体音频输出，使 <see cref="MediaPlayer"/> 在无头下正常初始化与运行
+/// 供无 <c>VideoView</c> / 无音频设备场景替代具体音频输出，使 <c>MediaPlayer</c> 在无头下正常初始化与运行
 /// （对称件：<see cref="NoOpVideoRenderer"/> 解决“无 GPU 设备”，本类解决“无音频设备”）。
 /// </summary>
 /// <remarks>
-/// <para>无头 A 形态下，视频帧经 <see cref="IMediaPlayer.VideoFrameAvailable"/> 流向计算 sink，
+/// <para>无头消费模式下，视频帧经 <see cref="IMediaPlayer.VideoFrameAvailable"/> 流向计算 sink，
 /// 音频帧被本输出静默丢弃——完全不依赖音频硬件，可在无音频端点 / CI 环境运行。</para>
 /// <para>实现 <see cref="IAudioOutput"/>（: <see cref="IMediaComponent"/> = <see cref="IDisposable"/> + <see cref="IAsyncDisposable"/>），生命周期闭环无原生资源。</para>
 /// <para>AOT 兼容：<see langword="sealed"/>、无反射、无 P/Invoke。</para>

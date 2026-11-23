@@ -11,10 +11,13 @@ namespace LingFan.Media.Abstractions;
 public interface IMediaStreamFactory
 {
     /// <summary>根据媒体源类型创建对应的 IMediaStream 实例。</summary>
+    /// <param name="source">媒体源。</param>
+    /// <returns>新创建的媒体流实例（网络流须先 <see cref="IMediaStream.ConnectAsync"/> 再同步读取）。</returns>
     IMediaStream Create(IMediaSource source);
 
     /// <summary>异步根据媒体源类型创建对应的 IMediaStream 实例。</summary>
     /// <param name="source">媒体源。</param>
     /// <param name="ct">取消令牌。</param>
+    /// <returns>新创建的媒体流实例。</returns>
     Task<IMediaStream> CreateAsync(IMediaSource source, CancellationToken ct = default);
 }

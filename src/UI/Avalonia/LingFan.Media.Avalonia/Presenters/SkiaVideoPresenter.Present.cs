@@ -30,7 +30,7 @@ public sealed partial class SkiaVideoPresenter
                 lock (_gate)
                 {
                     // 【先判定、后转换】上一帧还没被渲染线程取走时，本帧转换完几乎必然被顶掉
-                    // （实测大量帧未渲染即被顶掉，即一半以上帧从未上过屏，
+                    // （渲染线程落后时大量帧未渲染即被顶掉，
                     //  而每次转换耗时可观，全白花在管线线程上，还会挤压解码喂入的节拍）。
                     // 与其转换再丢弃，不如直接跳过本帧、留住已经转换好的那一帧：
                     // 视觉效果等价（反正两帧里只有一帧会上屏，最多相差一个帧距的延迟），
@@ -146,7 +146,7 @@ public sealed partial class SkiaVideoPresenter
                     _pendingH = h;
                 }
             }
-            // 其它资源类型：跳过该帧（不抛，避免击杀管线），但必须记录——静默跳过是此前白屏的元凶。
+            // 其它资源类型：跳过该帧（不抛，避免击杀管线），但必须记录——静默跳过会让「不出画」无从定位。
             else
             {
                 _logger?.LogWarning(
@@ -157,7 +157,7 @@ public sealed partial class SkiaVideoPresenter
         }
         catch (Exception ex)
         {
-            // 单帧异常（如 GPU 回读失败）记录但不向上抛到管线线程击杀播放——此前 ReadbackToCpu 抛 NotSupported 即被此处吞掉导致白屏。
+            // 单帧异常（如 GPU 回读失败）记录但不向上抛到管线线程击杀播放；不记录则回读不支持等失败会静默白屏。
             _logger?.LogWarning(ex, "SkiaVideoPresenter 帧转位图失败（跳过本帧）。");
         }
     }

@@ -6,9 +6,8 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Outputs.Wasapi;
 
 /// <summary>
-/// WASAPI 渲染线程（STA 独占）。Phase 1 从 <see cref="WasapiOutput"/> 提取：
-/// 把全部 WASAPI COM 调用收进一个常驻 STA 线程，消除逐帧 <c>RunOnSta</c> 跨线程封送税，
-/// 为 Phase 2 的生产者/消费者解耦（<c>AudioSampleRing</c>）奠定线程模型基础。
+/// WASAPI 渲染线程（STA 独占），<see cref="WasapiOutput"/> 的实际执行体：
+/// 把全部 WASAPI COM 调用收进一个常驻 STA 线程，消除逐帧 <c>RunOnSta</c> 跨线程封送开销。
 /// </summary>
 /// <remarks>
 /// <para><b>线程模型</b>：构造后由 <see cref="InitializeAsync"/> 启动唯一 STA 线程（COINIT_APARTMENTTHREADED）。
@@ -16,18 +15,18 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// 所有 COM 调用（CoCreateInstance/GetMixFormat/Initialize/GetBuffer/ReleaseBuffer/GetPosition）均在同一线程。
 /// WASAPI 要求 IAudioClient 在 STA 公寓创建与使用，MTA 下 GetMixFormat/Initialize 会触发原生访问违规（ACCESS_VIOLATION），
 /// 故 STA 线程唯一性不可破坏。</para>
-/// <para><b>异步策略</b>（与提取前一致，未改变契约语义）：</para>
+/// <para><b>异步策略</b>：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，内部启动 STA 线程 + 在渲染线程执行 InitializeCore，返回 <see cref="Task.CompletedTask"/>。
 /// CoInitializeEx + COM 设备枚举均为同步 COM 调用，无 I/O 可 await，非伪异步。</item>
-/// <item><see cref="Initialize"/>：同步（sync 分类），在渲染线程执行 IAudioClient + IAudioRenderClient 创建 +
+/// <item><see cref="Initialize"/>：同步（纯 COM 调用，无 I/O），在渲染线程执行 IAudioClient + IAudioRenderClient 创建 +
 /// 格式协商（GetMixFormat / IsFormatSupported）+ 事件驱动初始化（SetEventHandle）。</item>
-/// <item><see cref="Submit"/>/<see cref="SubmitBatch"/>：同步边界（native 分类），将帧交给渲染线程消费（阻塞等待该帧写入完成，
-/// 故调用方在 Submit 返回后可安全归还帧所有权——与行为一致）；缓冲满时由渲染线程的 COM 背压等待，
-/// 不再由调用方跨线程往返。</item>
-/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），渲染线程执行 IAudioClient.Stop/Start/Reset。</item>
-/// <item><see cref="GetPlaybackPosition"/>：同步（sync 分类），渲染线程执行 IAudioClock.GetPosition。</item>
-/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），向渲染线程投递 Shutdown 消息触发 COM 释放 + CoUninitialize，释放事件句柄。</item>
+/// <item><see cref="Submit"/>/<see cref="SubmitBatch"/>：同步边界（原生 COM 背压），将帧交给渲染线程消费（阻塞等待该帧写入完成，
+/// 故调用方在 Submit 返回后可安全归还帧所有权）；缓冲满时由渲染线程的 COM 背压等待，
+/// 调用方无需跨线程往返。</item>
+/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步，渲染线程执行 IAudioClient.Stop/Start/Reset。</item>
+/// <item><see cref="GetPlaybackPosition"/>：同步，渲染线程执行 IAudioClock.GetPosition。</item>
+/// <item><see cref="Dispose"/>：同步快速释放，向渲染线程投递 Shutdown 消息触发 COM 释放 + CoUninitialize，释放事件句柄。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>。非伪异步。</item>
 /// </list>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，采用原始 vtable P/Invoke（ComVTable 委托封送），不使用 [ComImport]/RCW，NativeAOT 兼容。</para>
@@ -91,7 +90,7 @@ internal sealed partial class WasapiRenderLoop
     // 共享模式 IAudioClock::GetPosition 的 devicePosition 含音频引擎「抓取领先」（Start 后瞬间预取
     // 进系统混音缓冲），该领先对 GetCurrentPadding（仅本 IAudioClient 设备缓冲，≤bufferSize≈100ms）
     // 与 GetStreamLatency（本地返回 0）均不可见，故直接减锚点/填充/延迟整段无效。
-    // 改为以墙钟为锚：起播 >100ms 后锁定 bias = rawSec - wallElapsed（引擎领先+常偏），
+    // 改为以墙钟为锚：起播瞬态过后（Clock 段 CalibMinSec = 300ms）锁定 bias = rawSec - wallElapsed（引擎领先+常偏），
     // 主时钟减此值即得真实可闻位置（≈墙钟，与视频 PTS 同源）。三者跨线程（渲染线程写、时钟线程读）均用 Volatile 访问。
     private System.Diagnostics.Stopwatch? _startStopwatch;
     private double _calibratedBias;
@@ -101,8 +100,8 @@ internal sealed partial class WasapiRenderLoop
     // CaptureStartAnchor 置 true；重播起点经 ResetPlaybackClock 置 false。缺此标志时，重播预滚动/门控窗口
     // 会沿用第一遍播放的 Start 锚点返回陈旧值，导致重播 PTS=0 首帧被错判落后、遭 Drop，画面冻结较长时间才切入。
     private volatile bool _clockArmed;
-    // 注：LINGFAN_SYNC_LEAD_MS 已改由 VideoPipeline 作用在「呈现延迟」变量（治本），
-    // 本音频时钟只暴露纯可闻位置，不再做任何前移补偿。
+    // 音频时钟只暴露纯可闻位置，不做任何前移补偿；
+    // LINGFAN_SYNC_LEAD_MS 的提前量补偿由 VideoPipeline 作用在「呈现延迟」变量上。
     private int _sampleRate;
     private int _channels;
     private float _volume = 1.0f;
@@ -129,9 +128,8 @@ internal sealed partial class WasapiRenderLoop
     private SampleFormat _deviceSampleFormat = SampleFormat.F32;
 
     // 设备原生 mix format 的采样率/声道数（GetMixFormat 检测）。
-    // 此前注释称"初始化 WAVEFORMATEX 必须用它而非解码器输出格式"，这是错的
-    // ——那样会让 Submit 侧的解码器格式帧被按设备速率播出。现仅用于诊断日志与 AUTOCONVERTPCM 判断，
-    // 实际初始化格式一律用客户端（解码器）采样率/声道数。详见 NegotiateSharedFormat 步骤 4。
+    // 仅用于诊断日志与 AUTOCONVERTPCM 判断；初始化 WAVEFORMATEX 一律用客户端（解码器）
+    // 采样率/声道数——若改用设备速率，解码器格式的帧会被按错误速率播出。详见 NegotiateSharedFormat。
     private int _mixSampleRate;
     private int _mixChannels;
 
@@ -140,7 +138,7 @@ internal sealed partial class WasapiRenderLoop
     // 0 表示不可用（GetFrequency 失败），此时 GetPlaybackPosition 回落到采样率换算并告警。
     private long _audioClockFrequency;
 
-    // STA 渲染线程基础设施（Phase 1：常驻渲染循环，替代原"每次 RunOnSta 跨线程封送"）
+    // STA 渲染线程基础设施：常驻渲染循环，避免每次调用 RunOnSta 的跨线程封送
     // 单一 STA 线程：CoInitializeEx(STA) → 处理控制消息与音频帧 → 关闭时释放 COM + CoUninitialize。
     // 所有 COM 调用都在该线程，调用方通过 ConcurrentQueue + AutoResetEvent 投递工作项并等待完成。
     private Thread? _thread;
@@ -251,7 +249,7 @@ internal sealed partial class WasapiRenderLoop
             try
             {
                 // 先置位关闭信号：渲染线程在 WriteFrame 的缓冲满丢帧路径不阻塞；Shutdown 消息入队后
-                // 渲染线程得以快速处理完队列并进入 Shutdown（不再有 2s 卡顿退出）。
+                // 渲染线程得以快速处理完队列并进入 Shutdown，避免退出时长时间等待。
                 _shutdownEvent.Set();
                 var shutdown = new RenderItem(ItemKind.Shutdown, null);
                 _queue.Enqueue(shutdown);
@@ -277,7 +275,7 @@ internal sealed partial class WasapiRenderLoop
         }
 
         // STA 公寓（CoInitializeEx(COINIT_APARTMENTTHREADED)）由渲染线程在 Shutdown 消息处理完成后
-        // 经 RenderThreadProc finally → CoUninitialize 正确反初始化，不再有跨实例/测试污染 COM 单元的问题。
+        // 经 RenderThreadProc finally → CoUninitialize 正确反初始化，避免 COM 单元状态跨实例泄漏。
 
         if (_submittedFrames > 0 || _droppedFrames > 0)
         {
@@ -285,7 +283,7 @@ internal sealed partial class WasapiRenderLoop
             _logger.LogWarning(
                 "[WASAPI-DIAG] submittedFrames={SubmittedFrames} submittedSamples={SubmittedSamples} approxSeconds={ApproxSeconds:F2} droppedFrames={DroppedFrames} bufferSize={BufferSize} sampleRate={SampleRate}",
                 _submittedFrames, _submittedSamples, approxSec, _droppedFrames, _bufferSize, _sampleRate);
-            // 双输出：xunit detailed 不转发 ILogger，用 Console 确保测试输出可见
+            // 双输出：ILogger 未接入可见输出通道时，用 Console 兜底确保诊断信息可见
             Console.WriteLine($"[WASAPI-DIAG] submittedFrames={_submittedFrames} submittedSamples={_submittedSamples} approxSeconds={approxSec:F2} droppedFrames={_droppedFrames} bufferSize={_bufferSize} sampleRate={_sampleRate}");
         }
 

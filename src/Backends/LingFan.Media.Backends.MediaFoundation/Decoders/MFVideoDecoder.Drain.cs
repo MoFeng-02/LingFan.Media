@@ -23,11 +23,11 @@ internal sealed partial class MFVideoDecoder
     private int _pendingBacklogOverCount;  // 连续超过高水位的 DrainAvailableOutputs 次数（区分瞬态突发 vs 持续积压）
     private const int PendingBacklogHighWater = 24;     // 积压高水位（> 即异常；正常仅 DPB 深度 ≤16）
     private const int PendingBacklogSustainedLimit = 4;  // 连续超标次数上限，超过才视为「持续积压」真缺陷
-    // (b)(2) 架构补短：稳态 _pendingOutputs 硬上限（EOS/DRAIN 模式豁免）。
+    // 稳态背压：_pendingOutputs 硬上限（EOS/DRAIN 模式豁免）。
     // 仅限稳态 decode-ahead，防止个别大 GOP/重排瞬间把内部缓冲无界堆高（内存尖峰）；
     // 超限即停止继续从 MFT 取帧，未取走的帧留在 MFT 内部（绝不丢），下一次 DecodeAsync 借
     // NOTACCEPTING→Drain 路径自然取回。EOS 必须排空 DPB 残留以救尾帧，故 DRAIN 路径不受此限。
-    private const int PendingOutputHardCeiling = 32;    // 高于正常 DPB 深度(≤16)，低于 EOS 豁免突发的 39 帧
+    private const int PendingOutputHardCeiling = 32;    // 高于正常 DPB 深度(≤16)，为 EOS 排空突发留余量
     private const int MaxOutputsPerDrain = 64;     // 单轮最多取帧数，防异常 MFT 无限吐帧
 
     /// <summary>
@@ -36,7 +36,7 @@ internal sealed partial class MFVideoDecoder
     /// <remarks>
     /// 每次 ProcessInput 之后必须循环 ProcessOutput 直到 <c>MF_E_TRANSFORM_NEED_MORE_INPUT</c>。
     /// 只取一帧会让输出在 MFT 内部积压，进而使后续 ProcessInput 持续返回
-    /// <c>MF_E_NOTACCEPTING</c> ⇒ 输入包被拒 ⇒ 丢帧。这是 30fps 源只出 22fps 的直接原因。
+    /// <c>MF_E_NOTACCEPTING</c> ⇒ 输入包被拒 ⇒ 按比例丢帧（帧率下降 + PTS 缺口）。
     /// </remarks>
     private int DrainAvailableOutputs(MediaPacket sourcePacket)
     {
@@ -51,9 +51,9 @@ internal sealed partial class MFVideoDecoder
                 break; // MFT 真正排空（DRAIN 收口信号）：调用方据此正常结束 EOS 排空
             if (frame != null)
             {
-                // (b)(2) 稳态背压：仅稳态限制内部缓冲上限，超界即停止继续从 MFT 取帧；
+                // 稳态背压：仅稳态限制内部缓冲上限，超界即停止继续从 MFT 取帧；
                 // 未取走的帧留在 MFT 内部（绝不丢），下一次 DecodeAsync 借 NOTACCEPTING→Drain 自然取回。
-                // EOS/DRAIN 模式豁免（isEos），否则尾段 DPB 残留帧无法排空 = 末段尾帧偶发 Drop 复发。
+                // EOS/DRAIN 模式豁免（isEos），否则尾段 DPB 残留帧无法排空（尾帧丢失）。
                 if (!isEos && _pendingOutputs.Count >= PendingOutputHardCeiling)
                     break;
                 _pendingOutputs.Enqueue(frame);
@@ -63,7 +63,7 @@ internal sealed partial class MFVideoDecoder
             }
             // frame==null 且 needMoreInput==false：DRAIN 期间的瞬态（重协商失败 / 提取失败 /
             // 硬件 MFT 在吐下一帧前的短暂空窗）。此时不应中断 —— 重试 ProcessOutput 往往能取出
-            // DPB 中滞留的尾帧；否则 DPB 剩余 ~10-16 帧（恰为 DPB 深度）永久丢失 = 末段尾帧偶发 Drop。
+            // DPB 中滞留的尾帧；否则 DPB 剩余帧（可达 DPB 深度）永久丢失（尾帧丢失）。
             // 连续无产出达上限才收口，避免异常 MFT 死循环。
             if (++noFramePulls >= drainTransientRetryLimit)
                 break;
@@ -72,7 +72,7 @@ internal sealed partial class MFVideoDecoder
         // 积压告警：区分「瞬态突发」与「持续积压」。
         //  - 瞬态：EOS 排空 DPB 残留 / 单帧大 GOP 导致 _pendingOutputs 一次性冲高，但消费侧随后追平（dropped=0，队列回落至低位）→ 良性，不告警。
         //  - 持续：消费侧真卡死，队列长期高于高水位不回落 → 内存增长真缺陷。
-        // 仅当「连续多次 DrainAvailableOutputs 超标」才视为持续积压，单次突发自愈不会触发（L492 未达上限即被 else 分支重置）。
+        // 仅当「连续多次 DrainAvailableOutputs 超标」才视为持续积压，单次突发自愈不会触发（未达连续上限时计数被 else 分支重置）。
         if (_pendingOutputs.Count > PendingBacklogHighWater)
         {
             if (++_pendingBacklogOverCount >= PendingBacklogSustainedLimit && !_warnedPendingBacklog)

@@ -4,9 +4,11 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Core;
 
-// VideoPipeline 的 Diagnostics 职责段（部分类，由 VideoPipeline.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/StartCore/PipelineLoop/DecodeLoop/Dispose）在主文件；
-// 呈现消费者与解码生产者双循环共享 _runId/_cts 会话状态，拆分不改变状态归属与线程模型。
+/// <summary>
+/// VideoPipeline 的诊断与启动等待分部：冻结看门狗、心跳快照，
+/// 以及 WaitForPrerollAsync / WaitForFirstFramePresentedAsync 启动编排等待点。
+/// 字段与生命周期编排在主文件 VideoPipeline.cs。
+/// </summary>
 public sealed partial class VideoPipeline
 {
     /// <summary>启动冻结看门狗（独立诊断线程）：每 2s 打一条管线心跳快照，管线卡死时仍持续输出。</summary>
@@ -36,7 +38,7 @@ public sealed partial class VideoPipeline
                     double sinkIdleSec = System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _sinkExitQpc)).TotalSeconds;
                     double decodeIdleSec = System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _decodeHeartbeatQpc)).TotalSeconds;
                     // 呈/解线程存活状态：心跳停更既可能是卡死也可能是线程已自然退出（EOS 收尾），
-                    // 不加此列会把「已退出」误诊为「死锁」（实测结论）。
+                    // 不加此列会把「已退出」误诊为「死锁」。
                     string alive = $"呈线程={(IsRunning ? "运行" : "已退出")} 解线程={(_decodeTask?.IsCompleted == true ? "已退出" : "运行")}";
                     // 异常升级：任一心跳停更超 1s（且对应线程仍标注运行中）时以 Warning 级输出，
                     // 使「卡死在某个不打日志的调用里」的场景在默认日志级别下可见；

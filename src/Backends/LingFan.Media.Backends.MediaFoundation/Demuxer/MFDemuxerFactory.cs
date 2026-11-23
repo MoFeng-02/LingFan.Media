@@ -24,7 +24,7 @@ public sealed class MFDemuxerFactory : IMediaDemuxerFactory
     private readonly Lazy<MFBackend> _backendFactory;
     private readonly ILoggerFactory _loggerFactory;
 
-    // A 方案：SourceReader 自带硬解 + DXGI 出样所需的共享设备管理器（Singleton）。
+    // SourceReader 自带硬解 + DXGI 出样所需的共享设备管理器（Singleton）。
     // 同样用 Lazy 包裹：provider 本身构造期不碰原生（开箱即用原则），但解析它会连带解析
     // IGpuDeviceContext（其实现可能在有头场景绑定渲染器设备）。用 Lazy 保持「注册 ≠ 立刻要 native」语义一致。
     private readonly Lazy<MfDxgiDeviceManagerProvider> _dxgiManagerProvider;

@@ -7,12 +7,21 @@ namespace LingFan.Media.Abstractions;
 public interface IAudioDecoder : IMediaComponent
 {
     /// <summary>参数化配置：查找编解码器并打开。</summary>
+    /// <param name="codec">音频编解码器。</param>
+    /// <param name="settings">音频配置（含流时间基与可选的重采样目标格式）。</param>
     void Initialize(AudioCodec codec, AudioSettings settings);
 
     /// <summary>解码一个数据包。无 CancellationToken（热路径）。</summary>
+    /// <param name="packet">待解码的数据包。</param>
+    /// <returns>
+    /// 解码出的音频帧；返回 <see langword="null"/> 表示<b>本次未产出音频帧</b>
+    /// （需要更多数据、流已到尾，或该包解码失败可跳过），<b>不代表</b>解码器失效——
+    /// 调用方不得据此判定整体失败或丢弃解码器（与 <see cref="IVideoDecoder.DecodeAsync"/> 的 null 语义一致）。
+    /// </returns>
     ValueTask<AudioFrame?> DecodeAsync(MediaPacket packet);
 
     /// <summary>刷新内部缓冲，取出剩余帧。</summary>
+    /// <returns>缓冲中剩余的一个音频帧；返回 <see langword="null"/> 表示缓冲已取尽。</returns>
     ValueTask<AudioFrame?> FlushAsync();
 
     /// <summary>重置解码器状态（Seek 后调用）。</summary>

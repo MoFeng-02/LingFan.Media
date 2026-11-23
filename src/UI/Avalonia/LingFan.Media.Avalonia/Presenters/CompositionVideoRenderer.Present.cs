@@ -139,18 +139,16 @@ internal sealed partial class CompositionVideoRenderer
                     : _drawingSurface.UpdateWithKeyedMutexAsync(
                         imported, (uint)_source.ConsumerAcquireKey, (uint)_source.ConsumerReleaseKey);
 
-            // 上屏任务必须被健康监控观测。原实现把 _lastPresent 存入即弃、
-            // 无条件 NoteSuccess()，导致「写入共享纹理成功但合成器从未采样 / 导入失效」被误判为成功，
+            // 上屏任务必须被健康监控观测：任务成功完成才记成功；任务失败/取消记一次跳过，
+            // 连续达阈值即触发回退。否则「写入共享纹理成功但合成器从未采样 / 导入失效」会被误判为成功，
             // 连续成功计数永不归零 → Unhealthy 永不触发 → 永不回退 Skia → 永久空白且无任何日志。
-            // 现改为：任务成功完成才记成功；任务失败/取消记一次跳过，连续达阈值即触发回退。
             _lastPresent = present;
             _ = present.ContinueWith(t =>
             {
                 if (t.IsFaulted || t.IsCanceled)
                 {
-                    // 上屏任务真实异常此前被静默吞掉（仅计一次跳过 → 30 次触发回退），
-                    // 导致「UpdateAsync 为何失败」完全不可见。此处把 AggregateException 展开记录，
-                    // 即可看到 Android 合成器对导入 AHB/OPAQUE_FD 图像的真实拒绝原因。
+                    // 把 AggregateException 展开记录，使合成器对导入 AHB/OPAQUE_FD 图像的
+                    // 真实拒绝原因可见（静默吞掉异常会让「UpdateAsync 为何失败」无从定位）。
                     if (t.Exception is { } ex)
                         _logger.LogError(ex, "CompositionVideoRenderer UpdateAsync 上屏失败（帧跳过，累计将触发回退）。HandleType={HandleType} Version={Version}",
                             _handleType, _lastVersion);

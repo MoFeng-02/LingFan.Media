@@ -62,8 +62,8 @@ public static class OpenGLExtensions
         builder.Services.AddSingleton<IGpuFrameProducer>(sp =>
             sp.GetRequiredService<OpenGLRendererFactory>().CreateFrameProducer());
 
-        // E3 后端自动选择：启用且未显式指定时，OpenGL 作为候选默认 GPU 后端（与 D3D11 / Vulkan 同构守卫）。
-        // 覆盖 D3D11 不存在的桌面平台（Linux EGL X11）；Windows 上若 D3D11 已先行注册则由其胜出，符合 V1 桌面默认意图。
+        // 后端自动选择：启用且未显式指定时，OpenGL 作为候选默认 GPU 后端（与 D3D11 / Vulkan 同构守卫）。
+        // 覆盖 D3D11 不存在的桌面平台（Linux EGL X11）；Windows 上若 D3D11 已先行注册则由其胜出（桌面默认优先 D3D11）。
         if (builder.Options.EnableAutoBackendSelection && builder.Options.DefaultVideoRenderer is null)
         {
             builder.Options.DefaultVideoRenderer = typeof(OpenGLRendererFactory);

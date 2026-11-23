@@ -135,7 +135,6 @@ internal sealed unsafe partial class VulkanRenderer
             throw new InvalidOperationException($"vkQueueSubmit 失败: {result}");
 
         // 已知性能限制——QueueWaitIdle 每帧同步 GPU 以确保 Command Buffer 可安全复用。
-        // 将改用 vkCreateFence + vkWaitForFences 或环形 Command Buffer 消除此阻塞。
         // 「提交成功、GPU 执行中 TDR」的设备丢失恰从 WaitIdle 浮现——必须检测。
         // 其余失败码（OOM 等）保持既有忽略语义不变。
         long tGpu = Stopwatch.GetTimestamp();

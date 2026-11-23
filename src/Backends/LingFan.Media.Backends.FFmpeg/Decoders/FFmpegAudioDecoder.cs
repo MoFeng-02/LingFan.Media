@@ -16,7 +16,7 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// <item><see cref="FlushAsync"/>：热路径异步，同上。</item>
 /// <item><see cref="Reset"/>：同步，avcodec_flush_buffers。</item>
 /// </list>
-/// <para><b>重采样（B11）</b>：当 AudioSettings 指定的目标采样率/声道数/采样格式
+/// <para><b>重采样</b>：当 AudioSettings 指定的目标采样率/声道数/采样格式
 /// 与解码源不同时，在 Initialize 中创建 SwrContext 重采样上下文；
 /// 解码帧经 swr_convert_frame 重采样为目标格式后再封装为 AudioFrame。
 /// 若目标与源一致则不创建。重采样为纯原生同步操作，不引入异步。</para>
@@ -41,11 +41,11 @@ internal sealed partial class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAwar
     private int _targetChannels;
     private bool _disposed;
 
-    /// <summary>解码器实际输出采样率（源采样率，或 B11 重采样目标采样率）。</summary>
+    /// <summary>解码器实际输出采样率（源采样率，或重采样目标采样率）。</summary>
     /// <remarks>Initialize 内赋值；供 MediaPlayer 初始化 WASAPI 设备率。</remarks>
     public int OutputSampleRate { get; private set; }
 
-    /// <summary>解码器实际输出声道数（源声道数，或 B11 重采样目标声道数）。</summary>
+    /// <summary>解码器实际输出声道数（源声道数，或重采样目标声道数）。</summary>
     public int OutputChannels { get; private set; }
     private bool _initialized;
 
@@ -124,7 +124,7 @@ internal sealed partial class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAwar
             ? MapTargetSampleFormat(settings.OutputSampleFormat.Value)
             : ctx->sample_fmt;
 
-        // B11 输出率/声道数回写（供 MediaPlayer 初始化 WASAPI 设备率，确保与帧率一致）。
+        // 输出率/声道数回写（供 MediaPlayer 初始化 WASAPI 设备率，确保与帧率一致）。
         OutputSampleRate = _targetSampleRate;
         OutputChannels = _targetChannels;
 

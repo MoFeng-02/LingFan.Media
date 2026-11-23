@@ -10,15 +10,19 @@ namespace LingFan.Media.Abstractions;
 public interface IVideoDecoder : IMediaComponent
 {
     /// <summary>参数化配置：查找编解码器并打开。非生命周期方法。</summary>
+    /// <param name="codec">视频编解码器。</param>
+    /// <param name="settings">视频配置（含流时间基与解码选项）。</param>
     void Initialize(VideoCodec codec, VideoSettings settings);
 
     /// <summary>
     /// 解码一个数据包。无 CancellationToken（热路径）。
-    /// 返回 null 表示需要更多数据（如 B 帧延迟）。
     /// </summary>
+    /// <param name="packet">待解码的数据包。</param>
+    /// <returns>解码出的视频帧；返回 <see langword="null"/> 表示需要更多数据（如 B 帧延迟）。</returns>
     ValueTask<VideoFrame?> DecodeAsync(MediaPacket packet);
 
     /// <summary>刷新内部缓冲，取出剩余帧。</summary>
+    /// <returns>缓冲中剩余的一个视频帧；返回 <see langword="null"/> 表示缓冲已取尽。</returns>
     ValueTask<VideoFrame?> FlushAsync();
 
     /// <summary>重置解码器状态（Seek 后调用）。</summary>

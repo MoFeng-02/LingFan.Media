@@ -39,7 +39,7 @@ public sealed class VideoPipelineConfig
     /// </summary>
     /// <remarks>
     /// <para>每个 <see cref="IVideoProcessor"/> 包装为一个 <c>Func&lt;VideoFrame, VideoFrame?&gt;</c> 闭包（null = 丢弃帧）。</para>
-    /// <para>Core.VideoPipeline 仅消费中立 BCL 委托，不直接依赖 <c>LingFan.Media.Video</c>，保持分层倒置避免。</para>
+    /// <para>Core.VideoPipeline 仅消费中立 BCL 委托，不直接依赖 <c>LingFan.Media.Video</c>，避免分层倒置。</para>
     /// <para>所有权转移：<see cref="IVideoProcessor.Process"/> 内部 Dispose 输入帧并返回新帧；
     /// 禁用的处理器透传（闭包直接返回输入帧）。</para>
     /// </remarks>
@@ -64,7 +64,7 @@ public sealed class VideoPipelineConfig
     /// </summary>
     /// <remarks>
     /// <para>依次调用每个 <see cref="IVideoProcessor.Reset"/>，释放有状态处理器
-    /// （如 <see cref="FrameRateConverter"/> 的上一帧副本 _held），
+    /// （如 <see cref="Processors.FrameRateConverter"/> 的上一帧副本 _held），
     /// 避免 Seek 后返回陈旧帧或跨会话滞留。</para>
     /// <para>宿主/Extensions 可将本方法作为
     /// <c>Action</c>（BCL 中立类型）注入 Core <c>VideoPipeline</c> 的重置钩子，

@@ -8,7 +8,8 @@ namespace LingFan.Media.Core;
 /// 监控缓冲状态，触发 Buffering/Ready 状态转换。
 /// </summary>
 /// <remarks>
-/// <para>线程安全：预读取线程与监控线程并发，使用 <see cref="System.Threading.Channels.Channel{T}"/>。</para>
+/// <para>线程安全：预读取循环与调用方（状态查询/定位操作）并发访问，使用 <see cref="System.Threading.Channels.Channel{T}"/>；
+/// 缓冲状态判定（Buffering/Ready 转换）在预读取循环内完成，无独立监控线程。</para>
 /// <para>FrameBuffer 无 SubtitleFrameQueue——字幕帧仅含文本和时间戳，</para>
 /// <para>无 GPU 资源、无需 Dispose。字幕帧由 SubtitleProcessor 内部缓存管理。</para>
 /// </remarks>
@@ -171,6 +172,13 @@ public sealed class BufferManager : IBufferManager
         _rebuildChannelsOnStart = _channelsClosed;
     }
 
+    /// <summary>
+    /// 启动（或定位后重启）预读取循环：停止并等待旧读线程退出、重建 CTS、
+    /// 按需重建包通道，进入 Buffering 状态并拉起后台读取循环。
+    /// </summary>
+    /// <param name="ct">外部取消令牌；与内部 CTS 链接后传入读取循环。</param>
+    /// <returns>缓冲 Ready、流结束或取消时完成的任务；读取循环本身继续在后台运行。</returns>
+    /// <remarks>定位场景须先调用 <see cref="PrepareForSeek"/>，通道重建判断才反映定位前的真实状态。</remarks>
     public async Task StartAsync(CancellationToken ct = default)
     {
         // 停止旧的读取线程（Seek 场景）

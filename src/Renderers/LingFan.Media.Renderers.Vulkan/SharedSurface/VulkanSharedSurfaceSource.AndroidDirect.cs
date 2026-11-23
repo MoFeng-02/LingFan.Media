@@ -61,7 +61,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource
             HandleTypes = ExternalMemoryHandleTypeFlags.AndroidHardwareBufferBitAndroid,
         };
         // 用法 = 0x17（SAMPLED|TRANSFER_SRC|TRANSFER_DST|COLOR_ATTACHMENT），与旧双提交路径被 Skia
-        // 接受的 usage 逐位一致（实测 SAMPLED-only(0x4) 会被拒）。
+        // 接受的 usage 逐位一致（SAMPLED-only(0x4) 会被拒）。
         // AHB 按 GPU_FRAMEBUFFER 分配，COLOR_ATTACHMENT 在 formatFeatures 内；万一驱动拒绝再回落 0x4。
         ImageCreateInfo ci = new()
         {
@@ -148,7 +148,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource
         // 描述符直指导入图像：声明布局=GENERAL、独占共享（同队列族），Skia 按此包装采样。
         // 布局声明=GENERAL 是【诚实的实际布局】（AHB 外部内存惯例：GL 写入后无任何 Vulkan 屏障，
         // 实际即 GENERAL），也是 Adreno 采样契约的正确声明——descriptor imageLayout 与实际一致时
-        // 采样才可靠（实测声明 SHADER_READ_ONLY(5) 而实际 GENERAL，包装可能通过但采样黑屏）。
+        // 采样才可靠（声明 SHADER_READ_ONLY(5) 而实际 GENERAL 时，包装可能通过但采样黑屏）。
         // 【防回归】NativeImageUsage 须如实引用 ci.Usage（创建=声明，逐位一致）：若声明值与创建值
         // 不一致，Skia 侧包装校验会以声明 usage 判定而失败，创建侧的正确 usage 从未到达包装校验。
         descriptor = new SharedGpuSurfaceDescriptor(

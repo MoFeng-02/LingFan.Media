@@ -18,7 +18,7 @@ namespace LingFan.Media.GPUShare.Android.Bridge;
 /// 以「普通 RGBA 纹理」经 RGBA→RGBA blit 采样上屏（Adreno 兼容、不崩）。
 /// </summary>
 /// <remarks>
-/// <para><b>为何绕开 YCbCr 采样</b>：Adreno（Android 12 实测）对「MediaCodec 产出的 YUV AHB + Vulkan
+/// <para><b>为何绕开 YCbCr 采样</b>：Adreno（Android 12）对「MediaCodec 产出的 YUV AHB + Vulkan
 /// <c>VkSamplerYcbcrConversion</c> 采样」报缺
 /// <c>VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_BIT</c>，驱动走未定义行为 → 进程级原生崩溃。
 /// 业界零拷贝范式（ExoPlayer / Chromium）从不让 Vulkan 直接 YCbCr 采样 AHB，而是让 GL 在 GPU 内做
@@ -111,9 +111,9 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
     private uint _scratchTex;      // 每帧重绑 EGLImage（AHB）的 GL 纹理
     private uint _fbo;            // FBO（附着 scratchTex）
 
-    // AHB 环形缓冲池已回退（实测每帧 allocate+一次性 EGLImage 是本机 Adreno 唯一稳定形态）：
-    // EGLImage 与 Vulkan import 并存/同 AHB 二次 CreateImage 均触发驱动故障。
-    // 直采架构下我方 0 次 vkQueueSubmit，gralloc churn 已无错误码暴露面，池化收益不抵驱动兼容代价。
+    // AHB 不做环形缓冲池：每帧 allocate + 一次性 EGLImage 是 Adreno 上唯一稳定形态——
+    // EGLImage 与 Vulkan import 并存、或同一 AHB 二次 CreateImage，均触发驱动故障。
+    // 直采架构下桥接层无 Vulkan 队列提交，池化收益不抵驱动兼容代价。
 
     // 扩展函数（运行时经 eglGetProcAddress 解析，AOT 友好 delegate*）。
     private delegate* unmanaged[Cdecl]<nint, nint> _eglGetNativeClientBufferAndroid = null;
@@ -152,6 +152,10 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         public readonly System.Threading.Tasks.TaskCompletionSource<nint> Tcs = new();
     }
 
+    /// <summary>创建桥接（不启动 GL 线程；须随后调用 <see cref="Initialize"/>）。</summary>
+    /// <param name="width">AHB 渲染目标宽度（像素）；≤0 回落 1920。</param>
+    /// <param name="height">AHB 渲染目标高度（像素）；≤0 回落 1080。</param>
+    /// <param name="logger">可选日志记录器。</param>
     public AndroidAhbRgbaBridge(int width, int height, ILogger? logger)
     {
         _width = width > 0 ? width : 1920;
@@ -164,6 +168,7 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
 
     /// <summary>桥接配置的帧尺寸（AHB 渲染目标尺寸）。</summary>
     public int FrameWidth => _width;
+    /// <summary>桥接配置的帧高度（AHB 渲染目标尺寸）。</summary>
     public int FrameHeight => _height;
 
     /// <summary>
@@ -222,6 +227,10 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
         }
     }
 
+    /// <summary>
+    /// 停止 GL 线程并释放桥接资源（幂等）。GL 对象在 GL 线程上销毁；等待有界（5 秒），
+    /// 超时则跳过 Surface/SurfaceTexture 释放并记录警告，避免调用方被设备级停摆挂死。
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -431,7 +440,7 @@ public sealed unsafe partial class AndroidAhbRgbaBridge : IDisposable
       + "void main() {\n"
       + "    vUV = (uTexTransform * vec4(aUV, 0.0, 1.0)).xy;\n"
       // aPos 已是 NDC [-1,1]（VBO 注释同款），直传 gl_Position。
-      // 误写 aPos*2.0-1.0 会把 quad 放大 3 倍 → 可见区只剩中央 1/3 裁切放大（实测）。
+      // 误写 aPos*2.0-1.0 会把 quad 放大 3 倍 → 可见区只剩中央 1/3 裁切放大。
       + "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
       + "}\n";
 

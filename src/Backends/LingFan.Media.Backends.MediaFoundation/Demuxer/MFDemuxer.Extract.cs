@@ -142,9 +142,9 @@ internal sealed partial class MFDemuxer
         // 自此 samplePtr 持有一份引用，所有退出路径（含异常）恰好释放一次。
         try
         {
-            // A 方案：该流已协商为 NV12 解码输出 ⇒ 走「已解码直通」打包（优先 GPU 纹理零拷贝）
+            // 该流已协商为 NV12 解码输出 ⇒ 走「已解码直通」打包（优先 GPU 纹理零拷贝）
             // 只有 TryConfigureVideoStreamToNv12 成功的那一条视频流会命中；其余流（音频 PCM、
-            // 未协商成功的视频压缩裸流）继续走下方通用字节拷贝路径，行为与改造前一致。
+            // 未协商成功的视频压缩裸流）继续走下方通用字节拷贝路径。
             if (_decodedVideoStreamIndex >= 0 && actualStreamIndex == _decodedVideoStreamIndex)
                 return ExtractDecodedVideoPacket(samplePtr, actualStreamIndex, timestamp);
 
@@ -177,8 +177,7 @@ internal sealed partial class MFDemuxer
                 //    在从未 Lock 的状态下调用 ⇒ 野指针写 / 重复释放 ⇒ 污染原生堆。
                 //    此类损坏不在原地崩溃，而是滞后到下一次 CLR 内部堆操作
                 //    （如 MfVTable.Get 的 GetDelegateForFunctionPointer）才以原生堆损坏暴露。
-                //    历史回归点：旧代码写作 `if (hr < 0 || curLen == 0) { unlockDel(...); }`，
-                //    把 Lock 失败与空缓冲混为一谈，是本崩溃的真正成因，勿回退。
+                //    防回归：勿把 Lock 失败与空缓冲混为一谈——Lock 失败时 Unlock 正是上述堆损坏的来源，勿回退。
                 if (hr < 0)
                 {
                     _logger.LogWarning("IMFMediaBuffer.Lock 失败: HRESULT=0x{HR:X8}（未 Unlock，符合配对规范）", hr);

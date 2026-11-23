@@ -8,14 +8,14 @@ namespace LingFan.Media.Backends.VLCNative;
 /// 多播放器共享安全（每个 VLCNativeDemuxer 创建独立的 Media + MediaPlayer）。</para>
 /// <para>构造函数和 Dispose 均为同步——libvlc 初始化/释放是快速原生调用，无 I/O 阻塞。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
-    /// <para>本后端同是<b>回调式 CPU 帧</b>模型（与项目此前的 VLC 后端行为一致）
+    /// <para>本后端同是<b>回调式 CPU 帧</b>模型
     /// （<c>libvlc_video_set_callbacks</c> 经 lock/unlock 拿 BGRA 内存）。<c>EnableHardwareDecoding</c> 时注入
-    /// <c>--avcodec-hw=any</c>（「可用就硬解」）：<b>有头</b>（真实显示设备）走 D3D11VA 真硬解 + 回拷 CPU BGRA，
-    /// 与老库 Headful 探针一致；<b>无头</b>（<c>--vout=dummy</c>，无显示设备）下 GPU 表面无法映射回 CPU → ffmpeg
+    /// <c>--avcodec-hw=any</c>（「可用就硬解」）：<b>有头</b>（真实显示设备）走 D3D11VA 真硬解 + 回拷 CPU BGRA；
+    /// <b>无头</b>（<c>--vout=dummy</c>，无显示设备）下 GPU 表面无法映射回 CPU → ffmpeg
     /// 报 <c>get_buffer() failed</c>，但 VLC 自动回退软解（帧仍以 CPU BGRA 交付，功能无损，仅日志有噪声）。
     /// VLC 后端在此架构里是「开箱即用回退中间件」，零拷贝硬解由 MF/ffmpeg 主路径承担。</para>
-    /// <para>引擎替换方面与原版一致：仅把后端引擎从 <c>LibVLC</c>（LGPL）替换为自写 <c>LibVlcInstance</c>（Apache-2.0），
-    /// 从而消除 NativeAOT 静态链接触发的 LGPL 义务。</para>
+    /// <para>引擎绑定：用自写 <c>LibVlcInstance</c>（Apache-2.0）而非 LGPL 的 <c>LibVLC</c> 绑定，
+    /// 避免 NativeAOT 静态链接触发的 LGPL 义务。</para>
     /// </remarks>
 public sealed class VLCNativeBackend : IDisposable
 {
@@ -41,7 +41,7 @@ public sealed class VLCNativeBackend : IDisposable
         if (options.Headless)
             args.Add("--vout=dummy");
 
-        // 启用硬件解码时注入 --avcodec-hw=any（「可用就硬解」，与此前 VLC 后端逐字对齐）。
+        // 启用硬件解码时注入 --avcodec-hw=any（「可用就硬解」）。
         // 无头(--vout=dummy)下 GPU 表面无法映射回 CPU，ffmpeg 会报 get_buffer() failed，但 VLC 自动回退软解，
         // 帧仍以 CPU BGRA 交付（功能无损，仅日志噪声；详见类文档与后端 README）。不按 Headless 强制 none，以免剥夺有头真硬解。
         if (options.EnableHardwareDecoding)

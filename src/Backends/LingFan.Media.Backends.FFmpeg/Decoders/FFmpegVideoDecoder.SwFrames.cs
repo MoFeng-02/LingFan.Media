@@ -32,7 +32,7 @@ internal sealed partial class FFmpegVideoDecoder
         SoftwareFrameResource? resource = null;
         if (format == PixelFormat.P010)
         {
-            // 10-bit 单一收敛点：解码侧把 P010(NV12 布局、10bit 存 16-bit 高位)
+            // 10-bit 单一收敛点：解码侧把 P010(NV12 布局、16-bit 样本)
             // CPU 解包为 BGRA32，渲染器只消费 BGRA32——与 NV12 软件帧/D3D11 不可绑 SRV
             // 的处理完全一致。无黑屏、无静默降 8-bit；真·GPU 10-bit 零拷贝着色器留作未来增强。
             resource = CreateP010ToBgraResource(avFrame, width, height);
@@ -40,7 +40,7 @@ internal sealed partial class FFmpegVideoDecoder
         else if (format == PixelFormat.YUV420P10)
         {
             // 10-bit 平面收敛点：ffmpeg 软解 10-bit HEVC 主流出帧为 yuv420p10le(三平面、
-            // 10bit 存 16-bit 高位)。与 P010 完全相同的 BT.601 全范围解包到 BGRA32，
+            // 10bit 右对齐存于 16-bit 字低 10 位，见 Read10Bit)。与 P010 完全相同的 BT.601 全范围解包到 BGRA32，
             // 仅平面布局不同。若不处理此分支，默认会误当 8-bit YUV420P 解包 => 画面发绿/错色，
             // 且 present 计数仍 PASS（假阳性）。
             resource = CreateYuv420P10ToBgraResource(avFrame, width, height);
@@ -113,10 +113,11 @@ internal sealed partial class FFmpegVideoDecoder
     }
 
     /// <summary>
-    /// P010(NV12 布局、10bit 存于 16-bit 高位) CPU 解包为 BGRA32 的单一收敛点。
+    /// P010(NV12 布局、16-bit 样本) CPU 解包为 BGRA32 的单一收敛点。
     /// </summary>
     /// <remarks>
-    /// <para>10-bit 值经右移 6 位归一化到 0..1023，再套用与 NV12 GPU 着色器 / Skia CPU 兜底
+    /// <para>10-bit 值经 <see cref="Read10Bit"/> 取 16-bit 字的低 10 位（右对齐，0..1023），
+    /// 再套用与 NV12 GPU 着色器 / Skia CPU 兜底
     /// 完全一致的 BT.601 全范围系数（Rv=1.402, Gu=0.344136, Gv=0.714136, Bu=1.772），
     /// 保证 10-bit 与 8-bit 帧色彩不漂移、无静默降精度。这是「10-bit 上屏」的唯一正确入口；
     /// 真·GPU 10-bit 零拷贝着色器（采 unorm16）留作未来增强。</para>
@@ -178,11 +179,11 @@ internal sealed partial class FFmpegVideoDecoder
     }
 
     /// <summary>
-    /// YUV420P10(三平面、10bit 存于 16-bit 高位) CPU 解包为 BGRA32 的单一收敛点。
+    /// YUV420P10(三平面、10bit 右对齐存于 16-bit 字低 10 位) CPU 解包为 BGRA32 的单一收敛点。
     /// </summary>
     /// <remarks>
     /// <para>与 <see cref="CreateP010ToBgraResource"/> 共用同一套 BT.601 全范围系数与
-    /// <see cref="Read10Bit"/>（10bit 右移 6 归一），仅平面布局不同：Y/U/V 各自独立平面，
+    /// <see cref="Read10Bit"/>（取右对齐 16-bit 字的低 10 位），仅平面布局不同：Y/U/V 各自独立平面，
     /// 色度按 2x2 子采样。ffmpeg 软解 10-bit HEVC 主流出帧即为此布局，故这是「10-bit 上屏」
     /// 真正会被触发的主路径。</para>
     /// <para>渲染器永远只消费 BGRA32（资源 Format 已为 BGRA32），三渲染器 + Skia 均免改。</para>

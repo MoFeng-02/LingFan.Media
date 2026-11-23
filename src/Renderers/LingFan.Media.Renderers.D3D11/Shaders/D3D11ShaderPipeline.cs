@@ -15,7 +15,7 @@ namespace LingFan.Media.Renderers.D3D11.Shaders;
 /// <item>VS 用 <c>SV_VertexID</c> 生成全屏三角形 → 无需 InputLayout / VertexBuffer（少 2 个 COM 对象、零顶点上传）。</item>
 /// <item>RGBA32 直接建 <c>R8G8B8A8_UNorm</c> 纹理由 GPU 采样 → 消除 CPU R/B 通道交换循环。</item>
 /// <item>YUV 每平面一个 <c>R8_UNorm</c>/<c>R8G8_UNorm</c> 纹理 + SRV，PS 内 BT.601 全范围矩阵
-/// （系数 1.402 / -0.344136 / -0.714136 / 1.772，与 SkiaVideoPresenter U11 路径完全一致，双路径色彩不漂移）。</item>
+/// （系数 1.402 / -0.344136 / -0.714136 / 1.772，与 SkiaVideoPresenter CPU 转换路径完全一致，双路径色彩不漂移）。</item>
 /// <item>HLSL 运行时编译经 Vortice.D3DCompiler → 系统 <c>d3dcompiler_47.dll</c> 原生 P/Invoke：
 /// 无反射、无 .NET 动态代码生成，NativeAOT 兼容（动态部分发生在原生编译器内）。</item>
 /// </list>

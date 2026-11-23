@@ -36,13 +36,13 @@ public static class AvaloniaExtensions
     /// <param name="builder">媒体服务构建器。</param>
     /// <returns>构建器（链式调用）。</returns>
     /// <remarks>
-    /// <para><b>U9</b>：默认 Presenter 工厂以 Singleton 注册，供宿主 DI 解析。
+    /// <para>默认 Presenter 工厂以 Singleton 注册，供宿主 DI 解析。
     /// 控件 <see cref="VideoView"/> 自身仍通过 <see cref="VideoView.RendererType"/> 静态创建 Presenter
     /// （Avalonia 控件不走 DI 解析，避免引入控件工厂注入耦合），本工厂供需要编程式创建/替换 Presenter
     /// 的宿主或未来控件工厂注入使用。</para>
-    /// <para><b>D3D11 GPU Presenter 工厂</b>（<c>AddD3D11Presenter</c>）暂未注册——依赖尚未落地的 Presenter 注册决策
-    /// （GPU Presenter 适配器类是否创建）与 Renderers.D3D11 真实实现，属独立 PR 范畴。</para>
-    /// <para><b>异步策略</b>：config 分类——纯 DI 注册，无 I/O。</para>
+    /// <para><b>D3D11 GPU Presenter 工厂</b>（<c>AddD3D11Presenter</c>）未注册——GPU Presenter 适配器
+    /// 及其注册决策尚未落地。</para>
+    /// <para><b>异步策略</b>：同步配置——纯 DI 注册，无 I/O。</para>
     /// <para><b>AOT 兼容</b>：static 方法，无反射。</para>
     /// </remarks>
     public static MediaBuilder AddSkiaPresenter(this MediaBuilder builder)

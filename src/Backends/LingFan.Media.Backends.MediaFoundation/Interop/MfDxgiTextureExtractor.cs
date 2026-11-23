@@ -9,8 +9,8 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// 从 MF 样本 buffer 提取 DXGI 纹理（零拷贝）的共用助手。
 /// </summary>
 /// <remarks>
-/// <para><b>由来</b>：原逻辑内嵌在 <c>MFVideoDecoder.TryExtractDxgiTexture</c>。A 方案（SourceReader 自带硬解）
-/// 后 <c>MFDemuxer</c> 也需在读样阶段提取纹理，故抽为无状态静态助手供两侧共用，避免两份分叉实现漂移。</para>
+/// <para><b>共用</b>：<c>MFVideoDecoder</c> 与 <c>MFDemuxer</c>（SourceReader 自带硬解时读样阶段也需提取纹理）
+/// 两侧共用本无状态静态助手，避免两份分叉实现漂移。</para>
 /// <para><b>路径</b>：<c>QueryInterface(IMFDXGIBuffer)</c> → <c>GetResource(ID3D11Texture2D)</c> +
 /// <c>GetSubresourceIndex</c> → 包成 <see cref="MfD3D11TextureResource"/>（<see cref="IGpuTextureResource"/> 中立契约）。</para>
 /// <para><b>COM 配对</b>：<c>GetResource</c> 成功即已 AddRef 纹理；后续任一步失败必须 <c>Marshal.Release(tex)</c>，

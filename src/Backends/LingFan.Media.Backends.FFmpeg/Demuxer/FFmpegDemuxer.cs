@@ -13,7 +13,7 @@ namespace LingFan.Media.Backends.FFmpeg.Demuxer;
 /// <list type="bullet">
 /// <item><c>OpenAsync</c> / <c>ReadPacketAsync</c> / <c>SeekAsync</c>：使用 <c>await Task.Run(...)</c>
 /// 将同步 FFmpeg 调用卸载到线程池——FFmpeg C API 本质同步，<c>Task.Run</c> 仅将阻塞从调用线程移到线程池，
-/// 是<b>伪异步</b>而非真异步。但这是 FFmpeg C API 的圆有局限（无原生异步 I/O API），
+/// 是<b>伪异步</b>而非真异步。但这是 FFmpeg C API 的固有局限（无原生异步 I/O API），
 /// 未来若 FFmpeg 提供异步读取接口应替换。网络建连部分由 <c>stream.ConnectAsync</c> 提供真异步。</item>
 /// <item><c>InitializeAsync</c>：接口契约，返回 <c>Task.CompletedTask</c>（无 I/O）。</item>
 /// <item>AVIO <c>ReadPacketCallback</c>：同步边界（C 函数指针），调用 <see cref="IMediaStream.Read(Span{byte})"/>；
@@ -48,8 +48,8 @@ internal sealed partial class FFmpegDemuxer : IMediaDemuxer
 
     // 重播归零诊断：SeekAsync 设 _logFirstPacketAfterSeek=true，
     // ReadPacketCore 在 seek 后首包打印其时间戳，用于确证「回到起点」seek 落点是否已回到 ≈0
-    // （此前 matroska/webm 在 EOF 后 AVSEEK_FLAG_BACKWARD 到 ts=0 会回绕到末关键帧，
-    // 回绕到末关键帧 → 重播视频冻结较长时间）。一次性诊断，不影响控制流。
+    // （matroska/webm 在 EOF 后 AVSEEK_FLAG_BACKWARD 到 ts=0 可能回绕到末关键帧
+    // → 重播视频冻结较长时间）。一次性诊断，不影响控制流。
     private bool _logFirstPacketAfterSeek;
     private long _lastSeekTargetTs;
 

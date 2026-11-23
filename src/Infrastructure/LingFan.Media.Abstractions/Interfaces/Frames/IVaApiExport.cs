@@ -11,7 +11,7 @@ namespace LingFan.Media.Abstractions;
 /// 导出 dma_buf fd + 多平面布局 → 渲染侧生产者（GL/Vulkan）零拷贝导入上屏。</para>
 /// <para><b>句柄所有权</b>：导出产生的 dma_buf fd 由本方法写入 <see cref="VaApiDmaBufDescriptor"/>，
 /// 所有权在导出后即转移给调用方（解码器 → 生产者），由生产者经 EGL/Vulkan 导入消费后关闭，本抽象不负责关闭。</para>
-/// <para><b>异步策略</b>：全部同步（sync 分类）——原生 VA-API 调用是同步边界，无 I/O await；实现保持同步。</para>
+/// <para><b>异步策略</b>：全部同步——原生 VA-API 调用是同步边界，无 I/O await；实现保持同步。</para>
 /// <para>AOT 兼容：接口 + 托管描述符，无反射。</para>
 /// </remarks>
 public interface IVaApiExport

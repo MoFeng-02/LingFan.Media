@@ -12,8 +12,9 @@ namespace LingFan.Media.Platforms;
 /// <item>设备枚举——音频设备、显示设备。</item>
 /// <item>电源管理——播放时阻止休眠。</item>
 /// </list>
-/// <para>范围：<see cref="CreateHardwareDecoder"/> 和 <see cref="GetGPUContext"/> 均为桩（抛出 <see cref="NotSupportedException"/>）。
-/// 实际可用的硬解 / GPU 互操作仅 <b>Windows（D3D11VA）</b>，其余平台属 Phase 2-3 目标。</para>
+/// <para>范围：<see cref="CreateHardwareDecoder"/> 和 <see cref="GetGPUContext"/> 是未实现的工厂接缝（抛出 <see cref="NotSupportedException"/>）。
+/// 实际可用的硬解 / GPU 互操作由各平台后端提供（Windows D3D11VA、Linux VAAPI、macOS/iOS VideoToolbox、Android MediaCodec），不经本接口；
+/// <see cref="SupportsHardwareDecode"/>/<see cref="SupportsGPUInterop"/> 表示相应后端路径可用，与工厂接缝是否实现无关。</para>
 /// <para>AOT 兼容：接口定义无反射，实现为 sealed 类。</para>
 /// </remarks>
 public interface IPlatformServices
@@ -31,10 +32,10 @@ public interface IPlatformServices
     /// 创建平台硬件解码器。
     /// </summary>
     /// <param name="codec">视频编解码器类型。</param>
-    /// <returns>硬件解码器实例，平台不支持时返回 null。</returns>
+    /// <returns>硬件解码器实例（预留返回位；当前桩实现恒抛异常，不返回 null，见 remarks）。</returns>
     /// <remarks>
     /// 桩——抛出 <see cref="NotSupportedException"/>。
-    /// 未来实现：Windows → D3D11VA / DXVA2，Linux → VAAPI，macOS/iOS → VideoToolbox，Android → MediaCodec。
+    /// 实际硬解由各平台后端提供（Windows D3D11VA、Linux VAAPI、macOS/iOS VideoToolbox、Android MediaCodec），不经本工厂创建。
     /// </remarks>
     IVideoDecoder? CreateHardwareDecoder(VideoCodec codec);
 

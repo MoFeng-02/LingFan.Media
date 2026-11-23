@@ -34,7 +34,7 @@ public interface IRendererProfiler
 /// 在 <c>_gate</c> 锁内阻塞——并发调用 <see cref="Dispose"/>/<see cref="Detach"/> 最坏被卡至超时才能获得锁。
 /// 这是「有限超时替代无限等待」权衡的已知副作用，属预期行为而非死锁。</para>
 /// <para><b>已知性能限制</b>：<see cref="RecordAndSubmitFrame"/> 中使用 <c>vkQueueWaitIdle</c>
-/// 每帧同步 GPU——确保 Command Buffer 可安全复用但消除 GPU 并行。将改用 Fence 或环形 Command Buffer。</para>
+/// 每帧同步 GPU——确保 Command Buffer 可安全复用但消除 GPU 并行。</para>
 /// <para><b>Linux Surface</b>：X11 / Wayland 经中性句柄类型 <c>X11WindowHandle</c> / <c>WaylandWindowHandle</c>
 /// （定义于 <c>LingFan.Media.Renderers.Shared</c>，非契约层）携带 Display* 指针，由
 /// <c>VulkanNative.CreateXlibSurfaceKHR</c> / <c>CreateWaylandSurfaceKHR</c> 创建 Surface；
@@ -67,8 +67,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
     private SurfaceKHR _surface;
     private SwapchainKHR _swapchain;
     private Image[] _swapchainImages = [];
-    // _swapchainImageViews 已移除——仅用 CmdCopyBufferToImage（直接操作 VkImage），
-    // 不需要 ImageView。实现 Shader 渲染时需重新添加。
+    // Swapchain 不创建 ImageView：拷贝/位块传输直接操作 VkImage（CmdCopyBufferToImage / CmdBlitImage）；
+    // Shader 路径的离屏资源与视图由 VulkanShaderPipeline 自管（EnsureSwapchainResources 只接收 VkImage）。
     private Format _swapchainFormat;
     private Extent2D _swapchainExtent;
     // Attach 时记录目标尺寸，供 OutOfDate 重建 SwapChain 使用
@@ -186,8 +186,8 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             {
                 _targetWidth = (uint)target.Width;
                 _targetHeight = (uint)target.Height;
-                // 原生死亡定位踪迹（stderr 直写，DECODER-DISPOSE 同款）：Attach 链五阶段，
-                // 卡死/崩溃时最后一条阶段行即定位点。
+                // Attach 链阶段踪迹（stderr 直写）：每阶段输出一行，
+                // 停摆时最后一条阶段行即指示卡住的位置。
                 Console.Error.WriteLine("[VULKAN-ATTACH] → CreateSurface");
                 CreateSurface(target);
                 Console.Error.WriteLine("[VULKAN-ATTACH] → CreateSwapchain");
@@ -242,7 +242,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             }
             if (result == Result.ErrorDeviceLost)
             {
-                // B-DEVLOST: VK_ERROR_DEVICE_LOST——设备及全部资源永久失效，
+                // VK_ERROR_DEVICE_LOST——设备及全部资源永久失效，
                 // 抛中立 GpuDeviceLostException 供会话层释放并重建。
                 _logger.LogError("Vulkan 设备丢失（vkAcquireNextImage）。");
                 throw new GpuDeviceLostException("Vulkan 设备已丢失（vkAcquireNextImage 返回 VK_ERROR_DEVICE_LOST）。需释放并重建渲染会话。");
@@ -261,7 +261,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
                 // 信号量恢复——AcquireNextImage 已信号 _imageAvailableSemaphore，
                 // 但 QueueSubmit 前异常导致信号量未消费。必须提交最小命令缓冲消费信号量，
                 // 否则下次 AcquireNextImage 因信号量已信号而永久超时（渲染器永久卡死）。
-                // B-DEVLOST: 设备丢失时跳过恢复（设备已死，提交必然失败且徒增日志噪音），直接上抛。
+                // 设备丢失时跳过恢复（设备已失效，提交必然失败且徒增日志噪音），直接上抛。
                 RecoverSemaphore(imageIndex);
                 throw;
             }
@@ -292,7 +292,7 @@ internal sealed unsafe partial class VulkanRenderer : IVideoRenderer, IRendererP
             }
             if (result == Result.ErrorDeviceLost)
             {
-                // B-DEVLOST: 同 AcquireNextImage——类型化异常供会话层重建
+                // 同 AcquireNextImage——类型化异常供会话层重建
                 _logger.LogError("Vulkan 设备丢失（vkQueuePresent）。");
                 throw new GpuDeviceLostException("Vulkan 设备已丢失（vkQueuePresent 返回 VK_ERROR_DEVICE_LOST）。需释放并重建渲染会话。");
             }

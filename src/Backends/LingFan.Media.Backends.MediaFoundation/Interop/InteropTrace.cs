@@ -9,9 +9,9 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// 原生互操作操作追踪器 —— 即「错误链 / 完整错误调度链」。
 /// </summary>
 /// <remarks>
-/// <para>动机：MF 冷启动触发 <c>COR_E_EXECUTIONENGINE</c>（原生堆损坏），
-/// 但堆损坏不在破坏点崩溃，而在「下一次 CLR 内部堆操作」才以滞后症状暴露，崩溃栈永远指向
-/// <c>Marshal.GetDelegateForFunctionPointer</c> 这种无辜调用 —— 看不到真正的错配 pair。</para>
+/// <para>原生堆损坏（如 <c>COR_E_EXECUTIONENGINE</c> 所指示的故障类别）不在破坏点崩溃，
+/// 而在「下一次 CLR 内部堆操作」才以滞后症状暴露，崩溃栈往往指向
+/// <c>Marshal.GetDelegateForFunctionPointer</c> 这类无辜调用 —— 看不到真正的错配 pair。</para>
 /// <para>本类把每一条原生配对操作（Lock/Unlock、GetBuffer/ReleaseBuffer、Map/Unmap、Marshal.Release、MfVTable.Get）
 /// 记录进一个<b>无分配环形缓冲</b>（时间戳 + 线程 + 指针 + 调用点 + HRESULT），使 post-mortem 时
 /// 最后若干条记录能直接指认「哪个指针被错序释放 / 在哪个调用点被 use-after-free」。</para>
@@ -35,10 +35,35 @@ internal static class InteropTrace
     /// <summary>原生操作种类（用于环形记录与护栏分类）。</summary>
     internal enum Op : byte
     {
-        Acquire, Release, ReleaseDouble,
-        Lock, LockFail, Unlock, UnlockNoLock,
-        GetBuffer, ReleaseBuffer, Map, Unmap, UnmapNoMap,
-        VTableGet, VTableGetOnReleased,
+        /// <summary>取得引用（如 Marshal.AddRef / 分配登记）。</summary>
+        Acquire,
+        /// <summary>释放引用（Marshal.Release）。</summary>
+        Release,
+        /// <summary>重复释放（护栏判定：同一地址第二次 Release）。</summary>
+        ReleaseDouble,
+        /// <summary>IMF2DBuffer Lock2D 成功。</summary>
+        Lock,
+        /// <summary>Lock2D 失败。</summary>
+        LockFail,
+        /// <summary>Unlock2D（与 Lock 配对）。</summary>
+        Unlock,
+        /// <summary>未 Lock 即 Unlock / 重复 Unlock（护栏判定）。</summary>
+        UnlockNoLock,
+        /// <summary>IMFMediaBuffer GetCurrentLength/缓冲取得。</summary>
+        GetBuffer,
+        /// <summary>缓冲释放。</summary>
+        ReleaseBuffer,
+        /// <summary>映射（如 IMFSourceReader 样本映射）。</summary>
+        Map,
+        /// <summary>解除映射（与 Map 配对）。</summary>
+        Unmap,
+        /// <summary>未 Map 即 Unmap（护栏判定）。</summary>
+        UnmapNoMap,
+        /// <summary>vtable 槽位取用（MfVTable.Get）。</summary>
+        VTableGet,
+        /// <summary>对已释放对象取 vtable（记录供 post-mortem，不硬抛）。</summary>
+        VTableGetOnReleased,
+        /// <summary>自定义操作记录。</summary>
         Custom
     }
 

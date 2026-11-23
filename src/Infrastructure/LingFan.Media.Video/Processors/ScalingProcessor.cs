@@ -27,7 +27,7 @@ public sealed class ScalingProcessor : IVideoProcessor
     /// <summary>目标高度（像素，0 表示未配置 → 透传）。</summary>
     public int TargetHeight { get; set; }
 
-    /// <summary>缩放算法（默认双线性，验收要求）。</summary>
+    /// <summary>缩放算法（默认双线性）。</summary>
     public ScalingAlgorithm Algorithm { get; set; } = ScalingAlgorithm.Bilinear;
 
     /// <summary>初始化 <see cref="ScalingProcessor"/> 的新实例。</summary>

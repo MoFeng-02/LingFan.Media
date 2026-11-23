@@ -11,6 +11,8 @@ namespace LingFan.Media.Abstractions;
 public interface ISubtitleDecoder : IMediaComponent
 {
     /// <summary>解码一个字幕数据包。无 CancellationToken（热路径）。</summary>
+    /// <param name="packet">待解码的字幕数据包。</param>
+    /// <returns>解码出的字幕帧；返回 <see langword="null"/> 的语义见 remarks。</returns>
     /// <remarks>
     /// 返回 <see langword="null"/> 表示<b>本次未产出字幕</b>（数据不足以成条、该包不含可显示内容，
     /// 或该包解码失败可跳过），<b>不代表</b>解码器失效——调用方不得据此判定整体失败或丢弃解码器
@@ -19,6 +21,7 @@ public interface ISubtitleDecoder : IMediaComponent
     ValueTask<SubtitleFrame?> DecodeAsync(MediaPacket packet);
 
     /// <summary>刷新内部缓冲，取出剩余字幕。</summary>
+    /// <returns>缓冲中剩余的一个字幕帧；返回 <see langword="null"/> 表示缓冲已取尽。</returns>
     ValueTask<SubtitleFrame?> FlushAsync();
 
     /// <summary>重置解码器状态（Seek 后调用，清空字幕内部缓冲）。</summary>

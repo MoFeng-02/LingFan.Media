@@ -12,7 +12,7 @@ namespace LingFan.Media.Apple.Shared;
 /// <para><b>设计目标</b>：彻底消除第三方绑定库的反射与运行期 marshaller——本层仅经
 /// <see cref="LibraryImportAttribute">[LibraryImport]</see> 直接调用 Apple 原生符号，NativeAOT 下零 IL2xxx。</para>
 /// <para><b>全仓唯一 Apple 绑定源</b>：Metal 渲染器、Backends.Apple、Platforms 的 VideoToolbox / Metal interop
-/// 全部消费本层，消除原先 MetalNative 内部 + Platforms 桩三处 Apple 绑定分叉。</para>
+/// 全部消费本层，避免多处 Apple 绑定分叉。</para>
 /// <para><b>三层原生依赖</b>：</para>
 /// <list type="bullet">
 /// <item><c>libobjc</c>（/usr/lib/libobjc.dylib）：Objective-C 运行时——<c>objc_msgSend</c> / <c>objc_getClass</c> / <c>sel_registerName</c> / <c>objc_retain</c> / <c>objc_release</c> / 自动释放池。</item>
@@ -26,13 +26,13 @@ namespace LingFan.Media.Apple.Shared;
 /// <para><b>跨平台守卫</b>：经 <see cref="NativeLibrary.SetDllImportResolver"/> 把中性库名重定向到 Apple framework 全路径；
 /// 非 Apple 平台（Windows / Linux / Android）返回 <see cref="nint.Zero"/>（加载失败，fail-fast）。
 /// 渲染器 <see cref="OperatingSystem.IsMacOS"/> / <see cref="OperatingSystem.IsIOS"/> 守卫，
-/// 非 Apple 永不触发任何原生符号解析，故本机（Windows）可编译、可安全加载程序集，仅运行期在 Apple 平台真正调用。</para>
+/// 非 Apple 永不触发任何原生符号解析，故非 Apple 平台可编译、可安全加载程序集，仅运行期在 Apple 平台真正调用。</para>
 /// <para><b>对象所有权（手动 retain/release，无 ARC）</b>：<c>alloc</c> / <c>new*</c> / <c>MTLCreateSystemDefaultDevice</c> 等方法按 Cocoa 规则返回
 /// <b>+1（已属调用方所有）</b>，调用方仅需在生命周期结束时调用<b>一次</b> <see cref="objc_release"/> 即可平衡——<b>切勿再额外 objc_retain</b>
 /// （否则 +1 永远无法释放、造成泄漏）。外部借入的对象（如宿主传入的 CAMetalLayer）才需 <see cref="objc_retain"/> 取得自己的 +1。
 /// 自动释放对象（<c>nextDrawable</c> / <c>renderPassDescriptor</c> / 各 property getter / 工厂方法）返回 autoreleased，
 /// 由每帧 <see cref="objc_autoreleasePoolPush"/> / <see cref="objc_autoreleasePoolPop"/> 回收，避免无 autorelease 池环境（NativeAOT）下的逐帧泄漏。
-/// 可用 <see cref="SafeAppleObject"/> / <see cref="SafeCFTypeRef"/> 把所有权交给 SafeHandle，确定性释放（治本级泄漏防护）。</para>
+/// 可用 <see cref="SafeAppleObject"/> / <see cref="SafeCFTypeRef"/> 把所有权交给 SafeHandle，确定性释放（防泄漏）。</para>
 /// <para><b>结构传参 ABI 约定</b>：AAPCS64（Apple Silicon）与 System V AMD64（Intel Mac）均规定
 /// 聚合 &gt;16 字节时按指针传递。故 <see cref="MTLRegion"/>（48 字节）、<see cref="MTLClearColor"/>（32 字节）以 <c>ref</c> 传递；
 /// <c>CGSize</c>（16 字节，setDrawableSize:）以两个 <c>double</c> 按值传递（ARM64 HFA / x86_64 SSE 寄存器一致）。
@@ -55,13 +55,6 @@ public static unsafe partial class AppleRuntime
         }
     }
 
-    /// <summary>
-    /// 把中性库名解析为 Apple framework 全路径（供任意消费程序集复用，消除 resolver 逻辑分叉）。
-    /// </summary>
-    /// <param name="libraryName">中性库名（libobjc / Metal / Foundation / VideoToolbox / AVFoundation …）。</param>
-    /// <param name="assembly">调用方程序集（P/Invoke 解析按调用程序集进行，每个消费程序集须各自注册）。</param>
-    /// <param name="searchPath">原生搜索路径（透传）。</param>
-    /// <returns>已加载库句柄；非 Apple 平台或未知框架返回 <see cref="nint.Zero"/>。</returns>
     /// <summary>中性库名 → Apple framework 全路径（与 <see cref="ResolveAppleFramework"/> 共用同一张映射表）。</summary>
     private static string? _FrameworkPath(string libraryName) => libraryName switch
     {
@@ -80,6 +73,13 @@ public static unsafe partial class AppleRuntime
         _ => null,
     };
 
+    /// <summary>
+    /// 把中性库名解析为 Apple framework 全路径并加载（供任意消费程序集复用，消除 resolver 逻辑分叉）。
+    /// </summary>
+    /// <param name="libraryName">中性库名（libobjc / Metal / Foundation / VideoToolbox / AVFoundation …）。</param>
+    /// <param name="assembly">调用方程序集（P/Invoke 解析按调用程序集进行，每个消费程序集须各自注册）。</param>
+    /// <param name="searchPath">原生搜索路径（透传）。</param>
+    /// <returns>已加载库句柄；非 Apple 平台或未知框架返回 <see cref="nint.Zero"/>。</returns>
     public static nint ResolveAppleFramework(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
     {
         string? path = _FrameworkPath(libraryName);
@@ -119,94 +119,113 @@ public static unsafe partial class AppleRuntime
 
     // Objective-C 运行时 C 函数（libobjc）
 
+    /// <summary>按名称取得 Objective-C 类对象（类不存在返回 <see cref="nint.Zero"/>）。</summary>
+    /// <param name="name">UTF-8 NUL 结尾的类名。</param>
     [LibraryImport("libobjc", EntryPoint = "objc_getClass")]
     public static partial nint objc_getClass(byte* name);
 
+    /// <summary>按名称注册（或取得已注册的）selector。</summary>
+    /// <param name="name">UTF-8 NUL 结尾的 selector 名（如 <c>alloc</c> / <c>nextDrawable</c>）。</param>
     [LibraryImport("libobjc", EntryPoint = "sel_registerName")]
     public static partial nint sel_registerName(byte* name);
 
+    /// <summary>引用计数 +1（仅用于借入对象取得自己的所有权；+1 返回的对象切勿再 retain）。</summary>
+    /// <param name="obj">Objective-C 对象指针。</param>
     [LibraryImport("libobjc", EntryPoint = "objc_retain")]
     public static partial nint objc_retain(nint obj);
 
+    /// <summary>引用计数 -1（与 retain / +1 所有权一一配对，归零即销毁）。</summary>
+    /// <param name="obj">Objective-C 对象指针。</param>
     [LibraryImport("libobjc", EntryPoint = "objc_release")]
     public static partial void objc_release(nint obj);
 
+    /// <summary>压入一层 autorelease 池，返回池标记（供 <see cref="objc_autoreleasePoolPop"/> 配对弹出）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_autoreleasePoolPush")]
     public static partial nint objc_autoreleasePoolPush();
 
+    /// <summary>弹出 autorelease 池并释放池内全部 autoreleased 对象（须与 Push 严格配对）。</summary>
+    /// <param name="pool"><see cref="objc_autoreleasePoolPush"/> 返回的池标记。</param>
     [LibraryImport("libobjc", EntryPoint = "objc_autoreleasePoolPop")]
     public static partial void objc_autoreleasePoolPop(nint pool);
 
     // CoreFoundation 引用计数（IOSurface / CVPixelBuffer 等 CF 类型）
 
+    /// <summary>CF 引用计数 +1（IOSurface / CVPixelBuffer 等 CF 类型；+1 返回的对象切勿再 retain）。</summary>
+    /// <param name="cf">CF 对象指针。</param>
     [LibraryImport("CoreFoundation", EntryPoint = "CFRetain")]
     public static partial nint CFRetain(nint cf);
 
+    /// <summary>CF 引用计数 -1（与 CFRetain / +1 所有权一一配对；传入 Zero 会崩溃，调用方须先判空）。</summary>
+    /// <param name="cf">CF 对象指针。</param>
     [LibraryImport("CoreFoundation", EntryPoint = "CFRelease")]
     public static partial void CFRelease(nint cf);
 
     // Metal C 函数（Metal.framework）
 
+    /// <summary>取得系统默认 Metal 设备（按 Cocoa 规则返回 +1，调用方负责一次 release；无 Metal 设备返回 Zero）。</summary>
     [LibraryImport("Metal", EntryPoint = "MTLCreateSystemDefaultDevice")]
     public static partial nint MTLCreateSystemDefaultDevice();
 
     // objc_msgSend 多固定签名重载（id 返回 = nint；标量 NSUInteger 用 nuint，id/指针用 nint）
 
-    // 无参（getter / 工厂 / alloc / init / 命令缓冲 / drawable / commit 等）
+    /// <summary>无参消息发送（getter / 工厂 / alloc / init / 命令缓冲 / drawable / commit 等）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector);
 
-    // 1 个 id 参数（setDevice: / setLayer: / setVertexFunction: / setFragmentFunction: / newFunctionWithName: / newTextureWithDescriptor: / presentDrawable: / renderCommandEncoderWithDescriptor: / setRenderPipelineState: / setTexture: 等）
+    /// <summary>1 个 id 参数（setDevice: / setLayer: / setVertexFunction: / setFragmentFunction: / newFunctionWithName: / newTextureWithDescriptor: / presentDrawable: / renderCommandEncoderWithDescriptor: / setRenderPipelineState: / setTexture: 等）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, nint arg0);
 
-    // 1 个 NSUInteger 参数（setPixelFormat: / setLoadAction: / setStoreAction: / objectAtIndexedSubscript: 等）
+    /// <summary>1 个 NSUInteger 参数（setPixelFormat: / setLoadAction: / setStoreAction: / objectAtIndexedSubscript: 等）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, nuint arg0);
 
-    // 1 个 BOOL/char 参数（setOpaque: / setWantsLayer: / mipmapped: 等）
+    /// <summary>1 个 BOOL/char 参数（setOpaque: / setWantsLayer: / mipmapped: 等）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, byte arg0);
 
-    // CGSize 按值（setDrawableSize:，16 字节 HFA，两个 double）
+    /// <summary>CGSize 按值（setDrawableSize:，16 字节 HFA，两个 double）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, double a, double b);
 
-    // C 字符串参数（stringWithUTF8String:）
+    /// <summary>C 字符串参数（stringWithUTF8String:）。</summary>
+    /// <param name="arg0">UTF-8 NUL 结尾字符串指针。</param>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, byte* arg0);
 
-    // id + NSUInteger（setFragmentTexture:atIndex: 等）
+    /// <summary>id + NSUInteger（setFragmentTexture:atIndex: 等）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, nint arg0, nuint arg1);
 
-    // id + 2×NSUInteger（setVertexBuffer:offset:atIndex: / setFragmentBytes:length:atIndex: / newBufferWithBytes:length:options: 等）
+    /// <summary>id + 2×NSUInteger（setVertexBuffer:offset:atIndex: / setFragmentBytes:length:atIndex: / newBufferWithBytes:length:options: 等）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, nint arg0, nuint arg1, nuint arg2);
 
-    // 3×NSUInteger（texture2DDescriptorWithPixelFormat:width:height:mipmapped:，末参 byte）
+    /// <summary>3×NSUInteger + byte（texture2DDescriptorWithPixelFormat:width:height:mipmapped:，末参 BOOL）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, nuint arg0, nuint arg1, nuint arg2, byte arg3);
 
-    // id + 错误指针（newRenderPipelineStateWithDescriptor:error:）
+    /// <summary>id + 错误指针（newRenderPipelineStateWithDescriptor:error:，失败时经 arg1 返回 NSError）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, nint arg0, nint* arg1);
 
-    // id + id + 错误指针（newLibraryWithSource:options:error:）
+    /// <summary>id + id + 错误指针（newLibraryWithSource:options:error:，失败时经 arg2 返回 NSError）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, nint arg0, nint arg1, nint* arg2);
 
-    // 3×NSUInteger（drawPrimitives:vertexStart:vertexCount:）
+    /// <summary>3×NSUInteger（drawPrimitives:vertexStart:vertexCount:）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, nuint arg0, nuint arg1, nuint arg2);
 
-    // MTLRegion（>16 字节，按 ref/指针传递）+ 3×NSUInteger（replaceRegion:mipmapLevel:withBytes:bytesPerRow:）。
-    // 独立方法名（非 objc_msgSend 重载）：避免与 texture2DDescriptor 的 6 参数值重载（nuint,nuint,nuint,byte）在
-    // 重载解析时因 nint/nuint/byte 互隐式转换而产生歧义（CS1615/CS1503）。EntryPoint 仍为原生 objc_msgSend。
+    /// <summary>
+    /// replaceRegion:mipmapLevel:withBytes:bytesPerRow:——MTLRegion（&gt;16 字节）按 ref/指针传递 + 3×NSUInteger。
+    /// </summary>
+    /// <remarks>独立方法名（非 objc_msgSend 重载）：避免与 texture2DDescriptor 的 6 参数值重载（nuint,nuint,nuint,byte）在
+    /// 重载解析时因 nint/nuint/byte 互隐式转换而产生歧义（CS1615/CS1503）。EntryPoint 仍为原生 objc_msgSend。</remarks>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSendReplaceRegion(nint receiver, nint selector, ref MTLRegion region, nuint level, nint bytes, nuint bytesPerRow);
 
-    // MTLClearColor（>16 字节，按 ref/指针传递）（setClearColor:）
+    /// <summary>MTLClearColor（&gt;16 字节，按 ref/指针传递）（setClearColor:）。</summary>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, ref MTLClearColor clearColor);
 
@@ -216,7 +235,9 @@ public static unsafe partial class AppleRuntime
     [StructLayout(LayoutKind.Sequential)]
     public struct MTLRegion
     {
+        /// <summary>区域原点坐标（X / Y / Z，像素）。</summary>
         public nuint X, Y, Z;
+        /// <summary>区域尺寸（Width / Height / Depth，像素）。</summary>
         public nuint Width, Height, Depth;
     }
 
@@ -224,6 +245,7 @@ public static unsafe partial class AppleRuntime
     [StructLayout(LayoutKind.Sequential)]
     public struct MTLClearColor
     {
+        /// <summary>清屏色分量（Red / Green / Blue / Alpha，通常 0..1，按附件像素格式解释）。</summary>
         public double Red, Green, Blue, Alpha;
     }
 
@@ -266,7 +288,7 @@ public static unsafe partial class AppleRuntime
 /// <see cref="ReleaseHandle"/> 调用一次 <see cref="AppleRuntime.objc_release"/> 平衡引用计数。
 /// </summary>
 /// <remarks>
-/// <para>用于把 Cocoa 所有权模型接入确定性释放，根治 A6 曾出现的引用计数泄漏。
+/// <para>用于把 Cocoa 所有权模型接入确定性释放，防止引用计数泄漏。
 /// 仅适用于按 Cocoa 规则返回 +1 的对象（alloc / new* / MTLCreateSystemDefaultDevice 等）；
 /// autoreleased 对象（getter / 工厂方法）不应包入本句柄，应由 autorelease 池回收。</para>
 /// </remarks>

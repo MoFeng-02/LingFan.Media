@@ -20,6 +20,10 @@ public sealed class SubtitleFrame
     /// <summary>
     /// 初始化 <see cref="SubtitleFrame"/> 的新实例。
     /// </summary>
+    /// <param name="text">字幕文本内容。</param>
+    /// <param name="start">显示开始时间。</param>
+    /// <param name="end">显示结束时间。</param>
+    /// <param name="style">字幕样式（可为 null，使用默认）。</param>
     public SubtitleFrame(string text, TimeSpan start, TimeSpan end, SubtitleStyle? style = null)
     {
         Text = text;

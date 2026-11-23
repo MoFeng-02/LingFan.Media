@@ -129,6 +129,7 @@ public sealed partial class NetworkMediaStream : IMediaStream
     /// </summary>
     /// <param name="source">网络媒体源。</param>
     /// <param name="httpClientFactory">HttpClient 工厂（用于池化连接，防止套接字耗尽）。</param>
+    /// <param name="resolvedIps">预解析并经 SSRF 校验的 IP 列表（可为 null）。传入时建连复用、避免二次 DNS 解析（防 DNS 重绑定）；null 时建连阶段解析。</param>
     public NetworkMediaStream(NetworkMediaSource source, IHttpClientFactory httpClientFactory, IPAddress[]? resolvedIps = null)
     {
         ArgumentNullException.ThrowIfNull(source);

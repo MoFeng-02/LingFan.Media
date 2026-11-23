@@ -35,6 +35,8 @@ public interface IBufferManager
     event EventHandler<BufferProgressEventArgs>? BufferProgressChanged;
 
     /// <summary>开始缓冲（预读取）。支持取消。</summary>
+    /// <param name="ct">取消令牌；取消后预读取停止。</param>
+    /// <returns>预读取完成或被取消时结束的任务。</returns>
     Task StartAsync(CancellationToken ct = default);
 
     /// <summary>停止缓冲。</summary>

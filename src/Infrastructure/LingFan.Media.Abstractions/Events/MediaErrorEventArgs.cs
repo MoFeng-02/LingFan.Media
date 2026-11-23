@@ -23,6 +23,11 @@ public sealed class MediaErrorEventArgs : EventArgs
     /// <summary>
     /// 初始化 <see cref="MediaErrorEventArgs"/> 的新实例。
     /// </summary>
+    /// <param name="errorCode">错误码。</param>
+    /// <param name="message">错误消息。</param>
+    /// <param name="exception">原始异常（可为 null）。</param>
+    /// <param name="isFatal">是否致命（不可恢复）。</param>
+    /// <param name="recoverable">是否可恢复。</param>
     public MediaErrorEventArgs(
         MediaErrorCode errorCode,
         string message,

@@ -13,6 +13,7 @@ public interface IFrameSink
     /// 投递后由管线 <c>ReturnFrame</c> 统一释放），也<b>不得在调用返回后持有帧引用</b>
     /// （多播下后续订阅方会读到已释放帧，use-after-free）。
     /// </summary>
+    /// <param name="frame">待消费的视频帧（只读借用，见 summary）。</param>
     void OnFrame(VideoFrame frame);
 }
 
@@ -25,16 +26,20 @@ public interface IFrameSink
 /// 高级消费者（录制、缩略图等）可直接实现 <see cref="IFrameSink"/> 经本通道订阅，无需委托。
 /// <para><b>帧所有权</b>：<see cref="IFrameChannel.Emit"/> 由管线在 <c>try</c> 内调用，
 /// 其后 <c>finally</c> 中由管线 <c>ReturnFrame</c> 释放帧——<b>通道与所有 Sink 均为只读借用，绝不 Dispose</b>。
-/// 任一 Sink 在 <see cref="OnFrame"/> 内 Dispose 会在多播下破坏后续订阅方，属硬违例。</para>
+/// 任一 Sink 在 <see cref="IFrameSink.OnFrame"/> 内 Dispose 会在多播下破坏后续订阅方，属硬违例。</para>
 /// </remarks>
 public interface IFrameChannel
 {
     /// <summary>订阅一个 Sink，返回取消订阅的句柄（Dispose 即退订）。</summary>
+    /// <param name="sink">要订阅的帧消费者。</param>
+    /// <returns>取消订阅句柄，Dispose 即退订。</returns>
     IDisposable Subscribe(IFrameSink sink);
 
     /// <summary>退订一个 Sink（按引用/相等性匹配）。</summary>
+    /// <param name="sink">要退订的帧消费者。</param>
     void Unsubscribe(IFrameSink sink);
 
     /// <summary>向所有订阅者投递一帧。</summary>
+    /// <param name="frame">待投递的视频帧（只读借用，见 remarks）。</param>
     void Emit(VideoFrame frame);
 }

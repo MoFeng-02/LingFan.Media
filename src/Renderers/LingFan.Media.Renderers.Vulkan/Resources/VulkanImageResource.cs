@@ -4,8 +4,8 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// Vulkan 图像帧资源。实现 <see cref="IFrameResource"/>。
 /// </summary>
 /// <remarks>
-/// <para>封装 <c>VkImage</c> + <c>VkDeviceMemory</c>，供未来 GPU 零拷贝路径使用
-///（如 VAAPI 硬解 → Vulkan 外部内存导入）。</para>
+/// <para>封装 <c>VkImage</c> + <c>VkDeviceMemory</c>，是 GPU 零拷贝路径的现役交付载体
+///（如 VAAPI/D3D11VA 硬解 → Vulkan 外部内存导入，由 <c>VulkanGpuFrameProducer</c> 构造）。</para>
 /// <para><b>资源所有权</b>：构造时不 AddRef（Vulkan 句柄无引用计数），
 /// <see cref="Dispose"/> 调用 <c>vk.DestroyImage</c> + <c>vk.FreeMemory</c> 显式释放。</para>
 /// <para><b>异步策略</b>：<see cref="Dispose"/> 为同步（native 分类）——Vulkan 资源释放是同步原生调用，无 I/O await。</para>
@@ -18,7 +18,7 @@ public sealed unsafe class VulkanImageResource : IFrameResource, IGpuTextureReso
     private readonly DeviceMemory _memory;
     private readonly ImageLayout _currentLayout;
     private readonly int _subresourceIndex;
-    // GPU→CPU 回读桥（由生产者注入；Android Tier2：Skia 合成路径经 staging buffer 回读上屏）。
+    // GPU→CPU 回读桥（由生产者注入；Android Skia 合成路径经 staging buffer 回读上屏）。
     // null = 生产者未提供（Windows/Linux 导入路径），ReadbackToCpu 按零拷贝路径约定抛 NotSupported。
     private readonly Func<VulkanImageResource, GpuTextureReadback>? _readback;
     private bool _disposed;
@@ -75,7 +75,7 @@ public sealed unsafe class VulkanImageResource : IFrameResource, IGpuTextureReso
     }
 
     /// <inheritdoc/>
-    /// <remarks>VkImage 句柄（<c>Image.Handle</c>）作为中立原生纹理句柄，供渲染器零拷贝 Present（<see cref="BlitVulkanImageResource"/>）。</remarks>
+    /// <remarks>VkImage 句柄（<c>Image.Handle</c>）作为中立原生纹理句柄，供渲染器零拷贝 Present（<see cref="VulkanRenderer.BlitVulkanImageResource"/>）。</remarks>
     IntPtr IGpuTextureResource.NativeTextureHandle => (IntPtr)_image.Handle;
 
     /// <inheritdoc/>

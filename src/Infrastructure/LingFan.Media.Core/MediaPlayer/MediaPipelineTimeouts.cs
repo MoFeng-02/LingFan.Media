@@ -4,8 +4,7 @@ namespace LingFan.Media.Core;
 /// 管线释放超时常量（Core 侧）。
 /// </summary>
 /// <remarks>
-/// <para>设计决策：超时采用固定内部常量，不暴露到 <c>MediaPlayerOptions</c>；
-/// 可配置化留待音视频管道重构统一处理，避免多一次契约面变更。</para>
+/// <para>超时为固定内部常量，不暴露到 <c>MediaPlayerOptions</c>（不属于公开配置面）。</para>
 /// <para>注意：MF 后端的「原生 drain / 调度器 Join」超时是另一组常量，位于
 /// <c>LingFan.Media.Backends.MediaFoundation.Concurrency.MediaPipelineTimeouts</c>；
 /// 本类只覆盖 Core 侧管线线程 / Task 的等待，二者互不依赖（跨程序集、均为 internal）。</para>

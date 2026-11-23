@@ -12,8 +12,9 @@ namespace LingFan.Media.Backends.MediaFoundation.Concurrency;
 /// <para>用途：把 Media Foundation <c>IMFSourceReader</c> 的全部 COM 调用（<c>ReadSample</c> / <c>SetCurrentPosition</c> /
 /// <c>GetNativeMediaType</c> 等）钉在同一条线程上。MF 的同步 <c>ReadSample</c> 会缓存与调用线程相关的内部状态，
 /// 若每次调用落在不同的线程池线程（<c>Task.Run</c> 默认行为），可能触发原生堆损坏
-/// （<c>COR_E_EXECUTIONENGINE</c>，原生堆损坏，非确定性、常在若干次成功读取后才爆发）。</para>
-/// <para>后台线程为 MTA（首次 COM 调用由 CLR 自动初始化），与 MF SourceReader 兼容。</para>
+/// （非确定性、常在若干次成功读取后才爆发）。</para>
+/// <para>后台线程在线程入口显式 <c>CoInitializeEx</c> 初始化为 MTA、退出时配对 <c>CoUninitialize</c>（见 <c>Loop</c>）；
+/// 手动创建的线程 CLR 不会自动初始化 COM 单元。MTA 与 MF SourceReader 兼容。</para>
 /// <para><b>生命周期</b>：<see cref="Shutdown"/> / <see cref="ShutdownAsync"/>（<see cref="Dispose"/> 委托前者）
 /// 调用 <see cref="BlockingCollection{T}.CompleteAdding"/> 后等待线程排空队列退出（可配置超时）。
 /// 本类<b>不再依赖</b>调用方守约「Dispose 时无在途任务」——
@@ -61,8 +62,8 @@ internal sealed class SingleThreadTaskScheduler : TaskScheduler, IDisposable
         // 显式初始化 COM 单元（MTA）——消除裸线程无单元导致的原生堆损坏。
         // 本线程由 new Thread 手动创建，CLR 不会自动 CoInitializeEx（仅 RCW 互操作路径才自动初始化）。
         // 该线程承载 MFDemuxer 对 IMFSourceReader 的全部原始 vtable P/Invoke 调用；
-        // 裸线程（无 COM 单元）调用 MF 原生 COM 会间歇踩坏原生堆 → COR_E_EXECUTIONENGINE（原生堆损坏）
-        // （非确定性、常在若干次成功读后才爆发）——即 MF 端到端冷启动偶发崩溃的成因。
+        // 裸线程（无 COM 单元）调用 MF 原生 COM 会间歇损坏原生堆
+        // （非确定性、常在若干次成功读后才爆发）。
         // 选用 MTA：无需消息泵，与裸 foreach 循环兼容（STA 需 pump，不可用于此）。
         int coInitHr = MFInterop.CoInitializeEx(IntPtr.Zero, MFInterop.COINIT_MULTITHREADED);
         bool coInitialized = coInitHr >= 0; // S_OK 或 S_FALSE 均视为本线程成功初始化
@@ -80,7 +81,7 @@ internal sealed class SingleThreadTaskScheduler : TaskScheduler, IDisposable
             // CoUninitialize 会关闭本线程的 COM 库、对本线程加载过的 in-proc server 逐个 DllCanUnloadNow 卸载，
             // 并在本线程是最后一个 MTA 成员时拆除整个 MTA。因此**在本线程上创建的一切 COM 对象，
             // 其最终 Release 必须先于此处执行**——否则那次 Release 会跳进已卸载/已失效的 vtable，
-            // 造成原生访问违例，CLR 报 `Fatal error. Internal CLR error.`（原生堆损坏，确定性，非 flaky）。
+            // 造成原生访问违例（确定性的原生堆损坏）。
             // 调用方通过 TryRunOnSchedulerThread(Async) 把 Marshal.Release 投递回本线程完成，
             // 之后才允许发起 Shutdown 让本线程退出（见 MFDemuxer 两阶段关闭协议步骤(3)）。
             if (coInitialized)

@@ -7,8 +7,9 @@ namespace LingFan.Media.Core;
 /// 协调启动/停止/暂停/刷新。
 /// </summary>
 /// <remarks>
-/// <para>所有方法均为同步 void（无 Task 返回，无 Resume）。</para>
-/// <para>Start() 同时处理首次启动和恢复暂停。</para>
+/// <para>Attach/Pause/Stop/Detach 为同步 void（纯内存操作）；
+/// StartAsync/FlushAsync/ResumeAfterSeekAsync 为真异步 Task（含启动编排与复位等待）。</para>
+/// <para>StartAsync() 同时处理首次启动和恢复暂停（各管线内部区分首启与恢复分支）。</para>
 /// <para>Stop() 只调 cts.Cancel，是 O(1) 非阻塞的。线程 join（5s 超时）在 MediaPlayer.DisposeAsync 中处理。</para>
 /// <para>管线创建不在 MediaPipelineHost 中——管线由 MediaPlayer 创建（需要 Decoder/Renderer 等 Session 级对象）。</para>
 /// <para>MediaPipelineHost 只负责生命周期管理。</para>
@@ -50,7 +51,7 @@ public sealed class MediaPipelineHost
     }
 
     /// <summary>
-    /// 启动两条管线（纯内存：设标志位 + fire-and-forget）。
+    /// 启动两条管线（异步编排：视频先起 → 预滚动 → 放行首帧门控并等首帧上屏 → 再启动音频，见方法体注释）。
     /// 同时重置完成门控标志，使重播（Ended → Playing）能再次正确触发 PlaybackCompleted。
     /// </summary>
     public async Task StartAsync()

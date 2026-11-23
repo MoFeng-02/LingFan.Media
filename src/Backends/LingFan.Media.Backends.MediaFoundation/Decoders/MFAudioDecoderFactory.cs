@@ -7,6 +7,8 @@ public sealed class MFAudioDecoderFactory : IAudioDecoderFactory
 {
     private readonly ILoggerFactory _loggerFactory;
 
+    /// <summary>以日志工厂构造（Singleton 工厂，无状态；每次 Create 返回新解码器实例）。</summary>
+    /// <param name="loggerFactory">日志工厂（不可为 null）。</param>
     public MFAudioDecoderFactory(ILoggerFactory loggerFactory)
     {
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));

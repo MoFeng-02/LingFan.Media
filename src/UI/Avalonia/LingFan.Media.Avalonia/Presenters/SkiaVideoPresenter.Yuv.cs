@@ -104,9 +104,9 @@ public sealed partial class SkiaVideoPresenter
         }
 
         // 【性能关键】内层热循环：裸指针（消除 Span 边界检查）+ 每像素对步进（U/V 共享一次读取）
-        // + 指针递增写。实测：Span 逐像素索引在高分辨率下每帧耗时达秒级（画面近乎定格）；
+        // + 指针递增写。Span 逐像素索引在高分辨率下每帧开销显著（画面近乎定格）；
         // 指针化 + 双像素步进为数量级改善，Release JIT 下更低。
-        // CPU 逐像素转换终究是 Tier0 兜底路径；1080p+ 的正解是 Tier2 硬解硬渲（GPU 采样 YUV）。
+        // CPU 逐像素转换终究是兜底路径；1080p+ 应优先硬解 + GPU 采样 YUV 的硬件渲染路径。
         var srcSpan = sw.Data.Span;
         fixed (byte* srcBase = srcSpan)
         fixed (short* pRv = Rv, pGu = Gu, pGv = Gv, pBu = Bu)

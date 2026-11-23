@@ -7,7 +7,7 @@ namespace LingFan.Media.Formats.Metadata;
 /// </summary>
 /// <remarks>
 /// <para>静态工具类，无状态，AOT 友好。</para>
-/// <para>从 <paramref name="extraFields"/> 中提取常见元数据字段（title/artist/album/year/genre），
+/// <para>从 <see cref="Extract"/> 的 extraFields 参数中提取常见元数据字段（title/artist/album/year/genre），
 /// 键名匹配采用大小写不敏感方式（兼容 FFmpeg 等后端输出的不同大小写风格）。</para>
 /// </remarks>
 public static class MetadataExtractor

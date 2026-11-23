@@ -218,7 +218,7 @@ internal sealed unsafe partial class EglContext : IGlContext
     /// <summary>
     /// 创建工厂级离屏 GL 上下文（EGL surfaceless 显示 + pbuffer 表面 + 桌面 GL 3.3），作为共享组所有者。
     /// 供 <see cref="OpenGLOffscreenDeviceContext"/> 在解码器初始化前建立，使解码侧产出的 GL 纹理
-    /// 经共享组对渲染器 on-screen 上下文可见（零拷贝路径的治本基础）。
+    /// 经共享组对渲染器 on-screen 上下文可见（零拷贝路径的共享组基础）。
     /// <para><b>跨平台一致性</b>：使用 <c>eglGetDisplay(EGL_DEFAULT_DISPLAY)</c> 获取默认显示，
     /// 与渲染器 on-screen 上下文经 <c>X11WindowHandle.Display</c>（同一 X 服务器默认显示）获取的 EGLDisplay 为同一实例，
     /// 故二者可经 shareContext 共享同一共享组（同 D3D11 单适配器前提）。</para>
@@ -269,7 +269,7 @@ internal sealed unsafe partial class EglContext : IGlContext
 
         if (isGles)
         {
-            // Android：ES 是 EGL 默认绑定 API，且实测部分线程上下文下显式 eglBindAPI 会以
+            // Android：ES 是 EGL 默认绑定 API，且部分线程上下文下显式 eglBindAPI 会以
             // EGL_BAD_DISPLAY 拒绝——直接跳过（默认绑定即所需 ES），避免无意义的平台差异。
         }
         else if (EglNative.eglBindAPI(api) == 0)

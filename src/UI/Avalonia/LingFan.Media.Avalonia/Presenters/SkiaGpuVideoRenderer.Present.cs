@@ -66,7 +66,7 @@ internal sealed partial class SkiaGpuVideoRenderer
             // 交付到渲染线程的入口心跳（不依赖合成循环）：证明帧确实抵达渲染器输入端。
             // 若本条出现而下游无绘制 ⇒ 卡在 Avalonia 渲染循环/合成调度，而非解码或导入链。
             // Trace 级（每 300 帧）：呈现线程为实时线程，Information 写 logcat（双 provider）
-            // 单次可达数十 ms，不应周期性落在呈现线程；[SKIA-GPU-STALL] 与 [SYNC] 承担异常可见性。
+            // 单次开销显著，不应周期性落在呈现线程；[SKIA-GPU-STALL] 与 [SYNC] 承担异常可见性。
             _deliveredFrames++;
             if ((_deliveredFrames % 300) == 1)
                 _logger.LogTrace(
@@ -76,7 +76,7 @@ internal sealed partial class SkiaGpuVideoRenderer
             // 渲染线程消费心跳检查：管线持续写入而渲染线程长时间未绘制 ⇒ 画面可能定格。
             // 仅告警不干预——真实修复取决于渲染线程侧状态（包装失败已有 OnDrawFailure 通道）。
             var lastDraw = Volatile.Read(ref _lastDrawQpc);
-            // 从未成功绘制（lastDraw==0）也算停滞：原判据会静默跳过，掩盖「渲染线程从未上屏」。
+            // 从未成功绘制（lastDraw==0）也算停滞，避免掩盖「渲染线程从未上屏」。
             if (Interlocked.Increment(ref _framesSinceLastDraw) > 90)
             {
                 double drawIdleSec = lastDraw == 0

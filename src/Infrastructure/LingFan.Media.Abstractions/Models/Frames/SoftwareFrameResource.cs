@@ -21,18 +21,15 @@ namespace LingFan.Media.Abstractions;
 /// </remarks>
 public sealed class SoftwareFrameResource : IFrameResource
 {
-    // 有界私有池（headless 默认场景的关键内存治理点）
-    // 原用 ArrayPool<byte>.Shared：4K 软解每帧租 12–33MB，归还后 Shared 会囤积数十个大 buffer 不还 GC，
-    // 造成「队列只 ~6 帧、进程内存却卡在 500MB~1GB」的 ghost 内存（帧在队列里很少，多的是池里囤的）。
-    // 私有有界池把每桶囤积数锁死：超出的 buffer 在 Return 时即丢弃、交由 GC 回收 —— 内存有界、可预测，
-    // 不再随 4K 软解爆发。in-flight 帧数由 FrameQueue 容量封顶，本池仅保留少量热 buffer 复用。
+    // 有界私有池（headless 默认场景的关键内存治理点）：
+    // 不用 ArrayPool<byte>.Shared——Shared 归还后会囤积大 buffer 不还 GC，
+    // 大分辨率软解时进程内存随池囤积无界增长（ghost 内存远超 in-flight 帧数）。
+    // 私有有界池把每桶囤积数锁死：超出的 buffer 在 Return 时即丢弃、交由 GC 回收——内存有界、可预测。
+    // in-flight 帧数由 FrameQueue 容量封顶，本池仅保留少量热 buffer 复用。
     // maxArrayLength 覆盖最大单帧（8K BGRA32≈132MB，留 256MB 余量）。
-    //
-    // 【实测修正】maxArraysPerBucket 必须覆盖 in-flight 峰值：
-    // 帧队列容量 8（8×3MB=24MB in-flight）+ 解码器内部缓冲 + 渲染侧持有 ≈10 块同尺寸并发需求。
-    // 旧值 4 时池形同虚设——每次池空必走 new byte[3MB]（LOH），高频 LOS 分配会频繁触发 GC，
-    // 呈现线程被反复抢占 → 帧率骤降。
-    // 提到 16（覆盖峰值 + 余量）：内存上界 16×3MB=48MB/尺寸桶，可预测；GC 压力趋零。
+    // maxArraysPerBucket 必须覆盖 in-flight 峰值（帧队列 + 解码器内部缓冲 + 渲染侧持有的并发需求）：
+    // 过小则池形同虚设——每次池空都直接分配大数组（LOH），高频分配频繁触发 GC、
+    // 抢占呈现线程导致帧率骤降。
     private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Create(
         maxArrayLength: 256 * 1024 * 1024,
         maxArraysPerBucket: 16);

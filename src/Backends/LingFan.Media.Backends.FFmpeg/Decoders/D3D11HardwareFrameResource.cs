@@ -30,8 +30,7 @@ namespace LingFan.Media.Backends.FFmpeg.Decoders;
 /// <para><b>零拷贝链路</b>：FFmpeg D3D11VA 硬解 → D3D11HardwareFrameResource（切片保活）
 /// → D3D11Renderer CopySubresourceRegion → BackBuffer → SwapChain → DirectComposition → Display。</para>
 /// <para><b>ReadbackToCpu（已实现）</b>：D3D11VA 硬解纹理经 Vortice 回读为 BGRA32，供 Skia 软渲染兜底路径消费
-/// （打通「GPU 解码 + 控件内 WriteableBitmap 上屏」链路）。实现移植自
-/// <c>LingFan.Media.Renderers.D3D11.D3D11TextureResource.ReadbackToCpu</c>（同一 D3D11VA 输出场景，已验证）。</para>
+/// （打通「GPU 解码 + 控件内 WriteableBitmap 上屏」链路）。</para>
 /// <para><b>异步策略</b>：全部同步（sync/native 分类）——COM AddRef/Release 与 IntPtr 操作均为同步，无 I/O await。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射，实现中立 <see cref="IGpuTextureResource"/> 契约。</para>
 /// </remarks>
@@ -109,8 +108,7 @@ internal sealed class D3D11HardwareFrameResource : IGpuTextureResource
     /// <remarks>
     /// <para>D3D11VA 硬解纹理 CPU 回读（NV12→BGRA），供 Skia 软渲染兜底路径消费——打通
     /// 「GPU 解码 + 控件内 WriteableBitmap 上屏」链路，保持 GPU 解码不退回软件解码。</para>
-    /// <para>实现移植自 <c>LingFan.Media.Renderers.D3D11.D3D11TextureResource.ReadbackToCpu</c>
-    /// （同一 D3D11VA 输出纹理场景，已验证）；本类仅持有纹理 COM 指针（构造 AddRef、Dispose Release），
+    /// <para>本类仅持有纹理 COM 指针（构造 AddRef、Dispose Release），
     /// 故 Vortice 包装 <c>srcTexture</c> 与本实例共享同一指针、无 finalizer，<b>绝不 Dispose</b> 以免重复 Release。</para>
     /// </remarks>
     public unsafe GpuTextureReadback ReadbackToCpu()

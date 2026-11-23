@@ -13,11 +13,11 @@ internal sealed partial class MFDemuxer
     /// 通过 <c>IMFSourceReader.GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION)</c> 取得。
     /// </summary>
     /// <remarks>
-    /// <para><b>为何必须显式查询</b>：MF 不会自动为源填充「时长」属性，<see cref="_metadata"/> 此前被硬编码为
-    /// <c>TimeSpan.Zero</c>，使 <c>player.Duration</c> 恒为 0——这是完整播放测试「几秒假完成」的成因
-    /// （测试以 <c>pos &gt;= duration-1</c> 判完成，duration=0 时首轮即满足）。</para>
+    /// <para><b>为何必须显式查询</b>：MF 不会自动为源填充「时长」属性；若把 <see cref="_metadata"/> 硬编码为
+    /// <c>TimeSpan.Zero</c>，<c>player.Duration</c> 恒为 0——以 <c>pos &gt;= duration-1</c> 判完成的播放逻辑
+    /// 会「几秒假完成」（duration=0 时首轮即满足）。</para>
     /// <para><b>容错</b>：查询失败 / 属性缺失 / 非 VT_UI8 / 值为 0 时回落 <c>TimeSpan.Zero</c>，不抛异常，
-    /// 行为与旧代码一致（仅损失时长信息，不影响解码播放）。MF_PD_DURATION 为 VT_UI8 标量，输出 PROPVARIANT 无需 PropVariantClear。</para>
+    /// 仅损失时长信息，不影响解码播放。MF_PD_DURATION 为 VT_UI8 标量，输出 PROPVARIANT 无需 PropVariantClear。</para>
     /// <para><b>槽位</b>：<c>GetPresentationAttribute</c> = 绝对槽 12 → slotIndex 9（见 <see cref="MFComInterfaces"/> 头注释）。</para>
     /// </remarks>
     private TimeSpan QueryContainerDuration(IntPtr readerPtr)
@@ -139,8 +139,8 @@ internal sealed partial class MFDemuxer
                 }
 
                 // GUID_NULL 时间格式 = 100ns 单位；极大时间戳触发 SourceReader 夹到末样本。
-                // 回归修复：必须检查 hr。seek 失败时（如本源返回负码）旧代码静默忽略，
-                // 导致后续从头读少量帧（如 16/30fps 即约 0.5s）伪装成真实时长。失败时立即返回 Zero，
+                // 必须检查 hr：seek 失败（如本源返回负码）若静默忽略，
+                // 后续从头读少量帧（如 16/30fps 即约 0.5s）会伪装成真实时长。失败时立即返回 Zero，
                 // 由 OpenCore 回退 ProbeDurationByDraining 拿正确时长（代价是同步阻塞）。
                 var endPos = new MfPropVariant { vt = MfPropVariant.VT_I8, hVal = long.MaxValue };
                 int seekHr = MfVTable.Get<IMFSourceReader_SetCurrentPosition>(readerPtr, 5)(readerPtr, ref timeFormat, ref endPos);

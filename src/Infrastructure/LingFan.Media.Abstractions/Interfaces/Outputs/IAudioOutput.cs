@@ -15,6 +15,8 @@ namespace LingFan.Media.Abstractions;
 public interface IAudioOutput : IMediaComponent
 {
     /// <summary>参数化配置：设置采样率和声道数。</summary>
+    /// <param name="sampleRate">输出采样率（Hz），须为合法固定率。</param>
+    /// <param name="channels">输出声道数。</param>
     void Initialize(int sampleRate, int channels);
 
     /// <summary>
@@ -22,6 +24,7 @@ public interface IAudioOutput : IMediaComponent
     /// 调用方负责 Submit 后释放帧（Return 到池或 Dispose）。
     /// 音频线程调用，缓冲满时阻塞（COM 背压，同步阻塞背压是正常机制，非伪异步）。
     /// </summary>
+    /// <param name="frame">待提交的音频帧；所有权仍归调用方。</param>
     void Submit(AudioFrame frame);
 
     /// <summary>暂停播放。</summary>
@@ -35,6 +38,8 @@ public interface IAudioOutput : IMediaComponent
     /// 返回时音频已开始流动。默认实现直接恢复播放（无预填需求的后端，如无声/无设备输出）；
     /// WASAPI 重写为解决起播静默窗（引擎抓取的是真实数据而非静音）。
     /// </summary>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>音频已开始流动时结束的任务。</returns>
     ValueTask BeginStreamingAsync(CancellationToken ct)
     {
         Resume();
@@ -45,6 +50,7 @@ public interface IAudioOutput : IMediaComponent
     void Flush();
 
     /// <summary>获取已播放位置（用于时钟同步）。</summary>
+    /// <returns>自本遍播放起已输出的音频时长。</returns>
     TimeSpan GetPlaybackPosition();
 
     /// <summary>
@@ -54,6 +60,7 @@ public interface IAudioOutput : IMediaComponent
     /// 这类后端应重写本方法，直接读取设备时钟（<c>IAudioClock::GetPosition</c> 可由任意线程调用，无需跨线程），
     /// 既平滑又零封送开销。</para>
     /// </summary>
+    /// <returns>已播放位置；默认实现与 <see cref="GetPlaybackPosition"/> 相同。</returns>
     TimeSpan GetPlaybackPositionDirect() => GetPlaybackPosition();
 
     /// <summary>

@@ -16,6 +16,7 @@ public interface IMediaComponent : IDisposable, IAsyncDisposable
     /// 异步初始化组件。
     /// </summary>
     /// <param name="ct">取消令牌。</param>
+    /// <returns>初始化完成时结束的任务。</returns>
     Task InitializeAsync(CancellationToken ct = default);
 
     // Dispose() 来自 IDisposable —— 同步快速释放路径

@@ -15,7 +15,7 @@ namespace LingFan.Media.Abstractions;
 /// 与 <see cref="IFramePoolAware{T}"/> 同一范式；AOT 安全（编译期确定类型，无反射）。</para>
 /// <para><b>调用时机</b>：必须在 <see cref="IAudioDecoder.Initialize"/> 之后、
 /// 音频输出设备初始化与首次 <see cref="IAudioDecoder.DecodeAsync"/> 之前调用。</para>
-/// <para><b>异步策略</b>：sync（config 分类）——纯内存赋值，无 I/O，不提供 async 重载。</para>
+/// <para><b>异步策略</b>：同步配置——纯内存赋值，无 I/O，不提供 async 重载。</para>
 /// </remarks>
 public interface IAudioSourceFormatAware
 {

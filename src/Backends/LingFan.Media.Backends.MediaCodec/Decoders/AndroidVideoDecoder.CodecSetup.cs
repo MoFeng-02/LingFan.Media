@@ -195,7 +195,7 @@ internal sealed partial class AndroidVideoDecoder
 
         if (preferSoftwareDecoder)
         {
-            // 软解候选顺序按输出模式区分（实测两模式下症状相反）：
+            // 软解候选顺序按输出模式区分（两类组件在两种模式下的失效模式相反）：
             // · Surface 输出（AHB 零拷贝桥接）：c2.android 优先。OMX.google 旧组件在
             //   SurfaceTexture/GL 消费者模式下吞输入不吐输出（产帧数次后永久停摆，
             //   画面冻结在首帧附近、音频正常播完）。
@@ -303,7 +303,7 @@ internal sealed partial class AndroidVideoDecoder
     }
 
     /// <summary>AOSP 软件解码器候选。
-    /// <b>OMX.google 排在 c2.android 之前</b>：实测 c2 软解 + ByteBuffer 会命中
+    /// <b>OMX.google 排在 c2.android 之前</b>：c2 软解 + ByteBuffer 会命中
     /// numClientBuffers 僵死（解码器不再归还输出缓冲），而 OMX.google 软解 + ByteBuffer 正常。
     /// 两者输出都是标准灵活 YUV 到 ByteBuffer，语义等价。</summary>
     private static string[] SoftwareCodecCandidates(VideoCodec codec) => codec switch

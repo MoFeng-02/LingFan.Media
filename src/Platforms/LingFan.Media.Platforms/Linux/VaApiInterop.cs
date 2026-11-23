@@ -14,8 +14,8 @@ namespace LingFan.Media.Platforms.Linux;
 /// VAAPI → VA Surface → dma_buf(DRM_PRIME_2) → GL/VK 纹理 → 渲染器上屏（无 CPU 回读）。</para>
 /// <para><b>实现</b>：libva 原生 P/Invoke（<c>libva.so.2</c>），[LibraryImport] 源生成、零反射、AOT 友好；
 /// 调用约定默认 Winapi（x64 下与 libva 的 C 调用约定等价）。</para>
-/// <para>VA-API 硬解为 Linux（Intel/AMD GPU + mesa + libva）真实零拷贝路径，非 Phase 2 桩。</para>
-/// <para><b>异步策略</b>：全部同步（sync 分类）——原生 VA-API 调用是同步边界，无 I/O。</para>
+/// <para>VA-API 硬解为 Linux（Intel/AMD GPU + mesa + libva）真实零拷贝路径。</para>
+/// <para><b>异步策略</b>：全部同步——原生 VA-API 调用是同步边界，无 I/O。</para>
 /// </remarks>
 public sealed partial class VaApiInterop : IVaApiExport
 {

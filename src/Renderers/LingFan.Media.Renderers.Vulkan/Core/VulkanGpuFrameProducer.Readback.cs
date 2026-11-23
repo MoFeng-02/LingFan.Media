@@ -9,7 +9,7 @@ public sealed unsafe partial class VulkanGpuFrameProducer
 {
     /// <summary>
     /// 把 <see cref="VulkanImageResource"/>（RGBA，TransferSrcOptimal）同步回读为紧凑 BGRA32。
-    /// Android Tier2 显示桥：Skia 合成路径（<c>SkiaVideoPresenter</c>）经 <see cref="IGpuTextureResource.ReadbackToCpu"/>
+    /// Android 显示桥：Skia 合成路径（<c>SkiaVideoPresenter</c>）经 <see cref="IGpuTextureResource.ReadbackToCpu"/>
     /// 消费 GPU 帧 —— 解码与 YCbCr→RGBA 转换仍在 GPU（零 CPU 像素转换），仅最终一帧一次 GPU→CPU 拷贝。
     /// </summary>
     /// <remarks>

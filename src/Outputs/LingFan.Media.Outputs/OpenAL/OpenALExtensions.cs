@@ -9,7 +9,7 @@ namespace LingFan.Media.Outputs.OpenAL;
 /// <para>使用模式：<code>services.AddLingFanMedia().AddOpenALOutput()</code></para>
 /// <para>注册 <see cref="OpenALOutputFactory"/> 为 Singleton。OpenAL 真正跨平台（Windows/Linux/macOS/Android），
 /// 无需 <see cref="OperatingSystem"/> 守卫；宿主须提供对应原生库（见 <see cref="OpenALInterop"/>）。</para>
-/// <para>此方法为同步配置（config 分类），无 I/O。</para>
+/// <para>此方法为同步配置，无 I/O。</para>
 /// </remarks>
 public static class OpenALExtensions
 {

@@ -45,7 +45,7 @@ internal sealed partial class WasapiRenderLoop
     {
         ArgumentNullException.ThrowIfNull(frames);
 
-        // Phase 1：逐帧投递 + 等待（保持阻塞语义与异常可观测性）。Phase 2 将改由 AudioSampleRing 非阻塞接管所有权。
+        // 逐帧投递 + 等待：保持阻塞语义与异常可观测性；不接管帧所有权（调用方在返回后归还）。
         var pending = new List<RenderItem>();
         foreach (var frame in frames)
         {
@@ -65,7 +65,7 @@ internal sealed partial class WasapiRenderLoop
             catch (OperationCanceledException)
             {
                 // 取消（Stop/Dispose）是正常退出路径：立即放弃剩余帧提交，使音频管线快速退出，
-                // 不再冒泡成 fail 日志。
+                // 不作为失败冒泡。
                 break;
             }
             if (item.Exception is TimeoutException tex)

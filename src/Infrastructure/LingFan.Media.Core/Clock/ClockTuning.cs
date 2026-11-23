@@ -21,14 +21,14 @@ internal static class ClockTuning
 
     /// <summary>
     /// 是否启用高精度系统定时器（<c>timeBeginPeriod(1)</c>）。默认 true。
-    /// <para>设为 <c>0</c> 关闭：<see cref="System.Threading.Thread.Sleep"/> 退回默认 15.6ms 分辨率，
+    /// <para>设为 <c>0</c> 关闭：<see cref="System.Threading.Thread.Sleep(int)"/> 退回默认 15.6ms 分辨率，
     /// 视频帧精确等待的粗粒度睡眠会重新被量化成 ±15ms 抖动（仅用于对照/排错）。</para>
     /// </summary>
     internal static readonly bool HighPrecisionTimer = ParseBool("LINGFAN_HP_TIMER", true);
 
     /// <summary>
     /// 是否用真实音频播放位置作为视频主时钟（替代批提交内的逐帧 SyncTo 突发）。默认 false。
-    /// <para><b>这是解决方案</b>：时钟由设备真实播放游标驱动（平滑、单调、缓冲耗尽时自然停摆），
+    /// <para>启用后时钟由设备真实播放游标驱动（平滑、单调、缓冲耗尽时自然停摆），
     /// 而非"已提交末端时间"在批内被瞬间预支。配合 <see cref="IAudioOutput.GetPlaybackPositionDirect"/> 零封送读取。</para>
     /// </summary>
     internal static readonly bool UseAudioPlaybackClock = ParseBool("LINGFAN_CLOCK_AUDIO_POS");

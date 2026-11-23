@@ -79,7 +79,7 @@ internal sealed partial class VLCNativeDemuxer : IMediaDemuxer
     private int _audioTrackIndex = -1;
     private long _audioSampleCounter;
 
-    // 音频抖动缓冲（治本修复 VLC amem 突发投递→WASAPI 渲染欠载）：
+    // 音频抖动缓冲（吸收 VLC amem 突发投递，防 WASAPI 渲染欠载）：
     // 生产者 OnAudioPlay 入队；专用释放线程按「共享通道水位」维持稳定释放到共享通道，
     // 突发被缓冲吸收、停产被缓冲覆盖，WASAPI 得连续供给、消除间隙。后端内作用域，不影响 MF/FFmpeg。
     private readonly ConcurrentQueue<MediaPacket> _audioJitter = new();
@@ -113,8 +113,8 @@ internal sealed partial class VLCNativeDemuxer : IMediaDemuxer
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-        // 视频(可丢)与音频(不可丢)分走独立有界通道：音频绝不被视频的 DropOldest 误删，
-        // 这是消除 VLC 音频间隙的根本修复（此前共享单通道时视频突发会把队首音频挤掉）。
+        // 视频(可丢)与音频(不可丢)分走独立有界通道：音频绝不被视频的 DropOldest 误删。
+        // 若共享单通道，视频突发会把队首音频挤掉 → 音频间隙。
         _videoChannel = Channel.CreateBounded<MediaPacket>(
             new BoundedChannelOptions(96)
             {
@@ -175,7 +175,7 @@ internal sealed partial class VLCNativeDemuxer : IMediaDemuxer
         {
             _sourceStream = stream;
             // 关键：libvlc_media_new_location 要求合法 MRL（file:///...、http://...），
-            // 裸 Windows 路径（E:\x.mp4）会被 VLC 拒开（"unable to open the MRL"）。
+            // 裸 Windows 盘符路径会被 VLC 拒开（"unable to open the MRL"）。
             // 本地文件系统路径必须走 libvlc_media_new_path，由 VLC 内部转 MRL；
             // 仅当 location 是格式良好的 URL（http/rtsp/mms/file:// 等）才用 new_location。
             bool isWellFormedUrl = Uri.TryCreate(location, UriKind.Absolute, out var uri)

@@ -18,7 +18,7 @@ using Microsoft.Extensions.Logging;
 namespace LinuxHeadlessVulkanProbe;
 
 /// <summary>
-/// Linux/WSL2 无头 Vulkan 渲染探针（Phase 2b）：在 Xvfb 虚拟显示提供的 X11 窗口上，
+/// Linux/WSL2 无头 Vulkan 渲染探针：在 Xvfb 虚拟显示提供的 X11 窗口上，
 /// 用 VulkanRenderer(X11 Surface) 真上屏 present，统计 vulkanPresentCount / GPU 纹理帧 / CPU 帧 / 丢帧。
 /// 证明「ffmpeg 解码 → Vulkan 渲染 present」在 Linux 无头环境（无物理显示器、非 WSLg GUI）可闭环。
 /// 注意：渲染器 Linux Attach 要求 X11WindowHandle（窗口表面）；Xvfb 提供虚拟 X 显示，不是 WSLg。

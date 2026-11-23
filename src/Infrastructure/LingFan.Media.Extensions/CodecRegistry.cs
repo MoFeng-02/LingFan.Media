@@ -8,7 +8,7 @@ namespace LingFan.Media.Extensions;
 /// <remarks>
 /// <para>提供容器格式 → 编解码器的静态映射查询，供后端自动选择
 /// （<c>MediaOptions.EnableAutoBackendSelection</c>）与能力探测使用。</para>
-/// <para>纯内存静态表，全部同步（sync 分类）：无 I/O、无 await，方法返回普通
+/// <para>纯内存静态表，全部同步：无 I/O、无 await，方法返回普通
 /// <see langword="bool"/> / 可空枚举，绝不包装为 <see cref="Task"/>（否则即伪异步）。</para>
 /// <para>仅引用跨层枚举 <see cref="ContainerFormat"/> / <see cref="VideoCodec"/> / <see cref="AudioCodec"/>
 /// （均为 Abstractions 已有类型），零外部引用，依赖倒置严守。</para>

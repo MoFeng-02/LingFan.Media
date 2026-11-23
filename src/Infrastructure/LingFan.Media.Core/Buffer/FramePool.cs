@@ -80,7 +80,7 @@ public sealed class FramePool<T> : IFramePool<T>, IDisposable where T : class
         _pool.Push(frame);
     }
 
-    // 泄漏对账（诊断期）：三分支命中计数（disposed/满池/入池）。
+    // 泄漏对账：三分支命中计数（disposed/满池/入池）。
     internal static long _retDisposedBranch, _retFullBranch, _retEnqueueBranch;
 
     /// <summary>

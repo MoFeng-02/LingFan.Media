@@ -46,6 +46,13 @@ public sealed class AudioFrame : IDisposableFrame
     /// <summary>
     /// 初始化 <see cref="AudioFrame"/> 的新实例。
     /// </summary>
+    /// <param name="data">PCM 音频数据。</param>
+    /// <param name="sampleRate">采样率（Hz）。</param>
+    /// <param name="channels">声道数。</param>
+    /// <param name="sampleFormat">采样格式。</param>
+    /// <param name="timestamp">时间戳。</param>
+    /// <param name="duration">帧持续时间。</param>
+    /// <param name="frameCount">本帧包含的采样数。</param>
     public AudioFrame(ReadOnlyMemory<byte> data, int sampleRate, int channels,
         SampleFormat sampleFormat, TimeSpan timestamp, TimeSpan duration, int frameCount)
     {

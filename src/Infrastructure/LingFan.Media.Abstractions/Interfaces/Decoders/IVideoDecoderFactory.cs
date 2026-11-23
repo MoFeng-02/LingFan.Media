@@ -10,11 +10,15 @@ namespace LingFan.Media.Abstractions;
 public interface IVideoDecoderFactory
 {
     /// <summary>根据编解码器和设置创建解码器实例。</summary>
+    /// <param name="codec">视频编解码器。</param>
+    /// <param name="settings">视频设置。</param>
+    /// <returns>新创建的视频解码器实例（未初始化，须调用 <see cref="IVideoDecoder.Initialize"/>）。</returns>
     IVideoDecoder Create(VideoCodec codec, VideoSettings settings);
 
     /// <summary>异步根据编解码器和设置创建解码器实例。</summary>
     /// <param name="codec">视频编解码器。</param>
     /// <param name="settings">视频设置。</param>
     /// <param name="ct">取消令牌。</param>
+    /// <returns>新创建的视频解码器实例。</returns>
     Task<IVideoDecoder> CreateAsync(VideoCodec codec, VideoSettings settings, CancellationToken ct = default);
 }

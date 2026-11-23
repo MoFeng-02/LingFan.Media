@@ -22,6 +22,10 @@ public sealed class LogEventArgs : EventArgs
     /// <summary>
     /// 初始化 <see cref="LogEventArgs"/> 的新实例。
     /// </summary>
+    /// <param name="level">日志级别。</param>
+    /// <param name="message">日志消息。</param>
+    /// <param name="source">来源模块（可为 null）。</param>
+    /// <param name="exception">关联异常（可为 null）。</param>
     public LogEventArgs(LogLevel level, string message, string? source = null, Exception? exception = null)
     {
         Level = level;

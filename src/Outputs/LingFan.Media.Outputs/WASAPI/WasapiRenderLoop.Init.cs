@@ -95,14 +95,12 @@ internal sealed partial class WasapiRenderLoop
             //   0 Initialize | 1 GetBufferSize | 2 GetStreamLatency(未使用) | 3 GetCurrentPadding
             //   | 4 IsFormatSupported | 5 GetMixFormat | 6 GetDevicePeriod(未使用)
             //   | 7 Start | 8 Stop | 9 Reset | 10 SetEventHandle | 11 GetService
-            // 此前基线注释抄漏了相对槽 2 的
-            //    GetStreamLatency，导致 GetCurrentPadding 起整体 -1 错位——GetMixFormat(误取槽4)
-            //    实际调到 IsFormatSupported，x64 下垃圾 pFormat 被解引用 → 原生访问违规。
+            // 槽表必须含相对槽 2 的 GetStreamLatency：漏掉它会使 GetCurrentPadding 起整体 -1 错位，
+            // GetMixFormat 会实际调到 IsFormatSupported，x64 下垃圾 pFormat 被解引用 → 原生访问违规。
             _audioClientInitialize = ComVTable.Get<IAudioClient_Initialize>(pAudioClient, 0);
             _audioClientGetBufferSize = ComVTable.Get<IAudioClient_GetBufferSize>(pAudioClient, 1);
-            // 补上此前未接入的 slot 2 GetStreamLatency（不扰动后续槽位，
-            // 因为 GetCurrentPadding 仍在 slot 3，相对索引未变）。用于把主时钟从「设备渲染游标」校准到
-            // 「真实可闻位置」——之前不减数百 ms 延迟导致视频比听到的声音整体提前。
+            // slot 2 GetStreamLatency：用于把主时钟从「设备渲染游标」校准到
+            // 「真实可闻位置」——不减去这段「提交→可闻」延迟，视频会比听到的声音整体提前。
             _audioClientGetStreamLatency = ComVTable.Get<IAudioClient_GetStreamLatency>(pAudioClient, 2);
             _audioClientGetCurrentPadding = ComVTable.Get<IAudioClient_GetCurrentPadding>(pAudioClient, 3);
             _audioClientIsFormatSupported = ComVTable.Get<IAudioClient_IsFormatSupported>(pAudioClient, 4);
@@ -114,14 +112,12 @@ internal sealed partial class WasapiRenderLoop
             _audioClientSetEventHandle = ComVTable.Get<IAudioClient_SetEventHandle>(pAudioClient, 10);
             _audioClientGetService = ComVTable.Get<IAudioClient_GetService>(pAudioClient, 11);
 
-            // 1.5 O10：在 Initialize 之前，通过 IAudioClient2.SetClientProperties 设置会话分类，
+            // 在 Initialize 之前，通过 IAudioClient2.SetClientProperties 设置会话分类，
             // 防止 Windows 将后台/非前台/隐藏窗口的音频会话在播放片刻后挂起（声音中断）。
-            // 全程 try/guard：任何不支持/失败都只记日志，不影响后续正常 Initialize（最坏退回旧行为）。
-            // 此处槽位须为 13（绝对槽 16），算错一格会直接导致原生访问违规：若误取 12（绝对槽 15），
+            // 全程 try/guard：任何不支持/失败都只记日志，不影响后续正常 Initialize（最坏退回未设置会话分类）。
+            // 槽位须为 13（绝对槽 16），算错一格会直接导致原生访问违规：若误取 12（绝对槽 15），
             // 实际调到 IAudioClient2::IsOffloadCapable —— 它多一个 BOOL* 出参，向未初始化寄存器指向的野地址写入。
-            // 槽位已修正为 13，COM 探针九个分类均 S_OK，调用本身不再崩。
-            // 但 EnableBackgroundCapableSession 仍默认 false：启用它的原始动机（防 OS 挂起后台会话）未被证实，
-            // 且启用后出现「长时间静音（数十秒级）后才出声」的现象。详见 WasapiOptions 上的说明。
+            // EnableBackgroundCapableSession 默认 false（opt-in）：启用可能出现长时间静音后才出声，详见 WasapiOptions 上的说明。
             if (_options.EnableBackgroundCapableSession)
                 TrySetSessionCategory(pAudioClient);
 
@@ -283,7 +279,7 @@ internal sealed partial class WasapiRenderLoop
             {
                 _audioClockPtr = pClock;
                 // IAudioClock vtable: IUnknown(0-2) + GetFrequency(slot0) + GetPosition(slot1) + GetCharacteristics(slot2)
-                // GetPosition 在 slot 1，索引必须为 1（此前误用 2 会调用 GetCharacteristics 返回垃圾值）
+                // GetPosition 在 slot 1，索引必须为 1（误用 2 会调用 GetCharacteristics 返回垃圾值）
                 _audioClockGetFrequency = ComVTable.Get<IAudioClock_GetFrequency>(pClock, 0);
                 _audioClockGetPosition = ComVTable.Get<IAudioClock_GetPosition>(pClock, 1);
 
@@ -336,7 +332,7 @@ internal sealed partial class WasapiRenderLoop
             _sampleRate = 0;
             _channels = 0;
             _deviceSampleFormat = SampleFormat.F32;
-            // 修复：重置 _eventDrivenMode 到用户配置值。
+            // 重置 _eventDrivenMode 到用户配置值。
             _eventDrivenMode = _options.EventDrivenMode;
             throw;
         }

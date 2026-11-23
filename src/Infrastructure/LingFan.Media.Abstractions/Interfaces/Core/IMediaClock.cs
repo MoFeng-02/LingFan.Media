@@ -39,8 +39,10 @@ public interface IMediaClock
     void Reset();
 
     /// <summary>跳转到指定位置。</summary>
+    /// <param name="position">目标时钟位置。</param>
     void SeekTo(TimeSpan position);
 
     /// <summary>同步到主时钟位置。</summary>
+    /// <param name="masterPosition">主时钟当前位置。</param>
     void SyncTo(TimeSpan masterPosition);
 }

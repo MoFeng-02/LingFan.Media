@@ -57,10 +57,10 @@ internal sealed partial class VLCNativeDemuxer
         byte[] data = new byte[dataSize];
         Marshal.Copy(_videoBuffer, data, 0, dataSize);
 
-        // 视频帧 PTS：原纯 CFR 计数（frame_counter × 单帧时长）不跟真实时钟对齐，
+        // 视频帧 PTS：纯 CFR 计数（frame_counter × 单帧时长）不跟真实时钟对齐，
         // VLC 软解经 libvlc 回调突发/抖动投递时，帧实际到达墙钟常落后合成 PTS 超过 DropThreshold
-        // → 被 Synchronizer 判「严重落后」丢弃（MF/FFmpeg 平稳投递故 0 丢）。
-        // 改为以播放起始墙钟为锚、按真实投递时刻合成 PTS，并对齐帧最小间距：
+        // → 被 Synchronizer 判「严重落后」丢弃。
+        // 故以播放起始墙钟为锚、按真实投递时刻合成 PTS，并对齐帧最小间距：
         //   突发（preroll 多帧同刻到达）→ 取「上一 PTS + 单帧时长」保持正确帧序与间距；
         //   平稳/抖动迟到 → 取「墙钟时刻」使 PTS 跟随主时钟、消除落后丢帧。
         if (!_videoPtsAnchorStarted)

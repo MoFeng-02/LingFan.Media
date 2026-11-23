@@ -12,7 +12,7 @@ using LingFan.Media.Abstractions;
 /// <para>混音流程：</para>
 /// <list type="number">
 /// <item>从每个激活且未静音的通道获取 sampleCount 个采样（按各通道输入声道数读取）</item>
-/// <item>自动将各通道采样数转换为输出声道布局（<see cref="MixerSettings.Channels"/>，AU6）</item>
+/// <item>自动将各通道采样数转换为输出声道布局（<see cref="MixerSettings.Channels"/>）</item>
 /// <item>所有通道相加（每通道乘其 Volume）</item>
 /// <item>乘 <see cref="MasterVolume"/></item>
 /// <item>Clamp 到 [-1,1]，转换为输出格式返回 <see cref="AudioFrame"/></item>

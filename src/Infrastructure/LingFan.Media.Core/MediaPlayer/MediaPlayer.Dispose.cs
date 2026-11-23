@@ -3,9 +3,11 @@ using LingFan.Media.Core.Platform;
 
 namespace LingFan.Media.Core;
 
-// MediaPlayer 的 Dispose 职责段（部分类，由 MediaPlayer.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/OpenAsync/PlayAsync/PauseAsync/StopAsync/SeekAsync/DisposeAsync/Dispose）在主文件；
-// Session 级对象在 OpenAsync 延迟创建，DisposeAsync 11 步释放每步独立 try-catch。
+/// <summary>
+/// MediaPlayer 的 Dispose 职责段（部分类，由 MediaPlayer.cs 按职责拆分，编译期等价）。
+/// 字段与核心编排（ctor/OpenAsync/PlayAsync/PauseAsync/StopAsync/SeekAsync/DisposeAsync/Dispose）在主文件；
+/// Session 级对象在 OpenAsync 延迟创建，DisposeAsync 分步释放、每步独立 try-catch。
+/// </summary>
 public sealed partial class MediaPlayer
 {
     private async Task Step_StopPipelinesAsync()

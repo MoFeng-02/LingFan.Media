@@ -17,8 +17,8 @@ internal sealed partial class WasapiRenderLoop
         {
             int hr = _audioClientStop!(_audioClientPtr);
             _deviceRunning = false;
-            // 修复：0x88890004 实际是 AUDCLNT_E_DEVICE_INVALIDATED（设备移除），非 AUDCLNT_E_NOT_INITIALIZED（0x88890001）。
-            // 两者在 Stop() 上下文中均可安全忽略。
+            // AUDCLNT_E_DEVICE_INVALIDATED（设备移除）与 AUDCLNT_E_NOT_INITIALIZED（未初始化）
+            // 在 Stop() 上下文中均可安全忽略；其余失败码仍告警。
             if (hr < 0
                 && hr != WasapiInterop.AUDCLNT_E_DEVICE_INVALIDATED
                 && hr != WasapiInterop.AUDCLNT_E_NOT_INITIALIZED)
@@ -31,7 +31,7 @@ internal sealed partial class WasapiRenderLoop
     /// <inheritdoc cref="WasapiOutput.Resume"/>
     /// <remarks>
     /// 重播（Ended→Playing）健壮性：自然 Ended 时客户端仍 Running（尾音由设备自然放完，不主动 Stop），
-    /// 重播若直接 Start 会得 <c>AUDCLNT_E_NOT_STOPPED</c>(0x88890005)。故先 Stop（幂等，已停止亦 S_OK）
+    /// 重播若直接 Start 会得 <c>AUDCLNT_E_NOT_STOPPED</c>（具名常量见 <see cref="WasapiInterop"/>）。故先 Stop（幂等，已停止亦 S_OK）
     /// 再 Reset（丢弃残留未播缓冲，避免重播开头混入上一次尾音）最后 Start，形成确定的「停止→清空→启动」序列。
     /// 首次播放（从未 Start）与恢复暂停（Pause 已 Stop）场景下 Stop 均为幂等空操作，无副作用。
     /// </remarks>
@@ -77,10 +77,9 @@ internal sealed partial class WasapiRenderLoop
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         // preroll 必须在 OpenAsync 之后、首帧之前 arm，即使设备尚未 Initialize
-        // （如 FFmpeg+AAC 采样率延迟到首帧回填的场景）。原逻辑在 !_initialized 时 early-return 导致
-        // _prerollPending 从未置位；渲染线程首帧惰性 Initialize 后才到 WriteFrame，此时已错过 arm →
-        // 设备永不 Start → 音频饥饿死锁（日志: 需要 2048 帧/可用 314 帧，卡死退不出）。
-        // 故 preroll 无条件 arm；仅 Stop/Reset 这类需有效客户端对象的操作在 _initialized 下执行
+        // （如 FFmpeg+AAC 采样率延迟到首帧回填的场景）：若因未初始化而跳过 arm，
+        // 渲染线程首帧惰性 Initialize 后才到 WriteFrame，此时已错过 arm，设备永不 Start，形成音频饥饿死锁。
+        // 故 preroll 无条件 arm；仅 Stop/Reset 这类需有效客户端对象的操作在客户端有效时执行
         // （_audioClientPtr 仅在 InitializeImpl 成功后才非 Zero，与 _initialized 等价）。
         if (_audioClientPtr != IntPtr.Zero)
         {

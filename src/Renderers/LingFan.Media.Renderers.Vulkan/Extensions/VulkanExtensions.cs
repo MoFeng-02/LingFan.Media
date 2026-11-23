@@ -78,7 +78,7 @@ public static class VulkanExtensions
                     SharedGpuHandleKind.VulkanOpaquePosixFileDescriptor));
         }
 
-        // E3 后端自动选择：启用且未显式指定时，Vulkan 作为候选默认 GPU 后端（与 D3D11 同构守卫）。
+        // 后端自动选择：启用且未显式指定时，Vulkan 作为候选默认 GPU 后端（与 D3D11 同构守卫）。
         // 默认仍面向无空域合成；独立 Win32 HWND 路径为 opt-in（由消费方显式 Attach HWND 启用）。
         if (builder.Options.EnableAutoBackendSelection && builder.Options.DefaultVideoRenderer is null)
         {

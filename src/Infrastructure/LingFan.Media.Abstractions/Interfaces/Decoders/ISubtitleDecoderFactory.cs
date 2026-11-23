@@ -12,10 +12,13 @@ namespace LingFan.Media.Abstractions;
 public interface ISubtitleDecoderFactory
 {
     /// <summary>根据字幕轨道创建解码器实例（按 track.SubtitleCodec 预置）。</summary>
+    /// <param name="track">字幕轨道。</param>
+    /// <returns>新创建的字幕解码器实例（编解码器已按轨道预置）。</returns>
     ISubtitleDecoder Create(MediaTrack track);
 
     /// <summary>异步根据字幕轨道创建解码器实例（按 track.SubtitleCodec 预置）。</summary>
     /// <param name="track">字幕轨道。</param>
     /// <param name="ct">取消令牌。</param>
+    /// <returns>新创建的字幕解码器实例。</returns>
     Task<ISubtitleDecoder> CreateAsync(MediaTrack track, CancellationToken ct = default);
 }

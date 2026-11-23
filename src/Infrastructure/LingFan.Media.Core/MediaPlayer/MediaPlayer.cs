@@ -10,7 +10,7 @@ namespace LingFan.Media.Core;
 /// <para>线程安全：公共方法线程安全，可在任意线程调用。</para>
 /// <para>Session 级对象（Clock/BufferManager/Synchronizer/Pipeline/Decoder/Renderer/Output）
 /// 在 OpenAsync 中延迟创建，不在构造函数中。</para>
-/// <para>DisposeAsync 11 步释放，每步独立 try-catch 不中断。</para>
+/// <para>DisposeAsync 分步释放（步骤见 MediaPlayer.DisposeEntry.cs），每步独立 try-catch 不中断。</para>
 /// <para>同步 Dispose 兜底做自己的同步清理路径，禁止 DisposeAsync().GetResult()（伪异步）。</para>
 /// </remarks>
 public sealed partial class MediaPlayer : IMediaPlayer
@@ -61,7 +61,7 @@ public sealed partial class MediaPlayer : IMediaPlayer
     private ProcessingMode _mode = ProcessingMode.RealTime;
 
     // 后处理变换链（中立 BCL 委托）。由 DI/Extensions 从 Video/Audio 模块的具体
-    // 处理器/音量/混音转换而来；Core 不依赖 Video/Audio 模块，保持分层倒置避免。
+    // 处理器/音量/混音转换而来；Core 不依赖 Video/Audio 模块，避免分层倒置。
     private readonly IReadOnlyList<Func<VideoFrame, VideoFrame?>>? _videoTransforms;
     private readonly IReadOnlyList<Func<AudioFrame, AudioFrame>>? _audioTransforms;
     private readonly Action? _videoTransformsReset;
@@ -85,7 +85,11 @@ public sealed partial class MediaPlayer : IMediaPlayer
     /// <param name="audioOutputFactory">音频输出工厂。</param>
     /// <param name="loggerFactory">日志工厂（用于创建子组件 logger）。</param>
     /// <param name="logger">播放器日志器。</param>
+    /// <param name="videoTransforms">视频后处理变换链（中立 BCL 委托，可为 null）。由 Video 模块把 <c>IVideoProcessor</c> 链转换而来，Core 不依赖 Video 模块。</param>
+    /// <param name="audioTransforms">音频后处理变换链（中立 BCL 委托，可为 null）。由 Audio 模块把 <c>VolumeControl</c>/<c>IAudioEffect</c>/<c>AudioMixer</c> 转换而来，Core 不依赖 Audio 模块。</param>
+    /// <param name="videoTransformsReset">视频后处理状态重置委托（中立委托，可为 null）。由 Video 模块把各 <c>IVideoProcessor.Reset</c> 合并而来，在 Seek/Flush 的解码锁内调用。</param>
     /// <param name="audioTransformsReset">音频效果状态重置委托（中立委托，可为 null）。由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。</param>
+    /// <param name="options">播放器选项（可为 null；null 时使用默认配置）。</param>
     public MediaPlayer(
         IMediaStreamFactory streamFactory,
         IMediaDemuxerFactory demuxerFactory,
@@ -249,12 +253,12 @@ public sealed partial class MediaPlayer : IMediaPlayer
                 // （PipelineLoop/DecodeLoop break，_isRunning=false）。重播需：
                 //   1) SeekAsync(0) 回绕 demuxer 到起点、重填缓冲通道、重置解码器/时钟基准；
                 //   2) 时钟先归零并启动（用归零后的基准做同步判定，避免首帧被判「过去太久」被 Drop）；
-                //   3) _pipelineHost.Start() 因 _isRunning==false 会重建 CTS 并重启双管线循环
+                //   3) _pipelineHost.StartAsync() 因 _isRunning==false 会重建 CTS 并重启双管线循环
                 //      （VideoPipeline/AudioPipeline 的 Start 已支持从排干态重启）。
                 await SeekAsync(TimeSpan.Zero);
                 // 重播（Ended→Playing）主时钟武装归零：自然 Ended 时 WASAPI 客户端仍 Running（尾音由设备自然放完），
-                // _startStopwatch 持续累计（数值不随重播归零）；而重播视频门控（MediaPipelineHost.StartAsync 第(3)步 SignalAudioReady）
-                // 早于音频 Start（第(5)步），若不在此解除武装，预滚动/门控窗口内同步器读到的主时钟是上一遍的陈旧值，
+                // _startStopwatch 持续累计（数值不随重播归零）；而重播视频门控（MediaPipelineHost.StartAsync 内 SignalAudioReady 放行）
+                // 早于音频启动，若不在此解除武装，预滚动/门控窗口内同步器读到的主时钟是上一遍的陈旧值，
                 // 会把 PTS=0 重播首帧判为「落后过多 → Drop」，画面冻结较长时间才切入。此处解除武装后，该窗口主时钟恒为 0，
                 // 首帧立即呈现；音频 Start（CaptureStartAnchor）会重新武装。
                 _audioOutput?.ResetPlaybackClock();
@@ -442,7 +446,7 @@ public sealed partial class MediaPlayer : IMediaPlayer
         SubtitleReceived?.Invoke(this, frame);
     }
 
-    // === DisposeAsync 11 步实现 ===
+    // === DisposeAsync 分步释放实现 ===
 
     // 共享单例渲染器生命周期说明：
     // _videoRenderer 是 D3D11RendererFactory 的缓存单例，Core 视频管线与 UI 层 D3D11GpuPresenter

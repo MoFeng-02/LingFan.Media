@@ -37,6 +37,14 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
 
     private bool _disposed;
 
+    /// <summary>
+    /// 创建 GPU 回读上下文：立即创建命令池（ResetCommandBuffer 模式）、命令缓冲与 fence；
+    /// staging 缓冲惰性分配并按帧尺寸扩容。创建失败抛 <see cref="InvalidOperationException"/>。
+    /// </summary>
+    /// <param name="device">借用的 VkDevice（Dispose 不销毁，生命周期归外部共享设备）。</param>
+    /// <param name="physicalDevice">借用的 VkPhysicalDevice（查询 host-visible 内存类型用，Dispose 不销毁）。</param>
+    /// <param name="readbackQueue">执行回读提交的 VkQueue（借用，须支持 transfer）。</param>
+    /// <param name="readbackQueueFamilyIndex">回读队列所属队列族索引（命令池绑定该族）。</param>
     public VulkanVideoGpuReadbackContext(Device device, PhysicalDevice physicalDevice, Queue readbackQueue, uint readbackQueueFamilyIndex)
     {
         _device = device;
@@ -288,6 +296,10 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
 
     private static int Clamp8(int v) => v < 0 ? 0 : v > 255 ? 255 : v;
 
+    /// <summary>
+    /// 释放回读上下文持有的 GPU 资源（staging 缓冲与内存 / fence / 命令池及其命令缓冲；幂等）。
+    /// 不销毁借用的 VkDevice 与队列。
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;

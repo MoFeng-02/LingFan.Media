@@ -17,7 +17,7 @@ public static class ConsumersExtensions
     /// </summary>
     /// <param name="builder">媒体构建器。</param>
     /// <returns>构建器（链式调用）。</returns>
-    /// <remarks>此方法为同步配置（config 分类），无 I/O。</remarks>
+    /// <remarks>此方法为同步配置，无 I/O。</remarks>
     public static MediaBuilder AddHeadlessRenderer(this MediaBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -38,7 +38,7 @@ public static class ConsumersExtensions
     /// </summary>
     /// <param name="builder">媒体构建器。</param>
     /// <returns>构建器（链式调用）。</returns>
-    /// <remarks>此方法为同步配置（config 分类），无 I/O。</remarks>
+    /// <remarks>此方法为同步配置，无 I/O。</remarks>
     public static MediaBuilder AddSilentAudioOutput(this MediaBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);

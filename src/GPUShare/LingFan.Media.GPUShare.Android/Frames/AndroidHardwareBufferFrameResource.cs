@@ -12,8 +12,8 @@ namespace LingFan.Media.GPUShare.Android;
 /// <para><b>生命周期</b>：构造即持有一次 AHB 引用（+1），<see cref="Dispose"/> 时
 /// <c>AHardwareBuffer_release</c> 释放；导入方（EGLImage / VkImage）持有各自的独立引用，
 /// 与本资源互不干扰。</para>
-/// <para><b>AHB 引用对账</b>：构造 +1 / Dispose -1。Live 持续增长 = Dispose 链断
-/// （现象：Graphics 内存每遍播放持续增长、AHB 地址零复用 = release 未达 gralloc）。</para>
+/// <para><b>AHB 引用对账</b>：构造 +1 / Dispose -1；存活计数应稳定在 in-flight 峰值，
+/// 持续增长即 Dispose 链未闭合（引用未归还 gralloc）。</para>
 /// <para><b>AOT 兼容</b>：裸 P/Invoke（<c>[LibraryImport]</c>），零反射。</para>
 /// </remarks>
 public sealed unsafe partial class AndroidHardwareBufferFrameResource : IFrameResource
@@ -21,7 +21,7 @@ public sealed unsafe partial class AndroidHardwareBufferFrameResource : IFrameRe
     private readonly IntPtr _ahbHandle;
     private bool _disposed;
 
-    // AHB 引用对账（泄漏定位）：构造 +1 / Dispose -1。Live 持续增长 = Dispose 链断。
+    // AHB 引用对账：构造 +1 / Dispose -1；存活计数持续增长即 Dispose 链未闭合。
     internal static long LiveCount => System.Threading.Interlocked.Read(ref _liveCount);
     private static long _liveCount;
 
@@ -45,7 +45,7 @@ public sealed unsafe partial class AndroidHardwareBufferFrameResource : IFrameRe
         Height = height;
         Format = format;
         System.Threading.Interlocked.Increment(ref _liveCount);
-        // 泄漏对账日志（每 64 帧一条）：Live 应稳定在 in-flight 峰值（≤~24）；持续上涨即泄漏。
+        // 泄漏对账日志（每 64 帧一条）：Live 应稳定在 in-flight 峰值（由解码池在途帧数决定）；持续上涨即泄漏。
         if (LiveCount % 64 == 1)
             Console.WriteLine($"[AHB-LEAK] live={LiveCount}");
     }

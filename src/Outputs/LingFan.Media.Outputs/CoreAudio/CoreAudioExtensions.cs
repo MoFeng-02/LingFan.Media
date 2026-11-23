@@ -6,7 +6,7 @@ namespace LingFan.Media.Outputs.CoreAudio;
 /// <remarks>
 /// <para>使用模式：<code>services.AddLingFanMedia().AddCoreAudioOutput()</code></para>
 /// <para>注册的是工厂（Singleton），不是实例！<see cref="CoreAudioOutput"/> 是 Session 级对象，由工厂 Create() 每次新建。</para>
-/// <para>此方法为同步配置（config 分类），无 I/O。</para>
+/// <para>此方法为同步配置，无 I/O。</para>
 /// </remarks>
 public static class CoreAudioExtensions
 {

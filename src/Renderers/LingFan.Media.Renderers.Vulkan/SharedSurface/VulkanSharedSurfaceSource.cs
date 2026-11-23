@@ -10,20 +10,23 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// 「无空域、纯控件级」的 GPU 上屏——<b>Vulkan 渲染 Vulkan 自己的</b>，不跨界喂 D3D11 组合器。
 /// </summary>
 /// <remarks>
-/// <para><b>这是渲染器层唯一碰 Vulkan 具体 API 的地方</b>。其余层（Avalonia <c>CompositionVideoRenderer</c>）
+/// <para><b>这是共享表面路径中唯一碰 Vulkan 具体 API 的地方</b>。其余层（Avalonia <c>CompositionVideoRenderer</c>）
 /// 只看到 <see cref="SharedGpuSurfaceDescriptor"/>（外部内存句柄 + 信号量对），<b>不引用任何 GPU 库</b>，
 /// 从而达成「不绑定具体 GPU、低耦合」的架构诉求，严守「各 Renderer 管好自身（无头/有头/无空域）」架构原则。</para>
 /// <para><b>零拷贝路径</b>：软帧（NV12/NV21/YUV420P/YUV422P/YUV444P/BGRA/RGBA）的 Y/U/V 平面上传到 GPU 纹理后
 /// 由 <see cref="VulkanShaderPipeline"/> 完成 YUV→RGB + 缩放，写入可导出离屏图像；该图像由宿主合成器
 /// 经 <c>VkImportMemoryWin32HandleInfoKHR</c> / <c>VkImportMemoryFdInfoKHR</c> 直接导入采样，无 CPU 回读、无独占 HWND。</para>
-/// <para><b>同步模型（Semaphores，Vulkan 原生机制）</b>：</para>
+/// <para><b>同步模型（Semaphores，fd/NT/IOSurface 句柄形态）</b>：</para>
 /// <list type="bullet">
 /// <item>生产者（本源）写完后 signal <c>ConsumerWait</c> 信号量（消费方据此等待「内容就绪」）；</item>
 /// <item>消费方采样完成后 signal <c>ConsumerSignal</c> 信号量（生产者据此等待「表面已归还，可覆写」）；</item>
 /// <item>生产者每帧以<b>有限超时（16ms，与 D3D11 keyed mutex 超时对称）</b>等待 <c>ConsumerSignal</c> 后再写，
 /// 超时即丢帧——绝不无限阻塞管线线程。两信号量均经外部句柄导出，消费方导入一次长期使用。</item>
 /// </list>
-/// <para><b>握手初始化</b>：二进制信号量默认未信号。生产者首帧须等待 <c>ConsumerSignal</c>，故创建时以一次
+/// <para><b>同步模型（None，Android 默认 VulkanNativeImage 形态）</b>：生产与消费共用同一 VkDevice、同一图形队列，
+/// 同队列提交天然按提交序串行，无需跨端信号量/keyed mutex 握手；交付前生产者以 fence 等待拷贝完成，
+/// 末屏障使写入对后续采样可见（见 <c>CopyToSharedImage</c>）。</para>
+/// <para><b>握手初始化（Semaphores 形态）</b>：二进制信号量默认未信号。生产者首帧须等待 <c>ConsumerSignal</c>，故创建时以一次
 /// signal-only 提交将其初始化为信号态，避免首帧永久阻塞。</para>
 /// <para><b>异步策略</b>：<see cref="TryWriteFrame"/> 同步（native 分类）——GPU 命令提交无真实 I/O await，
 /// 补 async 即伪异步；且用<b>有限超时</b> Fence 等待，超时即丢帧，绝不阻塞管线线程。</para>
@@ -70,15 +73,15 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private Fence _frameFence;
 
     // 可外部导出离屏图像（尺寸变化时重建；_version 随之递增）。
-    // Android 双缓冲（2 槽轮换写入/交付）：Skia Ganesh 对【同一 VkImage 句柄】的包装会命中纹理缓存、
-    // 内容不更新（管线持续出帧而屏幕定格首次采样内容）；每帧换一个 VkImage 交付即绕开缓存。
-    // 非 Android 走合成器 OPAQUE_FD 导入 + version 重建机制，单槽即可。
+    // VulkanNativeImage 形态（Android 同 device 直采样）双缓冲（2 槽轮换写入/交付）：Skia Ganesh 对【同一 VkImage 句柄】
+    // 的包装会命中纹理缓存、内容不更新（管线持续出帧而屏幕定格首次采样内容）；每帧换一个 VkImage 交付即绕开缓存。
+    // fd/NT/IOSurface 形态走合成器导入 + version 重建机制，单槽即可。
     private readonly Image[] _sharedImages = new Image[2];
     private readonly DeviceMemory[] _sharedMemories = new DeviceMemory[2];
     private readonly ImageView[] _sharedImageViews = new ImageView[2];
     private readonly bool[] _sharedCopyReady = new bool[2];
     private readonly ulong[] _sharedMemorySizes = new ulong[2];
-    /// <summary>本帧写入并交付的槽位（Android 每帧翻转；非 Android 恒 0）。</summary>
+    /// <summary>本帧写入并交付的槽位（VulkanNativeImage 形态每帧翻转；其余形态恒 0）。</summary>
     private int _sharedActive;
     // 槽位数：NativeImage（同 device 直采样）双缓冲轮换交付；fd/NT/IOSurface 形态单槽（与 Linux 一致）。
     private int _slotCount => _handleKind == SharedGpuHandleKind.VulkanNativeImage ? 2 : 1;
@@ -123,15 +126,14 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
     private bool _announcedSoft;
     private const int FrameLogInterval = 30;
 
-    // Android 共享离屏：与 Linux 走完全相同的 OPAQUE_FD 导出路径
-    // Android Vulkan（Mali/Adreno 等）完全支持
-    // VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT，可经 vkGetMemoryFdKHR 导出 dma_buf fd 交合成器
-    // VulkanOpaquePosixFileDescriptor 导入上屏。AHB 句柄类型仅是「额外支持」而非 OPAQUE_FD 的替代品。
+    // Android 共享离屏：默认 VulkanNativeImage 形态——宿主注入共享 VkDevice，Skia 同 device 直采样，
+    // 零外部内存导出/导入、零 fd、零 dedicated（见构造函数 Android 分支）。
+    // 仅当 handleKindOverride 显式指定 VulkanOpaquePosixFileDescriptor 时，才走与 Linux 相同的 OPAQUE_FD 导出路径：
+    // ExportMemoryAllocateInfo(OPAQUE_FD) + vkGetMemoryFdKHR 导出 dma_buf fd 交合成器导入上屏
+    //（版本/厂商无关、AOT 安全、零 P/Invoke 到 libandroid.so）。
     // 防回归：不要走「自分配 AHardwareBuffer + 反向解析 GraphicBuffer/native_handle_t 的 C++ 内存布局抠 fd」
     // 的脆弱路线（android_native_base_t 版本/厂商布局不兼容、AHardwareBuffer 与 GraphicBuffer 无继承契约，
     // 硬编码偏移会读到错误 magic → 优雅回退 Skia、Android 不出画）。
-    // Android 直接复用 Linux 已验证可用的 ExportMemoryAllocateInfo(OPAQUE_FD)
-    // + vkGetMemoryFdKHR 写法（版本/厂商无关、AOT 安全、零 P/Invoke 到 libandroid.so）。
 
     /// <summary>
     /// 初始化 <see cref="VulkanSharedSurfaceSource"/> 的新实例。
@@ -224,7 +226,7 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource : ISharedGpuSurfa
 
         // 离屏渲染管线：self-contained（着色器/描述符/管线布局/采样器/离屏 RenderPass 由
         // EnsureOffscreenResources 懒创建），每共享表面源实例独立持有，与 SwapChain 路径的
-        // VulkanRenderer._shaderPipeline 对称（VulkanRenderer.cs:1300）。不初始化则 TryWriteFrame
+        // VulkanRenderer._shaderPipeline 对称。不初始化则 TryWriteFrame
         // 在 _pipeline!.EnsureOffscreenResources 处 NullReferenceException。
         _pipeline = new VulkanShaderPipeline(_physicalDevice, _device);
 

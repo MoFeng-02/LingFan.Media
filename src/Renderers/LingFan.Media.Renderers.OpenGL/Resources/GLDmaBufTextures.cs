@@ -24,8 +24,11 @@ public sealed unsafe class GLEglDmaBufTexture : IFrameResource, IGpuTextureResou
     private readonly object _lock = new();
     private bool _disposed;
 
+    /// <inheritdoc/>
     public int Width { get; }
+    /// <inheritdoc/>
     public int Height { get; }
+    /// <inheritdoc/>
     public PixelFormat Format { get; }
 
     /// <summary>初始化 <see cref="GLEglDmaBufTexture"/> 的新实例。</summary>
@@ -49,9 +52,8 @@ public sealed unsafe class GLEglDmaBufTexture : IFrameResource, IGpuTextureResou
     int IGpuTextureResource.SubresourceIndex => _subresourceIndex;
 
     /// <inheritdoc/>
-    /// <exception cref="NotSupportedException">解码侧 VAAPI→EGL 导入为未来端点（见零拷贝架构约束），
-    /// 当前调用方（解码器）尚不产出 <see cref="GpuFrameImportKind.LinuxDmaBufFd"/>，本类不会被实例化；
-    /// 故 CPU 回读为显式未支持路径，非静默假绿。</exception>
+    /// <exception cref="NotSupportedException">CPU 回读未实现：dma_buf 零拷贝纹理由渲染器直接采样，不走 CPU 回读。
+    /// 本类为单平面旧路径变体，NV12 已由 <see cref="GLDmaBufNv12Texture"/> 双平面实现替代（见类 remarks）。</exception>
     public GpuTextureReadback ReadbackToCpu()
         => throw new NotSupportedException(
             "GLEglDmaBufTexture.ReadbackToCpu 为未来端点：解码侧 VAAPI→EGL 导入尚未启用（见零拷贝架构约束）。");
@@ -107,8 +109,11 @@ public sealed unsafe class GLDmaBufNv12Texture : IFrameResource, IGpuTextureReso
     private readonly object _lock = new();
     private bool _disposed;
 
+    /// <inheritdoc/>
     public int Width { get; }
+    /// <inheritdoc/>
     public int Height { get; }
+    /// <inheritdoc/>
     public PixelFormat Format { get; }
 
     /// <summary>Y 平面 GL 纹理（R8）。</summary>

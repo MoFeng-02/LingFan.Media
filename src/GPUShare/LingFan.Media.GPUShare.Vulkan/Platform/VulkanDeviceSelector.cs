@@ -10,7 +10,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// <para><b>归属</b>：GPUShare.Vulkan——物理设备枚举/评分/队列族查找/设备身份（UUID/LUID）查询
 /// 在此统一实现，渲染器工厂与共享设备创建等消费方共用，禁止在其他工程复刻选卡策略。</para>
 /// <para><b>选卡策略</b>：硬条件 = 具备图形队列族；偏好序 = 独显 &gt; 集显 &gt; 虚拟 GPU &gt; 其他；
-/// Linux 上 Intel（vendorID 0x8086）提权（VAAPI 解码 GPU 同设备对齐——跨厂商 dma_buf 导入不可行，实测实证）；
+/// Linux 上 Intel（vendorID 0x8086）提权（VAAPI 解码 GPU 同设备对齐——跨厂商 dma_buf 导入不可行）；
 /// 指定首选适配器 LUID 时大幅提权（跨 API 共享纹理导入须与解码侧同 GPU，跨 GPU/厂商导入会被驱动拒绝）。</para>
 /// <para><b>AOT</b>：全部经 <see cref="VulkanNative"/> 零反射绑定，无运行时反射。</para>
 /// </remarks>
@@ -65,7 +65,7 @@ public static unsafe class VulkanDeviceSelector
             };
 
             // Linux VAAPI 零拷贝同设备对齐：解码 GPU 为 Intel（iHD），跨厂商 dma_buf 导入不可行
-            // （Intel tiling modifier 对方无法按其布局采样 → 马赛克花屏，实测实证）。
+            // （Intel tiling modifier 对方无法按其布局采样 → 马赛克花屏）。
             // vendor 0x8086 提权压过独显优先启发式；Windows 的 D3D11VA LUID 对齐不受影响。
             if (OperatingSystem.IsLinux() && candProps.VendorID == 0x8086)
                 score += 10;

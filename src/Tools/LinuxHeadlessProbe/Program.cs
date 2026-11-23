@@ -16,9 +16,9 @@ using Microsoft.Extensions.Logging;
 namespace LinuxHeadlessProbe;
 
 /// <summary>
-/// Linux/WSL2 无头探针（Phase 1）：仅验证「ffmpeg 后端 + 生产管线 + 帧流转」能在 Linux 上跑通。
+/// Linux/WSL2 无头探针：仅验证「ffmpeg 后端 + 生产管线 + 帧流转」能在 Linux 上跑通。
 /// 不建 GPU 设备、不渲染上屏（NoOp 无头渲染器），把变量收敛到「ffmpeg 原生库能否在 Linux 加载 + 管线是否通」。
-/// 渲染路径（OpenGL/Vulkan 无头零拷贝）见 Phase 2，待补 offscreen present 接线。
+/// 渲染路径（OpenGL/Vulkan 无头 present）由同目录的 LinuxHeadlessOpenGlProbe / LinuxHeadlessVulkanProbe 覆盖。
 /// </summary>
 /// <remarks>
 /// <para>用法（在 WSL2 / Linux 内执行）：</para>

@@ -10,10 +10,13 @@ namespace LingFan.Media.Abstractions;
 public interface IMediaDemuxerFactory
 {
     /// <summary>根据媒体流创建对应的 IMediaDemuxer 实例。</summary>
+    /// <param name="stream">媒体数据流。</param>
+    /// <returns>新创建的解封装器实例（未打开，须调用 <see cref="IMediaDemuxer.OpenAsync"/>）。</returns>
     IMediaDemuxer Create(IMediaStream stream);
 
     /// <summary>异步根据媒体流创建对应的 IMediaDemuxer 实例。</summary>
     /// <param name="stream">媒体数据流。</param>
     /// <param name="ct">取消令牌。</param>
+    /// <returns>新创建的解封装器实例。</returns>
     Task<IMediaDemuxer> CreateAsync(IMediaStream stream, CancellationToken ct = default);
 }

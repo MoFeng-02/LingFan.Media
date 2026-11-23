@@ -243,11 +243,9 @@ internal sealed partial class SkiaGpuVideoRenderer : IVideoRenderer, IAvaloniaRe
         _logger.LogInformation("[SKIA-GPU] SkiaGpuVideoRenderer 挂载成功，源={Source}（{Done}/{Total}）。",
             _source.GetType().Name, _triedCount, _availableFactories.Count);
 
-        // CompositionCustomVisual 上屏路径【挂起】：
-        // 实验结论——Android EGL/Vulkan 后端下 SendHandlerMessage 消息不达 handler、
-        // OnAnimationFrameUpdate 从不回调、合成器不渲染该 visual（实测 + 帧循环看门狗），
-        // 且该路径会顶掉已验证的 DrawOp 上屏路径导致黑屏。挂载调用保留（下方 if 置 false），
-        // 待 Avalonia composition 层查明后再启用。
+        // CompositionCustomVisual 上屏路径在 Android 禁用：EGL/Vulkan 后端下
+        // SendHandlerMessage 消息不达 handler、OnAnimationFrameUpdate 不回调、合成器不渲染该 visual，
+        // 且该路径会顶掉 DrawOp 上屏路径导致黑屏。
         const bool EnableCompositionCustomVisual = false;
         if (EnableCompositionCustomVisual && OperatingSystem.IsAndroid())
             AttachCompositionCustomVisual(visual);

@@ -78,6 +78,9 @@ public interface IMediaStream
     /// <para>目标位置越界时抛 <see cref="System.IO.IOException"/>（与读取端错误统一）。</para>
     /// <para>已 <see cref="Close"/> 后调用抛 <see cref="ObjectDisposedException"/>。</para>
     /// </remarks>
+    /// <param name="offset">相对 <paramref name="origin"/> 的字节偏移。</param>
+    /// <param name="origin">偏移基准（流首/当前位置/流尾）。</param>
+    /// <returns>定位后的新读取位置（绝对字节偏移）。</returns>
     long Seek(long offset, SeekOrigin origin);
 
     /// <summary>

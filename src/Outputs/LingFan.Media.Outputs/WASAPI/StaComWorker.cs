@@ -15,8 +15,8 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// <see cref="Shutdown"/> 的 <c>releaseOnWorker</c> 回调保证这一顺序：回调在工作线程内执行完毕后，
 /// 线程 proc 的 <c>finally</c> 才调用 <c>CoUninitialize</c>。</para>
 /// <para><b>与 <see cref="WasapiRenderLoop"/> 的关系</b>：RenderLoop 有自己内建的 STA 线程（还兼做音频帧写入、
-/// 关闭信号、背压等），本类<b>不改动它</b>——那条路径承载着已验收的 frame pacing 修复，重构风险大于收益。
-/// 本类是给"纯控制类"COM 组件用的最小实现；后续若要统一线程模型，可把 RenderLoop 迁移到本类之上。</para>
+/// 关闭信号、背压等），不使用本类；本类是给"纯控制类"COM 组件（如 <see cref="WasapiAudioEngine"/>）
+/// 用的最小 STA 执行上下文实现。</para>
 /// <para><b>AOT</b>：无反射、无 <c>[ComImport]</c>，仅 <c>Thread</c> + 队列 + 事件。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]

@@ -5,8 +5,10 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Core;
 
-// AudioPipeline 的消费循环段（部分类，由 AudioPipeline.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/Start/Pause/Stop/Dispose）在主文件；音频主时钟供血循环与供给诊断。
+/// <summary>
+/// AudioPipeline 的消费循环分部：音频主时钟供血循环与供给诊断。
+/// 字段与生命周期编排（ctor/Start/Pause/Stop/Dispose）在主文件 AudioPipeline.cs。
+/// </summary>
 public sealed partial class AudioPipeline
 {
     // 诊断（LINGFAN_AUDIO_DIAG=1）：打点音频循环各相位时长，定位 headful 断音成因。
@@ -68,7 +70,7 @@ public sealed partial class AudioPipeline
         try
         {
             // 音频是主时钟的唯一供血者：喂帧线程被挤 → BufferQueue 排空 → 主时钟停走 →
-            // 音频欠载 + 视频按慢钟拖呈（真机实测强切会话时钟比 0.8、在途归零全程）。
+            // 音频欠载 + 视频按慢钟拖呈。
             // LongRunning 专用线程上提升 AboveNormal（全平台——主时钟欠载与平台无关）；
             // async 续体在读包真阻塞时偶尔换线程属已知边界，提交热路径（同步段）全程生效。
             try { System.Threading.Thread.CurrentThread.Priority = System.Threading.ThreadPriority.AboveNormal; }
@@ -110,7 +112,7 @@ public sealed partial class AudioPipeline
                     continue;
                 }
 
-                // 1. 提交阶段：小量子连续提交（(b)(1) 架构补短）
+                // 1. 提交阶段：小量子连续提交
                 //    每次最多提交 ~MaxSubmitChunkMs 的音频，使渲染线程的 submittedSamples 连续推进
                 //    （解决诊断仪"假 stall"），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时、抗 decode 抖动）。
                 if (_sampleQueue.Count > 0)
@@ -177,9 +179,9 @@ public sealed partial class AudioPipeline
                 }
 
                 // 前瞻：采样队列未填满且仍有包立即可用时，连续解码（不 await），把解码与提交解耦。
-                // 【关键】前瞻中每解码一帧即穿插一次提交——设备 BufferQueue（8×46.4ms≈372ms 水库）
+                // 【关键】前瞻中每解码一帧即穿插一次提交——设备缓冲水库
                 // 由本线程独占供血，解码阶段若零提交，水库被 DAC 定速抽干 → 欠载（音频咔哒 +
-                // 主时钟停走 → 视频帧卡顿）。穿插提交使在途水位全程 ≥6 缓冲，解码慢/抖不再欠载。
+                // 主时钟停走 → 视频帧卡顿）。穿插提交维持充足在途水位，解码慢/抖不再欠载。
                 while (_sampleQueue.Count < PrerollFrames && _packetQueue.Reader.TryRead(out var next))
                 {
                     // 每预取走一个包都要计入：这一轮 while 常连续取走多个包，漏采会把最小值抬高。

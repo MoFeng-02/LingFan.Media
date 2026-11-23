@@ -147,7 +147,7 @@ internal sealed partial class AndroidVideoDecoder
             finally
             {
                 // ByteBuffer 路径（render=false）必须显式关闭 Image，释放 native reader。
-                // 实测：仅 ReleaseOutputBuffer 而不 Close 会导致系统警告
+                // 仅 ReleaseOutputBuffer 而不 Close 会导致系统警告
                 // "A resource failed to call close"，且 CCodec 把未释放的 Image 计入 client-held
                 // buffer，大量出现 pipelineRoom<=numClientBuffers，解码器异常复用/丢帧 → 画面
                 // 大面积块状破碎、色块错位。此处用 try/catch 保护，确保即使 Close 异常也不会

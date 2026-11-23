@@ -97,7 +97,7 @@ internal sealed partial class D3D11ShaderPipeline
     /// <summary>
     /// 将软件帧各平面上传到 GPU 纹理。
     /// 平面布局与 <c>av_image_copy_to_buffer align=1</c> 紧凑打包语义一致
-    /// （与 SkiaVideoPresenter U11 的偏移推导同源）：Y 平面 w×h，色度平面按子采样推导，顺序 Y→U→V（或 Y→UV）。
+    /// （与 SkiaVideoPresenter CPU 路径的偏移推导同源）：Y 平面 w×h，色度平面按子采样推导，顺序 Y→U→V（或 Y→UV）。
     /// </summary>
     private void UploadPlanes(SoftwareFrameResource sw)
     {

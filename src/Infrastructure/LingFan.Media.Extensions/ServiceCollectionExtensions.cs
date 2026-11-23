@@ -23,14 +23,15 @@ namespace LingFan.Media.Extensions;
 /// <para>Infrastructure（Singleton）：无状态工厂 / 共享资源。</para>
 /// <para>- <see cref="IMediaStreamFactory"/> → <see cref="MediaStreamFactory"/>（持有 <c>IHttpClientFactory</c>）</para>
 /// <para>- <see cref="IMediaDemuxerFactory"/> → 由各后端 <c>AddXxx()</c> 经 TryAddEnumerable 集合注册（不再默认注册，支持多后端并存回退）</para>
-/// <para>- <see cref="IMediaPlayerFactory"/> → <see cref="MediaPlayerFactory"/></para>
+/// <para>- <see cref="IMediaPlayerFactory"/> → <see cref="BackendFallbackMediaPlayerFactory"/>（运行时回退调度；
+/// 同一实例同时以 <see cref="IBackendRegistry"/> 对外。核心组装工厂 <see cref="MediaPlayerFactory"/> 以 keyed <c>"composer"</c> 注册，供回退调度器选定后端组后建 Session）</para>
 /// <para>Session（Transient）：仅注册 <see cref="IMediaPlayer"/>，内部组件由 Factory 手动 new 不走 DI。</para>
 /// <para><b>以下工厂由各子模块扩展方法注册（不在 AddLingFanMedia 中）</b>：</para>
 /// <para>- <c>AddFFmpeg()</c> / <c>AddMediaFoundation()</c> / <c>AddVLCNative()</c> → 各以 TryAddEnumerable 集合注册
 /// <see cref="IMediaDemuxerFactory"/> / <see cref="IVideoDecoderFactory"/> / <see cref="IAudioDecoderFactory"/> / <see cref="ISubtitleDecoderFactory"/>（可多后端并存，按注册顺序回退）</para>
 /// <para>- <c>AddD3D11Renderer()</c> → <see cref="IVideoRendererFactory"/></para>
 /// <para>- <c>AddWasapiOutput()</c> → <see cref="IAudioOutputFactory"/></para>
-/// <para>此方法为同步配置（config 分类），无 I/O、无异步。</para>
+/// <para>此方法为同步配置，无 I/O、无异步。</para>
 /// </remarks>
 public static class ServiceCollectionExtensions
 {
@@ -41,14 +42,19 @@ public static class ServiceCollectionExtensions
     /// <param name="configure">全局媒体配置回调（可选）。</param>
     /// <returns>媒体构建器，用于链式调用 <c>AddFFmpeg()</c> / <c>AddD3D11Renderer()</c> 等。</returns>
     /// <remarks>
-    /// <para>注册 Infrastructure Lifetime（Singleton）工厂：</para>
+    /// <para>注册 Infrastructure Lifetime（Singleton）服务：</para>
     /// <para>- <see cref="IMediaStreamFactory"/> → <see cref="MediaStreamFactory"/></para>
-    /// <para>- <see cref="IMediaDemuxerFactory"/> → <see cref="Formats.DemuxerFactory"/></para>
-    /// <para>- <see cref="IMediaPlayerFactory"/> → <see cref="MediaPlayerFactory"/></para>
+    /// <para>- <see cref="IFormatDetector"/> → <see cref="FormatDetector"/>（回退调度器 Open 前轻量探测格式）</para>
+    /// <para>- <see cref="ICodecRegistry"/> → <see cref="CodecRegistry"/>（静态映射表，纯内存）</para>
+    /// <para>- <see cref="IMediaPlayerFactory"/> → <see cref="BackendFallbackMediaPlayerFactory"/>（同一实例兼以 <see cref="IBackendRegistry"/> 对外）；
+    /// 核心组装工厂 <see cref="MediaPlayerFactory"/> 以 keyed <c>"composer"</c> 注册</para>
+    /// <para>- <see cref="IMediaDemuxerFactory"/> <b>不在此注册</b>：由各后端 <c>AddXxx()</c> 经 TryAddEnumerable 集合注册；
+    /// 未注册任何后端时 Open 抛 <see cref="MediaBackendUnsupportedException"/></para>
     /// <para>注册 Session Lifetime（Transient）播放器：</para>
     /// <para>- <see cref="IMediaPlayer"/>（每次解析通过 Factory.Create() 新建）</para>
-    /// <para>注册 <c>IHttpClientFactory</c>（<c>AddHttpClient()</c>）供 <see cref="MediaStreamFactory"/> 网络流连接池管理。</para>
-    /// <para>注册 <c>IOptions&lt;MediaOptions&gt;</c> 供后续读取全局配置。</para>
+    /// <para>注册 <c>IHttpClientFactory</c>（<c>AddHttpClient()</c>）供 <see cref="MediaStreamFactory"/> 网络流连接池管理，
+    /// 并配置命名 client <c>"LingFanMedia"</c> 与 <c>"LingFanMedia_Insecure"</c>（均挂 SSRF 连接防护）。</para>
+    /// <para>注册 <c>IOptions&lt;MediaOptions&gt;</c> 与 <c>IOptions&lt;MediaPlayerOptions&gt;</c>（后者传播宿主配置的默认音量）。</para>
     /// <para>日志配置由消费方应用的 Host 负责（Extensions 层只依赖 <c>Logging.Abstractions</c>）。</para>
     /// </remarks>
     public static MediaBuilder AddLingFanMedia(
@@ -69,7 +75,7 @@ public static class ServiceCollectionExtensions
         // IHttpClientFactory：供 MediaStreamFactory 网络流连接池管理（防套接字耗尽）
         services.AddHttpClient();
 
-        // B-DNS: 网络流默认命名 client——SocketsHttpHandler.ConnectCallback 挂载
+        // 网络流默认命名 client——SocketsHttpHandler.ConnectCallback 挂载
         // SsrfConnectGuard（DNS pinning：只连 NetworkMediaStream 校验过的 IP，
         // 闭合「SsrfGuard.Validate 后 SendAsync 二次 DNS 解析」的重绑定 TOCTOU 窗口；
         // 重定向到新主机时回调内现场重解析 + 重校验）。
@@ -83,9 +89,9 @@ public static class ServiceCollectionExtensions
             });
 
         // SSL 证书绕过专用命名 client：仅 AllowInsecureHttps 的网络源经
-        // IHttpClientFactory.CreateClient("LingFanMedia_Insecure") 获取（S2 统一入口）。
+        // IHttpClientFactory.CreateClient("LingFanMedia_Insecure") 获取。
         // 自定义 SocketsHttpHandler 由工厂管理生命周期，避免套接字耗尽。
-        // B-DNS: 同样挂载 SsrfConnectGuard（不安全 SSL 场景同样需要 SSRF 防护）。
+        // 同样挂载 SsrfConnectGuard（不安全 SSL 场景同样需要 SSRF 防护）。
         services.AddHttpClient("LingFanMedia_Insecure")
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
@@ -113,7 +119,7 @@ public static class ServiceCollectionExtensions
 
         // 播放器工厂注册见下方（在构建器创建后，透传宿主配置的后处理链与重置钩子）。
 
-        // 编解码器注册表（E1）：静态映射表，纯内存，Singleton。
+        // 编解码器注册表：静态映射表，纯内存，Singleton。
         services.AddSingleton<ICodecRegistry, CodecRegistry>();
         // IGpuDeviceContext 的注册位于 Renderers.D3D11 的 AddD3D11Renderer
         // （具体工厂依赖 Vortice，Extensions 层不引用渲染器模块，严守分层）。
@@ -127,7 +133,7 @@ public static class ServiceCollectionExtensions
         services.Configure<MediaOptions>(o => options.CopyTo(o));
 
         // 播放器默认配置（契约层 MediaPlayerOptions）经 IOptions 绑定，使宿主配置的 DefaultVolume 传播到 Core 工厂。
-        // 此前 MediaPlayerOptions 仅在 Core 定义且从未注册，导致工厂始终走默认 1.0 —— 此处闭合该缺口。
+        // 必须注册：否则 Core 工厂读不到宿主配置，始终使用默认音量 1.0。
         services.Configure<MediaPlayerOptions>(o => o.DefaultVolume = options.DefaultVolume);
 
         // Session Lifetime（Transient：仅注册 IMediaPlayer，内部组件由 Factory 手动 new）
@@ -143,7 +149,7 @@ public static class ServiceCollectionExtensions
         // 。未配置时 transforms/reset 为 null。
         // 工厂委托在首次解析 IMediaPlayerFactory 时执行，此时所有 AddXxx 链式调用（含 WithAudioPipeline/WithVideoPipeline）已完成，
         // 故可安全读取 builder 中的宿主配置。
-        // 核心 composer（keyed "composer"）：保留原构造逻辑，供回退中间件在选定后端组后调用其 Create(...) 重载建 Session。
+        // 核心 composer（keyed "composer"）：供回退中间件在选定后端组后调用其 Create(...) 重载建 Session。
         services.AddKeyedSingleton<IMediaPlayerFactory>("composer", (sp, key) =>
         {
             var streamFactory = sp.GetRequiredService<IMediaStreamFactory>();

@@ -11,7 +11,7 @@ namespace LingFan.Media.Sources.Security;
 /// </summary>
 /// <remarks>
 /// <para>在网络连接建立前的 DNS 解析点对目标 IP 进行私有/回环/链路本地/保留/CGNAT 检查，
-/// 并解析十六进制/十进制 IP 字面量表示法（L21），防止通过编码形式绕过 <see cref="NetworkMediaSource"/> 构造期的字符串检查。</para>
+/// 并解析十六进制/十进制 IP 字面量表示法，防止通过编码形式绕过 <see cref="NetworkMediaSource"/> 构造期的字符串检查。</para>
 /// <para>所有方法均为纯 CPU 计算（无 I/O、无状态），可安全在异步路径中调用，不会引入伪异步或同步阻塞。</para>
 /// <para>调用点：<see cref="MediaStreamFactory.CreateAsync"/>（DNS 解析后快速失败）与
 /// <see cref="NetworkMediaStream"/> 的建连路径（确保两条工厂路径均受保护）。</para>
@@ -21,15 +21,15 @@ public static class SsrfGuard
     /// <summary>
     /// 校验解析后的目标 IP 与主机字面量，命中私有/保留范围且未显式允许时抛 <see cref="SecurityException"/>。
     /// </summary>
-    /// <param name="host">原始主机名/IP 字面量（用于 L21 编码形式检查）。</param>
-    /// <param name="resolvedIps">DNS 解析得到的 IP 列表（L20 DNS 重绑定防护）。</param>
+    /// <param name="host">原始主机名/IP 字面量（用于编码形式检查）。</param>
+    /// <param name="resolvedIps">DNS 解析得到的 IP 列表（DNS 重绑定防护）。</param>
     /// <param name="allowPrivateAddresses">是否允许访问内网（SSRF 防护开关）。</param>
     /// <exception cref="SecurityException">命中私有/保留地址且未允许。</exception>
     public static void Validate(string host, IPAddress[] resolvedIps, bool allowPrivateAddresses)
     {
         ArgumentNullException.ThrowIfNull(resolvedIps);
 
-        // L20：DNS 重绑定防护 —— 校验解析后的真实 IP 是否在私有/保留范围
+        // DNS 重绑定防护 —— 校验解析后的真实 IP 是否在私有/保留范围
         foreach (var ip in resolvedIps)
         {
             if (IsPrivateOrLoopbackOrReserved(ip) && !allowPrivateAddresses)
@@ -40,7 +40,7 @@ public static class SsrfGuard
             }
         }
 
-        // L21：十六进制/十进制 IP 字面量（DNS 可能不解析，需单独解析检查）
+        // 十六进制/十进制 IP 字面量（DNS 可能不解析，需单独解析检查）
         if (TryParseIpLiteral(host, out var literalIp) &&
             IsPrivateOrLoopbackOrReserved(literalIp) && !allowPrivateAddresses)
         {
@@ -50,7 +50,7 @@ public static class SsrfGuard
     }
 
     /// <summary>
-    /// 判断 IP 是否为私有/回环/链路本地/保留/CGNAT 地址（L22：新增 CGNAT 100.64.0.0/10）。
+    /// 判断 IP 是否为私有/回环/链路本地/保留/CGNAT 地址（含 CGNAT 100.64.0.0/10）。
     /// </summary>
     /// <param name="ip">待检查 IP。</param>
     /// <returns>是私有/保留地址返回 true。</returns>
@@ -79,7 +79,7 @@ public static class SsrfGuard
             if (bytes[0] == 169 && bytes[1] == 254) return true;
             // 0.0.0.0/8 — 本地网络
             if (bytes[0] == 0) return true;
-            // 100.64.0.0/10 — CGNAT（L22）
+            // 100.64.0.0/10 — CGNAT
             if (bytes[0] == 100 && bytes[1] >= 64 && bytes[1] <= 127) return true;
             // 224.0.0.0/4 起 — 多播/保留（含 240.0.0.0/4）
             if (bytes[0] >= 224) return true;
@@ -119,14 +119,14 @@ public static class SsrfGuard
     }
 
     /// <summary>
-    /// L21：解析十六进制（0x7f000001）/ 十进制（2130706433）/ 八进制点分（0177.0.0.1）IP 字面量表示法。
+    /// 解析十六进制（0x7f000001）/ 十进制（2130706433）/ 八进制点分（0177.0.0.1）IP 字面量表示法。
     /// </summary>
     /// <remarks>
     /// <para>十六进制与十进制整数字面量无点分结构（避免误判标准点分十进制，如 192.168.1.1）；
     /// 八进制点分仅当某段以 0 开头且长度 &gt; 1 时才按八进制解释（如 0177.0.0.1 → 127.0.0.1），
     /// 标准点分十进制（无前导零）不会误命中。</para>
     /// <para>这些方法与 <see cref="NetworkMediaSource"/> 构造期的字符串检查互补，
-    /// 覆盖 DNS 可能不解析、但字面量本身即指向内网的编码形式（L21）。</para>
+    /// 覆盖 DNS 可能不解析、但字面量本身即指向内网的编码形式。</para>
     /// </remarks>
     /// <param name="host">主机名/IP 字面量。</param>
     /// <param name="ip">解析出的 IP；失败为 null。</param>
@@ -158,7 +158,7 @@ public static class SsrfGuard
             return true;
         }
 
-        // 八进制点分（0177.0.0.1 → 127.0.0.1）：仅当确含前导零段时按八进制解释（L21）
+        // 八进制点分（0177.0.0.1 → 127.0.0.1）：仅当确含前导零段时按八进制解释
         if (TryParseDottedOctal(host, out var octalIp))
         {
             ip = octalIp;
@@ -169,7 +169,7 @@ public static class SsrfGuard
     }
 
     /// <summary>
-    /// L21：解析八进制点分 IP 表示法（如 <c>0177.0.0.1</c> → 127.0.0.1）。
+    /// 解析八进制点分 IP 表示法（如 <c>0177.0.0.1</c> → 127.0.0.1）。
     /// </summary>
     /// <remarks>
     /// 仅当四段中至少一段以 0 开头且长度 &gt; 1（即确实为八进制）时才解析，
@@ -196,7 +196,7 @@ public static class SsrfGuard
             if (part.Length == 0 || part.Length > 4)
                 return false;
 
-            // 以 0 开头且长度 > 1 → 视为八进制（L21 八进制表示法）。
+            // 以 0 开头且长度 > 1 → 视为八进制表示法。
             // 注：.NET 的 NumberStyles 无 Octal 枚举，故手动按 8 进制累加解析。
             if (part.Length > 1 && part[0] == '0')
             {

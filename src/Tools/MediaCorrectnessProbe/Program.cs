@@ -36,8 +36,8 @@ namespace MediaCorrectnessProbe;
 /// <para>用法：</para>
 /// <code>
 /// dotnet run --project src\Tools\MediaCorrectnessProbe
-/// dotnet run --project src\Tools\MediaCorrectnessProbe -- --file "D:\x.mp4" -v
-/// dotnet run --project src\Tools\MediaCorrectnessProbe -- --out "D:\out" --keep-every 20
+/// dotnet run --project src\Tools\MediaCorrectnessProbe -- --file "path/to/x.mp4" -v
+/// dotnet run --project src\Tools\MediaCorrectnessProbe -- --out "path/to/out" --keep-every 20
 /// </code>
 /// </remarks>
 internal static partial class Program

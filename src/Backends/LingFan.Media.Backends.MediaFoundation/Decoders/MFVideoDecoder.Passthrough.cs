@@ -16,7 +16,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 internal sealed partial class MFVideoDecoder
 {
     /// <summary>
-    /// 【A 方案】尝试把 <see cref="MFDemuxer"/> 的「已解码直通包」直接包成 <see cref="VideoFrame"/>，跳过本类 MFT。
+    /// 尝试把 <see cref="MFDemuxer"/> 的「已解码直通包」直接包成 <see cref="VideoFrame"/>，跳过本类 MFT。
     /// </summary>
     /// <param name="packet">待判定的包。</param>
     /// <returns>直通帧；非直通包（压缩裸流）返回 <see langword="null"/>，由调用方走原 MFT 路径。</returns>
@@ -26,7 +26,7 @@ internal sealed partial class MFVideoDecoder
     /// <b>移交所有权</b>给 <see cref="VideoFrame"/>，全程无一字节内存拷贝。
     /// 必须 Take 而非读 <see cref="MediaPacket.DecodedFrameResource"/>：否则 packet 释放时会销毁仍在渲染管线中的纹理。</para>
     /// <para><b>路径(2)（半 DXVA 回落）</b>：无 GPU 资源但带 <c>Width/Height</c> + NV12 字节 ⇒ 去 stride 紧凑化后
-    /// 包成 <see cref="SoftwareFrameResource"/>。仍比改造前好：省掉 MFT 的二次解码。</para>
+    /// 包成 <see cref="SoftwareFrameResource"/>，省掉 MFT 的二次解码。</para>
     /// <para><b>硬解自报</b>：仅在拿到 <see cref="IGpuTextureResource"/> 时才把 <see cref="IsHardwareAccelerated"/>
     /// 置真——CPU 直通帧无法证明其是否由硬件解出（驱动可能内部读回），遵守「S_OK≠被接受，须行为副作用双判据」。</para>
     /// </remarks>

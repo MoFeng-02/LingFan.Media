@@ -9,7 +9,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// OpenGL 工厂级离屏 GL 设备上下文（实现 <see cref="IGpuDeviceContext"/> 中立桥）。
 /// </summary>
 /// <remarks>
-/// <para><b>治本目标</b>：D3D11 / Vulkan 的共享 GPU 设备是工厂级单例，解码后端在 decode-init 阶段即可经
+/// <para><b>设计目标</b>：D3D11 / Vulkan 的共享 GPU 设备是工厂级单例，解码后端在 decode-init 阶段即可经
 /// <see cref="IGpuDeviceContext"/> 拿到设备句柄启用硬解 + 零拷贝。OpenGL 原先将 GL 上下文放在渲染器实例级
 /// （<see cref="OpenGLRenderer.Attach"/>），导致工厂层面不存在可供注册的 <c>IGpuDeviceContext</c>，解码侧
 /// 永远"看不到"OpenGL——这是违反依赖倒置的架构不对称。</para>
@@ -64,7 +64,7 @@ public sealed unsafe class OpenGLOffscreenDeviceContext : IGpuDeviceContext, IDi
     /// MakeCurrent/GL 操作须在此锁内串行，避免同一 HGLRC 并发 current 于两线程导致 WGL 函数指针失效（AV）。</summary>
     public object GlAccessLock => _glAccessLock;
 
-    /// <summary>将离屏上下文绑定到调用线程（供 <see cref="GLTextureResource"/> 回读/释放纹理）。</summary>
+    /// <summary>将离屏上下文绑定到调用线程（供零拷贝导入等需要共享组上下文的 GL 操作）。</summary>
     public void MakeCurrent() => _offscreen?.MakeCurrent();
 
     /// <summary>解绑调用线程上的离屏上下文。</summary>

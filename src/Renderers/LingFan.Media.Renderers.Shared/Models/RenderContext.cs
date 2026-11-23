@@ -48,6 +48,9 @@ public sealed class RenderContext : IGpuDeviceContext
     /// <param name="deviceHandle">GPU 设备原生句柄。</param>
     /// <param name="sharedDevice">共享 GPU 设备对象（可为 null）。</param>
     /// <param name="contextHandle">GPU 设备上下文原生句柄（D3D11VA 硬解需要）。</param>
+    /// <param name="sharedPhysicalDevice">共享 GPU 物理设备对象（Vulkan 零拷贝需同物理设备对齐时提供，盒装 PhysicalDevice；可为 null）。</param>
+    /// <param name="videoQueueFamilyIndex">视频解码队列族索引（VK_QUEUE_VIDEO_DECODE_BIT_KHR）；无视频解码能力时为 uint.MaxValue。</param>
+    /// <param name="graphicsQueueFamilyIndex">图形渲染队列族索引（VK_QUEUE_GRAPHICS_BIT，供 Vulkan 硬解 DPB 跨队列族并发共享）；未知时为 uint.MaxValue。</param>
     public RenderContext(
         GPUApiType gpuApiType,
         GpuDeviceCapabilities capabilities,

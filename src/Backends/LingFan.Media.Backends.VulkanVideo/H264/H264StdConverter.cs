@@ -85,8 +85,8 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         // qpprime_y_zero_transform_bypass_flag / seq_scaling_matrix_present_flag 仅当 profile 属
         // 「high」档族（上列 profile_idc）时才出现在比特流；Baseline(66)/Main(77)/Extended(88) 等档位
         // 无这些字段，chroma 隐式 4:2:0（=1）。
-        // 此前这些字段被无条件 ReadUe、且漏读 qpprime/seq_scaling 两比特 → 非 high 档整体偏移 2 个 ue(v)、
-        // high 档偏移 2 比特 → SPS 全乱 → 解码器无法解切片 → 静默吐全零 DPB（绿屏成因）。
+        // 防回归：这些字段不可无条件 ReadUe、且勿漏读 qpprime/seq_scaling 两比特——否则
+        // 非 high 档整体偏移 2 个 ue(v)、high 档偏移 2 比特 → SPS 全乱 → 解码器无法解切片 → 静默吐全零 DPB（绿屏）。
         bool highProfile = profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 244
                           || profileIdc == 44 || profileIdc == 83 || profileIdc == 86 || profileIdc == 118
                           || profileIdc == 128 || profileIdc == 138 || profileIdc == 139 || profileIdc == 134 || profileIdc == 135;

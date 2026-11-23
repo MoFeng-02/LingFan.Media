@@ -16,7 +16,7 @@ namespace LingFan.Media.Backends.MediaCodec;
 /// <para>此方法为同步配置（config 分类），无 I/O。</para>
 /// <para>依赖倒置：本后端只依赖 Abstractions 契约（IMediaDemuxerFactory / IVideoDecoderFactory /
 /// IAudioDecoderFactory），绝不引用任何 Renderers 程序集，也不依赖 <see cref="IGpuFrameProducer"/>。
-/// 解码输出为 CPU 侧 <c>Image.Plane</c> 提取的标准 I420 帧（GPU 零拷贝暂缓，见设计文档 §5.2），
+/// 解码输出为 CPU 侧 <c>Image.Plane</c> 提取的标准 I420 帧（GPU 零拷贝导入暂缓），
 /// 后端与渲染器互不感知。</para>
 /// </remarks>
 public static class AndroidExtensions
@@ -48,7 +48,7 @@ public static class AndroidExtensions
         // 注册工厂（集合注册 TryAddEnumerable：支持多后端并存、按 DI 注册顺序参与运行时回退）
         // 【必须类型化注册】工厂委托形式 Singleton<IVideoDecoderFactory>(sp => ...) 会被 TryAddEnumerable
         // 拒绝：委托类型 Func<IServiceProvider, IVideoDecoderFactory> 的返回类型与服务类型相同 →
-        // 「indistinguishable」ArgumentException，启动即崩（实测）。
+        // 「indistinguishable」ArgumentException，启动即崩。
         // 类型化注册同样与注册顺序无关：构造解析发生在播放期（GetServices 物化），那时各后端已注册。
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IMediaDemuxerFactory, AndroidDemuxerFactory>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IVideoDecoderFactory, AndroidVideoDecoderFactory>());

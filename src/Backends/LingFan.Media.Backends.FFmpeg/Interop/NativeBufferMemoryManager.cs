@@ -13,7 +13,7 @@ namespace LingFan.Media.Backends.FFmpeg.Interop;
 /// 帧/包 Dispose 时释放所有者，原生引用计数减一。</para>
 /// <para><b>安全约束</b>：所有者释放后不得再访问由本管理器产生的 <see cref="Memory{T}"/>
 /// （悬垂指针）。管线契约保证消费方在 Dispose 前完成读取（Present/Submit 均为同步拷贝）。</para>
-/// <para><b>异步策略</b>：sync-only（纯内存视图，无 I/O），符合同步/异步双支持基准第 3 条。</para>
+/// <para><b>异步策略</b>：sync-only（纯内存视图，无 I/O）。</para>
 /// <para><b>AOT 兼容</b>：基于标准库 <see cref="MemoryManager{T}"/>，无反射、无动态代码生成。</para>
 /// </remarks>
 internal sealed unsafe class NativeBufferMemoryManager : MemoryManager<byte>

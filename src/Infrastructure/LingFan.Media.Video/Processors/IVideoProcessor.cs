@@ -22,7 +22,7 @@ public interface IVideoProcessor
     /// 重置处理器内部状态（Seek/Flush 后调用）。
     /// </summary>
     /// <remarks>
-    /// <para>所有权：有状态处理器（如 <see cref="FrameRateConverter"/> 持有的上一帧副本 _held）
+    /// <para>所有权：有状态处理器（如 <see cref="Processors.FrameRateConverter"/> 持有的上一帧副本 _held）
     /// 须在此释放，避免 Seek 后返回陈旧帧或跨播放会话滞留。</para>
     /// <para>幂等、线程安全（由调用方在管线解码锁内调用）。</para>
     /// </remarks>

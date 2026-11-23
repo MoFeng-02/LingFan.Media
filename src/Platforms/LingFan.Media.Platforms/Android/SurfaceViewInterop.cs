@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 namespace LingFan.Media.Platforms.Android;
 
 /// <summary>
-/// Android SurfaceView 无空域合成互操作（Phase 2）。
+/// Android SurfaceView 无空域合成互操作。
 /// </summary>
 /// <remarks>
 /// <para>职责：持有由 Android 宿主（net10.0-android TFM 的 App/Demo 层，经 JNI 把
@@ -14,7 +14,7 @@ namespace LingFan.Media.Platforms.Android;
 /// <para><b>范围说明</b>：本库为 net10.0，不能引用 Android Java 类型（Surface/SurfaceHolder），
 /// 故「Java Surface → ANativeWindow」的提取由宿主层完成并传入指针；本类只做 NDK 侧互操作。</para>
 /// <para><b>平台边界</b>：仅 Android 有效；非 Android 调用抛 <see cref="PlatformNotSupportedException"/>。编译期跨平台可编译。</para>
-/// <para><b>异步策略</b>：全部同步（sync 分类）——NDK 调用是同步原生边界，无 I/O await；
+/// <para><b>异步策略</b>：全部同步——NDK 调用是同步原生边界，无 I/O await；
 /// 若改为 <c>async</c> 方法体内无 <c>await</c> 则为伪异步，故保持同步。</para>
 /// <para><b>AOT 兼容</b>：sealed + <see cref="LibraryImportAttribute"/> 源生成 P/Invoke，零反射。</para>
 /// </remarks>

@@ -37,7 +37,7 @@ public sealed unsafe partial class VulkanRendererFactory
                 _device = _externalDevice;
                 _queue = extQueue;
                 _queueFamilyIndex = _externalQueueFamilyIndex;
-                // 外部 device 由平台模块自建（LingFan.Media.Platforms.Android.VulkanDeviceFactory），
+                // 外部 device 由平台模块自建（LingFan.Media.Avalonia.Android.VulkanDeviceFactory），
                 // 设备级已启用
                 // VK_KHR_external_memory_fd / external_semaphore_fd —— 与自建分支同判据置位，
                 // 否则 VulkanSharedSurfaceSourceFactory.Create 会因 ExternalSharingEnabled=false 直接抛
@@ -183,7 +183,7 @@ public sealed unsafe partial class VulkanRendererFactory
                     bool probeSupported = probeResult == Result.Success && probe.SamplerYcbcrConversion;
 
                     // 规范兜底：samplerYcbcrConversion 自 Vulkan 1.1 起为核心<b>必选</b>特性——
-                    // apiVersion ≥ 1.1 的设备报告不支持属驱动/探测假阴性（部分 Adreno 设备实测：
+                    // apiVersion ≥ 1.1 的设备报告不支持属驱动/探测假阴性（部分 Adreno 设备上
                     // Features2 探测返回 false，与其 1.3 核心地位矛盾）。此时按规范直接启用：
                     // 1.1+ 一致性驱动必接受；极端非一致性驱动拒建设备 → 工厂抛异常 → 渲染回退链落 Skia，
                     // 与探测不支持时行为等价（不会更糟）。
@@ -215,7 +215,7 @@ public sealed unsafe partial class VulkanRendererFactory
                     }
                 }
 
-                // 视频解码队列族（B4 Vulkan Video 硬解复用同一设备；无则跳过，不影响现有渲染）。
+                // 视频解码队列族（Vulkan Video 硬解复用同一设备；无则跳过，不影响现有渲染）。
                 // 直接写入字段（与 _device/_queue 等同为方法级工作变量，确保 catch 之后的赋值块仍可见）。
                 _videoQueueFamilyIndex = VulkanDeviceSelector.FindVideoDecodeQueueFamily(physicalDevice);
                 bool videoOnSeparateFamily = _videoQueueFamilyIndex != uint.MaxValue && _videoQueueFamilyIndex != queueFamilyIndex;
@@ -343,7 +343,7 @@ public sealed unsafe partial class VulkanRendererFactory
                 // 填 Zero 让这些路径在「无 D3D11 设备可共享」分支干净回落软解（契约文档亦规定无设备即 Zero）。
                 // SharedDevice 仍保留 Vulkan 设备对象，供能力/诊断查询使用。
                 // 视频解码支持标志：video-decode 扩展 + 视频解码队列族均存在时为真
-                //（B4 后端据此走零拷贝硬解，否则软解兜底）。
+                //（解码后端据此走零拷贝硬解，否则软解兜底）。
                 bool videoDecodeSupported = _videoQueueFamilyIndex != uint.MaxValue;
                 renderContext = new RenderContext(
                     GPUApiType.Vulkan,
@@ -379,8 +379,8 @@ public sealed unsafe partial class VulkanRendererFactory
             _deviceReady = true;
 
             _logger.LogDebug("Vulkan 设备已创建（共享 Singleton）：{DeviceName}", devName);
-            // 原生死亡定位踪迹（stderr 直写，DECODER-DISPOSE 同款）：Linux 首接线轮次用于圈定
-            // 卡死/崩溃发生在工厂、渲染器构造还是 Attach 链；设备名同时确认 lavapipe/硬件 ICD。
+            // 设备创建完成踪迹（stderr 直写）：用于区分停摆发生在工厂、渲染器构造还是 Attach 链；
+            // 设备名同时确认 lavapipe/硬件 ICD。
             Console.Error.WriteLine($"[VULKAN-INIT] 共享设备创建完成：{devName}");
         }
     }

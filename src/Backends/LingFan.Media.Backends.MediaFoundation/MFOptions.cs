@@ -25,7 +25,7 @@ public sealed class MediaFoundationOptions
     /// </para>
     /// <para>
     /// <b>置为 <see langword="false"/> 的唯一用途是零拷贝定界</b>：跳过上述协商，让视频流继续输出压缩裸流，
-    /// 强制走「<c>MFVideoDecoder</c> 自管 MFT + 自行 SET_D3D_MANAGER」老路径。两条路径的帧落点对照即可定性：
+    /// 强制走「<c>MFVideoDecoder</c> 自管 MFT + 自行 SET_D3D_MANAGER」回落路径。两条路径的帧落点对照即可定性：
     /// </para>
     /// <list type="bullet">
     /// <item>自管 MFT 能出 <c>IMFDXGIBuffer</c> ⇒ 读回发生在 <b>SourceReader 封装层</b>，MF 后端应改走自管 MFT。</item>

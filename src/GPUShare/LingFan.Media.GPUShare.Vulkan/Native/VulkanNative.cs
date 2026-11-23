@@ -26,7 +26,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// <para><b>为何不能一次全局派发解析全部</b>：Vulkan 规范要求 <c>vkGetInstanceProcAddr(NULL, …)</c> 只保证返回
 /// 引导子集；其余函数（含 <c>vkDestroyInstance</c> / <c>vkCreateDevice</c>）经 NULL 派发会静默返回 <c>NULL</c>。
 /// 这是跨 loader 兼容的强制要求，Silk.NET / volk 均按此分阶段解析。</para>
-/// <para>调用约定：Vulkan 函数指针统一 <c>unmanaged[Stdcall]</c>；z 调用方传参与 Silk.NET 的 <c>Vk</c>/<c>Khr*</c>
+/// <para>调用约定：Vulkan 函数指针统一 <c>unmanaged[Stdcall]</c>；调用方传参与 Silk.NET 的 <c>Vk</c>/<c>Khr*</c>
 /// 方法签名保持一致（ref/out/数组/指针），故现有调用点只需改名。</para>
 /// </remarks>
 public static unsafe partial class VulkanNative
@@ -60,7 +60,7 @@ public static unsafe partial class VulkanNative
         nint h;
 
         // Linux：官方 loader 为 libvulkan.so.1；libvulkan.so 多为 -dev 包符号链接，未必存在，作回退。
-        // A2 的 Xlib/Wayland surface 绑定经 vkGetInstanceProcAddr 解析，也依赖此引导符号可用。
+        // Linux 的 Xlib/Wayland surface 绑定经 vkGetInstanceProcAddr 解析，也依赖此引导符号可用。
         if (OperatingSystem.IsLinux())
         {
             if (NativeLibrary.TryLoad("libvulkan.so.1", assembly, searchPath, out h))
@@ -71,7 +71,7 @@ public static unsafe partial class VulkanNative
         }
 
         // Android：Vulkan loader 即 libvulkan.so（系统随 NDK 提供），vulkan-1 不可解析。
-        // A3 在此落地——Android ANativeWindow surface 绑定同样依赖此引导符号。
+        // Android ANativeWindow surface 绑定同样依赖此引导符号。
         if (OperatingSystem.IsAndroid())
         {
             if (NativeLibrary.TryLoad("libvulkan.so", assembly, searchPath, out h))

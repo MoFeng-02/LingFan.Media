@@ -88,7 +88,7 @@ internal sealed partial class CompositionVideoRenderer
             string? ht = MapHandleKind(f.HandleKind);
             if (ht is null || !interop.SupportedImageHandleTypes.Contains(ht))
             {
-                // Gate0 自修复：Android AHB 候选常量未命中时，从合成器实际支持的句柄类型中认领
+                // 句柄类型自修复：Android AHB 候选常量未命中时，从合成器实际支持的句柄类型中认领
                 // 含 "HardwareBuffer"/"android" 的入口（运行时确认，不靠猜测）。认领成功即继续，
                 // 失败则跳过本工厂（回退下一个 / Skia）。
                 if (f.HandleKind == SharedGpuHandleKind.AndroidHardwareBuffer)
@@ -97,10 +97,10 @@ internal sealed partial class CompositionVideoRenderer
                         t.Contains("android", StringComparison.OrdinalIgnoreCase));
                 if (ht is null || !interop.SupportedImageHandleTypes.Contains(ht))
                 {
-                    // 静默跳过是零拷贝回退定位的最大盲区：合成器句柄类型为空集时（典型：Android 跑在
+                    // 跳过必须留痕：合成器句柄类型为空集时（典型：Android 跑在
                     // EGL 后端 —— Avalonia 的 GL 后端不实现外部图像导入，SupportedImageHandleTypes 为 []），
-                    // 每个工厂都会走到这里而不留任何痕迹，最终只看到一句笼统的「无可用工厂」。
-                    // 必须逐工厂打点：句柄类型 + 映射结果 + 合成器实际支持列表，一眼看出是后端选错还是映射缺项。
+                    // 每个工厂都会走到这里；不留痕迹则最终只看到一句笼统的「无可用工厂」。
+                    // 逐工厂打点：句柄类型 + 映射结果 + 合成器实际支持列表，一眼看出是后端选错还是映射缺项。
                     _logger.LogWarning(
                         "CompositionVideoRenderer 跳过工厂 {Factory}：句柄类型 {HandleKind}（映射={Mapped}）" +
                         "不在合成器支持列表内。合成器后端支持=[{Supported}]。" +

@@ -3,12 +3,13 @@ using System;
 namespace LingFan.Media.Video.Processors;
 
 /// <summary>
-/// 帧率转换处理器。将输入帧率转换到目标帧率。
+/// 帧率转换处理器。按固定 2:1 比例向目标帧率方向调整输出帧率。
 /// </summary>
 /// <remarks>
-/// <para>常见场景：24fps → 60fps（插帧）、60fps → 30fps（丢帧）。</para>
-    /// <para>降帧率丢帧（返回 null，由管线丢弃已 Dispose 的帧）；
-    /// 升帧率在两帧间插入上一帧副本（duplicate）。</para>
+/// <para>升帧率：每隔一帧插入一个上一帧副本，输出约为输入的 1.5 倍；
+/// 降帧率：每两帧丢弃一帧（返回 null，由管线丢弃已 Dispose 的帧），输出约为输入的一半。</para>
+/// <para><see cref="TargetFrameRate"/> 仅用于判定升/降方向；与输入帧率匹配（±0.01fps）时透传。
+/// 不做任意比例换算（如 24→60 需其他实现）。</para>
 /// <para>仅处理打包软件帧；其余格式透传。同步热路径。</para>
 /// </remarks>
 public sealed class FrameRateConverter : IVideoProcessor
@@ -19,7 +20,7 @@ public sealed class FrameRateConverter : IVideoProcessor
     /// <inheritdoc/>
     public bool IsEnabled { get; set; } = true;
 
-    /// <summary>目标帧率（FPS，如 60）。</summary>
+    /// <summary>目标帧率（FPS，如 60）。仅用于判定升/降方向，实际转换比例固定 2:1（见类型 remarks）。</summary>
     public float TargetFrameRate { get; set; } = 60f;
 
     // 上一帧副本（用于插帧/对齐）；最多保留一帧

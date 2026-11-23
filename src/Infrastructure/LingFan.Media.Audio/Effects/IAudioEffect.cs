@@ -38,7 +38,7 @@ public interface IAudioEffect
     /// </summary>
     /// <remarks>
     /// <para>用于 Seek/Flush 后清除延迟线、包络、滤波器历史等残留，避免定位后产生音频瞬态或拖尾。</para>
-    /// <para>纯内存操作（只增不改契约层，AOT 友好）：清零内部状态数组，<b>不重分配</b>缓冲区，
+    /// <para>纯内存操作（AOT 友好）：清零内部状态数组，<b>不重分配</b>缓冲区，
     /// 不触碰输入/输出帧，不持有原生资源，无泄漏风险。</para>
     /// <para>与 <see cref="Process"/> 同线程模型：由音频管线解码锁内调用，调用期间与 Process 互斥。</para>
     /// </remarks>

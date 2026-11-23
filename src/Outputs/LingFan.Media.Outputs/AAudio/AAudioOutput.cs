@@ -14,11 +14,11 @@ namespace LingFan.Media.Outputs.AAudio;
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，平台校验后返回 <see cref="Task.CompletedTask"/>。
 /// 无 I/O 可 await，<b>非伪异步</b>（不加 <c>async</c> 关键字、方法体无 <c>await</c>）。</item>
-/// <item><see cref="Initialize"/>：同步（sync 分类），创建 StreamBuilder、打开流并启动。全部为 NDK 同步原生调用。</item>
-/// <item><see cref="Submit"/>：同步边界（native 分类），<c>AAudioStream_write</c> 阻塞式写入自带背压（带超时）。</item>
-/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），requestPause/requestStart/requestFlush。</item>
+/// <item><see cref="Initialize"/>：同步，创建 StreamBuilder、打开流并启动。全部为 NDK 同步原生调用。</item>
+/// <item><see cref="Submit"/>：同步边界（原生调用），<c>AAudioStream_write</c> 阻塞式写入自带背压（带超时）。</item>
+/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步，requestPause/requestStart/requestFlush。</item>
 /// <item><see cref="GetPlaybackPosition"/>：同步，<c>AAudioStream_getFramesRead</c>（设备已消费帧数）换算时间。</item>
-/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），requestStop + close。</item>
+/// <item><see cref="Dispose"/>：同步快速释放，requestStop + close。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。</item>
 /// </list>
 /// <para><b>音量</b>：AAudio 无原生音量 API，采用软件增益（S16 样本缩放，写入前应用）。</para>

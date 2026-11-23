@@ -26,6 +26,12 @@ public sealed class MediaCookie
     /// <summary>
     /// 初始化 <see cref="MediaCookie"/> 的新实例。
     /// </summary>
+    /// <param name="name">Cookie 名称。</param>
+    /// <param name="value">Cookie 值。</param>
+    /// <param name="domain">域（可为 null）。</param>
+    /// <param name="path">路径（可为 null）。</param>
+    /// <param name="secure">是否仅 HTTPS。</param>
+    /// <param name="httpOnly">是否仅 HTTP（不可通过 JS 访问）。</param>
     public MediaCookie(
         string name,
         string value,

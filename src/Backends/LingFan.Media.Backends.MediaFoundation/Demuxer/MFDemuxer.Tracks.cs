@@ -97,7 +97,7 @@ internal sealed partial class MFDemuxer
                 if (vcodec == VideoCodec.Unknown)
                     _logger.LogWarning("[OPEN-DIAG] 未识别视频子类型 {Subtype} → 标记 Unknown（后端仅支持 H264/H265；AV1/VP9/MPEG 等需扩 codec 路由）", subtype);
 
-                // A 方案：把该视频流协商为 NV12【解码后】输出
+                // 把该视频流协商为 NV12【解码后】输出
                 // 仅在创建期成功挂上 D3D 管理器时才尝试；成功后 SourceReader 会自行加载硬件解码 MFT
                 // 并在共享 D3D11 设备上分配输出表面 ⇒ ReadSample 直出可 QI 成 IMFDXGIBuffer 的样本。
                 // 必须在构造 MediaTrack **之前**完成：VideoTrackInfo 为 init-only，尺寸须一次性写定
@@ -186,7 +186,6 @@ internal sealed partial class MFDemuxer
                 // 关键：SourceReader 默认输出**压缩原生格式**（AAC/MP3 裸流）。
                 // MFAudioDecoder 是直通实现（不自带 MFT），若不在此显式协商为 PCM，
                 // 下游会把 AAC 字节当成 S16 PCM 直喂 WASAPI → 噪声/静音。
-                // 此前该缺陷被 IID_IAudioRenderClient 的 GUID 错误（音频链路根本没跑起来）长期掩盖。
                 var pcm = ConfigureAudioStreamToPcm(readerPtr, index, sampleRate, channels, bitsPerSample);
 
                 track = new MediaTrack

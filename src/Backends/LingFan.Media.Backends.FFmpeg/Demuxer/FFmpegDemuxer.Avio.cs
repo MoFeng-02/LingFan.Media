@@ -96,8 +96,8 @@ internal sealed partial class FFmpegDemuxer
     /// <remarks>
     /// 缓冲以 av_malloc 分配（avio.h 契约），所有权在读期间移交 libavformat（其可能经
     /// av_realloc 替换缓冲），由 avio_closep 内部的 av_freep(&amp;s->buffer) 统一归还——
-    /// 调用方不得再释放。此前"置空 buffer + FreeHGlobal"的规避在 ffmpeg 替换过缓冲时会
-    /// 泄漏新缓冲，且分配器与契约不符。
+    /// 调用方不得再释放。勿「置空 buffer + 手动 FreeHGlobal」——ffmpeg 替换过缓冲时
+    /// 会泄漏新缓冲，且分配器与契约不符。
     /// </remarks>
     private unsafe void CleanupAVIO()
     {

@@ -29,8 +29,8 @@ internal sealed partial class MFVideoDecoder
             throw new InvalidOperationException("该 MF 视频解码器实例已关闭，不可重新初始化；请新建实例。");
 
         Codec = codec;
-        // 修正：原实现 = settings.EnableHardwareAcceleration 原样回显（假回显 bug）。
-        // 现先置 false，待下方 DXVA 接入成功后再置 true；失败/无设备则保持 false（软件解码）。
+        // IsHardwareAccelerated 反映真实接入结果而非回显 settings：先置 false，
+        // 待下方 DXVA 接入成功后再置 true；失败/无设备则保持 false（软件解码）。
         IsHardwareAccelerated = false;
 
         // 输入 subtype（H265 系统 MFT 注册的输入 subtype 为 "HEVC"）
@@ -130,7 +130,7 @@ internal sealed partial class MFVideoDecoder
             // 时序原则（对照 SDK 实现）：SET_D3D_MANAGER 必须在 SetInputType **之前**发送
             // （mftransform.h 权威值 0x2，MSDN 原文「必须在 SetInputType / SetOutputType 之前调用」）。MFT 在 SetInputType
             // 内部即查询 DXGI 管理器选 DXVA 配置；若此刻未收到，MFT 锁定软件路径 → 输出恒为系统内存
-            // （半 DXVA：硬解激活=True 但 GPU零拷贝=0）；该消息曾被放到「类型协商之后」，现订正回「SetInputType 之前」。
+            // （半 DXVA：硬解激活=True 但 GPU零拷贝=0）。
             // 失败一律回退软件解码，绝不抛异常阻断播放。
             _dxvaActive = false;
             if (settings.EnableHardwareAcceleration && _gpuContext is not null && _gpuContext.ApiType == GPUApiType.D3D11)
@@ -139,8 +139,9 @@ internal sealed partial class MFVideoDecoder
                 {
                     // (1) 能力探测：MF_SA_D3D11_AWARE。
                     // 必须先探测再发消息：MFT 对**不支持的消息按 IMFTransform 约定返回 S_OK 静默忽略**，
-                    //    仅凭 ProcessMessage 的 HRESULT 无法区分「真接受」与「忽略」——这正是「硬解激活=True
-                    //    却 GPU零拷贝=0」假绿能长期存在的原因。此处把 MFT 自报能力作为第一道判据。
+                    //    仅凭 ProcessMessage 的 HRESULT 无法区分「真接受」与「忽略」——若只信 HRESULT，
+                    //    会把「忽略」当成「接受」，形成「硬解激活=True 却 GPU零拷贝=0」的假绿。
+                    //    此处把 MFT 自报能力作为第一道判据。
                     if (!QueryD3D11Aware())
                         throw new NotSupportedException("该解码 MFT 未声明 MF_SA_D3D11_AWARE（不支持 Direct3D 11 视频解码）");
 
@@ -192,11 +193,11 @@ internal sealed partial class MFVideoDecoder
                         _logger.LogInformation("{Diag}", adapterDiag);
 
                     // (3) MF DXGI 设备管理器已于上方创建并绑定（MFCreateDXGIDeviceManager + ResetDevice）。
-                    //    发送 MFT_MESSAGE_SET_D3D_MANAGER(=0x2) 的时机在下方「SetInputType 之前」（订正，
-                    //    非「类型协商之后」）。
-                    // 消息号必须是 0x2：SDK mftransform.h 中根本不存在 SET_D3D11_MANAGER；D3D9/D3D11
-                    //    共用本消息，只靠 ulParam 接口类型区分。旧代码误写 0x80000013 被 MFT 当未知消息
-                    //    返回 S_OK 忽略 = 假激活的成因。
+                    //    MFT_MESSAGE_SET_D3D_MANAGER 必须在下方 SetInputType 之前（类型协商之前）发送，
+                    //    否则 D3D 管理器不被 MFT 接受。
+                    // 消息号以 MFConstants.MFT_MESSAGE_SET_D3D_MANAGER 为准：SDK mftransform.h 中不存在
+                    //    SET_D3D11_MANAGER；D3D9/D3D11 共用本消息，只靠 ulParam 接口类型区分。
+                    //    消息号写错时 MFT 对未知消息按约定返回 S_OK 静默忽略，表现为硬解「已激活」却全程软解。
                 }
                 catch (Exception ex)
                 {
@@ -215,8 +216,7 @@ internal sealed partial class MFVideoDecoder
             // mftransform.h：MFT_MESSAGE_SET_D3D_MANAGER = 0x2，MSDN 明文「必须在 SetInputType /
             // SetOutputType 之前调用」。MFT 在 SetInputType 内部即查询 DXGI 设备管理器选择 DXVA 配置；
             // 若此刻尚未收到 manager，MFT 锁定软件路径 → 输出 buffer 恒为系统内存（半 DXVA：
-            // 硬解激活=True 但 GPU零拷贝=0）；此前被移到类型协商之后，正是当前「半 DXVA」的成因；
-            // 现按 SDK 订正回「SetInputType 之前」。消息号 0x2 已修正，本组合（0x2 + SetInputType 前）此前从未被测。
+            // 硬解激活=True 但 GPU零拷贝=0）。防回归：放到类型协商之后发送会被静默忽略。
             if (_dxvaManager != IntPtr.Zero)
             {
                 try

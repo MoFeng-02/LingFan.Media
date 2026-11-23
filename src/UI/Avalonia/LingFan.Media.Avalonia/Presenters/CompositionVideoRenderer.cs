@@ -350,7 +350,7 @@ internal sealed partial class CompositionVideoRenderer : IVideoRenderer, IRender
     /// <summary>
     /// 中立 <see cref="SharedGpuHandleKind"/> → Avalonia <see cref="KnownPlatformGraphicsExternalImageHandleTypes"/> 的一次映射。
     /// </summary>
-    // Gate0（Android）：Avalonia 的 KnownPlatformGraphicsExternalImageHandleTypes 无 AndroidHardwareBuffer 成员，
+    // Android AHB 句柄类型：Avalonia 的 KnownPlatformGraphicsExternalImageHandleTypes 无 AndroidHardwareBuffer 成员，
     // 故 Android AHB 句柄类型字符串需运行时确认。下方候选循环会在合成器实际支持列表中自动认领
     // 含 "HardwareBuffer"/"android" 的入口（不靠硬编码猜测）；Attach 处的诊断日志会打印真实列表供核对。
     private const string AndroidHardwareBufferHandleType = "androidHardwareBuffer";

@@ -7,7 +7,7 @@ namespace LingFan.Media.Outputs.Alsa;
 /// <para>使用模式：<code>services.AddLingFanMedia().AddAlsaOutput()</code></para>
 /// <para>注册 <see cref="AlsaOutputFactory"/> 为 Singleton。
 /// 调用 <c>Create()</c> 返回的 <see cref="AlsaOutput"/> 在使用时抛出 <see cref="NotSupportedException"/>。</para>
-/// <para>此方法为同步配置（config 分类），无 I/O。</para>
+/// <para>此方法为同步配置，无 I/O。</para>
 /// </remarks>
 public static class AlsaExtensions
 {

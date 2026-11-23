@@ -25,8 +25,11 @@ public sealed unsafe class GLD3D11InteropTexture : IFrameResource, IGpuTextureRe
     private readonly int _subresourceIndex;
     private bool _disposed;
 
+    /// <inheritdoc/>
     public int Width { get; }
+    /// <inheritdoc/>
     public int Height { get; }
+    /// <inheritdoc/>
     public PixelFormat Format { get; }
 
     /// <summary>用于在 on-screen 上下文上打开 WGL 互操作设备的桥接 D3D11 设备。</summary>

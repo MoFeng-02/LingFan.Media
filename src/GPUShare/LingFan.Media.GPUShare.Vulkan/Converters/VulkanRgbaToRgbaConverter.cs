@@ -47,6 +47,10 @@ public sealed unsafe partial class VulkanRgbaToRgbaConverter : IDisposable
 
     private bool _disposed;
 
+    /// <summary>创建 RGBA→RGBA（格式/翻转）转换器（管线等 GPU 资源在首次使用时惰性创建）。</summary>
+    /// <param name="device">借用的 VkDevice（Dispose 不销毁，生命周期归外部共享设备）。</param>
+    /// <param name="physicalDevice">借用的 VkPhysicalDevice（Dispose 不销毁）。</param>
+    /// <param name="logger">可选日志器。</param>
     public VulkanRgbaToRgbaConverter(Device device, PhysicalDevice physicalDevice, ILogger? logger = null)
     {
         _device = device;
@@ -188,6 +192,10 @@ public sealed unsafe partial class VulkanRgbaToRgbaConverter : IDisposable
             ImageAspectFlags.ColorBit);
     }
 
+    /// <summary>
+    /// 释放转换器持有的 GPU 资源（管线 / RenderPass / 帧缓冲缓存 / 描述符 / 采样器 / 着色器模块；幂等）。
+    /// 不销毁借用的 VkDevice；源/目标图像所有权归调用方，不在释放范围。
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;

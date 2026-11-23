@@ -275,6 +275,10 @@ public sealed partial class D3D11Nv12ToRgbaConverter : IDisposable
         }
     }
 
+    /// <summary>
+    /// 释放本转换器持有的 COM 引用（VideoProcessor / 枚举器 / staging 纹理 / 单平面 NV12 纹理 / 视频上下文与设备；幂等）。
+    /// 共享 device/context 为借用裸指针，不 Release（所有权归外部共享设备）。
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;

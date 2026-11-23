@@ -7,11 +7,11 @@ namespace LingFan.Media.Renderers.Metal;
 /// Metal 纹理帧资源。实现 <see cref="IFrameResource"/>。
 /// </summary>
 /// <remarks>
-/// <para>封装 MTLTexture（macOS / iOS）原生句柄，供未来 GPU 纹理零拷贝路径（C 线增强）消费——
+/// <para>封装 MTLTexture（macOS / iOS）原生句柄，供未来 GPU 纹理零拷贝路径消费——
 /// 当前 <see cref="MetalRenderer.Present"/> 仅走 <see cref="SoftwareFrameResource"/> 软帧上屏，
 /// <see cref="IGpuTextureResource"/> 零拷贝路径暂未启用，故本类型作为合法 <see cref="IFrameResource"/> 实现存在，
 /// 不直接参与上屏。</para>
-/// <para><b>所有权</b>：若 <paramref name="ownsHandle"/> 为 <see langword="true"/>，<see cref="Dispose"/> 中
+/// <para><b>所有权</b>：若构造参数 <c>ownsHandle</c> 为 <see langword="true"/>，<see cref="Dispose"/> 中
 /// 经 <see cref="AppleRuntime.objc_release"/> 释放原生纹理；否则仅解除托管引用（句柄由外部所有者管理）。</para>
 /// <para>AOT 兼容：sealed 类，无反射。</para>
 /// </remarks>

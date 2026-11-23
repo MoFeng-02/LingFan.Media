@@ -31,7 +31,7 @@ namespace MediaPlaybackProbe;
 /// dotnet run --project src\Tools\MediaPlaybackProbe
 /// dotnet run --project src\Tools\MediaPlaybackProbe -- -v            // Debug 级日志（含格式协商、时钟等细节）
 /// dotnet run --project src\Tools\MediaPlaybackProbe -- --category    // 启用 IAudioClient2 会话分类做对照
-/// dotnet run --project src\Tools\MediaPlaybackProbe -- --file "D:\x.mp4"
+/// dotnet run --project src\Tools\MediaPlaybackProbe -- --file "path/to/x.mp4"
 /// </code>
 /// </remarks>
 internal static partial class Program

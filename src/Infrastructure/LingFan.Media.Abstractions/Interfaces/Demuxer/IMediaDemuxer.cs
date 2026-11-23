@@ -11,6 +11,9 @@ namespace LingFan.Media.Abstractions;
 public interface IMediaDemuxer : IMediaComponent
 {
     /// <summary>打开媒体流，进行格式探测和轨道解析。</summary>
+    /// <param name="stream">媒体数据流。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>格式探测与轨道解析完成时结束的任务。</returns>
     Task OpenAsync(IMediaStream stream, CancellationToken ct = default);
 
     /// <summary>解析出的轨道列表。</summary>
@@ -20,6 +23,8 @@ public interface IMediaDemuxer : IMediaComponent
     MediaMetadata Metadata { get; }
 
     /// <summary>读取下一个数据包。返回 null 表示流结束。</summary>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>下一个数据包；<see langword="null"/> 表示流结束。</returns>
     ValueTask<MediaPacket?> ReadPacketAsync(CancellationToken ct = default);
 
     /// <summary>定位到指定位置。<see langword="true"/> 只表示「定位请求已被接受」，不保证精确落点。</summary>
@@ -35,6 +40,9 @@ public interface IMediaDemuxer : IMediaComponent
     /// 但必须在实现自身的文档里写明所采用的一种；调用方不得依赖任何一侧的具体行为，
     /// 应先保证 <see cref="OpenAsync"/> 成功、并在释放后不再调用。</para>
     /// </remarks>
+    /// <param name="position">目标位置。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns><see langword="true"/> 表示定位请求被接受（非精确落点）；<see langword="false"/> 表示容器不可定位。</returns>
     Task<bool> SeekAsync(TimeSpan position, CancellationToken ct = default);
 
     /// <summary>关闭解封装器。</summary>

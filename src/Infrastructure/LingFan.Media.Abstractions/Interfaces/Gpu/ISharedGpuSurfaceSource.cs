@@ -12,7 +12,7 @@ namespace LingFan.Media.Abstractions;
 /// <para><b>与 <c>IGpuPresenter</c> 的区别</b>：<c>IGpuPresenter</c> 走原生窗口 SwapChain（需 HWND，
 /// 产生独立合成树 → 有空域，无法被 UI 内容遮挡/裁剪/变换）。本契约产出的是一块<b>共享纹理</b>，
 /// 交由宿主合成器作为普通视觉合成，因而无空域。</para>
-/// <para><b>同步模型由后端自报（治本）</b>：本契约不再把任何 GPU API 的同步原语写死。
+/// <para><b>同步模型由后端自报</b>：本契约不把任何 GPU API 的同步原语写死。
 /// 每个实现通过 <see cref="SyncMode"/> 声明它使用的跨设备同步模型——D3D11/DXGI 用
 /// <see cref="SharedGpuSyncMode.KeyedMutex"/>（由 <see cref="ConsumerAcquireKey"/> /
 /// <see cref="ConsumerReleaseKey"/> 驱动），Vulkan 用 <see cref="SharedGpuSyncMode.Semaphores"/>
@@ -26,7 +26,7 @@ namespace LingFan.Media.Abstractions;
 /// <item>消费者（UI 合成器）以 <see cref="ConsumerAcquireKey"/> 取锁 → 采样 → 以
 /// <see cref="ConsumerReleaseKey"/> 释放，交还给生产者。</item>
 /// </list>
-/// <para><b>异步策略</b>：<see cref="TryWriteFrame"/> 为同步（native 分类）——GPU 命令提交是同步调用，
+/// <para><b>异步策略</b>：<see cref="TryWriteFrame"/> 为同步原生调用——GPU 命令提交
 /// 无真实 I/O 可 await，补 async 即伪异步。</para>
 /// <para><b>线程</b>：<see cref="TryWriteFrame"/> 由管线线程调用，实现须自行保证与 UI/合成线程的并发安全
 /// （如共享设备开启多线程保护）。</para>

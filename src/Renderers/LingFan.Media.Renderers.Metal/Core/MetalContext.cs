@@ -47,7 +47,7 @@ internal sealed class MetalContext : IDisposable
         // 可能已为图层设定 device；渲染器不得强制覆盖为系统默认设备，否则在跨设备场景（drawable 纹理属于图层既有
         // device，而本层命令队列却建在系统默认 device 上）会直接崩溃。仅当图层未配置 device（例如本层自建的
         // macOS NSView 路径）时，才回退 MTLCreateSystemDefaultDevice() 并 setDevice:。
-        // 此策略与未来零拷贝 C 线兼容：解码器经 IGpuDeviceContext 共享同一设备时，本层直接复用，无需自建。
+        // 此策略与未来零拷贝增强兼容：解码器经 IGpuDeviceContext 共享同一设备时，本层直接复用，无需自建。
         nint hostDevice = AppleRuntime.objc_msgSend(_layer, AppleRuntime.Sel("device"));
         if (hostDevice != nint.Zero)
         {

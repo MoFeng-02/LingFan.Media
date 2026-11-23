@@ -5,14 +5,14 @@ using System.Threading;
 namespace LingFan.Media.Outputs.Wasapi;
 
 /// <summary>
-/// WASAPI 音频输出（公开适配层）。Phase 1 起，全部 WASAPI COM 逻辑已提取至 <see cref="WasapiRenderLoop"/>：
+/// WASAPI 音频输出（公开适配层）。全部 WASAPI COM 逻辑位于 <see cref="WasapiRenderLoop"/>：
 /// 本类仅实现 <see cref="IAudioOutput"/> / <see cref="IBatchAudioSubmit"/> 契约，并把每个调用转发给内部的
-/// <see cref="_loop"/>（常驻 STA 渲染线程）。公开 API 签名、行为与线程语义完全一致。
+/// <see cref="_loop"/>（常驻 STA 渲染线程）。
 /// </summary>
 /// <remarks>
-/// <para><b>为什么要这层适配</b>：保留 <c>IAudioOutput</c> / <c>IBatchAudioSubmit</c> 公共契约不变（Phase 1 不删接口），
-/// 同时把易出 AV 的 WASAPI COM 细节隔离在 <see cref="WasapiRenderLoop"/> 内。后续 Phase 2 引入
-/// <c>AudioSampleRing</c> 时，只改 <see cref="WasapiRenderLoop"/> 内部消费模型，本适配层签名不变。</para>
+/// <para><b>为什么要这层适配</b>：保持 <c>IAudioOutput</c> / <c>IBatchAudioSubmit</c> 公共契约稳定，
+/// 同时把易触发访问违规的 WASAPI COM 细节隔离在 <see cref="WasapiRenderLoop"/> 内；
+/// 渲染线程内部消费模型的调整不影响本适配层签名。</para>
 /// <para><b>异步策略 / 线程安全 / AOT / 资源所有权 / Submit 所有权</b> 等契约语义全部由 <see cref="WasapiRenderLoop"/> 承担，
 /// 见其 XML 文档。本类不持有任何 COM 状态。</para>
 /// </remarks>
@@ -58,16 +58,11 @@ internal sealed class WasapiOutput : IAudioOutput, IBatchAudioSubmit
 
     /// <inheritdoc/>
     /// <remarks>
-    /// 本转发<b>曾经缺失</b>，是「起播静默 + 主时钟迟迟不锚定」的成因。
     /// <see cref="IAudioOutput.BeginStreamingAsync"/> 带<b>默认接口实现</b>（返回
-    /// <c>ValueTask.CompletedTask</c>），而 <c>AudioPipeline</c> 是<b>经接口</b>调用的；
-    /// 本类漏写转发时编译器不会有任何提示，调用直接命中那个空的默认实现 ⇒
-    /// <c>WasapiRenderLoop.BeginStreamingAsync</c> 从未被执行 ⇒ <c>_prerollPending</c> 恒 false ⇒
-    /// <c>TryStartPreroll</c> 每次早退 ⇒ 设备只能等缓冲写满后由 <c>EnsureDeviceStarted</c> 兜底 Start
-    /// （日志「设备缓冲已满但引擎从未启动，已强制 Start」）。
-    /// 此前针对 <c>WasapiRenderLoop.BeginStreamingAsync</c> 的修复因此全部作用在<b>死代码路径</b>上。
-    /// <b>注意</b>：带默认实现的接口成员，在包装/委托类里漏转发是静默失效，不会报错——
-    /// 新增此类成员时必须同步检查所有 <c>IAudioOutput</c> 实现的转发完整性。
+    /// <c>ValueTask.CompletedTask</c>），而 <c>AudioPipeline</c> 是<b>经接口</b>调用的：
+    /// 包装/委托类漏写本转发时编译器不会有任何提示，调用会静默命中空的默认实现，
+    /// 使 preroll 永不 arm、起播静默。<b>注意</b>：带默认实现的接口成员，在包装/委托类里漏转发是静默失效，
+    /// 不会报错——新增此类成员时必须同步检查所有 <c>IAudioOutput</c> 实现的转发完整性。
     /// </remarks>
     public ValueTask BeginStreamingAsync(CancellationToken ct) => _loop.BeginStreamingAsync(ct);
 

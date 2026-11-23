@@ -9,7 +9,9 @@ namespace LingFan.Media.Core;
 /// Synchronizer 同步 → Renderer 呈现。
 /// </summary>
 /// <remarks>
-/// <para>所有方法均为同步 void（无 Task 返回，无 Resume）。</para>
+/// <para>Start/Pause/Stop/ResumeAfterSeek 与呈现热路径为同步；ResetForSeekAsync（定位复位）、
+/// WaitForPrerollAsync/WaitForFirstFramePresentedAsync（启动编排等待）为真异步 Task；
+/// DisposeAsync 为契约兼容，内部走同步清理路径。</para>
 /// <para>Start() 同时处理首次启动和恢复暂停。Stop() 只调 cts.Cancel（fire-and-forget）。</para>
 /// <para>线程 join（5s 超时）在 MediaPlayer.DisposeAsync 第1步中处理，不在 Stop() 中。</para>
 /// <para>丢帧和 Present 后的帧通过 ReturnFrame 归还到 FramePool或 Dispose。</para>
@@ -73,32 +75,23 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
     private volatile bool _isRunning;
     private volatile bool _isPaused;
     private TaskCompletionSource<bool>? _pauseAckTcs;
-    // 重播衔接卡顿解决：**首帧门控 + 视频预滚动**。
-    // 成因：MediaPipelineHost.StartAsync 原为「音频先启动 → 视频后启动」。首播时 BufferManager 在
-    // OpenAsync 阶段就已暖好包队列，视频首帧与音频同刻出现；但**重播**路径下
-    // SeekAsync 会先 Stop 再重启 demuxer 读取线程、并 Reset 解码器，视频首帧要较长时间才产出，
-    // 而音频设备（= 主时钟源 GetPlaybackPositionDirect）已在 0ms 起跑 →
-    //   (1) 起始一小段时间内的帧全部被 Synchronizer 判 Drop；
-    //   (2) 这段空窗内屏幕停在「上一次播放的末帧」，随后突跳到视频首个可呈现位置
-    //   ⇒ 用户感知为「第二次播放先卡一下再继续」。
-    // 修复：启动编排改为「视频先起 → 等预滚动 → 再启动音频设备 → 放行视频呈现」，
-    // 把首帧预热**吸收在 PlayAsync 内部**（主时钟尚未起跑，不计入播放时间线），
-    // 音频就绪后首帧与音频同刻出现 → 无缝。首播时预滚动瞬时满足，零回归。
+    // 重播无缝衔接：**首帧门控 + 视频预滚动**。
+    // 重播路径下 SeekAsync 会先 Stop 再重启 demuxer 读取线程、并 Reset 解码器，视频首帧要较长时间才产出；
+    // 若音频设备（= 主时钟源 GetPlaybackPositionDirect）先从 0ms 起跑，
+    // 起始空窗内的帧会被 Synchronizer 全判 Drop，屏幕停在上一次播放的末帧后突跳。
+    // 因此 MediaPipelineHost.StartAsync 的编排为「视频先起 → 等预滚动 → 放行视频呈现（主时钟≈0 瞬态）
+    // → 再启动音频设备」，把首帧预热**吸收在 PlayAsync 内部**（主时钟尚未起跑，不计入播放时间线），
+    // 音频就绪后首帧与音频同刻出现。首播时包队列已在 OpenAsync 阶段暖好，预滚动瞬时满足。
     private volatile bool _audioReadySignaled;   // 由 MediaPipelineHost 在音频设备启动后置位（跨线程写）
     private volatile bool _audioGateOpened;      // 呈现线程已通过门控（Start 复位，之后仅呈现线程读写）
     private volatile bool _firstFramePresented;  // 首帧已真正上屏（ProcessFrame 首次 Present 后置位，供 A/V 启动对齐）
     private TaskCompletionSource<bool>? _firstFramePresentedTcs;  // 音频编排等待点（Start 重建）
     // 预滚动帧数下限：等帧队列预热到该深度再启动音频设备（吸收重播的重定位+解码开销）。
     //
-    // 【实测修正】旧值固定 2 帧**过浅**：起播瞬间队列仅 2 帧，而前向缓冲目标
-    // TargetDepth=6；呈现一开跑立刻吃光这 2 帧，解码产出（启动期偏慢）
-    // 来不及补，队列迅速见底 → 呈现线程空等（Thread.Sleep(1)）+ 帧 PTS 落后被判 Drop。
-    // 表现：起播后一段时间内「队列」在 0/1/2 之间反复横跳、丢帧集中爆发，
-    // 画面呈现「花/跳/不连贯」；待解码器与 JIT 预热完成、队列稳定后才恢复正常。
-    //
-    // 修正：预滚动深度与前向缓冲目标对齐（= TargetDepth），让起播瞬间队列就是满的，
-    // 具备抵抗启动期产出波动的余量。代价为约 (TargetDepth−2)×帧间隔 的起播延迟，
-    // 换来启动期不再掉帧——远优于「前十几秒画面异常」。
+    // 预滚动深度与前向缓冲目标对齐（= TargetDepth）：起播瞬间队列即满，
+    // 具备抵抗启动期解码产出波动（启动期解码偏慢）的余量。深度过浅（如固定 2 帧）时
+    // 呈现一开跑即吃光预滚动帧、解码来不及补，队列见底 → 呈现线程空等 + 帧 PTS 落后被判 Drop，
+    // 启动期掉帧。代价为约 (TargetDepth−2)×帧间隔 的起播延迟，换来启动期不掉帧。
     private static readonly int VideoPrerollFrames = TargetDepth;
     // 预滚动等待上限：超时即放行启动音频，宁可轻微不同步也绝不卡住播放（解码异常/无视频帧时兜底）。
     private const int VideoPrerollTimeoutMs = 2000;
@@ -121,9 +114,8 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
     private TimeSpan _stallWatchMaster;
     private bool _stallWatchAnchored;
 
-    // 主时钟可见性（快照日志）：同步类问题的第一现场。此前主时钟从未被观测，
-    // 排障只能靠间接推断（部分厂商设备的 GetPosition 半冻结问题曾因此难以定位）。
-    // 快照让「主时钟是否 1× 推进」一眼可见。
+    // 主时钟可见性（快照日志）：让「主时钟是否 1× 推进」一眼可见，
+    // 为同步类问题（含设备 GetPosition 半冻结类异常）提供第一现场证据，取代间接推断。
     private long _pacingSnapshotQpc;
     // 每帧 Present 耗时实测（快照上报均值）：定位呈现侧瓶颈（GC 抢占/渲染慢）的直接证据，
     // 取代间接推断。正常应 <10ms；若 ≈1000ms 级则是呈现线程被抢占（GC 风暴/优先级）。
@@ -192,7 +184,7 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
     // 呈现循环的全部等待点（首帧门控/WaitUntilDue/空队列自旋）均有打卡或自带看门狗；
     // 若整条管线静默（无 [SYNC] 快照、无停摆日志），即卡死在某个不打日志的调用里。
     // 本看门狗在管线线程之外每 2s 输出：循环心跳年龄 / 主时钟 / 队列 / sink 在途深度——
-    // 冻结时一眼定位「循环死 vs 时钟死 vs sink 链死」。诊断期常开，代价一条日志/2s。
+    // 冻结时一眼定位「循环死 vs 时钟死 vs sink 链死」。常开，代价一条日志/2s。
     private Task? _freezeWatchdogTask;
     // 「已有看门狗在跑」的判据：存活标记 + 它绑定的令牌源。
     // 只看任务引用不可靠（包装任务在首个 await 处即完成），只看引用非空也不可靠
@@ -243,6 +235,10 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
     /// <param name="framePool">帧对象池。</param>
     /// <param name="processors">视频后处理链。
     /// 中立 BCL 委托，由 Video 模块把 <c>IVideoProcessor</c> 链转换而来，Core 不依赖 Video 模块。</param>
+    /// <param name="processorReset">视频后处理状态重置委托（中立委托，可为 null）。由 Video 模块把各 <c>IVideoProcessor.Reset</c> 合并而来，
+    /// 在 Seek/定位复位 的解码锁内调用，释放有状态处理器（帧率转换保留帧等）的跨位置残留。</param>
+    /// <param name="videoFrameSink">视频帧出口回调（可为 null）。呈现路径的唯一出口：同步判定放行后帧交给本回调，
+    /// 路由（无头计算 / Skia 软渲染 / D3D11 零拷贝 GPU 呈现）在回调内部完成；为 null 时帧静默归池、不呈现（测试/无 UI 调用方）。</param>
     public VideoPipeline(
         Channel<MediaPacket> packetQueue,
         IVideoDecoder decoder,
@@ -284,7 +280,7 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
     /// </summary>
     private void ReturnFrame(VideoFrame frame)
     {
-        // 泄漏对账（诊断期，Trace 级）：ReturnFrame 调用计数。帧资源泄漏定位用——
+        // 泄漏对账（Trace 级）：ReturnFrame 调用计数。帧资源泄漏定位用——
         // 若 [RET-COUNT] 与已呈数同步增长而 [AHB-LEAK] live 仍涨，则断点在池 reset 之后（池未执行 reset）。
         int ret = System.Threading.Interlocked.Increment(ref _returnCount);
         if ((ret % 128) == 1)
@@ -468,7 +464,7 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        // 隐患A修复：释放信号量前确保管线线程已退出，避免 SemaphoreSlim.Dispose 与并发 WaitAsync/Release 的未定义行为
+        // 释放信号量前确保管线线程已退出，避免 SemaphoreSlim.Dispose 与并发 WaitAsync/Release 的未定义行为
         EnsureThreadStopped();
 
         _decodeLock.Dispose();
@@ -476,7 +472,7 @@ public sealed partial class VideoPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 隐患A修复：释放解码锁前停止并 join 管线线程。
+    /// 释放解码锁前停止并 join 管线线程。
     /// 仅当当前不在管线线程自身上调用时才等待，避免自死锁。
     /// 正常流程（MediaPlayer 已先 join）下任务已完成，Wait 立即返回，无阻塞。
     /// </summary>

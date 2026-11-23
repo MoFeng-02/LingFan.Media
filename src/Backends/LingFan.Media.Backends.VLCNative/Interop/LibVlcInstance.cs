@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace LingFan.Media.Backends.VLCNative.Interop;
 
 /// <summary>
-/// libvlc 引擎实例封装（对应旧 <c>VLCBackend</c> 持有的 LibVLC，但走自写 Apache-2.0 P/Invoke）。
+/// libvlc 引擎实例封装（自写 Apache-2.0 P/Invoke 绑定）。
 /// </summary>
 /// <remarks>
 /// <para>DI 生命周期：Singleton。只持有 libvlc 引擎实例，不持媒体/播放上下文；多播放器共享安全。</para>
@@ -17,14 +17,14 @@ namespace LingFan.Media.Backends.VLCNative.Interop;
 /// 综合评分，优先选用<b>架构匹配且完整</b>的运行时。Windows / macOS / Linux / Android / iOS 走同一套规则。</para>
 /// <para>关键：VideoLAN 包在 <c>libvlc/</c> 下平铺 <c>win-x64 / win-arm64 / win-x86</c> 三套镜像，
 /// 递归发现必须按<b>当前进程架构</b>过滤——否则 x64 进程会误加载 arm64/x86 镜像触发
-/// <see cref="BadImageFormatException"/>（0x8007000B）。评分对架构匹配项加权 +1000，且 <c>NativeLibrary.Load</c>
+/// <see cref="BadImageFormatException"/>。评分对架构匹配项加权 +1000，且 <c>NativeLibrary.Load</c>
 /// 对所有候选做容错遍历：单个候选架构不符即跳过试下一个。</para>
 /// <para>加载后通过 <see cref="NativeLibrary.SetDllImportResolver"/> 把逻辑名 <c>"libvlc"</c> 钉死到已加载模块句柄，
 /// 不依赖各 OS loader 的「同基名复用」隐式行为，解析确定性强。</para>
 /// <para>plugins 目录不做特殊处理：libvlc 通过 libvlccore 自身模块路径推导同级 <c>plugins/</c>，
 /// 这是官方主路径；<c>VLC_PLUGIN_PATH</c> 环境变量在 .NET 下写入进程环境块后
 /// UCRT <c>getenv</c> 未必可见，故不采用。</para>
-/// <para>当前版本仅验证 Windows 运行时；其他平台的发现规则已就绪，待对应 VideoLAN 包接入后验证。</para>
+/// <para>当前仅 Windows 运行时经过验证；其他平台的发现规则已实现但尚未验证。</para>
 /// </remarks>
 public sealed class LibVlcInstance : IDisposable
 {
@@ -380,7 +380,16 @@ public sealed class LibVlcInstance : IDisposable
         };
     }
 
-    private enum OsKind { Windows, Mac, Linux }
+    /// <summary>运行平台族（决定 libvlc 原生库文件名与发现规则）。</summary>
+    private enum OsKind
+    {
+        /// <summary>Windows（libvlc.dll + libvlccore.dll）。</summary>
+        Windows,
+        /// <summary>macOS / iOS（.dylib）。</summary>
+        Mac,
+        /// <summary>Linux / Android（.so）。</summary>
+        Linux
+    }
 
     private static nint ResolveNativeLibrary(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
         => string.Equals(libraryName, NativeLibraryName, StringComparison.Ordinal)

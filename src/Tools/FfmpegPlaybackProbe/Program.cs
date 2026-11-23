@@ -29,7 +29,7 @@ namespace FfmpegPlaybackProbe;
 /// dotnet run --project src\Tools\FfmpegPlaybackProbe
 /// dotnet run --project src\Tools\FfmpegPlaybackProbe -- -v            // Debug 级日志
 /// dotnet run --project src\Tools\FfmpegPlaybackProbe -- --hw          // 启用 D3D11VA 零拷贝硬件解码
-/// dotnet run --project src\Tools\FfmpegPlaybackProbe -- --file "D:\x.mp4"
+/// dotnet run --project src\Tools\FfmpegPlaybackProbe -- --file "path/to/x.mp4"
 /// </code>
 /// </remarks>
 internal static class Program

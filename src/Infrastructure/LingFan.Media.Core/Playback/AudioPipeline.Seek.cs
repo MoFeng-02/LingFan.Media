@@ -5,9 +5,10 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Core;
 
-// AudioPipeline 的 Seek 职责段（部分类，由 AudioPipeline.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/StartAsync/Pause/Stop/PipelineLoop/Dispose）在主文件；
-// 音频不丢帧（丢帧致声音断裂），提交后经 Synchronizer.OnAudioFrameSubmitted 更新主时钟。
+/// <summary>
+/// AudioPipeline 的定位复位职责分部：ResetForSeekAsync（两阶段复位）与 ResumeAfterSeekAsync（恢复消费）。
+/// 字段与生命周期编排在主文件 AudioPipeline.cs。
+/// </summary>
 public sealed partial class AudioPipeline
 {
     /// <summary>

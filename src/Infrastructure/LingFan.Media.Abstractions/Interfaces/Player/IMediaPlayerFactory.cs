@@ -11,6 +11,7 @@ namespace LingFan.Media.Abstractions;
 public interface IMediaPlayerFactory
 {
     /// <summary>创建新的 IMediaPlayer 实例（解析 DI 中已注册的单体工厂）。</summary>
+    /// <returns>新创建的播放器实例（Session 级，未打开媒体）。</returns>
     IMediaPlayer Create();
 
     /// <summary>
@@ -21,6 +22,7 @@ public interface IMediaPlayerFactory
     /// <param name="videoDecoderFactory">视频解码器工厂。</param>
     /// <param name="audioDecoderFactory">音频解码器工厂。</param>
     /// <param name="subtitleDecoderFactory">字幕解码器工厂（可选；部分后端不提供字幕解码，传 null）。</param>
+    /// <returns>使用指定后端组的新播放器实例（Session 级，未打开媒体）。</returns>
     IMediaPlayer Create(
         IMediaDemuxerFactory demuxerFactory,
         IVideoDecoderFactory videoDecoderFactory,

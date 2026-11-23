@@ -9,7 +9,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Demuxer;
 internal sealed partial class MFDemuxer
 {
     /// <summary>
-    /// 把指定视频流协商为**解码后 NV12** 输出（A 方案：SourceReader 自带硬解 + DXGI 出样）。
+    /// 把指定视频流协商为**解码后 NV12** 输出（SourceReader 自带硬解 + DXGI 出样）。
     /// </summary>
     /// <param name="readerPtr">IMFSourceReader*。</param>
     /// <param name="streamIndex">MF 流索引。</param>
@@ -22,8 +22,8 @@ internal sealed partial class MFDemuxer
     /// 差别只在目标子类型是 NV12 而非 PCM。走已验证的成熟路子，风险最低。</para>
     /// <para>只设 MAJOR_TYPE + SUBTYPE 的<b>部分类型</b>，其余字段留空由 SourceReader 按源填充——
     /// 显式写死尺寸/帧率反而会让硬件 MFT 拒绝协商（MF_E_INVALIDMEDIATYPE）。</para>
-    /// <para>协商失败绝不抛异常：返回 false 后该流继续输出压缩裸流，下游 <c>MFVideoDecoder</c> 按老路自解码，
-    /// 与改造前行为逐字节一致（硬解优先、软解兜底）。</para>
+    /// <para>协商失败绝不抛异常：返回 false 后该流继续输出压缩裸流，下游 <c>MFVideoDecoder</c> 自解码
+    /// （硬解优先、软解兜底）。</para>
     /// <para>同步（native 分类）：全为 COM 调用，无 I/O。</para>
     /// </remarks>
     private bool TryConfigureVideoStreamToNv12(IntPtr readerPtr, int streamIndex, ref int width, ref int height, out int stride)

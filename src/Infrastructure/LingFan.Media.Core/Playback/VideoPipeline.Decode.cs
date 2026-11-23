@@ -4,9 +4,10 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Core;
 
-// VideoPipeline 的 Decode 职责段（部分类，由 VideoPipeline.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/StartCore/PipelineLoop/Dispose）在主文件；
-// 本段为解码生产者循环（独立于呈现消费者），共享 _runId/_cts 会话状态，线程模型不变。
+/// <summary>
+/// VideoPipeline 的解码生产者分部：独立解码循环（与呈现消费者分离），
+/// 共享 _runId/_cts 会话状态，线程模型与主文件一致。字段与生命周期编排在主文件 VideoPipeline.cs。
+/// </summary>
 public sealed partial class VideoPipeline
 {
     /// <summary>
@@ -101,7 +102,7 @@ public sealed partial class VideoPipeline
                 VideoFrame? decodedFrame = null;
                 try
                 {
-                    // 隐患B修复：解码锁获取超时期间 定位复位 可能跳过 Reset，此处补做
+                    // 解码锁获取超时期间 定位复位 可能跳过 Reset，此处补做
                     if (_pendingDecoderReset)
                     {
                         _decoder.Reset();

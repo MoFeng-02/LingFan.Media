@@ -188,15 +188,17 @@ internal sealed partial class FFmpegVideoDecoder
         AVFrame* sw = FF.av_frame_alloc();
         if (sw == null)
             throw new InvalidOperationException("av_frame_alloc 失败（GPU 零拷贝回落 CPU）");
-        // av_hwframe_transfer_data 不拷贝时间戳（dst 为裸分配帧）——必须手动透传源帧 pts，
-        // 否则回落帧 pts=0 → 全部被判落后丢弃 → 呈现冻结（GL --hw 回落路径实测）。
+        // av_hwframe_transfer_data 的 D3D11VA 传输实现只拷像素、不透传元数据（dst 为裸分配帧）——
+        // 必须手动透传源帧 pts，否则回落帧 pts=0 → 全部被判落后丢弃 → 呈现冻结。
+        // 帧属性是否被复制取决于 hwcontext 实现（VAAPI/DXVA2 等会调用 av_frame_copy_props；D3D11VA 不会）。
         sw->pts = avFrame->pts;
         try
         {
             int ret = FF.av_hwframe_transfer_data(sw, avFrame, 0);
             if (ret < 0)
                 throw new InvalidOperationException($"av_hwframe_transfer_data 失败: {GetErrorString(ret)}");
-            // 传输后再次对齐：个别 hwcontext 传输实现会重建/触碰 dst 元数据，pts 以源帧为唯一权威（幂等）。
+            // 传输后再次对齐：不同 hwcontext 实现对 dst 元数据的处理不一（有的复制源帧属性、有的不触碰），
+            // pts 一律以源帧为唯一权威（幂等透传）。
             sw->pts = avFrame->pts;
             return CreateVideoFrameFromAVFrame(sw);
         }

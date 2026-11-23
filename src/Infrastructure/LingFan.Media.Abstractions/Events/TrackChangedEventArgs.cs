@@ -17,6 +17,9 @@ public sealed class TrackChangedEventArgs : EventArgs
     /// <summary>
     /// 初始化 <see cref="TrackChangedEventArgs"/> 的新实例。
     /// </summary>
+    /// <param name="trackType">轨道类型。</param>
+    /// <param name="oldTrack">旧轨道（可为 null）。</param>
+    /// <param name="newTrack">新轨道（可为 null）。</param>
     public TrackChangedEventArgs(TrackType trackType, MediaTrack? oldTrack, MediaTrack? newTrack)
     {
         TrackType = trackType;

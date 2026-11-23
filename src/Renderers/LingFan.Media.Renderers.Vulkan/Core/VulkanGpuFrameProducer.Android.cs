@@ -35,7 +35,7 @@ public sealed unsafe partial class VulkanGpuFrameProducer
             return false;
         }
 
-        // 首帧进入日志：此后崩溃即定位在 vkGetAndroidHardwareBufferPropertiesANDROID（与其后步骤）
+        // 首帧进入日志：标记导入已通过能力预检、即将进入 vkGetAndroidHardwareBufferPropertiesANDROID（仅打印一次，供阶段定位）。
         if (!_ahbEntryLogged)
         {
             _ahbEntryLogged = true;

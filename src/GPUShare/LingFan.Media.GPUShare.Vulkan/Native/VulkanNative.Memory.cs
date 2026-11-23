@@ -6,6 +6,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 // 函数指针字段与三阶段初始化在 VulkanNative.cs；签名对齐 Silk.NET Vk / Khr*，调用点仅改名。
 public static unsafe partial class VulkanNative
 {
+    /// <summary>查询图像内存需求（vkGetImageMemoryRequirements：size/alignment/memoryTypeBits）。</summary>
     public static unsafe void GetImageMemoryRequirements(Device device, Image image, MemoryRequirements* pMemoryRequirements)
         => _getImageMemoryRequirements(device, image, pMemoryRequirements);
 
@@ -16,6 +17,7 @@ public static unsafe partial class VulkanNative
     /// </summary>
     public static bool HasImageMemoryRequirements2 => _getImageMemoryRequirements2 != null;
 
+    /// <summary>查询图像内存需求 v2（vkGetImageMemoryRequirements2；pNext 可链 dedicated 需求；未解析时抛异常）。</summary>
     public static unsafe void GetImageMemoryRequirements2(Device device, ImageMemoryRequirementsInfo2* pInfo, MemoryRequirements2* pMemoryRequirements)
     {
         if (_getImageMemoryRequirements2 == null)
@@ -23,6 +25,7 @@ public static unsafe partial class VulkanNative
         _getImageMemoryRequirements2(device, pInfo, pMemoryRequirements);
     }
 
+    /// <summary>分配设备内存（vkAllocateMemory ref 重载；外部内存导入/dedicated 经 pNext 链声明）。</summary>
     public static unsafe Result AllocateMemory(Device device, ref MemoryAllocateInfo pAllocateInfo, AllocationCallbacks* pAllocator, out DeviceMemory pMemory)
     {
         fixed (MemoryAllocateInfo* p = &pAllocateInfo)
@@ -34,6 +37,7 @@ public static unsafe partial class VulkanNative
         }
     }
 
+    /// <summary>分配设备内存（vkAllocateMemory 指针重载；便于携带 pNext 扩展链）。</summary>
     public static unsafe Result AllocateMemory(Device device, MemoryAllocateInfo* pAllocateInfo, AllocationCallbacks* pAllocator, out DeviceMemory pMemory)
     {
         DeviceMemory tmp;
@@ -42,8 +46,10 @@ public static unsafe partial class VulkanNative
         return r;
     }
 
+    /// <summary>释放设备内存（vkFreeMemory；绑定其上的图像/缓冲须已销毁或不再访问）。</summary>
     public static unsafe void FreeMemory(Device device, DeviceMemory memory, AllocationCallbacks* pAllocator) => _freeMemory(device, memory, pAllocator);
 
+    /// <summary>把设备内存绑定到图像（vkBindImageMemory；外部导入内存经 pNext 已在分配时关联的除外）。</summary>
     public static unsafe Result BindImageMemory(Device device, Image image, DeviceMemory memory, ulong memoryOffset)
         => _bindImageMemory(device, image, memory, memoryOffset);
 
@@ -75,15 +81,19 @@ public static unsafe partial class VulkanNative
         return r;
     }
 
+    /// <summary>查询缓冲内存需求（vkGetBufferMemoryRequirements：size/alignment/memoryTypeBits）。</summary>
     public static unsafe void GetBufferMemoryRequirements(Device device, Buffer buffer, MemoryRequirements* pMemoryRequirements)
         => _getBufferMemoryRequirements(device, buffer, pMemoryRequirements);
 
+    /// <summary>把设备内存绑定到缓冲（vkBindBufferMemory）。</summary>
     public static unsafe Result BindBufferMemory(Device device, Buffer buffer, DeviceMemory memory, ulong memoryOffset)
         => _bindBufferMemory(device, buffer, memory, memoryOffset);
 
+    /// <summary>映射 host-visible 设备内存到 CPU 地址（vkMapMemory；非 coherent 内存须配合 Flush/Invalidate）。</summary>
     public static unsafe Result MapMemory(Device device, DeviceMemory memory, ulong offset, ulong size, uint flags, void** ppData)
         => _mapMemory(device, memory, offset, size, flags, ppData);
 
+    /// <summary>解除设备内存映射（vkUnmapMemory）。</summary>
     public static unsafe void UnmapMemory(Device device, DeviceMemory memory) => _unmapMemory(device, memory);
 
     /// <summary>把 VkDeviceMemory 导出为 Windows HANDLE（外部内存 NT 句柄）。</summary>

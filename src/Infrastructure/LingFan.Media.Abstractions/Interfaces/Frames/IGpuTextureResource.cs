@@ -4,10 +4,10 @@ namespace LingFan.Media.Abstractions;
 /// 中立 GPU 纹理帧资源契约（跨层共享，零外部引用）。
 /// </summary>
 /// <remarks>
-/// <para>由具体渲染器实现（如 <c>LingFan.Media.Renderers.D3D11.D3D11TextureResource</c>），
+/// <para>由具体渲染器/后端实现（如 <c>LingFan.Media.Renderers.Vulkan.VulkanImageResource</c>），
 /// 供 Avalonia / Outputs 等层以平台无关方式消费 GPU 纹理（例如 CPU 回读后送入 Skia WriteableBitmap 回退路径），
 /// 而无需引用具体渲染器模块，严守依赖倒置。与 <see cref="IGpuDeviceContext"/> 同为 Abstractions 中立桥。</para>
-/// <para><b>异步策略</b>：<see cref="ReadbackToCpu"/> 为同步（native 分类）——D3D11/GL 纹理回读是同步 COM/原生调用，
+/// <para><b>异步策略</b>：<see cref="ReadbackToCpu"/> 为同步 COM/原生调用——D3D11/GL 纹理回读
 /// 无真实 I/O await。实现保持同步，不补 async（补即伪异步）。</para>
 /// </remarks>
 public interface IGpuTextureResource : IFrameResource
@@ -18,7 +18,7 @@ public interface IGpuTextureResource : IFrameResource
     /// </summary>
     /// <remarks>
     /// 调用方负责确保使用期间资源不被释放（如渲染器持锁或帧引用计数）。
-    /// 句柄所有权归 <see cref="IFrameResource"/> 实现的 <see cref="Dispose"/> 管理。
+    /// 句柄所有权归 <see cref="IFrameResource"/> 实现的 <see cref="IDisposable.Dispose"/> 管理。
     /// </remarks>
     IntPtr NativeTextureHandle { get; }
 

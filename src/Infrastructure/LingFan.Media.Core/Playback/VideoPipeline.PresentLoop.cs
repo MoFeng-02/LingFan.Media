@@ -4,8 +4,10 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Core;
 
-// VideoPipeline 的呈现消费者循环职责段（部分类，按职责拆分，编译期等价）。
-// Peek-then-Dequeue 同步判定与呈现节拍；共享 _runId/_cts 会话状态在主文件，线程模型不变。
+/// <summary>
+/// VideoPipeline 的呈现消费者循环分部：Peek-then-Dequeue 同步判定与呈现节拍。
+/// 共享 _runId/_cts 会话状态，字段与生命周期编排在主文件 VideoPipeline.cs。
+/// </summary>
 public sealed partial class VideoPipeline
 {
     /// <summary>
@@ -157,15 +159,13 @@ public sealed partial class VideoPipeline
                 var headTimestamp = head.Timestamp;
                 var action = _synchronizer.CheckVideoFrame(head);
 
-                // EOS（流末已到）覆盖：原实现在 eos 下把 Wait/Drop 一律改为 Present，
-                // 导致末段缓冲超前的帧（TargetDepth≈6 帧 + DRAIN 尾 GOP）被瞬间整批呈现 →
-                // "帧直接推进 / 画面突然变快"（用户痛点：末秒帧爆发式推进后骤停）。
-                // 修正策略（仍保末帧绝不丢，但消除爆发）：
+                // EOS（流末已到）覆盖规则（末帧绝不丢，且不整批爆发呈现）：
                 //   · eos && Drop（音频时钟已越界）→ 改 Present（绝不丢末帧）；
                 //   · eos && Wait（末段缓冲超前的帧）→ 保持 Wait，按各自 PTS 平滑收口；
                 //   · eos && Present → 保持 Present。
-                // 尾冻已由 DecodeLoop 的 EOS DRAIN 解决（末段 GOP 已入队），此处不再依赖强制呈现；
-                // 正常播放末段帧按各自节奏呈现，爆发消失，末帧仍常驻屏直到音频结束。
+                // 若在 eos 下把 Wait/Drop 一律改 Present，末段缓冲超前的帧（TargetDepth≈6 帧 + DRAIN 尾 GOP）
+                // 会被瞬间整批呈现，画面突然变快后骤停。尾冻由 DecodeLoop 的 EOS DRAIN 保证
+                // （末段 GOP 已入队），此处不依赖强制呈现；末帧常驻屏直到音频结束。
                 bool eos = _eosReached || _frameQueue.IsCompleted || _decodeDone;
                 if (eos && action == SyncAction.Drop)
                     action = SyncAction.Present;

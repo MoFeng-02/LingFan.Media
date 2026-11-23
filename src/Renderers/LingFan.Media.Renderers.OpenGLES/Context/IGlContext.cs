@@ -7,7 +7,7 @@ namespace LingFan.Media.Renderers.OpenGLES.Context;
 /// <para>渲染器不直接依赖具体平台绑定：<see cref="OpenGLESRenderer"/> 经此接口统一 MakeCurrent / SwapBuffers / 释放，
 /// 平台分支由 <see cref="OpenGLESRenderer.Attach"/> 按 <see cref="OperatingSystem"/> 守卫创建（当前仅 Android）。</para>
 /// <para>本接口仅描述<b>上屏</b> GLES 上下文：在 <see cref="OpenGLESRenderer.Attach"/> 时按窗口建立、<see cref="OpenGLESRenderer.Detach"/> / <see cref="Dispose"/> 时释放，为渲染器实例级。
-/// 与桌面 GL（<see cref="LingFan.Media.Renderers.OpenGL"/>）不同，Android GLES 当前无工厂级离屏设备上下文（零拷贝属 C 线未来增强）。</para>
+/// 与桌面 GL（<see cref="LingFan.Media.Renderers.OpenGL"/>）不同，Android GLES 当前无工厂级离屏设备上下文（零拷贝为未来增强）。</para>
 /// </remarks>
 internal interface IGlContext : IDisposable
 {

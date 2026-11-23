@@ -5,7 +5,7 @@ namespace LingFan.Media.Outputs.Alsa;
 /// </summary>
 /// <remarks>
 /// <para>DI 生命周期：Singleton 工厂。Create() 返回的 <see cref="AlsaOutput"/> 在使用时抛出 <see cref="NotSupportedException"/>。</para>
-/// <para>Create() 为同步（config 分类），手动 new，无 I/O。</para>
+/// <para>Create() 为同步操作，手动 new，无 I/O。</para>
 /// </remarks>
 public sealed class AlsaOutputFactory : IAudioOutputFactory
 {

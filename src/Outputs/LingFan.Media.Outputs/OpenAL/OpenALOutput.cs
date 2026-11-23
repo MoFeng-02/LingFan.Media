@@ -12,12 +12,12 @@ namespace LingFan.Media.Outputs.OpenAL;
 /// <para><b>异步策略</b>（与 WASAPI/AAudio 范本一致）：</para>
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，跨平台无限制，返回 <see cref="Task.CompletedTask"/>。无 I/O 可 await，非伪异步。</item>
-/// <item><see cref="Initialize"/>：同步（sync 分类），alcOpenDevice + alcCreateContext + alcMakeContextCurrent + alGenSources。</item>
-/// <item><see cref="Submit"/>：同步边界（native 分类），S16/S32/F32 归一到 S16（OpenAL core 通用格式），
+/// <item><see cref="Initialize"/>：同步，alcOpenDevice + alcCreateContext + alcMakeContextCurrent + alGenSources。</item>
+/// <item><see cref="Submit"/>：同步边界（原生调用），S16/S32/F32 归一到 S16（OpenAL core 通用格式），
 /// 动态生成缓冲、队列播放；缓冲满时阻塞（AL_BUFFERS_PROCESSED 轮询背压），同步阻塞背压是正常机制，非伪异步。</item>
-/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），alSourcePause/Play/Stop + 缓冲出队。</item>
+/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步，alSourcePause/Play/Stop + 缓冲出队。</item>
 /// <item><see cref="GetPlaybackPosition"/>：同步，已消费帧数 / 采样率估算。</item>
-/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），停止 + 删缓冲/源 + 销毁上下文 + 关设备。</item>
+/// <item><see cref="Dispose"/>：同步快速释放，停止 + 删缓冲/源 + 销毁上下文 + 关设备。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。</item>
 /// </list>
 /// <para><b>格式</b>：OpenAL core 保证 8/16-bit 整数；为跨平台确定性，所有输入（S16/S32/F32）归一到
@@ -50,7 +50,7 @@ internal sealed unsafe partial class OpenALOutput : IAudioOutput
     private long _consumedFrames;
 
     // 主时钟 1× 实时插值（对齐 OpenSlesOutput 同款范式）：_consumedFrames 仅在 Submit 线程背压排空时
-    // 步进（缓冲 ~46ms 一阶），直接读值即 46ms 台阶——视频呈现随主时钟台阶"一闪一闪"。
+    // 步进（一阶一个缓冲时长），直接读值即一个缓冲时长量级的台阶——视频呈现随主时钟台阶"一闪一闪"。
     // 步进锚点 + 单缓冲封顶插值消除阶梯量化；暂停/欠载时封顶使时钟自然冻结，单调性不受影响。
     private long _lastStepQpc;
     private int _lastStepBufferFrames;
@@ -172,7 +172,7 @@ internal sealed unsafe partial class OpenALOutput : IAudioOutput
     /// <inheritdoc/>
     /// <remarks>
     /// 主时钟 = 已消费帧数/采样率（消费记账，见 Submit 背压）。步进值经 1× 实时插值平滑
-    /// （封顶一个缓冲时长，欠载/暂停时自然冻结），消除 ~46ms 阶梯量化——视频呈现节拍的
+    /// （封顶一个缓冲时长，欠载/暂停时自然冻结），消除一个缓冲时长量级的阶梯量化——视频呈现节拍的
     /// "一闪一闪"直接来源于此阶梯。seqlock 式一致性读对齐 OpenSlesOutput 同款模式。
     /// </remarks>
     public TimeSpan GetPlaybackPosition()

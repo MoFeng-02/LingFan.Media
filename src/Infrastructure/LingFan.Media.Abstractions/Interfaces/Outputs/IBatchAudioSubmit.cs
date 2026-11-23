@@ -8,7 +8,7 @@ namespace LingFan.Media.Abstractions;
 /// 从而让音频供给速率达到实时（修复听感卡顿/掉速）。</para>
 /// <para>属于 <see cref="IAudioOutput"/> 的可选增强：实现者若支持批量提交则实现本接口，
 /// <c>AudioPipeline</c> 通过 <c>is</c> 探测，不支持时退回逐帧 <see cref="IAudioOutput.Submit"/>（其他平台行为不变）。</para>
-/// <para>契约层增补签名（未来基准：契约层可动态演进，只增不改优先）。零外部引用，仅依赖本命名空间类型。</para>
+/// <para>本接口按「只增不改」原则演进。零外部引用，仅依赖本命名空间类型。</para>
 /// </remarks>
 public interface IBatchAudioSubmit
 {

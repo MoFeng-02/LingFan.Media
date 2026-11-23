@@ -59,8 +59,8 @@ internal sealed partial class AndroidDemuxer
 
             // 关键：ByteBuffer.Wrap(托管数组) 在 Java 侧是 marshal 副本——ReadSampleData 写入的是
             // Java 侧副本数组，绝不回写 _readScratch！必须用 Get()（Java→C# 方向）把字节取回。
-            // （此前误用 Array.Copy(_readScratch,…) 拷出的是从未写入的托管数组 → 喂给解码器全零字节，
-            //  导致 video/audio dequeue 恒 TRY_AGAIN、0 产出。）
+            // （勿改用 Array.Copy(_readScratch,…)——拷出的是从未写入的托管数组 → 喂给解码器全零字节，
+            //  video/audio dequeue 恒 TRY_AGAIN、0 产出。）
             // 每包数据经 ArrayPool 租借（grow-only，消除每包 new 的 GC 压力）；packet Dispose 时由
             // RentedBufferOwner 归还池，避免跨包复用导致数据串号（Data 持有数组引用）。
             byte[] data = ArrayPool<byte>.Shared.Rent(n);

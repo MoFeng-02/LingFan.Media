@@ -10,7 +10,9 @@ namespace LingFan.Media.Core;
 /// AudioOutput 播放。音频时钟作为主时钟。
 /// </summary>
 /// <remarks>
-/// <para>所有方法均为同步 void（无 Task 返回，无 Resume）。</para>
+/// <para>Pause/Stop 与提交热路径为同步；StartAsync（首启含 preroll 等待）、
+/// ResetForSeekAsync/ResumeAfterSeekAsync（定位复位与恢复）为真异步 Task；
+/// DisposeAsync 为契约兼容，内部走同步清理路径。</para>
 /// <para>关键区别于 VideoPipeline：音频不丢帧（丢帧会导致声音断裂）。</para>
 /// <para>每次音频帧提交后通过 Synchronizer.OnAudioFrameSubmitted 更新主时钟。</para>
 /// <para><b>分部划分</b>：Loop 分部管消费循环与供给诊断；Submit/Seek 分部管提交与定位复位。本文件为生命周期编排。</para>
@@ -85,6 +87,8 @@ public sealed partial class AudioPipeline : IAsyncDisposable, IDisposable
     /// <param name="effectReset">音频效果状态重置委托。
     /// 中立 BCL 委托（<see cref="Action"/>），由 Audio 模块把各 <c>IAudioEffect.Reset</c> 合并而来，Core 不依赖 Audio 模块。
     /// 在 Seek/定位复位 的解码锁内调用，清除有状态效果（均衡器 biquad / 混响延迟线 / 压缩器包络）的跨位置残留。</param>
+    /// <param name="audioDataSink">音频采样数据观测回调（可为 null）。每帧提交给输出前在管线线程同步调用；
+    /// 回调仅可只读借用帧（不得 Dispose、不得跨线程持有），用于接线上层 <see cref="IMediaPlayer.AudioDataAvailable"/> 事件。</param>
     public AudioPipeline(
         Channel<MediaPacket> packetQueue,
         IAudioDecoder decoder,
@@ -152,8 +156,9 @@ public sealed partial class AudioPipeline : IAsyncDisposable, IDisposable
     public event EventHandler? Completed;
 
     /// <summary>
-    /// 启动或恢复管线。
-    /// Start() 同时处理首次启动和恢复（调用 audioOutput.Resume() 恢复输出）。
+    /// 启动或恢复管线（异步）。
+    /// StartAsync() 同时处理首次启动和恢复：首启走 BeginStreamingAsync preroll（写满设备缓冲后自动出声）；
+    /// 恢复（Pause 后再启动）立即调用 audioOutput.Resume()。
     /// </summary>
     public async Task StartAsync()
     {
@@ -180,9 +185,9 @@ public sealed partial class AudioPipeline : IAsyncDisposable, IDisposable
         // 本轮循环即当前循环，复位留下的「已作废」标记到此为止。
         _loopSuperseded = false;
 
-        // 治本(1)（起播静默窗）：非恢复播放走 preroll —— WASAPI 内部 Stop→Reset 并 arm，
-        // 提交循环写满设备缓冲后自动 Start，引擎抓取真实数据而非静音 → 起播无静默窗。
-        // 恢复播放（Pause→Resume）走旧路径立即 Resume。
+        // 起播无静默窗：非恢复播放走 preroll —— WASAPI 内部 Stop→Reset 并 arm，
+        // 提交循环写满设备缓冲后自动 Start，引擎抓取真实数据而非静音。
+        // 恢复播放（Pause→Resume）不走 preroll，立即 Resume。
         bool resuming = _isResuming;
         _isResuming = false;
         if (resuming)
@@ -226,10 +231,9 @@ public sealed partial class AudioPipeline : IAsyncDisposable, IDisposable
     // 前瞻窗口（预解码帧数）：让提交阶段能成批提交，折叠逐帧 STA 跨线程往返的固定开销（修复听感卡顿/掉速）。
     private const int PrerollFrames = 16;
 
-    // (b)(1) 架构补短：小量子连续提交。
-    // 旧逻辑一次性把 _sampleQueue 全部帧灌入设备（单批阻塞可达数百毫秒），管线离场解码时 submittedSamples
-    // 冻结、主时钟平滑前进 → 诊断仪误报"音频间隙/stall"。改为每次最多提交 ~MaxSubmitChunkMs 的音频，
-    // 使渲染线程的 submittedSamples 连续推进（解决假 stall），并收窄设备前置缓冲到 ~缓冲时长（更贴近实时）。
+    // 小量子连续提交：每次最多提交 ~MaxSubmitChunkMs 的音频，使渲染线程的 submittedSamples 连续推进
+    // （单批灌入全部帧会长时间阻塞提交、令 submittedSamples 冻结，诊断仪会误报"音频间隙/stall"），
+    // 并把设备前置缓冲收窄到 ~缓冲时长（更贴近实时）。
     private const int MaxSubmitChunkMs = 40;   // 单批提交上限（毫秒）；远小于诊断仪 100ms stall 阈值，留足余量
     private const int MinChunkSamples = 1024;  // 单批下限（采样数，≈23ms@44.1k/21ms@48k），避免过小批导致提交开销占比上升
     private int _submitChunkSamples;           // 懒初始化：首次提交时按帧采样率换算（采样率跨流可能变化，故每流首帧确定）
@@ -245,7 +249,7 @@ public sealed partial class AudioPipeline : IAsyncDisposable, IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        // 隐患A修复：释放信号量前确保管线线程已退出，避免 SemaphoreSlim.Dispose 与并发 WaitAsync/Release 的未定义行为
+        // 释放信号量前确保管线线程已退出，避免 SemaphoreSlim.Dispose 与并发 WaitAsync/Release 的未定义行为
         EnsureThreadStopped();
 
         _decodeLock.Dispose();
@@ -253,7 +257,7 @@ public sealed partial class AudioPipeline : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 隐患A修复：释放解码锁前停止并 join 管线线程。
+    /// 释放解码锁前停止并 join 管线线程。
     /// 仅当当前不在管线线程自身上调用时才等待，避免自死锁。
     /// 正常流程（MediaPlayer 已先 join）下任务已完成，Wait 立即返回，无阻塞。
     /// </summary>

@@ -11,7 +11,8 @@ namespace LingFan.Media.Core;
 /// <para>从 SubtitlePacketQueue 读取字幕包 → SubtitleDecoder 解码 → 缓存 SubtitleFrame →</para>
 /// <para>按 clock.Position 检查当前应显示的字幕 → 触发 SubtitleReceived 事件。</para>
 /// <para>SubtitleFrame 不实现 IDisposableFrame（仅含 string + TimeSpan，无原生资源）。</para>
-/// <para>所有方法均为同步 void。</para>
+/// <para>Start/Pause/Stop 与显示检查为同步；ClearAsync（两阶段清空）为真异步 Task；
+/// DisposeAsync 为契约兼容，内部走同步清理路径。</para>
 /// </remarks>
 public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
 {
@@ -281,7 +282,7 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
                     await _decodeLock.WaitAsync(_cts.Token);
                     try
                     {
-                        // 隐患B修复：解码锁获取超时期间 Clear 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
+                        // 解码锁获取超时期间 Clear 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
                         if (_pendingDecoderReset)
                         {
                             _decoder.Reset();
@@ -384,7 +385,7 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        // 隐患A修复：释放信号量前确保处理线程已退出，避免 SemaphoreSlim.Dispose 与并发 WaitAsync/Release 的未定义行为
+        // 释放信号量前确保处理线程已退出，避免 SemaphoreSlim.Dispose 与并发 WaitAsync/Release 的未定义行为
         EnsureThreadStopped();
 
         _decodeLock.Dispose();
@@ -392,7 +393,7 @@ public sealed class SubtitleProcessor : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// 隐患A修复：释放解码锁前停止并 join 处理线程。
+    /// 释放解码锁前停止并 join 处理线程。
     /// 仅当当前不在处理线程自身上调用时才等待，避免自死锁。
     /// 正常流程（MediaPlayer 已先 join）下任务已完成，Wait 立即返回，无阻塞。
     /// </summary>

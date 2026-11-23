@@ -15,6 +15,9 @@ namespace LingFan.Media.Abstractions;
 public interface IMediaPlayer : IDisposable, IAsyncDisposable
 {
     /// <summary>打开媒体源。支持取消。</summary>
+    /// <param name="source">媒体源。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>表示打开操作的任务；失败时抛出异常（致命错误通道，见 <see cref="ErrorOccurred"/> remarks）。</returns>
     Task OpenAsync(IMediaSource source, CancellationToken ct = default);
 
     /// <summary>开始播放（纯内存状态转换，无 CT）。</summary>
@@ -25,9 +28,11 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <para><b>失败语义</b>：守卫拒绝抛异常（不发错误事件）；启动过程中的失败经
     /// <see cref="ErrorOccurred"/> 上报、不抛出（与既有行为一致）。</para>
     /// </remarks>
+    /// <returns>表示播放启动操作的任务；启动过程中的失败经 <see cref="ErrorOccurred"/> 上报。</returns>
     Task PlayAsync();
 
     /// <summary>暂停播放（纯内存状态转换，无 CT）。</summary>
+    /// <returns>表示暂停状态转换的任务。</returns>
     Task PauseAsync();
 
     /// <summary>停止播放。不阻塞、不等待管线线程退出；<paramref name="ct"/> 当前不受理（保留位）。</summary>
@@ -37,6 +42,8 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <para>因此调用方不得把本方法返回视为「管线线程已停」的凭据；需要该保证时应自行等待或重新
     /// <see cref="OpenAsync"/>。</para>
     /// </remarks>
+    /// <param name="ct">取消令牌（保留位，当前实现不受理，见 remarks）。</param>
+    /// <returns>下发停止请求后即完成的任务；<b>不</b>代表管线线程已退出。</returns>
     Task StopAsync(CancellationToken ct = default);
 
     /// <summary>定位到指定位置。支持取消。</summary>
@@ -50,6 +57,9 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <para><b>精度</b>：上层只承诺「已下发定位请求」，落点精度由解封装器决定
     /// （见 <c>IMediaDemuxer.SeekAsync</c> 的返回值语义）。</para>
     /// </remarks>
+    /// <param name="position">目标位置。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>表示定位操作的任务；定位失败抛出异常（见 remarks）。</returns>
     Task SeekAsync(TimeSpan position, CancellationToken ct = default);
 
     /// <summary>当前播放状态。</summary>
@@ -113,7 +123,7 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// 视频帧到达事件（供 Skia 软渲染 Presenter 等消费）。
-    /// 由视频管线在 <see cref="SyncAction.Present"/> 分支、且 UI 已订阅（Skia 模式）时<b>同步触发</b>
+    /// 由视频管线在 <c>SyncAction.Present</c> 分支、且 UI 已订阅（Skia 模式）时<b>同步触发</b>
     /// （视频管线线程），订阅方<b>仅可只读借用</b>传入的 <see cref="VideoFrame"/>：须在其回调内同步拷贝所需数据
     /// （像素缓冲 / 宽高 / 像素格式），<b>不得 Dispose、不得跨线程持有该帧引用</b>。
     /// 未订阅（D3D11 原生 GPU 模式）时管线直接 Present 到已 Attach 的共享 SwapChain，不触发此事件，保持零额外开销。
@@ -121,7 +131,7 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
     /// <remarks>事件参数为契约层类型 <see cref="VideoFrame"/>，零外部引用合规。</remarks>
     event Action<VideoFrame>? VideoFrameAvailable;
 
-    /// <summary>累计视频丢帧数（诊断/可观测性，只读）。正常播放到结尾时若此值 ≈ 文件视频帧数 − 实际呈现帧数，说明末段尾帧被同步器判 Drop 而非呈现。</summary>
+    /// <summary>累计视频丢帧数（诊断/可观测性，只读）。含播放末段被同步器判 Drop 而非呈现的尾帧。</summary>
     long VideoDroppedFrames { get; }
 
     // IDisposable.Dispose() — 同步快速释放兜底

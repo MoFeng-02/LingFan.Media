@@ -49,6 +49,8 @@ public static class DecodePreferencePolicy
     }
 
     /// <summary>像素格式的位深（视频域：10-bit 格式记 10，其余记 8）。</summary>
+    /// <param name="format">像素格式。</param>
+    /// <returns>位深：10-bit 格式返回 10，其余返回 8。</returns>
     public static int BitDepthOf(PixelFormat format) => format switch
     {
         PixelFormat.P010 => 10,

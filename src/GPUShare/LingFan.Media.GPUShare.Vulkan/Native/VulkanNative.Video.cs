@@ -62,6 +62,7 @@ public static unsafe partial class VulkanNative
 
     // 物理设备视频能力 / 格式属性查询
 
+    /// <summary>查询物理设备对指定视频 profile 的解码能力（vkGetPhysicalDeviceVideoCapabilitiesKHR；未解析时抛异常）。</summary>
     public static unsafe Result GetPhysicalDeviceVideoCapabilitiesKHR(PhysicalDevice physicalDevice, VideoProfileInfoKHR* pVideoProfile, VideoCapabilitiesKHR* pCapabilities)
     {
         if (_getPhysicalDeviceVideoCapabilitiesKHR == null)
@@ -82,6 +83,7 @@ public static unsafe partial class VulkanNative
 
     // 视频会话（Video Session）生命周期
 
+    /// <summary>创建视频会话（vkCreateVideoSessionKHR；profile/DPB 容量经 pCreateInfo 声明，未解析时抛异常）。</summary>
     public static unsafe Result CreateVideoSessionKHR(Device device, ref VideoSessionCreateInfoKHR pCreateInfo, AllocationCallbacks* pAllocator, out VideoSessionKHR pVideoSession)
     {
         if (_createVideoSessionKHR == null)
@@ -95,12 +97,14 @@ public static unsafe partial class VulkanNative
         }
     }
 
+    /// <summary>销毁视频会话（vkDestroyVideoSessionKHR；未解析时静默无操作）。</summary>
     public static unsafe void DestroyVideoSessionKHR(Device device, VideoSessionKHR videoSession, AllocationCallbacks* pAllocator)
     {
         if (_destroyVideoSessionKHR == null) return;
         _destroyVideoSessionKHR(device, videoSession, pAllocator);
     }
 
+    /// <summary>查询视频会话内存需求（vkGetVideoSessionMemoryRequirementsKHR；两段式，未解析时抛异常）。</summary>
     public static unsafe Result GetVideoSessionMemoryRequirementsKHR(Device device, VideoSessionKHR videoSession, ref uint pMemoryRequirementsCount, VideoSessionMemoryRequirementsKHR* pMemoryRequirements)
     {
         if (_getVideoSessionMemoryRequirementsKHR == null)
@@ -109,6 +113,7 @@ public static unsafe partial class VulkanNative
             return _getVideoSessionMemoryRequirementsKHR(device, videoSession, p, pMemoryRequirements);
     }
 
+    /// <summary>把设备内存绑定到视频会话（vkBindVideoSessionMemoryKHR；按需求索引逐项绑定，未解析时抛异常）。</summary>
     public static unsafe Result BindVideoSessionMemoryKHR(Device device, VideoSessionKHR videoSession, uint bindIndex, BindVideoSessionMemoryInfoKHR* pBindInfo)
     {
         if (_bindVideoSessionMemoryKHR == null)
@@ -118,6 +123,7 @@ public static unsafe partial class VulkanNative
 
     // 视频会话参数（SPS/PPS 等 codec 参数）
 
+    /// <summary>创建视频会话参数集（vkCreateVideoSessionParametersKHR；承载 SPS/PPS 等 codec 参数，未解析时抛异常）。</summary>
     public static unsafe Result CreateVideoSessionParametersKHR(Device device, ref VideoSessionParametersCreateInfoKHR pCreateInfo, AllocationCallbacks* pAllocator, out VideoSessionParametersKHR pVideoSessionParameters)
     {
         if (_createVideoSessionParametersKHR == null)
@@ -131,6 +137,7 @@ public static unsafe partial class VulkanNative
         }
     }
 
+    /// <summary>增量更新视频会话参数集（vkUpdateVideoSessionParametersKHR；新增 SPS/PPS，未解析时抛异常）。</summary>
     public static unsafe Result UpdateVideoSessionParametersKHR(Device device, VideoSessionParametersKHR videoSessionParameters, VideoSessionParametersUpdateInfoKHR* pUpdateInfo)
     {
         if (_updateVideoSessionParametersKHR == null)
@@ -138,6 +145,7 @@ public static unsafe partial class VulkanNative
         return _updateVideoSessionParametersKHR(device, videoSessionParameters, pUpdateInfo);
     }
 
+    /// <summary>销毁视频会话参数集（vkDestroyVideoSessionParametersKHR；未解析时静默无操作）。</summary>
     public static unsafe void DestroyVideoSessionParametersKHR(Device device, VideoSessionParametersKHR videoSessionParameters, AllocationCallbacks* pAllocator)
     {
         if (_destroyVideoSessionParametersKHR == null) return;
@@ -146,6 +154,7 @@ public static unsafe partial class VulkanNative
 
     // 解码命令（须包在 vkCmdBeginVideoCodingKHR … vkCmdEndVideoCodingKHR 之间）
 
+    /// <summary>录制「开始视频编码段」（vkCmdBeginVideoCodingKHR；绑定会话/参数/DPB 槽位，未解析时抛异常）。</summary>
     public static unsafe void CmdBeginVideoCodingKHR(CommandBuffer commandBuffer, VideoBeginCodingInfoKHR* pBeginInfo)
     {
         if (_cmdBeginVideoCodingKHR == null)
@@ -153,6 +162,7 @@ public static unsafe partial class VulkanNative
         _cmdBeginVideoCodingKHR(commandBuffer, pBeginInfo);
     }
 
+    /// <summary>录制「解码一帧」（vkCmdDecodeVideoKHR；码流经 bitstream 缓冲，输出/参考槽位经 pFrameInfo，未解析时抛异常）。</summary>
     public static unsafe void CmdDecodeVideoKHR(CommandBuffer commandBuffer, VideoDecodeInfoKHR* pFrameInfo)
     {
         if (_cmdDecodeVideoKHR == null)
@@ -160,6 +170,7 @@ public static unsafe partial class VulkanNative
         _cmdDecodeVideoKHR(commandBuffer, pFrameInfo);
     }
 
+    /// <summary>录制「结束视频编码段」（vkCmdEndVideoCodingKHR；未解析时抛异常）。</summary>
     public static unsafe void CmdEndVideoCodingKHR(CommandBuffer commandBuffer, VideoEndCodingInfoKHR* pEndInfo)
     {
         if (_cmdEndVideoCodingKHR == null)
@@ -167,6 +178,7 @@ public static unsafe partial class VulkanNative
         _cmdEndVideoCodingKHR(commandBuffer, pEndInfo);
     }
 
+    /// <summary>录制「视频编码控制」（vkCmdControlVideoCodingKHR；如 seek 后复位 DPB，未解析时抛异常）。</summary>
     public static unsafe void CmdControlVideoCodingKHR(CommandBuffer commandBuffer, VideoCodingControlInfoKHR* pControlInfo)
     {
         if (_cmdControlVideoCodingKHR == null)

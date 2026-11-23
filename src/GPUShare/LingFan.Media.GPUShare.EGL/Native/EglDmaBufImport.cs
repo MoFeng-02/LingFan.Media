@@ -16,16 +16,27 @@ public static unsafe class EglDmaBufImport
 {
     // EGL_EXT_image_dma_buf_import 常量（EGL/eglext.h 官方值。
     // 历史教训：本表曾整块错位一格且混入不存在的"PLANE_COUNT"键，致 dma_buf 导入恒 EGL_BAD_PARAMETER。）
+    /// <summary>EGL_IMAGE_TARGET（OES 目标枚举）。</summary>
     public const int EglImageTarget = 0x30D1;          // EGL_IMAGE_TARGET (OES 目标枚举)
+    /// <summary>EGL_LINUX_DMA_BUF_EXT：eglCreateImageKHR 的 dma_buf 导入 target。</summary>
     public const int EglLinuxDmaBufExt = 0x3270;       // EGL_LINUX_DMA_BUF_EXT
+    /// <summary>EGL_WIDTH：导入属性表的图像宽度键。</summary>
     public const int EglWidth = 0x3057;                // EGL_WIDTH
+    /// <summary>EGL_HEIGHT：导入属性表的图像高度键。</summary>
     public const int EglHeight = 0x3056;              // EGL_HEIGHT
+    /// <summary>EGL_DMA_BUF_PLANE0_FD_EXT：平面 0 的 dma_buf fd 属性键。</summary>
     public const int EglDmaBufPlane0FdExt = 0x3272;    // EGL_DMA_BUF_PLANE0_FD_EXT
+    /// <summary>EGL_DMA_BUF_PLANE0_OFFSET_EXT：平面 0 字节偏移属性键。</summary>
     public const int EglDmaBufPlane0OffsetExt = 0x3273; // EGL_DMA_BUF_PLANE0_OFFSET_EXT
+    /// <summary>EGL_DMA_BUF_PLANE0_PITCH_EXT：平面 0 行距（pitch）属性键。</summary>
     public const int EglDmaBufPlane0PitchExt = 0x3274; // EGL_DMA_BUF_PLANE0_PITCH_EXT
+    /// <summary>EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT：平面 0 DRM modifier 低 32 位属性键。</summary>
     public const int EglDmaBufPlane0ModifierLoExt = 0x3275; // EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT
+    /// <summary>EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT：平面 0 DRM modifier 高 32 位属性键。</summary>
     public const int EglDmaBufPlane0ModifierHiExt = 0x3276; // EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT
+    /// <summary>EGL_LINUX_DRM_FOURCC_EXT：导入属性表的 DRM fourcc 像素格式键。</summary>
     public const int EglLinuxDrmFourccExt = 0x3271;    // EGL_LINUX_DRM_FOURCC_EXT
+    /// <summary>EGL_NONE：属性表结束标记。</summary>
     public const int EglNone = 0x3038;                 // EGL_NONE
     // 注：EGL 无 "PLANE_COUNT" 键（0x3278/0x3279 实为 PLANE1_MODIFIER_LO/HI）——平面数由出现的
     // 最高平面号属性推断；多平面导入须用 PLANE1_* 属性对，不得使用虚构计数键。
@@ -63,6 +74,7 @@ public static unsafe class EglDmaBufImport
         return _eglCreateImageKHR != null && _glEGLImageTargetTexture2DOES != null;
     }
 
+    /// <summary>从 dma_buf 等原生缓冲创建 EGLImage（五参契约见类 remarks；扩展未解析返回 <c>nint.Zero</c>）。</summary>
     public static unsafe nint EglCreateImageKHR(nint dpy, nint ctx, uint target, nint clientBuffer, int* attribList)
         => _eglCreateImageKHR != null ? _eglCreateImageKHR(dpy, ctx, target, clientBuffer, attribList) : nint.Zero;
 
@@ -75,9 +87,11 @@ public static unsafe class EglDmaBufImport
         => _eglQueryDmaBufModifiersEXT != null
             && _eglQueryDmaBufModifiersEXT(display, drmFourcc, maxModifiers, modifiers, externalOnly, numModifiers) != 0;
 
+    /// <summary>销毁 EGLImage（扩展未解析返回 0）。</summary>
     public static unsafe int EglDestroyImageKHR(nint dpy, nint image)
         => _eglDestroyImageKHR != null ? _eglDestroyImageKHR(dpy, image) : 0;
 
+    /// <summary>把 EGLImage 绑定为当前 GL 纹理的存储（GL_TEXTURE_EXTERNAL_OES；扩展未解析时静默无操作）。</summary>
     public static unsafe void GlEGLImageTargetTexture2DOES(uint target, nint image)
     {
         if (_glEGLImageTargetTexture2DOES != null)

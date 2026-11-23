@@ -7,5 +7,6 @@ namespace LingFan.Media.Abstractions;
 public interface IAudioOutputFactory
 {
     /// <summary>创建新的 IAudioOutput 实例。</summary>
+    /// <returns>新创建的音频输出实例（未初始化，须调用 <see cref="IAudioOutput.Initialize"/>）。</returns>
     IAudioOutput Create();
 }

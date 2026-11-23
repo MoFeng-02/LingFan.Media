@@ -11,8 +11,9 @@ namespace LingFan.Media.GPUShare.D3D11;
 public static unsafe partial class D3D11Interop
 {
     /// <summary>IDXGIResource1::CreateSharedHandle（绝对槽位 13）；pAttributes=null、lpName=null、dwAccess=access。</summary>
-    /// <remarks>dwAccess 须用 SDK dxgi.h 权威值组合：READ=0x80000000、WRITE=0x1（见 <see cref="SharedResourceReadWrite"/>）。
-    /// 防回归：READ/WRITE 直觉序（0x1/0x2）是错的——0x2 不是任何 DXGI 共享资源标志。</remarks>
+    /// <remarks>dwAccess 须用 SDK dxgi.h 权威值组合：<see cref="SharedResourceReadWrite"/>
+    /// （READ/WRITE 位定义见 D3D11Interop.cs 的 <c>DXGI_SHARED_RESOURCE_READ</c>/<c>DXGI_SHARED_RESOURCE_WRITE</c> 常量）。
+    /// 防回归：READ/WRITE 直觉序（1/2）是错的——2 不是任何 DXGI 共享资源标志。</remarks>
     public static IntPtr CreateSharedHandle(IntPtr dxgiResource1Ptr, uint access)
     {
         var fn = ComVTable.GetAbsolute<PFN_CreateSharedHandle>(dxgiResource1Ptr, 13);

@@ -4,9 +4,10 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Core;
 
-// VideoPipeline 的 Seek 职责段（部分类，由 VideoPipeline.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/StartCore/PipelineLoop/DecodeLoop/Dispose）在主文件；
-// 呈现消费者与解码生产者双循环共享 _runId/_cts 会话状态，拆分不改变状态归属与线程模型。
+/// <summary>
+/// VideoPipeline 的定位复位职责分部：ResetForSeekAsync（两阶段复位）与 ResumeAfterSeek（恢复呈现）。
+/// 字段与生命周期编排在主文件 VideoPipeline.cs。
+/// </summary>
 public sealed partial class VideoPipeline
 {
     /// <summary>

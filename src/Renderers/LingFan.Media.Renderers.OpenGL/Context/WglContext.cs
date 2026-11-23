@@ -186,7 +186,7 @@ internal sealed unsafe class WglContext : IGlContext
     /// <summary>
     /// 创建工厂级离屏 GL 上下文（隐藏 1×1 窗口 + WGL 3.3 core），作为共享组所有者。
     /// 供 <see cref="OpenGLOffscreenDeviceContext"/> 在解码器初始化前建立，使解码侧产出的 GL 纹理
-    /// 经共享组对渲染器 on-screen 上下文可见（零拷贝路径的治本基础）。
+    /// 经共享组对渲染器 on-screen 上下文可见（零拷贝路径的共享组基础）。
     /// </summary>
     public static WglContext CreateOffscreen(ILogger? logger = null)
     {

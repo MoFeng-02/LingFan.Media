@@ -12,7 +12,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// （<see cref="VulkanRenderer"/> 经 pattern matching 匹配此类型，直接 blit 同设备 NV12 VkImage，零拷贝上屏）。</para>
 /// <para><b>资源所有权（与 VulkanImageResource 关键区别）</b>：DPB 图像须跨多帧复用（被后续帧作为参考帧引用），
 /// 因此本类 <see cref="Dispose"/> <b>不</b>调用 vkDestroyImage / vkFreeMemory——仅通知解码器该帧已被消费
-/// （<paramref name="onReleased"/> 回调，传回槽位索引），由解码器 DPB 管理器决定何时复用该槽位。
+/// （构造参数 <c>onReleased</c> 回调，传回槽位索引），由解码器 DPB 管理器决定何时复用该槽位。
 /// 若 Dispose 即销毁图像，会导致「帧在途仍被渲染器读取时槽位被复用/图像被销毁」的竞态与显存泄漏。</para>
 /// <para><b>异步策略</b>：<see cref="Dispose"/> 为同步（native 分类），仅触发托管回调，无 I/O await。</para>
 /// <para>AOT 兼容：sealed 类，无反射、无 Silk.NET 运行期依赖（销毁走 <c>VulkanNative</c> 零反射绑定）。</para>

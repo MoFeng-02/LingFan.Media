@@ -15,6 +15,6 @@ public enum SampleFormat : int
 
 // 注：FrameHandleType 枚举已移除，改为 IFrameResource 多态接口。
 // sealed 实现分布：SoftwareFrameResource（本契约层，CPU 内存）；
-// D3D11TextureResource / VulkanImageResource / GLTextureResource / MetalTextureResource 在各渲染工程；
+// VulkanImageResource / MetalTextureResource 等 GPU 纹理帧资源在各渲染工程；
 // 平台特定原生帧（AHardwareBuffer / CVPixelBuffer / IOSurface）在对应平台模块。
 // Renderer 用 pattern matching 匹配类型，AOT 安全。

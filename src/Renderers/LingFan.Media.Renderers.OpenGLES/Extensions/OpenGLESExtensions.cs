@@ -22,7 +22,7 @@ namespace LingFan.Media.Renderers.OpenGLES;
 /// <para><b>自动选择守卫（先到先得）</b>：与 D3D11/Vulkan/桌面 OpenGL 同构——仅当 <c>DefaultVideoRenderer</c> 尚为空时设为 GLES 工厂类型。
 /// 故 Android 宿主若先 <c>AddVulkanRenderer()</c>（Vulkan 抢占默认），再 <c>AddOpenGLESRenderer()</c>，
 /// GLES 不抢占、作为兜底；若仅注册 GLES（无 Vulkan），则 GLES 成为默认。Windows/Linux 上由对应桌面后端先行抢占默认。</para>
-/// <para><b>为何不注册 IGpuDeviceContext</b>：GLES 当前无离屏设备上下文（零拷贝共享组属 C 线未来增强），
+/// <para><b>为何不注册 IGpuDeviceContext</b>：GLES 当前无离屏设备上下文（零拷贝共享组为未来增强），
 /// 注册反而会发出"GLES 零拷贝就绪"的虚假信号；解码后端拿不到设备句柄时按契约走软解回退（明确行为，非 S_OK≠被接受的假绿）。</para>
 /// </remarks>
 public static class OpenGLESExtensions

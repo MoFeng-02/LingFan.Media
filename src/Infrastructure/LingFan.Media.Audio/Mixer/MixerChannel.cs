@@ -10,11 +10,10 @@ using LingFan.Media.Abstractions;
 /// </summary>
 /// <remarks>
 /// <para><see cref="Submit"/> 将 <see cref="AudioFrame"/> 数据直接解码为 float 采样并写入内部环形缓冲区，
-/// 供 <see cref="AudioMixer.Mix"/> 读取。使用 <see cref="lock"/> 保证线程安全
+/// 供 <see cref="AudioMixer.Mix"/> 读取。使用 <c>lock</c> 保证线程安全
 /// （Submit 从解码线程调用，Mix 从音频输出线程调用）。</para>
-/// <para>（AU5）：内部缓冲由 <see cref="System.Collections.Generic.Queue{T}"/> 改为
-/// <see cref="ArrayPool{T}"/> 环形缓冲区，消除逐采样 Enqueue 的装箱/动态扩容开销，
-/// 且不再分配中间 float[]（直接解码入环）。</para>
+/// <para>内部缓冲为 <see cref="ArrayPool{T}"/> 环形缓冲区：无逐采样入队的装箱/动态扩容开销，
+/// 也不分配中间 float[]（采样直接解码入环）。</para>
 /// <para>实现 <see cref="IDisposable"/> 以归还池化数组。</para>
 /// </remarks>
 public sealed class MixerChannel : IDisposable

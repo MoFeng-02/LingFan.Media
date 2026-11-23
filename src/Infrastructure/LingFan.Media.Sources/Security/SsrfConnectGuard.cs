@@ -6,7 +6,7 @@ using System.Net.Sockets;
 namespace LingFan.Media.Sources.Security;
 
 /// <summary>
-/// B-DNS: SSRF 建连级防护——<see cref="SocketsHttpHandler.ConnectCallback"/> 实现。
+/// SSRF 建连级防护——<see cref="SocketsHttpHandler.ConnectCallback"/> 实现。
 /// </summary>
 /// <remarks>
 /// <para><b>闭合的 TOCTOU 缺口</b>：<see cref="NetworkMediaStream"/> 在发送请求前用

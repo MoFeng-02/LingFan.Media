@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 namespace LingFan.Media.Backends.MediaFoundation;
 
 /// <summary>
-/// 进程级共享的 <c>IMFDXGIDeviceManager</c> 提供者（A 方案：SourceReader 自带硬解 + DXGI 出样的关键前置）。
+/// 进程级共享的 <c>IMFDXGIDeviceManager</c> 提供者（SourceReader 自带硬解 + DXGI 出样的关键前置）。
 /// </summary>
 /// <remarks>
 /// <para><b>职责</b>：创建一个绑定到 <see cref="IGpuDeviceContext"/> D3D11 设备的 MF DXGI 设备管理器，

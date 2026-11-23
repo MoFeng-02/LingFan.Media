@@ -48,7 +48,7 @@ public static class MFExtensions
         // 供 DXVA 硬解。TryAdd 确保不覆盖已有注册（有头复用渲染器设备）。MF 与渲染器互不引用，仅经契约协作。
         builder.Services.TryAddSingleton<IGpuDeviceContext, MfGpuDeviceContext>();
 
-        // SourceReader 自带硬解所需的 DXGI 设备管理器（A 方案）
+        // SourceReader 自带硬解所需的 DXGI 设备管理器
         // 进程级共享单例：绑定 IGpuDeviceContext 的 D3D11 设备，供 MFDemuxer 在创建 SourceReader 时
         // 以 MF_SOURCE_READER_D3D_MANAGER 挂载 ⇒ ReadSample 直接吐 DXGI 纹理样本（零拷贝）。
         // 构造期不触碰原生（开箱即用原则）：设备/管理器均在首次 TryGetManager() 时延迟创建。

@@ -4,8 +4,10 @@ using LingFan.Media.Sources.Security;
 
 namespace LingFan.Media.Sources;
 
-// NetworkMediaStream 的 HTTP 连接段（部分类，由 NetworkMediaStream.cs 按职责拆分，编译期等价）。
-// 惰性建连（SSRF 校验/DNS pinning）、Range 重开连接与 GET 请求构造。
+/// <summary>
+/// NetworkMediaStream 的 HTTP 连接段（部分类，由 NetworkMediaStream.cs 按职责拆分，编译期等价）。
+/// 惰性建连（SSRF 校验/DNS pinning）、Range 重开连接与 GET 请求构造。
+/// </summary>
 public sealed partial class NetworkMediaStream
 {
     /// <summary>

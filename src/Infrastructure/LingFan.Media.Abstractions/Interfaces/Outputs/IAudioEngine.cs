@@ -37,5 +37,6 @@ public interface IAudioEngine : IDisposable, IAsyncDisposable
     /// 异步预热音频引擎。幂等：重复调用直接返回（已在预热中则复用同一次进行中的操作）。
     /// </summary>
     /// <param name="ct">取消令牌。取消只中止<b>等待</b>，已投递的原生初始化不会被回滚。</param>
+    /// <returns>预热完成（或已在热态直接完成）时结束的任务；失败语义见 remarks（视为未预热，不中断宿主启动）。</returns>
     Task WarmupAsync(CancellationToken ct = default);
 }

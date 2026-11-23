@@ -8,7 +8,7 @@ namespace LingFan.Media.Abstractions;
 /// <para>解码器等组件可选实现此接口。调用方（如 MediaPlayer）通过 pattern matching 检测并注入池。</para>
 /// <para>不修改现有接口（IMediaComponent/IVideoDecoder 等），通过 pattern matching 注入，保持架构兼容。</para>
 /// <para><b>AOT 兼容</b>：接口 + pattern matching（is 运算符），编译期确定类型，无反射。</para>
-/// <para><b>异步策略</b>：sync（config 分类）——纯内存设置引用，无 I/O。</para>
+/// <para><b>异步策略</b>：同步配置——纯内存设置引用，无 I/O。</para>
 /// </remarks>
 public interface IFramePoolAware<T> where T : class
 {

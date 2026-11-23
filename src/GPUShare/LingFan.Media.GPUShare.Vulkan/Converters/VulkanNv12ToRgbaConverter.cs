@@ -66,6 +66,10 @@ public sealed unsafe partial class VulkanNv12ToRgbaConverter : IDisposable
 
     private const int FormatNv12 = 2;
 
+    /// <summary>创建 NV12→RGBA 转换器（管线/目标等 GPU 资源在首次转换时惰性创建）。</summary>
+    /// <param name="device">借用的 VkDevice（Dispose 不销毁，生命周期归外部共享设备）。</param>
+    /// <param name="physicalDevice">借用的 VkPhysicalDevice（查询内存类型用，Dispose 不销毁）。</param>
+    /// <param name="logger">可选日志器。</param>
     public VulkanNv12ToRgbaConverter(Device device, PhysicalDevice physicalDevice, ILogger? logger = null)
     {
         _device = device;
@@ -80,6 +84,7 @@ public sealed unsafe partial class VulkanNv12ToRgbaConverter : IDisposable
     /// <param name="cmd">正在记录的命令缓冲（调用方持有 _gate 锁）。</param>
     /// <param name="nv12Source">NV12 VkImage（硬解 DPB 或导入纹理），格式须为 multi-planar NV12。</param>
     /// <param name="srcLayout">源图像交付时的布局（Vulkan 硬解 DPB 传 VideoDecodeDpbKhr；导入纹理传 Undefined）。</param>
+    /// <param name="baseArrayLayer">源 NV12 平面所在的基础数组层（数组形态 DPB/导入纹理传对应层；单层图像传 0）。平面视图按（图像句柄, 层）缓存。</param>
     /// <param name="width">源/目标宽度（像素）。</param>
     /// <param name="height">源/目标高度（像素）。</param>
     /// <param name="targetFormat">目标 RGBA 格式（须与下游 SwapChain 格式一致，避免 blit 跨 R/B 顺序）；通常为 B8G8R8A8Unorm / R8G8B8A8Unorm。</param>
@@ -211,6 +216,10 @@ public sealed unsafe partial class VulkanNv12ToRgbaConverter : IDisposable
             ImageAspectFlags.ColorBit);
     }
 
+    /// <summary>
+    /// 释放转换器持有的全部 GPU 资源（平面视图缓存 / 帧缓冲 / 管线与 RenderPass / 描述符 / 采样器 / 着色器模块 / 内部缓存的 RGBA 目标及其内存；幂等）。
+    /// 不销毁借用的 VkDevice；调用方提供的 RGBA 目标（Convert 重载）不在释放范围。
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;

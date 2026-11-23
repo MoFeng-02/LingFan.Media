@@ -104,10 +104,8 @@ internal sealed partial class MFVideoDecoder
                 //    IMFMediaBuffer.Unlock 只能与【成功的】Lock 配对，且恰好一次。
                 //    下方「Lock → 拷贝 → Unlock」整体置于【嵌套 try】，所有提前 return
                 //    （currentLength==0 / 尺寸未知 / Lock 失败）都发生在进入该嵌套 try 之前，
-                //    故绝不会触发 Unlock。旧代码把 Unlock 放在外层 finally，导致未 Lock 即 Unlock
-                //    （2D/DXGI 临时拷贝实现的 Unlock 会野指针写）→ 滞后至下次 CLR 堆操作才以原生堆损坏暴露。
-                // COM 配对原则（与 MFDemuxer.ExtractPacket 同构）：
-                //    IMFMediaBuffer.Unlock 只能与【成功的】Lock 配对，且恰好一次。
+                //    故绝不会触发 Unlock。未 Lock 即 Unlock 在 2D/DXGI 临时拷贝实现里会野指针写，
+                //    滞后至下次 CLR 堆操作才以原生堆损坏暴露。
                 //    错误链：经 InteropTrace 记录并（严格模式）校验 Lock/Unlock 配对。
                 hr = InteropTrace.LockBuffer(outBuffer, lockDel, out IntPtr pData, out _, out _,
                     "ExtractFrame:IMFMediaBuffer.Lock");
@@ -316,7 +314,7 @@ internal sealed partial class MFVideoDecoder
     /// 说明 MFT 把 GPU 纹理读回到了系统内存（"半 DXVA"）：解码走硬解，但零拷贝提取失败。
     /// 本方法摊开 buffer 真实身份（是否仍是 IMFMediaBuffer / IMF2DBuffer / ID3D11Texture2D）与
     /// 输出媒体类型属性（subtype / NominalRange / DefaultStride），用于定位「读回」的成因。
-    /// 诊断手段：IID 与 Lock 槽位均取已核验正确的值——IID 曾字节级错误令所有 QI 假阴性，现已订正；
+    /// 诊断手段：IID 与 Lock 槽位均取 SDK 权威正确值（IID 写错会令所有 QI 假阴性）；
     /// Lock 复用真实 CPU 路径的 vtable 槽位 0/1/2，不依赖 QI，故即使 QI 仍异常也能给出真值。
     /// </summary>
     private void DiagnoseNonDxgiBuffer(IntPtr buffer, int dxgiHr)
@@ -326,7 +324,7 @@ internal sealed partial class MFVideoDecoder
             var sb = new System.Text.StringBuilder();
             sb.Append("[DXVA-DIAG] 输出 buffer 非 IMFDXGIBuffer(QI=0x").Append(dxgiHr.ToString("X8")).Append(") → 深度诊断：");
 
-            // (1) buffer 是否仍是有效 IMFMediaBuffer（用【已订正】的 IID，真值）
+            // (1) buffer 是否仍是有效 IMFMediaBuffer（用 SDK 权威 IID，真值）
             int hrMb = Marshal.QueryInterface(buffer, in MFConstants.IID_IMFMediaBuffer, out IntPtr mb);
             bool isMb = hrMb >= 0;
             sb.Append(" IMFMediaBuffer=").Append(isMb ? "是" : "否");

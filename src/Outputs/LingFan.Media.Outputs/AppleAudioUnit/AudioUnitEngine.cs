@@ -14,7 +14,7 @@ namespace LingFan.Media.Outputs.AppleAudioUnit;
 /// <see cref="Submit"/> 推入托管环形缓冲（500ms 容量），缓冲满时阻塞等待（带 2 秒超时）自带背压；
 /// 回调侧数据不足补零（静音，underrun 不抛错）。</para>
 /// <para><b>异步策略</b>（与 WASAPI/AAudio/OpenSL ES 范本一致）：
-/// 全部成员为同步（native/sync 分类）——AudioUnit C API 均为同步原生调用，无真实 I/O 可 await。
+/// 全部成员为同步——AudioUnit C API 均为同步原生调用，无真实 I/O 可 await。
 /// InitializeAsync/DisposeAsync 契约语义由外层包装类承担。</para>
 /// <para><b>音量</b>：软件增益（S16 样本缩放，写入环形缓冲前应用），与 AAudio 一致，避免依赖平台差异化音量 API。</para>
 /// <para><b>播放位置</b>：渲染回调累计已消费数据帧数（<see cref="Interlocked"/>），换算时间。</para>
@@ -79,7 +79,7 @@ internal sealed unsafe partial class AudioUnitEngine : IDisposable
         _readyForInit = true;
     }
 
-    /// <summary>创建 AudioUnit、设置流格式、注册渲染回调并启动播放。同步原生调用（sync 分类）。</summary>
+    /// <summary>创建 AudioUnit、设置流格式、注册渲染回调并启动播放。同步原生调用。</summary>
     internal void Initialize(int sampleRate, int channels)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -223,7 +223,7 @@ internal sealed unsafe partial class AudioUnitEngine : IDisposable
         }
     }
 
-    /// <summary>同步快速释放：停止播放、反初始化并销毁 AudioUnit（sync 分类）。</summary>
+    /// <summary>同步快速释放：停止播放、反初始化并销毁 AudioUnit。</summary>
     public void Dispose()
     {
         if (_disposed) return;

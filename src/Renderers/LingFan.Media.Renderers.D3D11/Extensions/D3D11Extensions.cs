@@ -41,7 +41,7 @@ public static class D3D11Extensions
         // 与 IGpuDeviceContext 同源：依赖具体 D3D11RendererFactory 取共享设备，注册为 Singleton。
         builder.Services.AddSingleton<ISharedGpuSurfaceSourceFactory, D3D11SharedSurfaceSourceFactory>();
 
-        // E3 后端自动选择：启用且未显式指定时，D3D11 作为 Windows 默认 GPU 后端。
+        // 后端自动选择：启用且未显式指定时，D3D11 作为 Windows 默认 GPU 后端。
         if (builder.Options.EnableAutoBackendSelection && builder.Options.DefaultVideoRenderer is null)
         {
             builder.Options.DefaultVideoRenderer = typeof(D3D11RendererFactory);

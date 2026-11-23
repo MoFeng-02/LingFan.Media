@@ -20,7 +20,7 @@ public enum GpuFrameImportKind
     /// <summary>Apple(macOS/iOS)：IOSurfaceRef。</summary>
     IOSurface,
 
-    /// <summary>跨平台：Vulkan Video 解码产出的 VkImage，经 Vulkan 外部内存句柄（fd / HANDLE）导入，由 Vulkan 渲染器零拷贝消费（B4）。</summary>
+    /// <summary>跨平台：Vulkan Video 解码产出的 VkImage，经 Vulkan 外部内存句柄（fd / HANDLE）导入，由 Vulkan 渲染器零拷贝消费。</summary>
     VulkanImage,
 }
 
@@ -56,7 +56,7 @@ public readonly struct GpuFrameImportSource
     public int SubresourceIndex { get; init; }
 
     /// <summary>导入纹理的数组层数（D3D11 纹理数组 = 切片总数）。生产者据此创建整数组 VkImage（单切片为 1）。
-    /// 缺省 1：v1 渐进式 H.264/H.265 常见 arrayLayers=1；D3D11VA 纹理数组>1 时必须填真实层数，否则外部内存导入校验失败回落软解。</summary>
+    /// 缺省 1：渐进式（非分层）H.264/H.265 常见 arrayLayers=1；D3D11VA 纹理数组>1 时必须填真实层数，否则外部内存导入校验失败回落软解。</summary>
     public int ArrayLayers { get; init; } = 1;
 
     // Linux VAAPI dma_buf 多平面描述（真实零拷贝，composed NV12 = 单 fd + 双平面）
@@ -93,7 +93,7 @@ public readonly struct GpuFrameImportSource
 /// <para><b>能力自报 + 行为副作用双判据（S_OK≠被接受）</b>：<see cref="TryImport"/> 在扩展不可用、
 /// 原生句柄无效或导入失败时返回 <see langword="false"/>，调用方须回落软件解码并计入 CPU 拷贝统计，
 /// 绝不报"已就绪"假绿。</para>
-/// <para><b>异步策略</b>：<see cref="TryImport"/> 为同步（native 分类）——GPU 纹理导入是同步原生调用，无 I/O await；
+/// <para><b>异步策略</b>：<see cref="TryImport"/> 为同步原生调用——GPU 纹理导入无 I/O await；
 /// 实现保持同步，不补 async（补即伪异步）。</para>
 /// </remarks>
 public interface IGpuFrameProducer

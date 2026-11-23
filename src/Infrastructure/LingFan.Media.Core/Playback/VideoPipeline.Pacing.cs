@@ -4,9 +4,10 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Core;
 
-// VideoPipeline 的 Pacing 职责段（部分类，由 VideoPipeline.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/StartCore/PipelineLoop/DecodeLoop/Dispose）在主文件；
-// 呈现消费者与解码生产者双循环共享 _runId/_cts 会话状态，拆分不改变状态归属与线程模型。
+/// <summary>
+/// VideoPipeline 的呈现节拍分部：ProcessFrame 同步判定与呈现、WaitUntilDue 等待与过调探针。
+/// 字段与生命周期编排在主文件 VideoPipeline.cs。
+/// </summary>
 public sealed partial class VideoPipeline
 {
     private void ProcessFrame(VideoFrame frame)
@@ -314,7 +315,7 @@ public sealed partial class VideoPipeline
 
         // 等待过调探针：醒来时已越过墙钟年线超过阈值 ⇒ 呈现线程被抢占（GL 桥/解码/合成器
         // 争抢大核）或睡眠过冲——这是"间隔峰值/迟到帧"的最后一块无观测盲区（errMs 大但
-        // sink/队空/GC 均干净的唯一剩余解释）。限频 3s，数据用于定夺线程优先级等处置。
+        // sink/队空/GC 均干净的唯一剩余解释）。限频 3s；过调样本用于评估呈现线程优先级与调度配置。
         double overshootMs = System.Diagnostics.Stopwatch.GetElapsedTime(targetQpc).TotalMilliseconds;
         if (overshootMs > WaitOvershootLogThresholdMs &&
             System.Diagnostics.Stopwatch.GetElapsedTime(Volatile.Read(ref _lastOvershootLogQpc)).TotalMilliseconds > 3000)

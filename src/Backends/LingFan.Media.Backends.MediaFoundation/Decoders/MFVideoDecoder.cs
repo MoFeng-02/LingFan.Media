@@ -28,7 +28,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 /// <para><b>仅 Windows 可用</b>：非 Windows 平台 Initialize 抛 <see cref="PlatformNotSupportedException"/>。</para>
 /// <para><b>AOT 兼容</b>：sealed 类；COM 互操作走原始 vtable P/Invoke（<see cref="MfVTable"/> 委托封送）+ 真实导出的 MF 扁平 API，
 /// 不使用 <c>[ComImport]</c>/RCW，NativeAOT 兼容。</para>
-/// <para><b>vtable 槽位</b>：公式 <c>slotIndex = SDK 绝对槽 − 3</c>；关键槽位已在运行时逐一验证（MFTDiag 全 S_OK）——
+/// <para><b>vtable 槽位</b>：公式 <c>slotIndex = SDK 绝对槽 − 3</c>；关键槽位以 SDK 头文件为准——
 /// IMFTransform：GetOutputStreamInfo=4, GetOutputAvailableType=11, SetInputType=12, SetOutputType=13,
 /// GetOutputCurrentType=15, ProcessMessage=20, ProcessInput=21, ProcessOutput=22（注意 GetAttributes=5 不可漏数）；
 /// IMFSample：GetBufferCount=36, ConvertToContiguousBuffer=38, AddBuffer=39；IMFAttributes：GetUINT64=5, SetGUID=21。</para>
@@ -66,11 +66,11 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
     private readonly ILogger<MFVideoDecoder> _logger;
     private bool _initialized;
     // MFStartup/MFShutdown 配对标志：Initialize 成功调用 MFStartup 后置 true，
-    // ReleaseComObjects 中配对 MFShutdown 并复位。原实现只 Startup 不 Shutdown → 进程级平台
+    // ReleaseComObjects 中配对 MFShutdown 并复位。防回归：只 Startup 不 Shutdown 会使进程级平台
     // 引用计数只增不减，MF 平台常驻进程永不释放（内存/句柄泄漏）。
     private bool _mfStartupAcquired;
 
-    // 两阶段关闭协议构件：关闸 → 排空在途原生调用 → 独占释放或意泄漏。
+    // 两阶段关闭协议构件：关闸 → 排空在途原生调用 → 独占释放或有意泄漏。
     private readonly NativeCallGate _transformGate = new();
     private bool _leakedOnClose;   // drain 失败标记：已有意泄漏，禁止任何后续释放尝试
 
@@ -121,7 +121,7 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
     private bool _frameSummaryLogged; // 收尾帧路径统计仅打印一次
     private bool _loggedDxvaDiagOnce; // DXVA 纹理提取失败诊断仅打印一次（专用标志，勿复用软解布局标志）
 
-    // A 方案：SourceReader 自带硬解「直通包」路径
+    // SourceReader 自带硬解「直通包」路径
     // MFDemuxer 建 SourceReader 时挂 MF_SOURCE_READER_D3D_MANAGER + ENABLE_HARDWARE_TRANSFORMS，
     // 并把视频流输出协商为 NV12 ⇒ ReadSample 直接吐【已解码】样本。此时 packet 携带：
     //   (1) DecodedFrameResource（DXGI 纹理）  → 真·零拷贝，本类只做所有权移交，绝不再过 MFT；
@@ -179,7 +179,7 @@ internal sealed partial class MFVideoDecoder : IVideoDecoder
             return new ValueTask<VideoFrame?>((VideoFrame?)null);
         try
         {
-            // 0. 【A 方案 · 直通分支】SourceReader 已在 demuxer 内完成硬解 ⇒ 本类不得再过一遍 MFT。
+            // 0. 【直通分支】SourceReader 已在 demuxer 内完成硬解 ⇒ 本类不得再过一遍 MFT。
             //    必须置于下方 `packet.Data.Length == 0` 守卫【之前】：GPU 纹理直通包的 Data 恰是
             //       ReadOnlyMemory<byte>.Empty（帧全程在显存，没有系统内存副本），落到那条守卫上会被
             //       整帧静默丢弃 ⇒ 画面全黑而日志无任何异常（正是设计原则明令禁止的静默失效）。

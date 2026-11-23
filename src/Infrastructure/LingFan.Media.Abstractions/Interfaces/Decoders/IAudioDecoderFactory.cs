@@ -10,11 +10,15 @@ namespace LingFan.Media.Abstractions;
 public interface IAudioDecoderFactory
 {
     /// <summary>根据编解码器和设置创建解码器实例。</summary>
+    /// <param name="codec">音频编解码器。</param>
+    /// <param name="settings">音频设置。</param>
+    /// <returns>新创建的音频解码器实例（未初始化，须调用 <see cref="IAudioDecoder.Initialize"/>）。</returns>
     IAudioDecoder Create(AudioCodec codec, AudioSettings settings);
 
     /// <summary>异步根据编解码器和设置创建解码器实例。</summary>
     /// <param name="codec">音频编解码器。</param>
     /// <param name="settings">音频设置。</param>
     /// <param name="ct">取消令牌。</param>
+    /// <returns>新创建的音频解码器实例。</returns>
     Task<IAudioDecoder> CreateAsync(AudioCodec codec, AudioSettings settings, CancellationToken ct = default);
 }

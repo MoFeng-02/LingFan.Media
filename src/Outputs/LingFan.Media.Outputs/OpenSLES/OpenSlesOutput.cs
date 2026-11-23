@@ -15,13 +15,13 @@ namespace LingFan.Media.Outputs.OpenSLES;
 /// <list type="bullet">
 /// <item><see cref="InitializeAsync"/>：接口契约，同步执行引擎/混音/播放器创建后返回 <see cref="Task.CompletedTask"/>。
 /// 全部为 NDK 同步原生调用，无 I/O 可 await，<b>非伪异步</b>（不加 <c>async</c> 关键字、方法体无 <c>await</c>）。</item>
-/// <item><see cref="Initialize"/>：同步（sync 分类），构建 PCM 格式/数据源/数据汇并创建播放器。</item>
-/// <item><see cref="Submit"/>：同步边界（native 分类），拷贝 PCM 到原生缓冲并 <c>Enqueue</c>；缓冲满时由缓冲队列计数做背压（阻塞等待）。</item>
-/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步（sync 分类），SetPlayState(PAUSED/PLAYING)/BufferQueue.Clear。</item>
+/// <item><see cref="Initialize"/>：同步，构建 PCM 格式/数据源/数据汇并创建播放器。</item>
+/// <item><see cref="Submit"/>：同步边界（原生调用），拷贝 PCM 到原生缓冲并 <c>Enqueue</c>；缓冲满时由缓冲队列计数做背压（阻塞等待）。</item>
+/// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步，SetPlayState(PAUSED/PLAYING)/BufferQueue.Clear。</item>
 /// <item><see cref="GetPlaybackPosition"/>：同步，主时钟消费记账（首帧 PTS 锚点 + 已完成缓冲采样数），
 /// 等价 AudioTrack.playbackHeadPosition 语义；<see cref="GetPlaybackPositionDirect"/> 默认转发至此。
 /// 不读 SLPlayItf::GetPosition（厂商设备半冻结值不可信）。</item>
-/// <item><see cref="Dispose"/>：同步快速释放（sync 分类），Destroy 所有 NDK 对象。</item>
+/// <item><see cref="Dispose"/>：同步快速释放，Destroy 所有 NDK 对象。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。</item>
 /// </list>
 /// <para><b>线程安全</b>：Submit 在音频管线线程调用；Pause/Resume/Flush 在控制线程调用，不可并发。
@@ -77,10 +77,10 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     private const int SLOT_BQ_RegisterCallback = 3;
     private const int SLOT_Volume_SetVolumeLevel = 0;
 
-    // 在途缓冲深度：设备 BufferQueue 水库 = MaxInFlightBuffers × 单缓冲时长。8 × 46.4ms ≈ 372ms
-    // ——吸收音频解码阶段的零提交窗口（16 包 × DequeueOutput 5ms 轮询 + JNI ≈ 80~150ms）与
-    // CPU 调度抖动，消除周期性欠载（音频咔哒 + 主时钟停走 = 帧卡顿成因）。深度翻倍仅增加
-    // ~186ms 常驻内存与等量呈现延迟，对 A/V 同步无影响（视频按 master 呈现）。
+    // 在途缓冲深度：设备 BufferQueue 水库 = MaxInFlightBuffers × 单缓冲时长。
+    // 水库须覆盖音频解码阶段的零提交窗口（解码输出轮询等待 + JNI 开销）与 CPU 调度抖动，
+    // 消除周期性欠载（音频咔哒 + 主时钟停走 = 帧卡顿成因）。加深水库仅增加等量
+    // 常驻内存与呈现延迟，对 A/V 同步无影响（视频按 master 呈现）。
     private const int MaxInFlightBuffers = 8;
 
     // NDK 对象（SLObjectItf = void**，以 IntPtr 持有方法表指针）
@@ -242,7 +242,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
     /// <remarks>
     /// 主时钟 = 首帧媒体 PTS 锚点 + 已消费采样数/采样率（消费记账，等价 AudioTrack.playbackHeadPosition）。
     /// 不读 SLPlayItf::GetPosition——该 API 在部分厂商设备上返回半冻结值，
-    /// 曾致主时钟推进 ≪ 墙钟 → 视频帧永久 Wait、画面冻结而音频照常（详见字段区注释）。
+    /// 若读取它，主时钟推进会 ≪ 墙钟 → 视频帧永久 Wait、画面冻结而音频照常（详见字段区注释）。
     /// 记账时钟的性质：消费严格 1× 实时（单调）、暂停自然冻结、欠载自然停摆——主时钟所需全部性质。
     /// 步进值经 1× 实时插值平滑（封顶一个缓冲时长，见字段区注释），消除呈现时刻的阶梯量化；
     /// 暂停/欠载时封顶使时钟自然冻结，单调性不受影响。
@@ -254,7 +254,7 @@ internal sealed unsafe partial class OpenSlesOutput : IAudioOutput
         if (anchor == long.MinValue || _sampleRate <= 0)
             return TimeSpan.Zero; // 尚无音频提交：主时钟保持 0（视频首帧门控期内）
         // seqlock 式一致性读：consumed 与 stepQpc 必须来自同一次步进——步进落在两次读取间隙
-        // 会使插值在新 consumed 上叠加至多一缓冲（±46ms 锯齿 = 迟到 errMs 峰值的直接来源）。
+        // 会使插值在新 consumed 上叠加至多一个缓冲时长的锯齿（呈现时刻抖动的直接来源）。
         // 写序（回调线程）= 先 consumed 后 stepQpc，故两次 stepQpc 相同即 consumed 一致。
         long stepQpcFirst = Volatile.Read(ref _lastStepQpc);
         long consumed = Interlocked.Read(ref _framesConsumed);

@@ -5,9 +5,11 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.Core;
 
-// AudioPipeline 的 Submit 职责段（部分类，由 AudioPipeline.cs 按职责拆分，编译期等价）。
-// 字段与核心编排（ctor/StartAsync/Pause/Stop/PipelineLoop/Dispose）在主文件；
-// 音频不丢帧（丢帧致声音断裂），提交后经 Synchronizer.OnAudioFrameSubmitted 更新主时钟。
+/// <summary>
+/// AudioPipeline 的提交职责分部：采样提交与解码入队。
+/// 音频不丢帧（丢帧致声音断裂），提交后经 Synchronizer.OnAudioFrameSubmitted 更新主时钟。
+/// 字段与生命周期编排在主文件 AudioPipeline.cs。
+/// </summary>
 public sealed partial class AudioPipeline
 {
     /// <summary>
@@ -89,7 +91,7 @@ public sealed partial class AudioPipeline
     }
 
     /// <summary>
-    /// 整批提交解码帧。先逐帧做变换链 + 主时钟 + 数据事件（与历史单帧 SubmitFrame 语义完全一致），
+    /// 整批提交解码帧。先逐帧做变换链 + 主时钟 + 数据事件（逐帧语义，批量化只折叠输出往返），
     /// 再一次性交给输出（支持 <see cref="IBatchAudioSubmit"/> 时折叠为单次 STA 往返，否则退回逐帧 Submit）。
     /// 帧所有权始终在本方法（pipeline 线程）内归还到池，绝不跨线程归还（帧池非线程安全）。
     /// </summary>
@@ -97,7 +99,7 @@ public sealed partial class AudioPipeline
     {
         if (batch.Count == 0) return;
 
-        // 预处理：变换链 + 主时钟 + 数据事件（逐帧，与历史单帧语义一致）
+        // 预处理：变换链 + 主时钟 + 数据事件（逐帧执行，不随批量化改变语义）
         var prepared = new List<AudioFrame>(batch.Count);
         foreach (var frame in batch)
         {
@@ -145,6 +147,7 @@ public sealed partial class AudioPipeline
     /// <summary>
     /// 解码单个包并入队（与 定位复位/Reset 加锁，防止竞态）。供 PipelineLoop 主解码与前瞻预解码共用。
     /// </summary>
+    /// <param name="packet">待解码的音频包。所有权归本方法：无论解码成功、取消还是暂停跳过，均由本方法负责 Dispose。</param>
     /// <param name="ct">本轮消费循环的令牌（循环入口固化）。用参数而不是现读 <see cref="_cts"/>，
     /// 否则旧循环在定位复位换掉 <see cref="_cts"/> 后会改用新令牌继续解码。</param>
     private async Task DecodeAndEnqueueAsync(MediaPacket packet, CancellationToken ct)
@@ -163,7 +166,7 @@ public sealed partial class AudioPipeline
 
         try
         {
-            // 隐患B修复：解码锁获取超时期间 定位复位 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
+            // 解码锁获取超时期间 定位复位 可能跳过 Reset，此处补做，确保解码器内部状态必然复位
             if (_pendingDecoderReset)
             {
                 _decoder.Reset();

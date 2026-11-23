@@ -108,6 +108,7 @@ public partial class FormatDetector : IFormatDetector
     /// 探测媒体流的容器格式。
     /// </summary>
     /// <param name="stream">媒体数据流（必须可定位）。</param>
+    /// <param name="ct">取消令牌。</param>
     /// <returns>识别到的 <see cref="ContainerFormat"/>；无法识别时返回 <see cref="ContainerFormat.Unknown"/>。</returns>
     /// <exception cref="ArgumentNullException">stream 为 null。</exception>
     public static async Task<ContainerFormat> DetectAsync(IMediaStream stream, CancellationToken ct = default)

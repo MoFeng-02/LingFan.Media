@@ -56,7 +56,7 @@ public sealed class SkiaVideoRenderer : IVideoRenderer, IAvaloniaRenderAware
     }
 
     /// <inheritdoc/>
-    /// <remarks>同步快速释放（sync 分类）：委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>。
+    /// <remarks>同步快速释放：委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>。
     /// Skia 软渲染释放为快速同步操作，无 I/O 可 await，非伪异步。</remarks>
     public ValueTask DisposeAsync()
     {

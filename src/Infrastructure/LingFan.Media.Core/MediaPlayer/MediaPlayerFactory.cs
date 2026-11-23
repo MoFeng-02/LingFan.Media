@@ -27,7 +27,7 @@ public sealed class MediaPlayerFactory : IMediaPlayerFactory
 
     // 后处理变换链（中立 BCL 委托）。
     // 由 Extensions/DI 从 Video/Audio 模块的具体处理器/音量/混音转换而来；
-    // Core 不直接依赖 Video/Audio 模块，保持分层倒置避免。
+    // Core 不直接依赖 Video/Audio 模块，避免分层倒置。
     private readonly IReadOnlyList<Func<VideoFrame, VideoFrame?>>? _videoTransforms;
     private readonly IReadOnlyList<Func<AudioFrame, AudioFrame>>? _audioTransforms;
     private readonly Action? _videoTransformsReset;

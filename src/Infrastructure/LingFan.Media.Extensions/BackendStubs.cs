@@ -7,11 +7,11 @@ namespace LingFan.Media.Extensions;
 /// <para>VLC / MediaFoundation 后端已有真实实现，
 /// 分别迁移至各自的后端项目（LingFan.Media.Backends.VLCNative / .MediaFoundation），
 /// 使用 <c>AddVLCNative()</c> / <c>AddMediaFoundation()</c> 扩展方法注册。</para>
-/// <para>GStreamer 与 WebRTC <b>决定不支持</b>（GStreamer 过于复杂且 Linux 已有 VLC/FFmpeg 充分覆盖；
-/// WebRTC 不在当前范围）。两者统一为<b>注册期 fail-fast</b>：调用 <c>AddGStreamer()</c> / <c>AddWebRTC()</c>
+/// <para>GStreamer 与 WebRTC <b>不支持</b>：Linux 场景由 VLC/FFmpeg 覆盖，WebRTC 不在本库范围内。
+/// 两者统一为<b>注册期 fail-fast</b>：调用 <c>AddGStreamer()</c> / <c>AddWebRTC()</c>
 /// 立即抛 <see cref="NotSupportedException"/>，不做「注册成功、运行时才抛」的延迟失败——
 /// 消费方在装配阶段即得知不支持，而非播放中途。</para>
-/// <para>所有方法为同步配置（config 分类），无 I/O。</para>
+/// <para>所有方法为同步配置，无 I/O。</para>
 /// </remarks>
 public static class BackendStubs
 {

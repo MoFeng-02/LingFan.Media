@@ -48,9 +48,9 @@ internal static partial class MfDxvaInterop
     //    从管理器取回 ID3D11Device 并复测 DXVA 能力，是「绑定是否真正生效」的唯一权威判据。
     //    SDK 实物 mfobjects.h:6631-6639：GetVideoService 真实签名为
     //        HRESULT GetVideoService(THIS, _In_ HANDLE hDevice, _In_ REFIID riid, _Outptr_ void** ppService)
-    //      即紧接 This 之后的【第一个参数是 OpenDeviceHandle 取得的 HANDLE】，此前手写委托漏掉该参数
-    //      ⇒ 调用栈错位（riid 落到了 hDevice 位、ppService 落到 riid 位、少压一个参数）
-    //      ⇒ 返回 0x80070006 假失败（假阴性），会被误判 ResetDevice 未绑定。必须从 OpenDeviceHandle 取 HANDLE 再调用。
+    //      即紧接 This 之后的【第一个参数是 OpenDeviceHandle 取得的 HANDLE】；漏掉该参数
+    //      会调用栈错位（riid 落到了 hDevice 位、ppService 落到 riid 位、少压一个参数），
+    //      返回假失败（假阴性），被误判 ResetDevice 未绑定。必须从 OpenDeviceHandle 取 HANDLE 再调用。
     //    OpenDeviceHandle：HRESULT OpenDeviceHandle(THIS, HANDLE* phDevice)；绝对槽 6 → slot 3。
     //    CloseDeviceHandle：HRESULT CloseDeviceHandle(THIS, HANDLE hDevice)；绝对槽 3 → slot 0。
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]

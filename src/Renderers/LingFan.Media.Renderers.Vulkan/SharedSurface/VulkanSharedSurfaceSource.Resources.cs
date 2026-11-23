@@ -160,11 +160,11 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource
             ArrayLayers = 1,
             Samples = SampleCountFlags.Count1Bit,
             Tiling = ImageTiling.Optimal,
-            // _sharedImage 现为普通 Vulkan 外部图像（Android 同 Linux）：生产者把转换后的 RGBA 经
-            // vkCmdCopyImage 拷入（TRANSFER_DST_BIT），合成器经 OPAQUE_FD 导入后作为采样纹理上屏。
+            // _sharedImage 为普通 Vulkan 图像：生产者把转换后的 RGBA 经 vkCmdCopyImage 拷入（TRANSFER_DST_BIT）；
+            // fd/NT 形态由合成器经外部内存句柄导入后作为采样纹理上屏，Android 默认 NativeImage 形态由同 device Skia 直接包装采样。
             // Usage 与 Flags 必须与宿主合成器（Avalonia VulkanImageBase）逐位一致：
             // vkGetImageMemoryRequirements 是 image 创建参数的函数，Usage/Flags 不同会让
-            // 驱动（部分 Adreno 型号实测）给出不同 size，而 Avalonia 导入时按其自身 requirements
+            // 驱动（部分 Adreno 型号）给出不同 size，而 Avalonia 导入时按其自身 requirements
             // 对 MemorySize 做严格相等校验，不符即抛"Invalid memory size"→ 每帧导入失败。
             // 对齐值取自 Avalonia 12.1.1 反汇编：UsageFlags=0x17(TransferSrc|TransferDst|Sampled|
             // ColorAttachment)、Flags=MUTABLE_FORMAT。

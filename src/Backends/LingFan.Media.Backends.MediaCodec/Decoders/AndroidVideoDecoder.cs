@@ -15,7 +15,7 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// 基于托管 <see cref="AndroidMediaCodec"/> 的视频解码器，双路径：
 /// <b>1) GLES 桥接零拷贝（默认优先）</b>：解码器输出到 <see cref="AndroidAhbRgbaBridge"/> 的 SurfaceTexture，
 /// 驱动在 GPU 内把 YUV→RGB 渲进 RGBA AHardwareBuffer，Vulkan 渲染器以普通 RGBA 纹理采样上屏
-/// （绕开 Adreno 对「YUV AHB + Vulkan YCbCr 采样」的原生空指针崩溃）；
+/// （规避 Adreno 对「YUV AHB + Vulkan YCbCr 采样」的兼容性缺陷）；
 /// <b>2) ByteBuffer + 灵活 YUV420 回退</b>：桥接不可用（API&lt;29 或 EGL/GLES 初始化失败）时，
 /// 经 <c>getOutputImage</c> 取标准化三平面 I420 走 CPU。两条路径均走 net-android 托管绑定，
 /// 仅桥接的 EGL/GLES/AHardwareBuffer 图形原语经 [LibraryImport]（Android 后端
@@ -24,7 +24,7 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// <remarks>
 /// <para><b>异步策略</b>：<see cref="DecodeAsync"/> / <see cref="FlushAsync"/> 为热路径，内部同步托管调用，
 /// 返回 <see cref="ValueTask.FromResult{TResult}"/>（与 FFmpegVideoDecoder 同构）。<see cref="Initialize"/> 为同步初始化。</para>
-/// <para><b>单一路径：ByteBuffer + 灵活 YUV420</b>：解码器以 <c>COLOR_FormatYUV420Flexible</c> 配置，输出经
+/// <para><b>CPU 回退路径：ByteBuffer + 灵活 YUV420</b>：解码器以 <c>COLOR_FormatYUV420Flexible</c> 配置，输出经
 /// <see cref="AndroidMediaCodec.GetOutputImage"/> 取 <see cref="Image"/>（YUV_420_888），由托管
 /// <see cref="Image.Plane"/> 的 <see cref="Java.Nio.ByteBuffer"/> 经 CPU 提取标准紧凑 I420。平台契约（MediaCodec「原始视频缓冲区」节，
 /// AOSP 原文经 MS Learn/Xamarin 转载）明文：灵活 YUV 缓冲既可用于 Surface，也可用于 ByteBuffer 经 getOutputImage 访问，
@@ -32,7 +32,7 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// （plane0=Y、plane1=U、plane2=V），无需按厂商私有 NV12/NV21 布局猜测。</para>
 /// <para><b>为何不走 ImageReader(Surface)+CPU 读</b>：Surface 原生输出是不透明 COLOR_FormatSurface，平台只承诺
 /// 可用于呈现/GL 采样，从不承诺能被 CPU 按 YUV_420_888 正确读出（色度是否落盘取决于 gralloc 用途位与厂商实现）。
-/// 实测即命中该缺口：V 平面恒≈0 → 画面泛绿。GPU 零拷贝的正确形态是 SurfaceTexture→GL 在 GPU 内把
+/// CPU 读 Surface 输出即命中该缺口：V 平面恒≈0 → 画面泛绿。GPU 零拷贝的正确形态是 SurfaceTexture→GL 在 GPU 内把
 /// YUV→RGB 渲进 RGBA AHardwareBuffer，再交 Vulkan 以普通 RGBA 采样（<see cref="AndroidAhbRgbaBridge"/> 路径），
 /// 已实现为本解码器默认优先的零拷贝路径，不可用时回退本 ByteBuffer CPU 路径。</para>
 /// <para><b>可见区</b>：帧由 <see cref="ExtractI420FromImage"/> 按 <see cref="Image.CropRect"/>（= 输出格式
@@ -40,7 +40,7 @@ namespace LingFan.Media.Backends.MediaCodec.Decoders;
 /// 按 plane 的 pixelStride/rowStride 提取，Y pixelStride 恒为 1，U/V 的 pixelStride 为 1(planar I420) 或
 /// 2(semiplanar NV12，U 偶 V 奇)。</para>
 /// <para><b>色彩随帧透传</b>：<see cref="ReadOutputFormat"/> 读 <c>KEY_COLOR_STANDARD/RANGE/TRANSFER</c> 填
-/// <see cref="VideoColorInfo"/>，随帧交给渲染端选正确的 YUV→RGB 矩阵（治骁龙偏绿）。</para>
+/// <see cref="VideoColorInfo"/>，随帧交给渲染端选正确的 YUV→RGB 矩阵（避免色彩元数据缺省导致的偏色）。</para>
 /// <para><b>仅 Android 可用</b>：非 Android 运行时 <see cref="Initialize"/> 抛 <see cref="PlatformNotSupportedException"/>。</para>
 /// <para><b>分部划分</b>：Feed 分部管输入喂入与排空后补喂；Drain 分部管 EOS 两阶段排空；
 /// CodecSetup/Output/FrameExtract 分部管解码器创建配置、输出读取与帧提取。
@@ -161,7 +161,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         _logger.LogInformation("[ANDROID-VID] csd({Len}B) hex={Hex}",
             csd.Length, Convert.ToHexString(csd.Span));
         int frameW = settings.Width ?? 0, frameH = settings.Height ?? 0;
-        // 【仅诊断】手写 SPS 位流解析不可信（实测存在大幅误判）——真值以解码器 OutputFormat 为准。
+        // 【仅诊断】手写 SPS 位流解析不可信（可能大幅误判尺寸）——真值以解码器 OutputFormat 为准。
         // 绝不可参与 configure 决策（错误尺寸喂硬解会导致 0 帧产出）。
         if (csd.Length > 0 && AndroidCodecMaps.TryParseH264WidthHeight(csd.ToArray(), out int pw, out int ph))
             _logger.LogInformation("[ANDROID-VID] SPS 诊断解析 {W}x{H}（容器声明 {DW}x{DH}；仅供对照，不参与决策）",
@@ -176,23 +176,22 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
         // 不采用「输出到 ImageReader(YUV_420_888) 再 CPU 读」：Surface 输出的原生格式是不透明的
         // COLOR_FormatSurface，平台只承诺其可用于呈现/GL 采样，从不承诺该缓冲能被 CPU 按
         // YUV_420_888 语义正确读出（是否可读、色度是否落盘取决于 gralloc 用途位与厂商实现）。
-        // 实测即命中该缺口：Y/U 有效而 V 平面恒 ≈0，而色度平面为 0（非 128）正是画面整体
+        // CPU 回读即命中该缺口：Y/U 有效而 V 平面恒 ≈0，而色度平面为 0（非 128）正是画面整体
         // 泛绿的成因。GPU 零拷贝的正确形态是 SurfaceTexture/AHardwareBuffer→GL/Vulkan 采样，
         // 而非经 ImageReader 回读 CPU；该形态即本解码器的 GLES 桥接零拷贝路径（AndroidAhbRgbaBridge），
         // 经 AndroidVideoDecodePolicy 启用，不可用时回退到本 ByteBuffer CPU 路径。
         //
         // 解码分档（见 AndroidVideoDecodePolicy）：
         // 1) 硬解 + CPU 帧（能播档，默认）：OMX 硬件解码器 + ByteBuffer CPU 帧 + 渲染端 Skia 软渲。
-        //    OMX 走旧 OMX 框架（非 Codec2），无 c2 的 numClientBuffers 僵死；此为实测通过路径。
+        //    OMX 走旧 OMX 框架（非 Codec2），无 c2 的 numClientBuffers 僵死；此为默认稳定路径。
         // 2) 桥接零拷贝（增强档，EnableHardwareZeroCopy）：软解（c2）+ GLES 桥接 → RGBA AHB。
-        //    Vulkan AHB 采样在 Adreno 上驱动崩，待 GL 路线重做。
+        //    Vulkan AHB 采样在 Adreno 上存在驱动兼容性缺陷（GLES 桥接 RGBA 路线为替代）。
         // 桥接不可用时回落 1) 硬解 + ByteBuffer（绝不 c2 软解 + ByteBuffer——那是 numClientBuffers 僵死档）。
         bool zeroCopy = AndroidVideoDecodePolicy.EnableHardwareZeroCopy;
         _useAhbFrames = zeroCopy && TryCreateAhbOutputSurface(frameW, frameH);
-        // 零拷贝档也用硬解（实测：c2 软解 + Surface 桥在输入正常喂入时仍产帧停滞；
-        // 「软解+桥接产帧稳定」系未充分验证的假设）。硬解 + Surface 模式与历史结论一致
-        // （「高通硬解 ByteBuffer 输出停滞系误诊，Surface 模式才是正解」）。
-        // 单变量对照实验：ForceSoftwareDecoder 只换解码器（AOSP 软解），帧提取/重排/同步/上屏完全不变。
+        // 零拷贝档也用硬解：c2 软解 + Surface 桥在输入正常喂入时仍会产帧停滞，
+        // 硬解 + Surface 模式才是稳定路径（勿改用软解 + 桥接）。
+        // ForceSoftwareDecoder 为诊断开关：只换解码器（AOSP 软解），帧提取/重排/同步/上屏完全不变。
         var codecObj = CreateVideoCodec(mime, codec,
             preferSoftwareDecoder: AndroidVideoDecodePolicy.ForceSoftwareDecoder);
         try
@@ -280,7 +279,7 @@ internal sealed partial class AndroidVideoDecoder : IVideoDecoder
     }
 
     // 自适应重排缓冲
-    // MediaCodec 契约要求按**呈现序**输出，但部分 OMX 厂商实现实测按**解码序**（B 帧重排）吐帧：
+    // MediaCodec 契约要求按**呈现序**输出，但部分 OMX 厂商实现按**解码序**（B 帧重排）吐帧：
     // pts 回退集中出现在开播初期（I/P/B 交错输出）。
     // 后果：管线只 Peek 队首，队首 pts 远在未来时整队被堵（队头阻塞），主时钟追上后
     // 其后各帧又集体超时被丢 —— 开播期时序错乱/花屏。

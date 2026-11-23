@@ -6,18 +6,22 @@ namespace LingFan.Media.GPUShare.Vulkan;
 // 函数指针字段与三阶段初始化在 VulkanNative.cs；签名对齐 Silk.NET Vk / Khr*，调用点仅改名。
 public static unsafe partial class VulkanNative
 {
+    /// <summary>枚举实例下的物理设备（vkEnumeratePhysicalDevices；两段式：先取数量再取列表）。</summary>
     public static unsafe Result EnumeratePhysicalDevices(Instance instance, ref uint pPhysicalDeviceCount, PhysicalDevice* pPhysicalDevices)
     {
         fixed (uint* p = &pPhysicalDeviceCount)
             return _enumeratePhysicalDevices(instance, p, pPhysicalDevices);
     }
 
+    /// <summary>查询物理设备基础属性（vkGetPhysicalDeviceProperties：名称/类型/vendorID/限制）。</summary>
     public static unsafe void GetPhysicalDeviceProperties(PhysicalDevice physicalDevice, PhysicalDeviceProperties* pProperties)
         => _getPhysicalDeviceProperties(physicalDevice, pProperties);
 
+    /// <summary>查询物理设备内存属性（vkGetPhysicalDeviceMemoryProperties：堆与内存类型，供 FindMemoryType 匹配）。</summary>
     public static unsafe void GetPhysicalDeviceMemoryProperties(PhysicalDevice physicalDevice, PhysicalDeviceMemoryProperties* pMemoryProperties)
         => _getPhysicalDeviceMemoryProperties(physicalDevice, pMemoryProperties);
 
+    /// <summary>查询物理设备队列族属性（vkGetPhysicalDeviceQueueFamilyProperties；两段式）。</summary>
     public static unsafe void GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice physicalDevice, ref uint pQueueFamilyPropertyCount, QueueFamilyProperties* pQueueFamilyProperties)
     {
         fixed (uint* p = &pQueueFamilyPropertyCount)
@@ -35,6 +39,7 @@ public static unsafe partial class VulkanNative
         return _getPhysicalDeviceFeatures2(physicalDevice, pFeatures);
     }
 
+    /// <summary>查询物理设备属性（Vulkan 1.1 core；pNext 可链 UUID/LUID 等扩展属性结构；未解析时抛异常）。</summary>
     public static unsafe Result GetPhysicalDeviceProperties2(PhysicalDevice physicalDevice, PhysicalDeviceProperties2* pProperties2)
     {
         if (_getPhysicalDeviceProperties2 == null)

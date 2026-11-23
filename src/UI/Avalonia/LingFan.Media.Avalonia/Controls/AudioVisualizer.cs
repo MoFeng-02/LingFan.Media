@@ -13,12 +13,12 @@ namespace LingFan.Media.Avalonia;
 /// 音频可视化控件。显示频谱/波形/柱状频谱。
 /// </summary>
 /// <remarks>
-/// <para><b>异步策略</b>：全部 sync / native 分类——
-/// Render 为 native（Avalonia void 签名硬限制），OnData/OnAudioFrame 为 sync（纯内存 Span 操作）。
+/// <para><b>异步策略</b>：全部同步——
+/// Render 受 Avalonia void 签名硬限制（原生回调），OnData/OnAudioFrame 为纯内存 Span 操作。
 /// 无任何 I/O 或 await，补 async 即伪异步（禁止）。</para>
-/// <para><b>U2/U3/U10</b>：对接真实音频管线数据（通过 <see cref="IMediaPlayer.AudioDataAvailable"/>
+/// <para><b>数据源</b>：对接真实音频管线数据（通过 <see cref="IMediaPlayer.AudioDataAvailable"/>
 /// 事件），实现 FFT 频谱分析与真实波形/柱状渲染。模拟数据作为无订阅时的回退。</para>
-/// <para><b>L7 线程安全</b>：<see cref="_audioData"/> 由音频管线线程（OnAudioFrame）写入、
+/// <para><b>线程安全</b>：<see cref="_audioData"/> 由音频管线线程（OnAudioFrame）写入、
 /// UI 线程（Render）读取，使用 <see cref="_audioDataLock"/> 保护。采用双缓冲语义——
 /// 写入方总是构造新数组后整体替换引用，读取方在锁内捕获引用，锁外读取旧数组快照，无竞态。</para>
 /// <para><b>AOT 兼容</b>：sealed 类，无反射；FFT 仅用 Span/ArrayPool；PCM→float 用 MemoryMarshal。</para>
@@ -108,7 +108,7 @@ public sealed class AudioVisualizer : Control
     {
         base.OnPropertyChanged(change);
 
-        // U2：绑定播放器变化时订阅/取消订阅音频数据事件
+        // 绑定播放器变化时订阅/取消订阅音频数据事件
         if (change.Property == PlayerProperty)
         {
             if (change.OldValue is IMediaPlayer oldPlayer)
@@ -154,7 +154,7 @@ public sealed class AudioVisualizer : Control
     }
 
     /// <summary>
-    /// 接收音频帧数据（U2）。由 <see cref="IMediaPlayer.AudioDataAvailable"/> 在音频管线线程同步触发。
+    /// 接收音频帧数据。由 <see cref="IMediaPlayer.AudioDataAvailable"/> 在音频管线线程同步触发。
     /// <b>只读借用</b>传入的 <see cref="AudioFrame"/>：立即拷贝 PCM 字节并转换为单声道 float，
     /// 绝不持有帧引用或 Dispose（帧由管线池管理）。同步方法，无 I/O，无伪异步。
     /// </summary>
@@ -221,7 +221,7 @@ public sealed class AudioVisualizer : Control
 
         for (var i = 0; i < barCount; i++)
         {
-            // U10：优先使用真实数据，无订阅时回退模拟
+            // 优先使用真实数据，无订阅时回退模拟
             var value = data.Length > 0 && i < data.Length
                 ? Math.Abs(data[i])
                 : (float)(_random.NextDouble() * 0.8 + 0.1);
@@ -252,7 +252,7 @@ public sealed class AudioVisualizer : Control
         float[] data;
         lock (_audioDataLock) data = _audioData;
 
-        // U10：真实数据优先，无订阅时回退模拟
+        // 真实数据优先，无订阅时回退模拟
         var renderData = data.Length > 0 ? data : GenerateSimulatedWaveform(BarCount * 4);
 
         if (renderData.Length < 2)
@@ -287,7 +287,7 @@ public sealed class AudioVisualizer : Control
             return;
         }
 
-        // U3：FFT 频谱分析
+        // FFT 频谱分析
         var n = FftProcessor.NextPow2(data.Length);
         if (n > 4096) n = 4096; // FFT 规模上限，防止极端长帧拖慢渲染
 

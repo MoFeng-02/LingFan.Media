@@ -6,6 +6,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 // 函数指针字段与三阶段初始化在 VulkanNative.cs；签名对齐 Silk.NET Vk / Khr*，调用点仅改名。
 public static unsafe partial class VulkanNative
 {
+    /// <summary>创建信号量（vkCreateSemaphore；GPU 队列间同步，外部导出形态经 pNext 声明）。</summary>
     public static unsafe Result CreateSemaphore(Device device, ref SemaphoreCreateInfo pCreateInfo, AllocationCallbacks* pAllocator, out Semaphore pSemaphore)
     {
         fixed (SemaphoreCreateInfo* p = &pCreateInfo)
@@ -17,9 +18,11 @@ public static unsafe partial class VulkanNative
         }
     }
 
+    /// <summary>销毁信号量（vkDestroySemaphore；调用方须确保无在途等待/信号操作）。</summary>
     public static unsafe void DestroySemaphore(Device device, Semaphore semaphore, AllocationCallbacks* pAllocator)
         => _destroySemaphore(device, semaphore, pAllocator);
 
+    /// <summary>创建围栏（vkCreateFence；GPU→CPU 完成通知）。</summary>
     public static unsafe Result CreateFence(Device device, FenceCreateInfo* pCreateInfo, AllocationCallbacks* pAllocator, out Fence pFence)
     {
         Fence tmp;
@@ -28,12 +31,15 @@ public static unsafe partial class VulkanNative
         return r;
     }
 
+    /// <summary>销毁围栏（vkDestroyFence；调用方须确保无在途等待）。</summary>
     public static unsafe void DestroyFence(Device device, Fence fence, AllocationCallbacks* pAllocator)
         => _destroyFence(device, fence, pAllocator);
 
+    /// <summary>CPU 阻塞等待围栏（vkWaitForFences；timeout 纳秒，waitAll 非 0 须全部 signaled）。</summary>
     public static unsafe Result WaitForFences(Device device, uint fenceCount, Fence* pFences, uint waitAll, ulong timeout)
         => _waitForFences(device, fenceCount, pFences, waitAll, timeout);
 
+    /// <summary>复位围栏为 unsignaled（vkResetFences；复用前必须复位）。</summary>
     public static unsafe Result ResetFences(Device device, uint fenceCount, Fence* pFences)
         => _resetFences(device, fenceCount, pFences);
 

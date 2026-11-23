@@ -181,6 +181,10 @@ public sealed class D3D11Nv12SharedHandleExporter : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// 标记释放（幂等）。本类仅借用共享 device/context 裸指针（不持有 COM 引用），无需 Release；
+    /// 导出成功的共享纹理所有权已随 out 参数转移给调用方。
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;

@@ -20,6 +20,10 @@ public sealed class BufferProgressEventArgs : EventArgs
     /// <summary>
     /// 初始化 <see cref="BufferProgressEventArgs"/> 的新实例。
     /// </summary>
+    /// <param name="state">当前缓冲状态。</param>
+    /// <param name="bufferedDuration">已缓冲时长。</param>
+    /// <param name="bufferedBytes">已缓冲字节数。</param>
+    /// <param name="progress">缓冲进度（0.0~1.0，仅网络流有意义）。</param>
     public BufferProgressEventArgs(BufferState state, TimeSpan bufferedDuration, long bufferedBytes, float progress)
     {
         State = state;

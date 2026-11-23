@@ -76,9 +76,9 @@ public sealed unsafe partial class VulkanRendererFactory
             AddIfAvail("VK_EXT_metal_objects");
         }
 
-        // B4 Vulkan Video 硬解（Vulkan 闭环零拷贝）：条件启用 video-decode 扩展。
+        // Vulkan Video 硬解（Vulkan 闭环零拷贝）：条件启用 video-decode 扩展。
         // 按物理设备实际支持过滤，缺失则静默跳过——vkCreateDevice 不会因 video 扩展不可用而失败，
-        // 现有渲染路径完全不受影响（不支持 video 解码的 GPU 仅由 B4 后端回落软件解码）。
+        // 现有渲染路径完全不受影响（不支持 video 解码的 GPU 仅由 Vulkan Video 解码后端回落软件解码）。
         AddIfAvail("VK_KHR_video_queue");
         AddIfAvail("VK_KHR_video_decode_queue");
         AddIfAvail("VK_KHR_video_decode_h264");
@@ -149,7 +149,7 @@ public sealed unsafe partial class VulkanRendererFactory
             AddIfAvailable("VK_KHR_external_memory_capabilities");
             AddIfAvailable("VK_KHR_external_semaphore_capabilities");
         }
-        // B4 Vulkan Video 硬解：实例级启用 VK_KHR_video_queue。
+        // Vulkan Video 硬解：实例级启用 VK_KHR_video_queue。
         // 该扩展虽分类为 device extension，但 vkGetPhysicalDeviceVideoCapabilitiesKHR /
         // vkGetPhysicalDeviceVideoFormatPropertiesKHR 是【实例级分派函数】（首参 VkPhysicalDevice），
         // 规范要求其所在扩展在实例启用后方可正确调用（FFmpeg hwcontext_vulkan 亦在设备级启用，双保险）。

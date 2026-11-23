@@ -8,7 +8,7 @@ namespace LingFan.Media.Outputs.AAudio;
 /// <para>注册的是工厂（Singleton），不是实例！<see cref="AAudioOutput"/> 是 Session 级对象，由工厂 Create() 每次新建。</para>
 /// <para>低版本回退：AAudio 需 Android 8.1（API 27）+。低版本设备请由宿主改注册
 /// <c>AddOpenSlesOutput()</c>（宿主侧可用 <c>OperatingSystem.IsAndroidVersionAtLeast(27)</c> 判定）。</para>
-/// <para>此方法为同步配置（config 分类），无 I/O。</para>
+/// <para>此方法为同步配置，无 I/O。</para>
 /// </remarks>
 public static class AAudioExtensions
 {

@@ -13,7 +13,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <item>呈现线程：<c>D3D11Renderer</c> 在视频呈现线程上用同一 context 做 <c>CopySubresourceRegion</c> + <c>Present</c>。</item>
 /// </list>
 /// <para>FFmpeg 的 <c>AVD3D11VADeviceContext</c> 在 <c>av_hwdevice_ctx_init</c> 时会创建一把<b>自己的</b>互斥量
-/// （<c>d3d11va_default_lock</c>）来保护它自己的 context 调用——但我方渲染器完全不参与那把锁，
+/// （<c>d3d11va_default_lock</c>）来保护它自己的 context 调用——但本渲染器完全不参与那把锁，
 /// 于是两条线程并发操作同一 immediate context ⇒ 命令流交错错乱（呈现出错帧/半写入帧）、
 /// 长时间竞态后驱动状态破坏 ⇒ 原生 AccessViolation。</para>
 /// <para><c>ID3D11Multithread::SetMultithreadProtected(TRUE)</c> 让 D3D11 运行时对该设备的所有

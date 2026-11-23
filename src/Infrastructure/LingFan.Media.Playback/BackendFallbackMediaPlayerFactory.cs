@@ -36,6 +36,15 @@ public sealed class BackendFallbackMediaPlayerFactory : IMediaPlayerFactory, IBa
     /// <remarks>key 由实测回退结果填充，无硬编码规则；mp4/H264 与 mp4/H265 各自独立记忆，互不污染。</remarks>
     internal readonly ConcurrentDictionary<FormatKey, int> FormatCache = new();
 
+    /// <summary>
+    /// 初始化 <see cref="BackendFallbackMediaPlayerFactory"/> 的新实例。
+    /// </summary>
+    /// <param name="sp">服务提供者；用于解析 keyed "composer" 核心工厂与各后端工厂组。</param>
+    /// <param name="loggerFactory">可选日志工厂。</param>
+    /// <param name="streamFactory">可选媒体流工厂；与 <paramref name="formatDetector"/> 同时提供时，
+    /// 文件源在打开前做格式探测以命中格式级记忆（见 <see cref="FallbackMediaPlayer"/>）。</param>
+    /// <param name="formatDetector">可选格式探测器。</param>
+    /// <exception cref="InvalidOperationException">核心 composer 未注册（DI 中缺少 keyed "composer" 的 <see cref="IMediaPlayerFactory"/>）。</exception>
     public BackendFallbackMediaPlayerFactory(
         IServiceProvider sp,
         ILoggerFactory? loggerFactory = null,
