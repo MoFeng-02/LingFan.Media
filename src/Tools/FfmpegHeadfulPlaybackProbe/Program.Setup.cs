@@ -26,7 +26,7 @@ internal static partial class Program
     {
         var loggerFactory = LoggerFactory.Create(b => b
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "[HH:mm:ss.fff] "; })
-            .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
+            .SetMinimumLevel(verbose ? LogLevel.Trace : LogLevel.Information));
 
         var services = new ServiceCollection();
         services.AddSingleton<ILoggerFactory>(loggerFactory);

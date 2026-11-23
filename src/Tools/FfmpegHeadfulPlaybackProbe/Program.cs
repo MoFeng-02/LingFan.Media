@@ -98,6 +98,8 @@ internal static partial class Program
             Environment.SetEnvironmentVariable("LINGFAN_SYNC_DIAG", "1");
 
         double syncLeadMs = ParseDouble(args, "--sync-lead", 0);
+        // --full 兜底窗口倍率：cap = Duration × capScale + 8s；默认 1 保持既有口径。
+        double capScale = Math.Max(1, ParseDouble(args, "--cap-scale", 1));
         if (syncLeadMs != 0)
             Environment.SetEnvironmentVariable("LINGFAN_SYNC_LEAD_MS", syncLeadMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
         int saveFrames = (int)ParseDouble(args, "--save-frames", 0);
@@ -255,7 +257,9 @@ internal static partial class Program
                 if (fullPlayback)
                 {
                     if (player.State == MediaState.Ended) break;
-                    double cap = player.Duration.TotalSeconds + 8;
+                    // 兜底窗口倍率（默认 1）：软解超实时能力素材需数倍时长才能自然收尾，
+                    // 判别「解码慢」与「管线挂起」时用 --cap-scale 3 放大窗口观察能否自然 Ended。
+                    double cap = player.Duration.TotalSeconds * capScale + 8;
                     if (poll.Elapsed.TotalSeconds > cap)
                     {
                         Console.WriteLine("  [HEADFUL] 超时未收到 Ended（兜底退出）");
