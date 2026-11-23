@@ -191,6 +191,21 @@ function checkGuidePages(manifest, sourceWords) {
 }
 
 // ---------- 5: desensitization ----------
+// Two rule groups:
+//   DESENSITIZE       — applies to every docs markdown page.
+//   DESENSITIZE_EXTRA — codename families that only make sense in API prose;
+//                       applied to generated reference pages and to the ///
+//                       doc comments of the projects that feed them.
+// Whitelists guard known public terms so format/version/channel names do not
+// false-positive (pixel & sample formats, HE-AAC v2, AudioUnit v2, Vulkan API
+// versions, RFC1918 literals in SSRF docs, named-constant hex definitions).
+
+const PUBLIC_TERM_CONTEXT = /(?:HE-AAC|AudioUnit|Vulkan|API|vulkan)\s*$/i;
+const FORMAT_TOKENS = new Set([
+  'S16', 'S32', 'S8', 'F32', 'F16', 'R8', 'R8G8', 'GR88', 'B8', 'A8', 'L0', 'R0',
+  'U00', 'U01', 'U10', 'U11',
+]);
+
 const DESENSITIZE = [
   { name: 'section symbol', re: /\u00A7/g },
   { name: 'absolute path', re: /\b[A-Za-z]:[\\/]/g },
@@ -206,14 +221,83 @@ const DESENSITIZE = [
   { name: 'internal narrative', re: /(?:我们排查|我们发现|踩过|复审|拍板|留档|整轮|排查过程|调查过程)/g },
 ];
 
+const DESENSITIZE_EXTRA = [
+  { name: 'B-family codename', re: /\bB-[A-Z0-9]+\b/g },
+  { name: 'AU-family codename', re: /\bAU\d+\b/g },
+  {
+    name: 'letter-digit codename',
+    re: /\b(?:B\d{1,2}|L\d{1,2}(?:-L\d{1,2})?|[ESOA]\d{1,2}|U\d{1,2})\b/g,
+    allow: (m) => FORMAT_TOKENS.has(m[0]),
+  },
+  {
+    name: 'lowercase version codename',
+    re: /\bv[12]\b/g,
+    allow: (m, text) => PUBLIC_TERM_CONTEXT.test(text.slice(Math.max(0, m.index - 24), m.index)),
+  },
+  { name: 'C-line label', re: /C线/g },
+  { name: 'phase label', re: /\bPhase\s*\d+[a-z]?\b/gi },
+  { name: 'tier label', re: /\bTier\s*\d\b/gi },
+  { name: 'gate label', re: /\bGate\s*\d\b/gi },
+  { name: 'plan label', re: /[A-Z]\s?方案/g },
+  { name: 'root-cure wording', re: /治本|隐患[AB]/g },
+  { name: 'dispose channel codename', re: /\bDECODER-DISPOSE\b/g },
+  { name: 'b-number marker', re: /\(b\)\(\d+\)/g },
+  { name: 'headless-A label', re: /无头\s*A\s*形态/g },
+  { name: 'category table term', re: /\b(?:config|sync|native)\s*分类/g },
+];
+
+/** First violating match of one rule, honoring its allow callback. */
+function firstViolation(rule, text) {
+  rule.re.lastIndex = 0;
+  let m;
+  while ((m = rule.re.exec(text))) {
+    if (rule.allow && rule.allow(m, text)) continue;
+    return m;
+  }
+  return null;
+}
+
 function checkDesensitize() {
   for (const abs of walkDocsMd()) {
     const text = fs.readFileSync(abs, 'utf8');
     const r = rel(abs);
-    for (const { name, re } of DESENSITIZE) {
-      re.lastIndex = 0;
-      const m = re.exec(text);
-      if (m) err(`Desensitize (${name}): ${r} contains "${m[0]}"`);
+    for (const rule of DESENSITIZE) {
+      const m = firstViolation(rule, text);
+      if (m) err(`Desensitize (${rule.name}): ${r} contains "${m[0]}"`);
+    }
+    const isGenerated = parseFrontmatter(text).generated === true;
+    if (isGenerated) {
+      for (const rule of DESENSITIZE_EXTRA) {
+        const m = firstViolation(rule, text);
+        if (m) err(`Desensitize (${rule.name}): ${r} contains "${m[0]}"`);
+      }
+    }
+  }
+}
+
+/** Scan /// doc comments of the projects feeding the public reference.
+ *  Body // comments are intentionally out of scope here (they never reach
+ *  docs); line-level exemptions keep named-constant hex definitions and
+ *  RFC1918 literals in SSRF-guard prose from false-positiving. */
+function checkSourceDocComments(projects) {
+  const constHexLine = /(?:const|static\s+readonly|=\s*)[^;]*\b0x[8C][0-9A-Fa-f]{7}\b/;
+  const rfc1918Line = /RFC\s*1918|私网|私有网|环回|link-local|loopback/i;
+  for (const proj of projects) {
+    for (const abs of walkCs(path.join(repoRoot, proj.dir))) {
+      const lines = stripBom(fs.readFileSync(abs, 'utf8')).split(/\r?\n/);
+      const relSrc = path.relative(repoRoot, abs).split(path.sep).join('/');
+      for (let i = 0; i < lines.length; i++) {
+        const t = lines[i].trimStart();
+        if (!t.startsWith('///')) continue;
+        const body = t.slice(3);
+        for (const rule of [...DESENSITIZE, ...DESENSITIZE_EXTRA]) {
+          if (rule.name === 'crash hex code' && constHexLine.test(lines[i])) continue;
+          if (rule.name === 'private IP' && rfc1918Line.test(body)) continue;
+          if (rule.name === 'section symbol' && /ISO\/IEC|VUID|\.h\b|规范|spec/i.test(body)) continue;
+          const m = firstViolation(rule, body);
+          if (m) err(`Desensitize src (${rule.name}): ${relSrc}:${i + 1} contains "${m[0]}"`);
+        }
+      }
     }
   }
 }
@@ -228,6 +312,7 @@ const sourceWords = buildSourceWordIndex();
 checkFreshnessAndCoverage(manifest, projects);
 checkGuidePages(manifest, sourceWords);
 checkDesensitize();
+checkSourceDocComments(projects);
 
 console.log(`Checked docs against source (${sourceWords.size} source identifiers indexed).`);
 if (warnings.length) {
