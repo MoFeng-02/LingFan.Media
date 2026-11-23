@@ -15,7 +15,7 @@ using Microsoft.Extensions.Options;
 namespace LingFan.Media.Extensions;
 
 /// <summary>
-/// DI 注册主入口。提供 <see cref="AddLingFanMedia"/> 扩展方法注册核心媒体服务。
+/// DI 注册主入口。提供 <see cref="AddLingFanMedia(IServiceCollection, Action{MediaOptions})"/> 扩展方法注册核心媒体服务。
 /// </summary>
 /// <remarks>
 /// <para>使用模式：<code>services.AddLingFanMedia().AddFFmpeg().AddD3D11Renderer().AddWasapiOutput();</code></para>

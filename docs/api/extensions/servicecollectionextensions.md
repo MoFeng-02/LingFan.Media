@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`ServiceCollectionExtensions.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Extensions/ServiceCollectionExtensions.cs)
 
-DI 注册主入口。提供 `AddLingFanMedia` 扩展方法注册核心媒体服务。
+DI 注册主入口。提供 `AddLingFanMedia(IServiceCollection, Action{MediaOptions})` 扩展方法注册核心媒体服务。
 
 ## Declaration
 

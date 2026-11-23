@@ -2039,7 +2039,7 @@
         "AddLingFanMedia",
         "AddLingFanMedia"
       ],
-      "sourceHash": "be5145f93c96cb5dd55d2b75e39c6f74d3acecc263c4f02c86e30a36f9ad5dbe",
+      "sourceHash": "1e46899c548ad2d1fb2e2a9f9d3b62f93f97397631df80ee42b1b47b1e6a360d",
       "project": "extensions"
     },
     {
@@ -3084,7 +3084,7 @@
       "page": "api/extensions/servicecollectionextensions",
       "pageZh": "zh/api/extensions/servicecollectionextensions",
       "source": "src/Infrastructure/LingFan.Media.Extensions/ServiceCollectionExtensions.cs",
-      "sourceHash": "be5145f93c96cb5dd55d2b75e39c6f74d3acecc263c4f02c86e30a36f9ad5dbe",
+      "sourceHash": "1e46899c548ad2d1fb2e2a9f9d3b62f93f97397631df80ee42b1b47b1e6a360d",
       "project": "extensions",
       "types": [
         "ServiceCollectionExtensions"

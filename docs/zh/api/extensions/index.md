@@ -15,5 +15,5 @@ generator: "scripts/gen-api.mjs"
 | [`GStreamerOptions`](/zh/api/extensions/backendstubs) | class | GStreamer 后端配置选项（桩，保留供 API 兼容）。 |
 | [`MediaBuilderPipelineExtensions`](/zh/api/extensions/mediabuilderpipelineextensions) | class | `MediaBuilder` 的管线后处理配置扩展（组合根侧）。 |
 | [`ModuleExtensions`](/zh/api/extensions/moduleextensions) | class | 各子模块内部服务注册的辅助扩展方法。 |
-| [`ServiceCollectionExtensions`](/zh/api/extensions/servicecollectionextensions) | class | DI 注册主入口。提供 `AddLingFanMedia` 扩展方法注册核心媒体服务。 |
+| [`ServiceCollectionExtensions`](/zh/api/extensions/servicecollectionextensions) | class | DI 注册主入口。提供 `AddLingFanMedia(IServiceCollection, Action{MediaOptions})` 扩展方法注册核心媒体服务。 |
 | [`WebRTCOptions`](/zh/api/extensions/backendstubs) | class | WebRTC 后端配置选项（桩，保留供 API 兼容）。 |
