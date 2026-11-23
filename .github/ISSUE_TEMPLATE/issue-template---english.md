@@ -1,57 +1,57 @@
 ---
 name: Issue Template - English
-about: Describe the issue in your mother tongue – no machine translation, please
-title: "[Short title, preferably in English or your native language]"
+about: Describe the issue in your native language. Please don't use machine translation.
+title: "[Short title, English or your native language is fine]"
 labels: ''
 assignees: ''
 
 ---
 
-> **❗ IMPORTANT – PLEASE READ BEFORE WRITING**
+> **Before you write**
 >
-> 1. **Write your entire issue in your native language** – the one you speak and think in most naturally.
-> 2. **Do NOT use any machine translation** (e.g., Google Translate, DeepL, ChatGPT, etc.) to generate your text. Machine translations often distort nuances and introduce errors.
-> 3. **The maintainer's first language is Chinese** and will read your text with translation tools. Don't worry about the language — just write clearly in your own words.
-> 4. If you are also comfortable writing in English, you may **add an additional English version that you wrote yourself** (not machine-translated). However, **your native-language version remains the primary reference**.
+> 1. **Write the whole issue in your native language** — the language you're most comfortable with.
+> 2. **Don't use machine translation** (Google Translate, DeepL, ChatGPT, etc.). It often changes the meaning and causes confusion.
+> 3. The maintainer's first language is Chinese and will read your text with translation tools. Don't worry about your English or Chinese — just write clearly.
+> 4. If you're comfortable writing in English, you can add an English version you wrote yourself (not machine-translated). Your native-language version stays the main reference.
 >
-> Following this rule ensures that your problem is understood accurately and saves back-and-forth clarification. Thank you for your cooperation!
+> This makes the issue easier to understand and avoids back-and-forth. Thanks!
 
 ---
 
-### 1. Brief description (in your native language)
-Summarise the issue in one or two sentences.
+### 1. Brief description (native language)
+One or two sentences about the problem.
 
-### 2. Steps to reproduce (in your native language)
-List the actions you took, step by step, from start to the point where the problem occurs. For example:
+### 2. Steps to reproduce (native language)
+List what you did, in order, from the start to the point where the problem shows up. For example:
 1. Loaded a video file (e.g. sample.mp4, H.264 in MP4)
 2. Called Play() / added the player to a window or page
-3. Switched to fullscreen / enabled hardware decoding
+3. Switched to fullscreen / turned on hardware decoding
 4. …
 
-### 3. Expected result (in your native language)
+### 3. Expected result (native language)
 What did you expect to happen?
 
-### 4. Actual result (in your native language)
-What actually happened? Include error messages, unexpected behaviour, or any relevant output.
+### 4. Actual result (native language)
+What actually happened? Include errors, unexpected behavior, or relevant output.
 
-### 5. Environment details (can be in English or common terms)
-- Operating system and version (e.g., Windows 11, macOS 14, Ubuntu 22.04, Android 14, iOS 17):
-- .NET runtime and version (e.g., .NET 10; NativeAOT?):
-- LingFan.Media version (e.g., v1.2.3):
-- UI framework (Avalonia / MAUI / console · no UI / other):
-- Media file info (container, video/audio codecs, resolution; or a link to a shareable sample file):
-- GPU model; hardware decoding on or off (does the issue only happen with hardware or software decoding?):
-- Other relevant dependencies or configuration:
+### 5. Environment details (English or common terms are fine)
+- OS and version (e.g. Windows 11, macOS 14, Ubuntu 22.04, Android 14, iOS 17):
+- .NET runtime and version (e.g. .NET 10; NativeAOT?):
+- LingFan.Media version (e.g. v1.2.3):
+- UI framework (Avalonia / MAUI / console, no UI / other):
+- Media file info (container, video/audio codecs, resolution; or a link to a sample file):
+- GPU model; hardware decoding on/off (does it only happen with hardware or software decoding?):
+- Other dependencies or configuration:
 
 ### 6. Additional materials (optional)
 - Screenshots / screen recordings (drag and drop here)
-- Log files (please redact sensitive information, then paste or attach)
+- Log files (redact sensitive info first, then paste or attach)
 - Relevant code snippets (wrap in ```)
-- Related reproducible code, repository
+- Reproducible code or repo link
 
 ---
 
 ### 7. (Optional) Your own English version
-> If you are fluent in English, you may provide a version that you wrote yourself (not machine-translated) for quick reference. **Your native-language text above is still the authoritative version.**
+> If you're fluent in English, you can add your own English translation (not machine-translated) for quick reference. **The native-language text above is still the authoritative version.**
 
 (Write your English text here)
