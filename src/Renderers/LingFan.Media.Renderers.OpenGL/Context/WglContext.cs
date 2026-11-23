@@ -53,6 +53,10 @@ internal sealed unsafe class WglContext : IGlContext
     private nint _hglrc;
     private readonly ILogger? _logger;
 
+    // 窗口所有权：仅 CreateOffscreen 自建的隐藏窗口归本实例释放；
+    // 构造注入的宿主 HWND 只借用（GetDC/ReleaseDC 配对），Dispose 不得销毁宿主窗口。
+    private readonly bool _ownsWindow;
+
     public int GlMajor { get; private set; }
     public int GlMinor { get; private set; }
 
@@ -62,12 +66,24 @@ internal sealed unsafe class WglContext : IGlContext
     /// <summary>平台显示/设备上下文句柄（HDC）。作为 <see cref="IGpuDeviceContext"/> 的 ContextHandle（解码侧 interop 用）。</summary>
     public nint PlatformDisplay => _hdc;
 
+    /// <summary>
+    /// 在给定窗口上创建 WGL GL 上下文。窗口为借用：本实例只获取/归还其 DC，不负责销毁窗口。
+    /// </summary>
+    /// <param name="hwnd">宿主窗口句柄（HWND），须有效且生命周期覆盖本实例。</param>
+    /// <param name="logger">可选日志记录器。</param>
+    /// <param name="shareContext">可选共享组上下文句柄（HGLRC）；非零时新上下文与其共享纹理等资源。</param>
     public WglContext(nint hwnd, ILogger? logger = null, nint shareContext = default)
+        : this(hwnd, logger, shareContext, ownsWindow: false)
+    {
+    }
+
+    private WglContext(nint hwnd, ILogger? logger, nint shareContext, bool ownsWindow)
     {
         if (hwnd == nint.Zero)
             throw new ArgumentNullException(nameof(hwnd));
         _hwnd = hwnd;
         _logger = logger;
+        _ownsWindow = ownsWindow;
         Create(shareContext);
     }
 
@@ -171,6 +187,9 @@ internal sealed unsafe class WglContext : IGlContext
             GLNative.ReleaseDC(_hwnd, _hdc);
             _hdc = nint.Zero;
         }
+        // 自建隐藏窗口在归还 DC 后销毁；借用的宿主窗口不动。
+        if (_ownsWindow && _hwnd != nint.Zero)
+            GLNative.DestroyWindow(_hwnd);
         _hwnd = nint.Zero;
     }
 
@@ -191,7 +210,16 @@ internal sealed unsafe class WglContext : IGlContext
     public static WglContext CreateOffscreen(ILogger? logger = null)
     {
         nint hwnd = CreateHiddenWindow();
-        return new WglContext(hwnd, logger);
+        try
+        {
+            return new WglContext(hwnd, logger, shareContext: default, ownsWindow: true);
+        }
+        catch
+        {
+            // 构造失败时窗口尚未移交所有权，由此处销毁，避免隐藏窗口泄漏。
+            GLNative.DestroyWindow(hwnd);
+            throw;
+        }
     }
 
     private static nint CreateHiddenWindow()
