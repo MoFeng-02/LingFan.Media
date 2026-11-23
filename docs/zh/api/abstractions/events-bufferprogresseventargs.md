@@ -63,3 +63,10 @@ public BufferProgressEventArgs(BufferState state, TimeSpan bufferedDuration, lon
 ```
 
 初始化 `BufferProgressEventArgs` 的新实例。
+
+**参数**
+
+- `state`：当前缓冲状态。
+- `bufferedDuration`：已缓冲时长。
+- `bufferedBytes`：已缓冲字节数。
+- `progress`：缓冲进度（0.0~1.0，仅网络流有意义）。

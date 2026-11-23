@@ -33,7 +33,7 @@ public interface IGpuFrameProducer
 原生句柄无效或导入失败时返回 `false`，调用方须回落软件解码并计入 CPU 拷贝统计，
 绝不报"已就绪"假绿。
 
-**异步策略**：`TryImport` 为同步（native 分类）——GPU 纹理导入是同步原生调用，无 I/O await；
+**异步策略**：`TryImport` 为同步原生调用——GPU 纹理导入无 I/O await；
 实现保持同步，不补 async（补即伪异步）。
 
 ## 成员

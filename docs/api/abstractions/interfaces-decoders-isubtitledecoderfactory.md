@@ -42,6 +42,12 @@ ISubtitleDecoder Create(MediaTrack track);
 
 根据字幕轨道创建解码器实例（按 track.SubtitleCodec 预置）。
 
+**Parameters**
+
+- `track`: 字幕轨道。
+
+**Returns**: 新创建的字幕解码器实例（编解码器已按轨道预置）。
+
 ### CreateAsync
 
 ```csharp
@@ -54,3 +60,5 @@ Task<ISubtitleDecoder> CreateAsync(MediaTrack track, CancellationToken ct = defa
 
 - `track`: 字幕轨道。
 - `ct`: 取消令牌。
+
+**Returns**: 新创建的字幕解码器实例。

@@ -97,7 +97,7 @@ public bool KeyFrame { get; internal set; }
 public VideoColorInfo? ColorInfo { get; set; }
 ```
 
-帧的色彩空间描述（可空；渲染端据此选 YUV→RGB 矩阵，null 时用默认。
+帧的色彩空间描述（可空；渲染端据此选 YUV→RGB 矩阵，null 时用默认矩阵，见 `VideoColorInfo`）。
 
 ### RotationDegrees
 
@@ -125,6 +125,18 @@ public VideoFrame(int width, int height, PixelFormat format, IFrameResource reso
 ```
 
 初始化 `VideoFrame` 的新实例。
+
+**Parameters**
+
+- `width`: 帧宽度（像素）。
+- `height`: 帧高度（像素）。
+- `format`: 像素格式。
+- `resource`: 帧资源（CPU 内存或 GPU 纹理）。
+- `timestamp`: 显示时间戳（PTS）。
+- `duration`: 帧持续时间。
+- `keyFrame`: 是否关键帧。
+- `colorInfo`: 色彩空间描述（可空）。
+- `rotationDegrees`: 显示旋转角度（0/90/180/270）。
 
 ### Constructor
 
@@ -156,6 +168,8 @@ public void Reset(int width, int height, PixelFormat format, IFrameResource? res
 - `timestamp`: 显示时间戳。
 - `duration`: 帧持续时间。
 - `keyFrame`: 是否关键帧。
+- `colorInfo`: 色彩空间描述（可空）。
+- `rotationDegrees`: 显示旋转角度（0/90/180/270）。
 
 ### Dispose
 

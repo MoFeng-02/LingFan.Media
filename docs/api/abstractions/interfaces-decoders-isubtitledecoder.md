@@ -44,6 +44,12 @@ ValueTask<SubtitleFrame?> DecodeAsync(MediaPacket packet);
 或该包解码失败可跳过），**不代表**解码器失效——调用方不得据此判定整体失败或丢弃解码器
 （与 `DecodeAsync` 的 null 语义一致）。
 
+**Parameters**
+
+- `packet`: 待解码的字幕数据包。
+
+**Returns**: 解码出的字幕帧；返回 `null` 的语义见 remarks。
+
 ### FlushAsync
 
 ```csharp
@@ -51,6 +57,8 @@ ValueTask<SubtitleFrame?> FlushAsync();
 ```
 
 刷新内部缓冲，取出剩余字幕。
+
+**Returns**: 缓冲中剩余的一个字幕帧；返回 `null` 表示缓冲已取尽。
 
 ### Reset
 

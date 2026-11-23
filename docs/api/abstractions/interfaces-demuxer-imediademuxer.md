@@ -40,6 +40,13 @@ Task OpenAsync(IMediaStream stream, CancellationToken ct = default);
 
 打开媒体流，进行格式探测和轨道解析。
 
+**Parameters**
+
+- `stream`: 媒体数据流。
+- `ct`: 取消令牌。
+
+**Returns**: 格式探测与轨道解析完成时结束的任务。
+
 ### Tracks
 
 ```csharp
@@ -64,6 +71,12 @@ ValueTask<MediaPacket?> ReadPacketAsync(CancellationToken ct = default);
 
 读取下一个数据包。返回 null 表示流结束。
 
+**Parameters**
+
+- `ct`: 取消令牌。
+
+**Returns**: 下一个数据包；`null` 表示流结束。
+
 ### SeekAsync
 
 ```csharp
@@ -84,6 +97,13 @@ Task<bool> SeekAsync(TimeSpan position, CancellationToken ct = default);
 `false` 表示未定位，也可抛 `InvalidOperationException` 表示调用时机错误，
 但必须在实现自身的文档里写明所采用的一种；调用方不得依赖任何一侧的具体行为，
 应先保证 `OpenAsync` 成功、并在释放后不再调用。
+
+**Parameters**
+
+- `position`: 目标位置。
+- `ct`: 取消令牌。
+
+**Returns**: `true` 表示定位请求被接受（非精确落点）；`false` 表示容器不可定位。
 
 ### Close
 

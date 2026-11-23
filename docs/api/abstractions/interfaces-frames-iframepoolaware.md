@@ -30,7 +30,7 @@ public interface IFramePoolAware<T> where T : class
 
 **AOT 兼容**：接口 + pattern matching（is 运算符），编译期确定类型，无反射。
 
-**异步策略**：sync（config 分类）——纯内存设置引用，无 I/O。
+**异步策略**：同步配置——纯内存设置引用，无 I/O。
 
 ## Members
 

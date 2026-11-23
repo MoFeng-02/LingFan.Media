@@ -115,3 +115,9 @@ Task CloseAsync(CancellationToken ct = default);
 ```
 
 关闭会话，释放资源。实际管线资源释放由 MediaPlayer.DisposeAsync 负责。
+
+**Parameters**
+
+- `ct`: 取消令牌。
+
+**Returns**: 会话关闭完成时结束的任务。

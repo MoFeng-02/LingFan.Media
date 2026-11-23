@@ -41,6 +41,10 @@ void Attach(IRenderTarget target);
 
 绑定渲染目标。UI 线程调用。
 
+**Parameters**
+
+- `target`: 渲染目标。
+
 ### Detach
 
 ```csharp
@@ -58,6 +62,10 @@ void Present(VideoFrame frame);
 呈现一帧。渲染线程调用。
 Present 为同步消费——Renderer 在返回前完成 GPU 资源上传/拷贝，
 调用方即可安全释放帧；若某 Renderer 需异步保留帧，应由该 Renderer 自行接管所有权。
+
+**Parameters**
+
+- `frame`: 待呈现的视频帧；返回后调用方即可释放（除非该 Renderer 文档声明接管所有权）。
 
 ### Clear
 

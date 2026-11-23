@@ -38,6 +38,13 @@ IVideoDecoder Create(VideoCodec codec, VideoSettings settings);
 
 根据编解码器和设置创建解码器实例。
 
+**参数**
+
+- `codec`：视频编解码器。
+- `settings`：视频设置。
+
+**返回**：新创建的视频解码器实例（未初始化，须调用 `Initialize`）。
+
 ### CreateAsync
 
 ```csharp
@@ -51,3 +58,5 @@ Task<IVideoDecoder> CreateAsync(VideoCodec codec, VideoSettings settings, Cancel
 - `codec`：视频编解码器。
 - `settings`：视频设置。
 - `ct`：取消令牌。
+
+**返回**：新创建的视频解码器实例。

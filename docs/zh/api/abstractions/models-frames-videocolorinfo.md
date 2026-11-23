@@ -24,9 +24,10 @@ public readonly record struct VideoColorInfo(ColorStandard Standard, ColorRange 
 
 ## 备注
 
-`ColorStandard` 与 `ColorRange` 决定
-YUV→RGB 的亮度/色差矩阵与分量偏移；`ColorTransfer` 标识传输特性。
-两者为未指定时，渲染端回退 BT.601-Full（保持既有默认行为）。
+`Standard` 与 `Range` 决定
+YUV→RGB 的亮度/色差矩阵与分量偏移；`Transfer` 标识传输特性。
+前两者均未指定（`IsSpecified` 为 `false`）时，
+渲染端回退 BT.601-Full（保持既有默认行为）。
 
 ## 成员
 

@@ -39,6 +39,8 @@ IMediaPlayer Create();
 
 创建新的 IMediaPlayer 实例（解析 DI 中已注册的单体工厂）。
 
+**返回**：新创建的播放器实例（Session 级，未打开媒体）。
+
 ### Create
 
 ```csharp
@@ -58,3 +60,5 @@ IMediaPlayer Create(
 - `videoDecoderFactory`：视频解码器工厂。
 - `audioDecoderFactory`：音频解码器工厂。
 - `subtitleDecoderFactory`：字幕解码器工厂（可选；部分后端不提供字幕解码，传 null）。
+
+**返回**：使用指定后端组的新播放器实例（Session 级，未打开媒体）。

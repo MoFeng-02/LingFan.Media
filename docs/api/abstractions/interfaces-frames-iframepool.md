@@ -44,6 +44,8 @@ T Rent();
 
 租用一个帧实例。
 
+**Returns**: 可复用的帧实例（池空时为新实例）；所有权归调用方，用毕须 `Return`。
+
 ### Return
 
 ```csharp
@@ -51,3 +53,7 @@ void Return(T frame);
 ```
 
 归还帧实例到池中。
+
+**Parameters**
+
+- `frame`: 此前从本池 &lt;see cref="Rent"/&gt; 的帧；归还后不得再访问。

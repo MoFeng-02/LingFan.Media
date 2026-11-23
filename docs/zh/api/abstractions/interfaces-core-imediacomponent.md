@@ -45,3 +45,5 @@ Task InitializeAsync(CancellationToken ct = default);
 **参数**
 
 - `ct`：取消令牌。
+
+**返回**：初始化完成时结束的任务。

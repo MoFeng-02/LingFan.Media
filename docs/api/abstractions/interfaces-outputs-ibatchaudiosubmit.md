@@ -30,7 +30,7 @@ public interface IBatchAudioSubmit
 属于 `IAudioOutput` 的可选增强：实现者若支持批量提交则实现本接口，
 `AudioPipeline` 通过 `is` 探测，不支持时退回逐帧 `Submit`（其他平台行为不变）。
 
-契约层增补签名（未来基准：契约层可动态演进，只增不改优先）。零外部引用，仅依赖本命名空间类型。
+本接口按「只增不改」原则演进。零外部引用，仅依赖本命名空间类型。
 
 ## Members
 

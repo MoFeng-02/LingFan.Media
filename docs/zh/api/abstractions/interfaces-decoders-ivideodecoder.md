@@ -38,6 +38,11 @@ void Initialize(VideoCodec codec, VideoSettings settings);
 
 参数化配置：查找编解码器并打开。非生命周期方法。
 
+**参数**
+
+- `codec`：视频编解码器。
+- `settings`：视频配置（含流时间基与解码选项）。
+
 ### DecodeAsync
 
 ```csharp
@@ -45,7 +50,12 @@ ValueTask<VideoFrame?> DecodeAsync(MediaPacket packet);
 ```
 
 解码一个数据包。无 CancellationToken（热路径）。
-返回 null 表示需要更多数据（如 B 帧延迟）。
+
+**参数**
+
+- `packet`：待解码的数据包。
+
+**返回**：解码出的视频帧；返回 `null` 表示需要更多数据（如 B 帧延迟）。
 
 ### FlushAsync
 
@@ -54,6 +64,8 @@ ValueTask<VideoFrame?> FlushAsync();
 ```
 
 刷新内部缓冲，取出剩余帧。
+
+**返回**：缓冲中剩余的一个视频帧；返回 `null` 表示缓冲已取尽。
 
 ### Reset
 

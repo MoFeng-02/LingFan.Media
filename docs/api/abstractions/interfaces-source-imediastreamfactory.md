@@ -40,6 +40,12 @@ IMediaStream Create(IMediaSource source);
 
 根据媒体源类型创建对应的 IMediaStream 实例。
 
+**Parameters**
+
+- `source`: 媒体源。
+
+**Returns**: 新创建的媒体流实例（网络流须先 `ConnectAsync` 再同步读取）。
+
 ### CreateAsync
 
 ```csharp
@@ -52,3 +58,5 @@ Task<IMediaStream> CreateAsync(IMediaSource source, CancellationToken ct = defau
 
 - `source`: 媒体源。
 - `ct`: 取消令牌。
+
+**Returns**: 新创建的媒体流实例。

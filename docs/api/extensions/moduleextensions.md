@@ -27,6 +27,8 @@ public static class ModuleExtensions
 各模块的服务注册直接在各自的扩展方法中完成（如
 `AddFFmpeg()` 在 `FFmpegExtensions.cs` 中注册解码器工厂）。
 
-此保留类用于未来跨模块的内部服务注册，如编解码注册表、GPU 设备上下文等。
+本类当前为空占位：跨模块内部服务已在各自实际位置注册——
+编解码注册表（ICodecRegistry）在 `AddLingFanMedia()` 中注册，
+GPU 设备上下文（IGpuDeviceContext）由各渲染器扩展（如 `AddD3D11Renderer()`）注册。
 
-所有方法为同步配置（config 分类），无 I/O、无异步。
+所有方法为同步配置，无 I/O、无异步。

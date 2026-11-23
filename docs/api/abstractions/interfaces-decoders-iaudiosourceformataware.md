@@ -38,7 +38,7 @@ public interface IAudioSourceFormatAware
 **调用时机**：必须在 `Initialize` 之后、
 音频输出设备初始化与首次 `DecodeAsync` 之前调用。
 
-**异步策略**：sync（config 分类）——纯内存赋值，无 I/O，不提供 async 重载。
+**异步策略**：同步配置——纯内存赋值，无 I/O，不提供 async 重载。
 
 ## Members
 

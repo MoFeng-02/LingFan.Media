@@ -35,3 +35,5 @@ IAudioOutput Create();
 ```
 
 创建新的 IAudioOutput 实例。
+
+**返回**：新创建的音频输出实例（未初始化，须调用 `Initialize`）。

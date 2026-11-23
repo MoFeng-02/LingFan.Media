@@ -144,6 +144,13 @@ long Seek(long offset, SeekOrigin origin);
 
 已 `Close` 后调用抛 `ObjectDisposedException`。
 
+**参数**
+
+- `offset`：相对 &lt;paramref name="origin"/&gt; 的字节偏移。
+- `origin`：偏移基准（流首/当前位置/流尾）。
+
+**返回**：定位后的新读取位置（绝对字节偏移）。
+
 ### SuggestedOpenHeaders
 
 ```csharp

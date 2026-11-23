@@ -27,7 +27,7 @@ public interface IDisposableFrame : IDisposable
 帧所有权转移语义：Decoder → FrameQueue → Renderer，任何时刻只有一个组件持有所有权。
 丢帧必须 Dispose，否则 GPU 资源泄漏。
 必须继承 `IDisposable`：FramePool 满池分支经 `is IDisposable` 判定后 Dispose 帧
-（不继承时判定恒 false、帧静默泄漏——实测会导致 Graphics 内存每遍播放持续增长直至进程耗尽）。
+（不继承时判定恒 false、帧静默泄漏——GPU/原生内存随播放持续累积直至耗尽）。
 
 ## 成员
 

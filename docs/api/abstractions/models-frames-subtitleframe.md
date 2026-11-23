@@ -63,3 +63,10 @@ public SubtitleFrame(string text, TimeSpan start, TimeSpan end, SubtitleStyle? s
 ```
 
 初始化 `SubtitleFrame` 的新实例。
+
+**Parameters**
+
+- `text`: 字幕文本内容。
+- `start`: 显示开始时间。
+- `end`: 显示结束时间。
+- `style`: 字幕样式（可为 null，使用默认）。

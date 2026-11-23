@@ -28,7 +28,7 @@ public static class MediaBuilderPipelineExtensions
 故留在组合根 Extensions（唯一全知位置），不下沉到 Composition 叶子——
 插件（后端/渲染器/输出）只需 MediaBuilder 的 Services/Options 注册面，不感知管线配置类型。
 
-调用语法与实例方法一致：`builder.WithAudioPipeline(config)`；各方法为同步配置（config 分类），无 I/O。
+调用语法与实例方法一致：`builder.WithAudioPipeline(config)`；各方法为同步配置，无 I/O。
 
 ## Members
 

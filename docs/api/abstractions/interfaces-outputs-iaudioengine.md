@@ -77,3 +77,5 @@ Task WarmupAsync(CancellationToken ct = default);
 **Parameters**
 
 - `ct`: 取消令牌。取消只中止&lt;b&gt;等待&lt;/b&gt;，已投递的原生初始化不会被回滚。
+
+**Returns**: 预热完成（或已在热态直接完成）时结束的任务；失败语义见 remarks（视为未预热，不中断宿主启动）。

@@ -113,6 +113,16 @@ public AudioFrame(ReadOnlyMemory<byte> data, int sampleRate, int channels,
 
 初始化 `AudioFrame` 的新实例。
 
+**参数**
+
+- `data`：PCM 音频数据。
+- `sampleRate`：采样率（Hz）。
+- `channels`：声道数。
+- `sampleFormat`：采样格式。
+- `timestamp`：时间戳。
+- `duration`：帧持续时间。
+- `frameCount`：本帧包含的采样数。
+
 ### 构造函数
 
 ```csharp

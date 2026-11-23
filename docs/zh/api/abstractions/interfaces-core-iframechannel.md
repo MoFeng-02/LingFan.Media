@@ -42,6 +42,12 @@ IDisposable Subscribe(IFrameSink sink);
 
 订阅一个 Sink，返回取消订阅的句柄（Dispose 即退订）。
 
+**参数**
+
+- `sink`：要订阅的帧消费者。
+
+**返回**：取消订阅句柄，Dispose 即退订。
+
 ### Unsubscribe
 
 ```csharp
@@ -50,6 +56,10 @@ void Unsubscribe(IFrameSink sink);
 
 退订一个 Sink（按引用/相等性匹配）。
 
+**参数**
+
+- `sink`：要退订的帧消费者。
+
 ### Emit
 
 ```csharp
@@ -57,3 +67,7 @@ void Emit(VideoFrame frame);
 ```
 
 向所有订阅者投递一帧。
+
+**参数**
+
+- `frame`：待投递的视频帧（只读借用，见 remarks）。

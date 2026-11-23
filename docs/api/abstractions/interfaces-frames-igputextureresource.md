@@ -24,11 +24,11 @@ public interface IGpuTextureResource : IFrameResource
 
 ## Remarks
 
-由具体渲染器实现（如 `LingFan.Media.Renderers.D3D11.D3D11TextureResource`），
+由具体渲染器/后端实现（如 `LingFan.Media.Renderers.Vulkan.VulkanImageResource`），
 供 Avalonia / Outputs 等层以平台无关方式消费 GPU 纹理（例如 CPU 回读后送入 Skia WriteableBitmap 回退路径），
 而无需引用具体渲染器模块，严守依赖倒置。与 `IGpuDeviceContext` 同为 Abstractions 中立桥。
 
-**异步策略**：`ReadbackToCpu` 为同步（native 分类）——D3D11/GL 纹理回读是同步 COM/原生调用，
+**异步策略**：`ReadbackToCpu` 为同步 COM/原生调用——D3D11/GL 纹理回读
 无真实 I/O await。实现保持同步，不补 async（补即伪异步）。
 
 ## Members

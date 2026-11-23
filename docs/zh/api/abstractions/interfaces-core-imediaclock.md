@@ -114,6 +114,10 @@ void SeekTo(TimeSpan position);
 
 跳转到指定位置。
 
+**参数**
+
+- `position`：目标时钟位置。
+
 ### SyncTo
 
 ```csharp
@@ -121,3 +125,7 @@ void SyncTo(TimeSpan masterPosition);
 ```
 
 同步到主时钟位置。
+
+**参数**
+
+- `masterPosition`：主时钟当前位置。

@@ -25,7 +25,7 @@ public sealed class GpuDeviceLostException : Exception
 
 ## 备注
 
-**B-DEVLOST**：设备丢失由驱动崩溃/重置（TDR）、GPU 移除（外接显卡拔出）、
+**成因**：设备丢失由驱动崩溃/重置（TDR）、GPU 移除（外接显卡拔出）、
 驱动升级等引起——设备及其全部资源（纹理/缓冲/交换链）永久失效，任何后续调用都会失败。
 
 **语义**：渲染器检测到设备丢失时抛出本异常（替代泛化的 `InvalidOperationException`），

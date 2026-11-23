@@ -80,3 +80,9 @@ public static int BitDepthOf(PixelFormat format) => format switch;
 ```
 
 像素格式的位深（视频域：10-bit 格式记 10，其余记 8）。
+
+**Parameters**
+
+- `format`: 像素格式。
+
+**Returns**: 位深：10-bit 格式返回 10，其余返回 8。

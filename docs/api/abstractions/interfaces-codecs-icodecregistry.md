@@ -27,7 +27,7 @@ public interface ICodecRegistry
 提供容器格式 → 编解码器的静态映射查询，供后端自动选择
 （`MediaOptions.EnableAutoBackendSelection`）与能力探测使用。
 
-纯内存静态表，全部同步（sync 分类）：无 I/O、无 await，实现返回普通 `bool` /
+纯内存静态表，全部同步：无 I/O、无 await，实现返回普通 `bool` /
 可空枚举，绝不包装为 `Task`（否则即伪异步）。
 
 仅引用跨层枚举 `ContainerFormat` / `VideoCodec` / `AudioCodec`

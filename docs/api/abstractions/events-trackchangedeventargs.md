@@ -55,3 +55,9 @@ public TrackChangedEventArgs(TrackType trackType, MediaTrack? oldTrack, MediaTra
 ```
 
 初始化 `TrackChangedEventArgs` 的新实例。
+
+**Parameters**
+
+- `trackType`: 轨道类型。
+- `oldTrack`: 旧轨道（可为 null）。
+- `newTrack`: 新轨道（可为 null）。

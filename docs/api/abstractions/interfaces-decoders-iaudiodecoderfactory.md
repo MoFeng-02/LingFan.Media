@@ -38,6 +38,13 @@ IAudioDecoder Create(AudioCodec codec, AudioSettings settings);
 
 根据编解码器和设置创建解码器实例。
 
+**Parameters**
+
+- `codec`: 音频编解码器。
+- `settings`: 音频设置。
+
+**Returns**: 新创建的音频解码器实例（未初始化，须调用 `Initialize`）。
+
 ### CreateAsync
 
 ```csharp
@@ -51,3 +58,5 @@ Task<IAudioDecoder> CreateAsync(AudioCodec codec, AudioSettings settings, Cancel
 - `codec`: 音频编解码器。
 - `settings`: 音频设置。
 - `ct`: 取消令牌。
+
+**Returns**: 新创建的音频解码器实例。

@@ -76,3 +76,11 @@ public MediaErrorEventArgs(
 ```
 
 初始化 `MediaErrorEventArgs` 的新实例。
+
+**Parameters**
+
+- `errorCode`: 错误码。
+- `message`: 错误消息。
+- `exception`: 原始异常（可为 null）。
+- `isFatal`: 是否致命（不可恢复）。
+- `recoverable`: 是否可恢复。

@@ -38,7 +38,8 @@ Infrastructure（Singleton）：无状态工厂 / 共享资源。
 
 - `IMediaDemuxerFactory` → 由各后端 `AddXxx()` 经 TryAddEnumerable 集合注册（不再默认注册，支持多后端并存回退）
 
-- `IMediaPlayerFactory` → `MediaPlayerFactory`
+- `IMediaPlayerFactory` → `BackendFallbackMediaPlayerFactory`（运行时回退调度；
+同一实例同时以 `IBackendRegistry` 对外。核心组装工厂 `MediaPlayerFactory` 以 keyed `"composer"` 注册，供回退调度器选定后端组后建 Session）
 
 Session（Transient）：仅注册 `IMediaPlayer`，内部组件由 Factory 手动 new 不走 DI。
 
@@ -51,7 +52,7 @@ Session（Transient）：仅注册 `IMediaPlayer`，内部组件由 Factory 手�
 
 - `AddWasapiOutput()` → `IAudioOutputFactory`
 
-此方法为同步配置（config 分类），无 I/O、无异步。
+此方法为同步配置，无 I/O、无异步。
 
 ## Members
 
@@ -65,21 +66,28 @@ public static MediaBuilder AddLingFanMedia(
 
 注册 LingFan.Media 核心服务（工厂 + 播放器）并返回 `MediaBuilder` 供链式注册。
 
-注册 Infrastructure Lifetime（Singleton）工厂：
+注册 Infrastructure Lifetime（Singleton）服务：
 
 - `IMediaStreamFactory` → `MediaStreamFactory`
 
-- `IMediaDemuxerFactory` → `DemuxerFactory`
+- `IFormatDetector` → `FormatDetector`（回退调度器 Open 前轻量探测格式）
 
-- `IMediaPlayerFactory` → `MediaPlayerFactory`
+- `ICodecRegistry` → `CodecRegistry`（静态映射表，纯内存）
+
+- `IMediaPlayerFactory` → `BackendFallbackMediaPlayerFactory`（同一实例兼以 `IBackendRegistry` 对外）；
+核心组装工厂 `MediaPlayerFactory` 以 keyed `"composer"` 注册
+
+- `IMediaDemuxerFactory` **不在此注册**：由各后端 `AddXxx()` 经 TryAddEnumerable 集合注册；
+未注册任何后端时 Open 抛 `MediaBackendUnsupportedException`
 
 注册 Session Lifetime（Transient）播放器：
 
 - `IMediaPlayer`（每次解析通过 Factory.Create() 新建）
 
-注册 `IHttpClientFactory`（`AddHttpClient()`）供 `MediaStreamFactory` 网络流连接池管理。
+注册 `IHttpClientFactory`（`AddHttpClient()`）供 `MediaStreamFactory` 网络流连接池管理，
+并配置命名 client `"LingFanMedia"` 与 `"LingFanMedia_Insecure"`（均挂 SSRF 连接防护）。
 
-注册 `IOptions<MediaOptions>` 供后续读取全局配置。
+注册 `IOptions<MediaOptions>` 与 `IOptions<MediaPlayerOptions>`（后者传播宿主配置的默认音量）。
 
 日志配置由消费方应用的 Host 负责（Extensions 层只依赖 `Logging.Abstractions`）。
 

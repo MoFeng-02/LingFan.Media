@@ -36,6 +36,11 @@ void Initialize(AudioCodec codec, AudioSettings settings);
 
 参数化配置：查找编解码器并打开。
 
+**参数**
+
+- `codec`：音频编解码器。
+- `settings`：音频配置（含流时间基与可选的重采样目标格式）。
+
 ### DecodeAsync
 
 ```csharp
@@ -44,6 +49,14 @@ ValueTask<AudioFrame?> DecodeAsync(MediaPacket packet);
 
 解码一个数据包。无 CancellationToken（热路径）。
 
+**参数**
+
+- `packet`：待解码的数据包。
+
+**返回**：解码出的音频帧；返回 `null` 表示**本次未产出音频帧**
+（需要更多数据、流已到尾，或该包解码失败可跳过），**不代表**解码器失效——
+调用方不得据此判定整体失败或丢弃解码器（与 `DecodeAsync` 的 null 语义一致）。
+
 ### FlushAsync
 
 ```csharp
@@ -51,6 +64,8 @@ ValueTask<AudioFrame?> FlushAsync();
 ```
 
 刷新内部缓冲，取出剩余帧。
+
+**返回**：缓冲中剩余的一个音频帧；返回 `null` 表示缓冲已取尽。
 
 ### Reset
 

@@ -38,6 +38,12 @@ IMediaDemuxer Create(IMediaStream stream);
 
 根据媒体流创建对应的 IMediaDemuxer 实例。
 
+**参数**
+
+- `stream`：媒体数据流。
+
+**返回**：新创建的解封装器实例（未打开，须调用 `OpenAsync`）。
+
 ### CreateAsync
 
 ```csharp
@@ -50,3 +56,5 @@ Task<IMediaDemuxer> CreateAsync(IMediaStream stream, CancellationToken ct = defa
 
 - `stream`：媒体数据流。
 - `ct`：取消令牌。
+
+**返回**：新创建的解封装器实例。

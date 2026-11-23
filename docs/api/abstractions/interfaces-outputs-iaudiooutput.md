@@ -42,6 +42,11 @@ void Initialize(int sampleRate, int channels);
 
 参数化配置：设置采样率和声道数。
 
+**Parameters**
+
+- `sampleRate`: 输出采样率（Hz），须为合法固定率。
+- `channels`: 输出声道数。
+
 ### Submit
 
 ```csharp
@@ -51,6 +56,10 @@ void Submit(AudioFrame frame);
 提交音频帧。不接管帧所有权；仅同步拷贝 PCM 数据，
 调用方负责 Submit 后释放帧（Return 到池或 Dispose）。
 音频线程调用，缓冲满时阻塞（COM 背压，同步阻塞背压是正常机制，非伪异步）。
+
+**Parameters**
+
+- `frame`: 待提交的音频帧；所有权仍归调用方。
 
 ### Pause
 
@@ -78,6 +87,12 @@ ValueTask BeginStreamingAsync(CancellationToken ct);
 返回时音频已开始流动。默认实现直接恢复播放（无预填需求的后端，如无声/无设备输出）；
 WASAPI 重写为解决起播静默窗（引擎抓取的是真实数据而非静音）。
 
+**Parameters**
+
+- `ct`: 取消令牌。
+
+**Returns**: 音频已开始流动时结束的任务。
+
 ### Flush
 
 ```csharp
@@ -94,6 +109,8 @@ TimeSpan GetPlaybackPosition();
 
 获取已播放位置（用于时钟同步）。
 
+**Returns**: 自本遍播放起已输出的音频时长。
+
 ### GetPlaybackPositionDirect
 
 ```csharp
@@ -106,6 +123,8 @@ TimeSpan GetPlaybackPositionDirect() => GetPlaybackPosition();
 （WASAPI）的 `GetPlaybackPosition` 走跨线程封送，高频调用有成本；
 这类后端应重写本方法，直接读取设备时钟（`IAudioClock::GetPosition` 可由任意线程调用，无需跨线程），
 既平滑又零封送开销。
+
+**Returns**: 已播放位置；默认实现与 `GetPlaybackPosition` 相同。
 
 ### ResetPlaybackClock
 

@@ -42,6 +42,13 @@ Task OpenAsync(IMediaSource source, CancellationToken ct = default);
 
 打开媒体源。支持取消。
 
+**Parameters**
+
+- `source`: 媒体源。
+- `ct`: 取消令牌。
+
+**Returns**: 表示打开操作的任务；失败时抛出异常（致命错误通道，见 `ErrorOccurred` remarks）。
+
 ### PlayAsync
 
 ```csharp
@@ -58,6 +65,8 @@ Task PlayAsync();
 **失败语义**：守卫拒绝抛异常（不发错误事件）；启动过程中的失败经
 `ErrorOccurred` 上报、不抛出（与既有行为一致）。
 
+**Returns**: 表示播放启动操作的任务；启动过程中的失败经 `ErrorOccurred` 上报。
+
 ### PauseAsync
 
 ```csharp
@@ -65,6 +74,8 @@ Task PauseAsync();
 ```
 
 暂停播放（纯内存状态转换，无 CT）。
+
+**Returns**: 表示暂停状态转换的任务。
 
 ### StopAsync
 
@@ -79,6 +90,12 @@ Task StopAsync(CancellationToken ct = default);
 
 因此调用方不得把本方法返回视为「管线线程已停」的凭据；需要该保证时应自行等待或重新
 `OpenAsync`。
+
+**Parameters**
+
+- `ct`: 取消令牌（保留位，当前实现不受理，见 remarks）。
+
+**Returns**: 下发停止请求后即完成的任务；**不**代表管线线程已退出。
 
 ### SeekAsync
 
@@ -98,6 +115,13 @@ Task SeekAsync(TimeSpan position, CancellationToken ct = default);
 
 **精度**：上层只承诺「已下发定位请求」，落点精度由解封装器决定
 （见 `IMediaDemuxer.SeekAsync` 的返回值语义）。
+
+**Parameters**
+
+- `position`: 目标位置。
+- `ct`: 取消令牌。
+
+**Returns**: 表示定位操作的任务；定位失败抛出异常（见 remarks）。
 
 ### State
 
@@ -228,7 +252,7 @@ event Action<VideoFrame>? VideoFrameAvailable;
 ```
 
 视频帧到达事件（供 Skia 软渲染 Presenter 等消费）。
-由视频管线在 `Present` 分支、且 UI 已订阅（Skia 模式）时**同步触发**
+由视频管线在 `SyncAction.Present` 分支、且 UI 已订阅（Skia 模式）时**同步触发**
 （视频管线线程），订阅方**仅可只读借用**传入的 `VideoFrame`：须在其回调内同步拷贝所需数据
 （像素缓冲 / 宽高 / 像素格式），**不得 Dispose、不得跨线程持有该帧引用**。
 未订阅（D3D11 原生 GPU 模式）时管线直接 Present 到已 Attach 的共享 SwapChain，不触发此事件，保持零额外开销。
@@ -241,4 +265,4 @@ event Action<VideoFrame>? VideoFrameAvailable;
 long VideoDroppedFrames { get; }
 ```
 
-累计视频丢帧数（诊断/可观测性，只读）。正常播放到结尾时若此值 ≈ 文件视频帧数 − 实际呈现帧数，说明末段尾帧被同步器判 Drop 而非呈现。
+累计视频丢帧数（诊断/可观测性，只读）。含播放末段被同步器判 Drop 而非呈现的尾帧。

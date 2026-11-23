@@ -67,7 +67,7 @@
         "MaxValue",
         "AudioEffectParameter"
       ],
-      "sourceHash": "dff255bb696452057ec472b32afe63b999dba22866107e5a9593cdd3beb11674",
+      "sourceHash": "87ad6501e75ae8e7c6f37f14966a9fc685fda5629f8df01cff88390c09560b9c",
       "project": "abstractions"
     },
     {
@@ -92,7 +92,7 @@
         "Reset",
         "Dispose"
       ],
-      "sourceHash": "52f34755c4c0bacab82930e3f197198dfea75d5ca004a3ad8c49c3609925e881",
+      "sourceHash": "31bb4233fa825a6d415f3cc929961b2847670f7aa9fa1521f3ac5f55197bbfb8",
       "project": "abstractions"
     },
     {
@@ -169,7 +169,7 @@
         "Progress",
         "BufferProgressEventArgs"
       ],
-      "sourceHash": "1ddf89debd7506028046a0f37cfdd78206f8a456efd953fd5c946bf2ecb6e426",
+      "sourceHash": "35bff4cc98409cceb0e4aedf777fb8fc407f71f580dac9d788d86db81d09ecea",
       "project": "abstractions"
     },
     {
@@ -289,7 +289,7 @@
         "ExceedsSoftwareDecodeCapability",
         "BitDepthOf"
       ],
-      "sourceHash": "61bd4dcb929667b877df8010311596b792af971ffc9bda9fb2bc6c83b8a33fbc",
+      "sourceHash": "fa081ba26d30d0496fcf88d96c280441c51da245c18ad7ba0d59571c9a3acbff",
       "project": "abstractions"
     },
     {
@@ -343,7 +343,7 @@
         "GpuDeviceLostException",
         "GpuDeviceLostException"
       ],
-      "sourceHash": "635f79c13436914c434e5d58f0c9ccf61a0cb76ccef193a2167df473daa15d61",
+      "sourceHash": "7c087da74629778e60e554d07a523fa961267cc738c6d4fb9dd292cb278955ef",
       "project": "abstractions"
     },
     {
@@ -362,7 +362,7 @@
         "IOSurface",
         "VulkanImage"
       ],
-      "sourceHash": "4d840373e19f4fb4730860f2f8dcbcb97b65757fdc6ef55364c94b8f79ffcce6",
+      "sourceHash": "cabaa4fbf21c1f738620b050a6b24da68b544389a751589e3471b21b95f2e400",
       "project": "abstractions"
     },
     {
@@ -389,7 +389,7 @@
         "PlaneOffsets",
         "PlanePitches"
       ],
-      "sourceHash": "4d840373e19f4fb4730860f2f8dcbcb97b65757fdc6ef55364c94b8f79ffcce6",
+      "sourceHash": "cabaa4fbf21c1f738620b050a6b24da68b544389a751589e3471b21b95f2e400",
       "project": "abstractions"
     },
     {
@@ -410,7 +410,7 @@
         "GpuTextureReadback",
         "Dispose"
       ],
-      "sourceHash": "8ae1a1f3ae8a4ac5ad2bc7a9ad007c9bc74ce65656dd4e6e5c6ec0c1610edd39",
+      "sourceHash": "63bba4da28c32fdb7979b4502f50ea7f462ccc5d5034307f2aec39294f509116",
       "project": "abstractions"
     },
     {
@@ -430,7 +430,7 @@
         "OutputSampleRate",
         "OutputChannels"
       ],
-      "sourceHash": "cc5bd1ba5303aa3c3ace80c247cfdcfc06bf4577d61bb161f84af81c3ae0be68",
+      "sourceHash": "0865316e55c9a9a55b9c0ab3006b5552be139dddf2d4dfe6ac46c83d7ed1b66b",
       "project": "abstractions"
     },
     {
@@ -445,7 +445,7 @@
         "Create",
         "CreateAsync"
       ],
-      "sourceHash": "0310cb7e48a766a3abffa10d5bb2ddc3bbd969114c18e31b1701bfa5e2edd3f1",
+      "sourceHash": "dc93d67d045c5eb6d0f152aee75587abcf5f0146cf08c0f2a07ea17385f8b9e3",
       "project": "abstractions"
     },
     {
@@ -461,7 +461,7 @@
         "Warmup",
         "WarmupAsync"
       ],
-      "sourceHash": "454fca0be8b3d2a6ce6428c3c45758238f052b168ac38ff6f70405b6bc837030",
+      "sourceHash": "68e06a8d41533a56b13addc951e861dedf3be28d86ba8fd92b52d36da53fc2c6",
       "project": "abstractions"
     },
     {
@@ -485,7 +485,7 @@
         "Latency",
         "Volume"
       ],
-      "sourceHash": "280634a175484501a737092d254ad584a12c32a51425672beec4d1f98fbd3fa9",
+      "sourceHash": "ecf7f673df103eda746fbc33a1a8ce607478a3114b87c98f7fda8f2e166b8e5a",
       "project": "abstractions"
     },
     {
@@ -499,7 +499,7 @@
       "members": [
         "Create"
       ],
-      "sourceHash": "93549672baef7457bad5f1fe04d8294bbb736f33e664a6de1bec7d40859ce1f5",
+      "sourceHash": "f9d2fe0abfba4e6a1a8c0e92b5fba6f52f33844fa9227789c9569fd8aeb7e2a6",
       "project": "abstractions"
     },
     {
@@ -513,7 +513,7 @@
       "members": [
         "SetSourceFormat"
       ],
-      "sourceHash": "d48ee4dfcbddd7a21f2c3c7df62a1694f2f31672be120a901bfb401d95df09af",
+      "sourceHash": "b9e6feb155d7c8bb54036b68d03aaf1045432158f8c598d5850f2569cecdc557",
       "project": "abstractions"
     },
     {
@@ -542,7 +542,7 @@
         "SubmitBatch",
         "SubmitBatch"
       ],
-      "sourceHash": "fdb269a764ea8fac8df086d4370a934f105162d5aa2db404cd4157b090ff6909",
+      "sourceHash": "4d19b1b8a03a9ca97885c2202603716af568e31cfb4fdafb20f53dd1182178e2",
       "project": "abstractions"
     },
     {
@@ -564,7 +564,7 @@
         "Stop",
         "Clear"
       ],
-      "sourceHash": "8ef392acda6754d2616481c9e0f4851b584fc1fcee0a5024503421c812b7caea",
+      "sourceHash": "2d4e0bcda9ea78b02f3734d4a0ff239d1401960f47a65133c3c6ea6f17536064",
       "project": "abstractions"
     },
     {
@@ -581,7 +581,7 @@
         "GetDefaultVideoCodec",
         "GetDefaultAudioCodec"
       ],
-      "sourceHash": "3daf48070cb17122ed10eb05b8bc3e4c9ea62d2b46741de34431cd1f9779fced",
+      "sourceHash": "beee1893298e884f78fe0b22dd47e5a0f84594024db074a9026e1a2e2f7325d3",
       "project": "abstractions"
     },
     {
@@ -595,7 +595,7 @@
       "members": [
         "IsDisposed"
       ],
-      "sourceHash": "85291f52482f7a7e27a1c9dedcac7b1f7cfa008cbfa6ab121b37032fbebb13be",
+      "sourceHash": "7f18021ff72b713e80d108940540815bba27ee6cbc4acb4519aecaf4ef9d5d4b",
       "project": "abstractions"
     },
     {
@@ -626,7 +626,7 @@
         "Unsubscribe",
         "Emit"
       ],
-      "sourceHash": "73772ef8df5385f20780cf039b21442d668ca4ba386c1cbf2874d93f4d55c56b",
+      "sourceHash": "6177a837e3fa8773e32b650c787571276f8ace9045ae9d15788e2410b071a756",
       "project": "abstractions"
     },
     {
@@ -641,7 +641,7 @@
         "Rent",
         "Return"
       ],
-      "sourceHash": "595683b137b8a79d35206440be93950ada58110de476bf7af4444e64811a430f",
+      "sourceHash": "0cdfe3abda0ae43c5a6fba67c3451ba1157da6a4d9c40cf6f742417c65d1ce5f",
       "project": "abstractions"
     },
     {
@@ -655,7 +655,7 @@
       "members": [
         "SetFramePool"
       ],
-      "sourceHash": "5f27175c571ce4bd45eb634a067016b81b8500992a01995e02cfddfec3709c46",
+      "sourceHash": "ddf6d19ea6b808a9a90c58faa37aa7a4b4be42dced5f0cf7ec889d22c0f88148",
       "project": "abstractions"
     },
     {
@@ -671,7 +671,7 @@
         "Height",
         "Format"
       ],
-      "sourceHash": "45400e8388271e8ee27ec95e9558c68cdb1b6ac1bda7afcf8b0a9c846e5b99ab",
+      "sourceHash": "69a4ac71c67744014c6697ed0d5bad8e2d2841a540d2d16a893b4a28774f44ac",
       "project": "abstractions"
     },
     {
@@ -685,7 +685,7 @@
       "members": [
         "OnFrame"
       ],
-      "sourceHash": "73772ef8df5385f20780cf039b21442d668ca4ba386c1cbf2874d93f4d55c56b",
+      "sourceHash": "6177a837e3fa8773e32b650c787571276f8ace9045ae9d15788e2410b071a756",
       "project": "abstractions"
     },
     {
@@ -724,7 +724,7 @@
         "TryImport",
         "IsImportSupported"
       ],
-      "sourceHash": "4d840373e19f4fb4730860f2f8dcbcb97b65757fdc6ef55364c94b8f79ffcce6",
+      "sourceHash": "cabaa4fbf21c1f738620b050a6b24da68b544389a751589e3471b21b95f2e400",
       "project": "abstractions"
     },
     {
@@ -740,7 +740,7 @@
         "SubresourceIndex",
         "ReadbackToCpu"
       ],
-      "sourceHash": "031302e7979a6c1a19e2b012c03e319405d60e6d20850d4c260c1bbe5eeb91c8",
+      "sourceHash": "d9397c7e6eff53a4d79e924a645866c1d8bcd2c6eb6c692d7d1c26fd2adc2320",
       "project": "abstractions"
     },
     {
@@ -792,7 +792,7 @@
         "SeekTo",
         "SyncTo"
       ],
-      "sourceHash": "1e486475e9ec1089397315a7f024afd6c271596f51f3ef58fc906934ae51e1fc",
+      "sourceHash": "be69f86a510d46b0d729b9f414d65c1b81112ad9011e5e04571cc32037eb98a8",
       "project": "abstractions"
     },
     {
@@ -806,7 +806,7 @@
       "members": [
         "InitializeAsync"
       ],
-      "sourceHash": "0ad18483bd74af2d1c3f650df007e7db01eb09f0e682d561f8eaca9bfeff1248",
+      "sourceHash": "8e4c9af6a9482d0d544f117c2bac89dc7d77fd18d9b536c513d79dcc5fc223f7",
       "project": "abstractions"
     },
     {
@@ -825,7 +825,7 @@
         "SeekAsync",
         "Close"
       ],
-      "sourceHash": "c3eb92ef1b26652689c7ca6587390c673874413aaaabfc505c7dc15ddbf629da",
+      "sourceHash": "66434f24eecfd72718e7e7545e5269f42750a6fb8ab6043f27f9668206857015",
       "project": "abstractions"
     },
     {
@@ -840,7 +840,7 @@
         "Create",
         "CreateAsync"
       ],
-      "sourceHash": "c3e0922494e563ffe53e585c32c6e4918e4c63e8c5af65e584c0d51afb76b8f1",
+      "sourceHash": "23522c8bf9ba17808e0c96037edaf8c82039a8372a05ffa417bce9bdf9371ae8",
       "project": "abstractions"
     },
     {
@@ -873,7 +873,7 @@
         "VideoFrameAvailable",
         "VideoDroppedFrames"
       ],
-      "sourceHash": "52a7626cbcc464167d17fa94cd35e580715c5186d396373c0ede417c7c7a6d35",
+      "sourceHash": "9126c6f9db2d23b268ab981e94b967857ba8bce9b2abab31718d76d5417e818b",
       "project": "abstractions"
     },
     {
@@ -888,7 +888,7 @@
         "Create",
         "Create"
       ],
-      "sourceHash": "65d20a733b51377c7c5ee8fbd66b459d4931d3ef70585dbc34c5f87422c30074",
+      "sourceHash": "320f28da4d0a306bd498e5c873e4843ff30aefaed5141dde036c18dd1e89e05f",
       "project": "abstractions"
     },
     {
@@ -912,7 +912,7 @@
         "IsLive",
         "CloseAsync"
       ],
-      "sourceHash": "76dec8f8bbc777c8f25637ffc6daa425399a215660b7775f4be70136149c7615",
+      "sourceHash": "bc23d87d0795d14253e67644a290889a8a0123e62dda1505324b27a5d96d1188",
       "project": "abstractions"
     },
     {
@@ -967,7 +967,7 @@
         "SuggestedOpenHeaders",
         "Close"
       ],
-      "sourceHash": "d933a3c61a13b05eaaf1d4f6c27bfd745e6844b67f09b895176754dfda7dda1e",
+      "sourceHash": "d148d2cc8f6f40a6621494c458893a73dffa01c091b7d367ea3b5cecedbedfd3",
       "project": "abstractions"
     },
     {
@@ -982,7 +982,7 @@
         "Create",
         "CreateAsync"
       ],
-      "sourceHash": "44d39324cea9682374ab9ac6948d56cd72cffa569906ab4eb6f13173568ff593",
+      "sourceHash": "0350e76e4691b45aa964405d20cd438f4ba4a49cd2c97b497bb40939b9f34b47",
       "project": "abstractions"
     },
     {
@@ -1010,7 +1010,7 @@
       "members": [
         "Unhealthy"
       ],
-      "sourceHash": "a79116dd89f7f6761828adb06a3f299f5d2d8715daf285ebd2f127d9bf1aa40d",
+      "sourceHash": "974f19027e1fe053ad40c356faa6a195c062ff9824b299dc308831cd75238164",
       "project": "abstractions"
     },
     {
@@ -1048,7 +1048,7 @@
         "Semaphores",
         "TryWriteFrame"
       ],
-      "sourceHash": "ec4ed56c49de30f5b69591087f24977cb0339c9f0ea19fc172aa3c59c1e19642",
+      "sourceHash": "2d7cb0739e4a171b9b57257cd993d39d3fda9a597e6f4f1aafe4b21f0c851f5b",
       "project": "abstractions"
     },
     {
@@ -1064,7 +1064,7 @@
         "IsAvailable",
         "Create"
       ],
-      "sourceHash": "ec4ed56c49de30f5b69591087f24977cb0339c9f0ea19fc172aa3c59c1e19642",
+      "sourceHash": "2d7cb0739e4a171b9b57257cd993d39d3fda9a597e6f4f1aafe4b21f0c851f5b",
       "project": "abstractions"
     },
     {
@@ -1081,7 +1081,7 @@
         "Reset",
         "SubtitleCodec"
       ],
-      "sourceHash": "e1165e982666c0bf528d2405543ab774fe75f9f1fbe51b4eecea25c0cb16d6ea",
+      "sourceHash": "c3fd7ad5606410f3f31ce5093cfb0eafeac2e1fd5e9539b690f1ef9bee158985",
       "project": "abstractions"
     },
     {
@@ -1096,7 +1096,7 @@
         "Create",
         "CreateAsync"
       ],
-      "sourceHash": "c2579ff8955b1994b6fbe47f8164e847baf3b567a8f32ac8f402f13125ad7afe",
+      "sourceHash": "88d293effed522f30057b5896207da68bb1d45348582882056c094231d483b59",
       "project": "abstractions"
     },
     {
@@ -1110,7 +1110,7 @@
       "members": [
         "TryExportSurfaceToDmaBuf"
       ],
-      "sourceHash": "5790536953180b61d7ffc4dcaaf3fce03740d2aef4386e1de446138ab66e7910",
+      "sourceHash": "15da56badf87866f42fb516e280e92198cdb50521efdee296f8914632ccdebaa",
       "project": "abstractions"
     },
     {
@@ -1129,7 +1129,7 @@
         "Codec",
         "IsHardwareAccelerated"
       ],
-      "sourceHash": "694c8136e9798d36ef45b43de65272806f0e3c5b6c005d7fc48d96e8c4b26442",
+      "sourceHash": "be6445b41031e052dc3a882f49abb2d5478805573b2ee21cba715703c5c79114",
       "project": "abstractions"
     },
     {
@@ -1144,7 +1144,7 @@
         "Create",
         "CreateAsync"
       ],
-      "sourceHash": "6344cb9bf512ef3a17e3452f29ec3ce41f548ec4a9eaa0ab5656c6c39f94761c",
+      "sourceHash": "6b9a903f12eb4ef4ddd141bc56cfaaf7994480024896245d8409b993afcadcbf",
       "project": "abstractions"
     },
     {
@@ -1162,7 +1162,7 @@
         "Clear",
         "PresentationLatency"
       ],
-      "sourceHash": "c6190da9d98604aff80a8dbee7fef51623899b2c8747c9f54d23ad36cef30cf0",
+      "sourceHash": "e96cf94d327042614f107ef33fdfcab5f1ddc4aa238ad1e7c2120e765ed5df69",
       "project": "abstractions"
     },
     {
@@ -1176,7 +1176,7 @@
       "members": [
         "Create"
       ],
-      "sourceHash": "6501dccc3c69b5c0197de61e087df2370e8e2063003a49e2c7bb38decbc92fcf",
+      "sourceHash": "dc9e24fdd755e541d4ea851b8766911fbe83dab20a1cbb57e8fc8a1cb467a602",
       "project": "abstractions"
     },
     {
@@ -1194,7 +1194,7 @@
         "Exception",
         "LogEventArgs"
       ],
-      "sourceHash": "67d90ae98df9396b1e5bb7955e83d9d268b2a1f9c1076eaf19d8a9414d7f7a2e",
+      "sourceHash": "e930bc05dddf05553137d1578d2328d339eba2aa3d1c500d39864e1106162f7f",
       "project": "abstractions"
     },
     {
@@ -1209,7 +1209,7 @@
         "MediaBackendUnsupportedException",
         "MediaBackendUnsupportedException"
       ],
-      "sourceHash": "676f56568f2405e4a048f108a9783322bb5238d1af447b7c043dfa0434fec2a5",
+      "sourceHash": "6e51a0cf954120a99672a1d2fe91e55d43857a106c1ff124b078a80433017a0b",
       "project": "abstractions"
     },
     {
@@ -1229,7 +1229,7 @@
         "HttpOnly",
         "MediaCookie"
       ],
-      "sourceHash": "9d17dd76f2f1a5834f985521699b99321f7f848cdeddd616a6b46fbade36e799",
+      "sourceHash": "18c795f97d2cc4fd3aa1c4448480dee2faa9efab984c9f26a747719435a5a21d",
       "project": "abstractions"
     },
     {
@@ -1275,7 +1275,7 @@
         "Recoverable",
         "MediaErrorEventArgs"
       ],
-      "sourceHash": "f38c319ec6fcd3866d2e0f838fae876f2319f8792121ca911ef784ee2b93a06f",
+      "sourceHash": "e6cd3a279ddbfc26f66505b74ea8a6ff0f51c12e936b2d8bad5c49544e86fe34",
       "project": "abstractions"
     },
     {
@@ -1291,7 +1291,7 @@
         "Video",
         "MediaFormatProfile"
       ],
-      "sourceHash": "9087062e34dc09429a099282360e6d02654544f93913faa31b0c3830e5e23923",
+      "sourceHash": "b2607f2538b7a8c583f3a43786de8ea3f8876e0c60fe8eff99dfe6b6b67d7bd0",
       "project": "abstractions"
     },
     {
@@ -1553,7 +1553,7 @@
         "S32",
         "F32"
       ],
-      "sourceHash": "521b90963398f081c05db3606b999f2eb484ce128411ef33b85795a4106de62c",
+      "sourceHash": "2c4896aa9f45a57f77b5d8979e2318c288d1c7df8578eff2219a5762956c47ab",
       "project": "abstractions"
     },
     {
@@ -1593,7 +1593,7 @@
         "VulkanNativeImage",
         "GlTexture"
       ],
-      "sourceHash": "12558ae45e4dd5b5b9918d679f816b31822c26ba8c500c7667ee08157f84dda8",
+      "sourceHash": "adeb8b28f27c8ceb497b96db659ad55a73db68f84a48c3dfcd6b87d4077fde8e",
       "project": "abstractions"
     },
     {
@@ -1636,7 +1636,7 @@
         "B8G8R8A8UNorm",
         "R8G8B8A8UNorm"
       ],
-      "sourceHash": "12558ae45e4dd5b5b9918d679f816b31822c26ba8c500c7667ee08157f84dda8",
+      "sourceHash": "adeb8b28f27c8ceb497b96db659ad55a73db68f84a48c3dfcd6b87d4077fde8e",
       "project": "abstractions"
     },
     {
@@ -1676,7 +1676,7 @@
         "SoftwareFrameResource",
         "Dispose"
       ],
-      "sourceHash": "a7777774968fafa5365b09b8e8c9d564a95afd8b49207448b02af0473c9916e0",
+      "sourceHash": "5593014d977f018efce2aff0f91f592a87faedc351cc6a42c734d1c761f11dd8",
       "project": "abstractions"
     },
     {
@@ -1688,7 +1688,7 @@
       "pageZh": "zh/api/abstractions/models-frames-videocolorinfo",
       "symbol": "LingFan.Media.Abstractions.struct",
       "members": [],
-      "sourceHash": "134b99c1531a4ece58c857445ace6e8131f45ae5812bfc6b037ed65ce5da3b0a",
+      "sourceHash": "3ba86d5fecd39e8f5dbb63abba017f3497eabf38fe6bd0c846a544355ae00d78",
       "project": "abstractions"
     },
     {
@@ -1702,7 +1702,7 @@
       "members": [
         "0"
       ],
-      "sourceHash": "12558ae45e4dd5b5b9918d679f816b31822c26ba8c500c7667ee08157f84dda8",
+      "sourceHash": "adeb8b28f27c8ceb497b96db659ad55a73db68f84a48c3dfcd6b87d4077fde8e",
       "project": "abstractions"
     },
     {
@@ -1767,7 +1767,7 @@
         "Style",
         "SubtitleFrame"
       ],
-      "sourceHash": "69e75d24c4af8831831a90776a4e2aad74b5d945abbf191205bbd681fb26d865",
+      "sourceHash": "aa6d2f464128c33796dcd252941fdab3814f9ed9b7423f031c39be7f0394d364",
       "project": "abstractions"
     },
     {
@@ -1819,7 +1819,7 @@
         "NewTrack",
         "TrackChangedEventArgs"
       ],
-      "sourceHash": "555bbe98c65f835115d675ba3b7a20c88c5e6b6647c0f8e37263a2f8f7107074",
+      "sourceHash": "7276a1a94534f776c55b7c38d975a7c45525c6b43fdd68801f5d2f322884cf64",
       "project": "abstractions"
     },
     {
@@ -1858,7 +1858,7 @@
         "PlaneOffsets",
         "PlanePitches"
       ],
-      "sourceHash": "5790536953180b61d7ffc4dcaaf3fce03740d2aef4386e1de446138ab66e7910",
+      "sourceHash": "15da56badf87866f42fb516e280e92198cdb50521efdee296f8914632ccdebaa",
       "project": "abstractions"
     },
     {
@@ -1905,7 +1905,7 @@
         "Reset",
         "Dispose"
       ],
-      "sourceHash": "dc8d85c21074b7b8f017fa47377cca399d37bc04f146a6ad5b4739d8bfeab02a",
+      "sourceHash": "fd8ccca85bf9ba72eea974006687bb7dbc15d00f2c39f1b8672c1dad4d008cbe",
       "project": "abstractions"
     },
     {
@@ -1980,7 +1980,7 @@
         "AddGStreamer",
         "AddWebRTC"
       ],
-      "sourceHash": "09fbceb536f80b05e06c9b756a62a2e5e306f994ed403312f039707a0253e9bc",
+      "sourceHash": "5f6ca38ce107749916a1c59b56fc699a9a28b580a4fbe6c38d7c8605c016db3e",
       "project": "extensions"
     },
     {
@@ -1995,7 +1995,7 @@
         "PluginPath",
         "EnableHardwareDecode"
       ],
-      "sourceHash": "09fbceb536f80b05e06c9b756a62a2e5e306f994ed403312f039707a0253e9bc",
+      "sourceHash": "5f6ca38ce107749916a1c59b56fc699a9a28b580a4fbe6c38d7c8605c016db3e",
       "project": "extensions"
     },
     {
@@ -2012,7 +2012,7 @@
         "WithVideoPipeline",
         "WithVideoTransforms"
       ],
-      "sourceHash": "2620184341c05a6e8175d756ca1d89f336e9dba4a5d070279f59b47d8f779f58",
+      "sourceHash": "736a32caf2d54ea3ae6b143a2230d3986decbe9a4b6e3c9d88974a700fe3a913",
       "project": "extensions"
     },
     {
@@ -2024,7 +2024,7 @@
       "pageZh": "zh/api/extensions/moduleextensions",
       "symbol": "LingFan.Media.Extensions.ModuleExtensions",
       "members": [],
-      "sourceHash": "5c7882d89bbc2f42ddaba1137b67e551fb8205db7de0a7e5c52c4439c307cfea",
+      "sourceHash": "9fc60a27f6471ee6420910f601c4a94c40ea749656208d1acd77ac535f73e5bd",
       "project": "extensions"
     },
     {
@@ -2039,7 +2039,7 @@
         "AddLingFanMedia",
         "AddLingFanMedia"
       ],
-      "sourceHash": "66d5786ce201bf7f683b0b5b55d9b165dddb50abf90b8374970a614179e356a6",
+      "sourceHash": "be5145f93c96cb5dd55d2b75e39c6f74d3acecc263c4f02c86e30a36f9ad5dbe",
       "project": "extensions"
     },
     {
@@ -2053,7 +2053,7 @@
       "members": [
         "EnableHardwareDecode"
       ],
-      "sourceHash": "09fbceb536f80b05e06c9b756a62a2e5e306f994ed403312f039707a0253e9bc",
+      "sourceHash": "5f6ca38ce107749916a1c59b56fc699a9a28b580a4fbe6c38d7c8605c016db3e",
       "project": "extensions"
     }
   ],
@@ -2212,7 +2212,7 @@
       "page": "api/abstractions/enums-sampleformat",
       "pageZh": "zh/api/abstractions/enums-sampleformat",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SampleFormat.cs",
-      "sourceHash": "521b90963398f081c05db3606b999f2eb484ce128411ef33b85795a4106de62c",
+      "sourceHash": "2c4896aa9f45a57f77b5d8979e2318c288d1c7df8578eff2219a5762956c47ab",
       "project": "abstractions",
       "types": [
         "SampleFormat"
@@ -2282,7 +2282,7 @@
       "page": "api/abstractions/events-bufferprogresseventargs",
       "pageZh": "zh/api/abstractions/events-bufferprogresseventargs",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/BufferProgressEventArgs.cs",
-      "sourceHash": "1ddf89debd7506028046a0f37cfdd78206f8a456efd953fd5c946bf2ecb6e426",
+      "sourceHash": "35bff4cc98409cceb0e4aedf777fb8fc407f71f580dac9d788d86db81d09ecea",
       "project": "abstractions",
       "types": [
         "BufferProgressEventArgs"
@@ -2292,7 +2292,7 @@
       "page": "api/abstractions/events-logeventargs",
       "pageZh": "zh/api/abstractions/events-logeventargs",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/LogEventArgs.cs",
-      "sourceHash": "67d90ae98df9396b1e5bb7955e83d9d268b2a1f9c1076eaf19d8a9414d7f7a2e",
+      "sourceHash": "e930bc05dddf05553137d1578d2328d339eba2aa3d1c500d39864e1106162f7f",
       "project": "abstractions",
       "types": [
         "LogEventArgs"
@@ -2302,7 +2302,7 @@
       "page": "api/abstractions/events-mediaerroreventargs",
       "pageZh": "zh/api/abstractions/events-mediaerroreventargs",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/MediaErrorEventArgs.cs",
-      "sourceHash": "f38c319ec6fcd3866d2e0f838fae876f2319f8792121ca911ef784ee2b93a06f",
+      "sourceHash": "e6cd3a279ddbfc26f66505b74ea8a6ff0f51c12e936b2d8bad5c49544e86fe34",
       "project": "abstractions",
       "types": [
         "MediaErrorEventArgs"
@@ -2322,7 +2322,7 @@
       "page": "api/abstractions/events-trackchangedeventargs",
       "pageZh": "zh/api/abstractions/events-trackchangedeventargs",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/TrackChangedEventArgs.cs",
-      "sourceHash": "555bbe98c65f835115d675ba3b7a20c88c5e6b6647c0f8e37263a2f8f7107074",
+      "sourceHash": "7276a1a94534f776c55b7c38d975a7c45525c6b43fdd68801f5d2f322884cf64",
       "project": "abstractions",
       "types": [
         "TrackChangedEventArgs"
@@ -2332,7 +2332,7 @@
       "page": "api/abstractions/exceptions-gpudevicelostexception",
       "pageZh": "zh/api/abstractions/exceptions-gpudevicelostexception",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Exceptions/GpuDeviceLostException.cs",
-      "sourceHash": "635f79c13436914c434e5d58f0c9ccf61a0cb76ccef193a2167df473daa15d61",
+      "sourceHash": "7c087da74629778e60e554d07a523fa961267cc738c6d4fb9dd292cb278955ef",
       "project": "abstractions",
       "types": [
         "GpuDeviceLostException"
@@ -2342,7 +2342,7 @@
       "page": "api/abstractions/interfaces-codecs-icodecregistry",
       "pageZh": "zh/api/abstractions/interfaces-codecs-icodecregistry",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Codecs/ICodecRegistry.cs",
-      "sourceHash": "3daf48070cb17122ed10eb05b8bc3e4c9ea62d2b46741de34431cd1f9779fced",
+      "sourceHash": "beee1893298e884f78fe0b22dd47e5a0f84594024db074a9026e1a2e2f7325d3",
       "project": "abstractions",
       "types": [
         "ICodecRegistry"
@@ -2372,7 +2372,7 @@
       "page": "api/abstractions/interfaces-core-ibuffermanager",
       "pageZh": "zh/api/abstractions/interfaces-core-ibuffermanager",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IBufferManager.cs",
-      "sourceHash": "8ef392acda6754d2616481c9e0f4851b584fc1fcee0a5024503421c812b7caea",
+      "sourceHash": "2d4e0bcda9ea78b02f3734d4a0ff239d1401960f47a65133c3c6ea6f17536064",
       "project": "abstractions",
       "types": [
         "IBufferManager"
@@ -2382,7 +2382,7 @@
       "page": "api/abstractions/interfaces-core-iframechannel",
       "pageZh": "zh/api/abstractions/interfaces-core-iframechannel",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IFrameChannel.cs",
-      "sourceHash": "73772ef8df5385f20780cf039b21442d668ca4ba386c1cbf2874d93f4d55c56b",
+      "sourceHash": "6177a837e3fa8773e32b650c787571276f8ace9045ae9d15788e2410b071a756",
       "project": "abstractions",
       "types": [
         "IFrameSink",
@@ -2393,7 +2393,7 @@
       "page": "api/abstractions/interfaces-core-imediaclock",
       "pageZh": "zh/api/abstractions/interfaces-core-imediaclock",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IMediaClock.cs",
-      "sourceHash": "1e486475e9ec1089397315a7f024afd6c271596f51f3ef58fc906934ae51e1fc",
+      "sourceHash": "be69f86a510d46b0d729b9f414d65c1b81112ad9011e5e04571cc32037eb98a8",
       "project": "abstractions",
       "types": [
         "IMediaClock"
@@ -2403,7 +2403,7 @@
       "page": "api/abstractions/interfaces-core-imediacomponent",
       "pageZh": "zh/api/abstractions/interfaces-core-imediacomponent",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IMediaComponent.cs",
-      "sourceHash": "0ad18483bd74af2d1c3f650df007e7db01eb09f0e682d561f8eaca9bfeff1248",
+      "sourceHash": "8e4c9af6a9482d0d544f117c2bac89dc7d77fd18d9b536c513d79dcc5fc223f7",
       "project": "abstractions",
       "types": [
         "IMediaComponent"
@@ -2413,7 +2413,7 @@
       "page": "api/abstractions/interfaces-decoders-iaudiodecoder",
       "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiodecoder",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioDecoder.cs",
-      "sourceHash": "cc5bd1ba5303aa3c3ace80c247cfdcfc06bf4577d61bb161f84af81c3ae0be68",
+      "sourceHash": "0865316e55c9a9a55b9c0ab3006b5552be139dddf2d4dfe6ac46c83d7ed1b66b",
       "project": "abstractions",
       "types": [
         "IAudioDecoder"
@@ -2423,7 +2423,7 @@
       "page": "api/abstractions/interfaces-decoders-iaudiodecoderfactory",
       "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiodecoderfactory",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioDecoderFactory.cs",
-      "sourceHash": "0310cb7e48a766a3abffa10d5bb2ddc3bbd969114c18e31b1701bfa5e2edd3f1",
+      "sourceHash": "dc93d67d045c5eb6d0f152aee75587abcf5f0146cf08c0f2a07ea17385f8b9e3",
       "project": "abstractions",
       "types": [
         "IAudioDecoderFactory"
@@ -2433,7 +2433,7 @@
       "page": "api/abstractions/interfaces-decoders-iaudiosourceformataware",
       "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiosourceformataware",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioSourceFormatAware.cs",
-      "sourceHash": "d48ee4dfcbddd7a21f2c3c7df62a1694f2f31672be120a901bfb401d95df09af",
+      "sourceHash": "b9e6feb155d7c8bb54036b68d03aaf1045432158f8c598d5850f2569cecdc557",
       "project": "abstractions",
       "types": [
         "IAudioSourceFormatAware"
@@ -2443,7 +2443,7 @@
       "page": "api/abstractions/interfaces-decoders-isubtitledecoder",
       "pageZh": "zh/api/abstractions/interfaces-decoders-isubtitledecoder",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/ISubtitleDecoder.cs",
-      "sourceHash": "e1165e982666c0bf528d2405543ab774fe75f9f1fbe51b4eecea25c0cb16d6ea",
+      "sourceHash": "c3fd7ad5606410f3f31ce5093cfb0eafeac2e1fd5e9539b690f1ef9bee158985",
       "project": "abstractions",
       "types": [
         "ISubtitleDecoder"
@@ -2453,7 +2453,7 @@
       "page": "api/abstractions/interfaces-decoders-isubtitledecoderfactory",
       "pageZh": "zh/api/abstractions/interfaces-decoders-isubtitledecoderfactory",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/ISubtitleDecoderFactory.cs",
-      "sourceHash": "c2579ff8955b1994b6fbe47f8164e847baf3b567a8f32ac8f402f13125ad7afe",
+      "sourceHash": "88d293effed522f30057b5896207da68bb1d45348582882056c094231d483b59",
       "project": "abstractions",
       "types": [
         "ISubtitleDecoderFactory"
@@ -2463,7 +2463,7 @@
       "page": "api/abstractions/interfaces-decoders-ivideodecoder",
       "pageZh": "zh/api/abstractions/interfaces-decoders-ivideodecoder",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IVideoDecoder.cs",
-      "sourceHash": "694c8136e9798d36ef45b43de65272806f0e3c5b6c005d7fc48d96e8c4b26442",
+      "sourceHash": "be6445b41031e052dc3a882f49abb2d5478805573b2ee21cba715703c5c79114",
       "project": "abstractions",
       "types": [
         "IVideoDecoder"
@@ -2473,7 +2473,7 @@
       "page": "api/abstractions/interfaces-decoders-ivideodecoderfactory",
       "pageZh": "zh/api/abstractions/interfaces-decoders-ivideodecoderfactory",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IVideoDecoderFactory.cs",
-      "sourceHash": "6344cb9bf512ef3a17e3452f29ec3ce41f548ec4a9eaa0ab5656c6c39f94761c",
+      "sourceHash": "6b9a903f12eb4ef4ddd141bc56cfaaf7994480024896245d8409b993afcadcbf",
       "project": "abstractions",
       "types": [
         "IVideoDecoderFactory"
@@ -2483,7 +2483,7 @@
       "page": "api/abstractions/interfaces-demuxer-imediademuxer",
       "pageZh": "zh/api/abstractions/interfaces-demuxer-imediademuxer",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Demuxer/IMediaDemuxer.cs",
-      "sourceHash": "c3eb92ef1b26652689c7ca6587390c673874413aaaabfc505c7dc15ddbf629da",
+      "sourceHash": "66434f24eecfd72718e7e7545e5269f42750a6fb8ab6043f27f9668206857015",
       "project": "abstractions",
       "types": [
         "IMediaDemuxer"
@@ -2493,7 +2493,7 @@
       "page": "api/abstractions/interfaces-demuxer-imediademuxerfactory",
       "pageZh": "zh/api/abstractions/interfaces-demuxer-imediademuxerfactory",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Demuxer/IMediaDemuxerFactory.cs",
-      "sourceHash": "c3e0922494e563ffe53e585c32c6e4918e4c63e8c5af65e584c0d51afb76b8f1",
+      "sourceHash": "23522c8bf9ba17808e0c96037edaf8c82039a8372a05ffa417bce9bdf9371ae8",
       "project": "abstractions",
       "types": [
         "IMediaDemuxerFactory"
@@ -2513,7 +2513,7 @@
       "page": "api/abstractions/interfaces-frames-idisposableframe",
       "pageZh": "zh/api/abstractions/interfaces-frames-idisposableframe",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IDisposableFrame.cs",
-      "sourceHash": "85291f52482f7a7e27a1c9dedcac7b1f7cfa008cbfa6ab121b37032fbebb13be",
+      "sourceHash": "7f18021ff72b713e80d108940540815bba27ee6cbc4acb4519aecaf4ef9d5d4b",
       "project": "abstractions",
       "types": [
         "IDisposableFrame"
@@ -2523,7 +2523,7 @@
       "page": "api/abstractions/interfaces-frames-iframepool",
       "pageZh": "zh/api/abstractions/interfaces-frames-iframepool",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFramePool.cs",
-      "sourceHash": "595683b137b8a79d35206440be93950ada58110de476bf7af4444e64811a430f",
+      "sourceHash": "0cdfe3abda0ae43c5a6fba67c3451ba1157da6a4d9c40cf6f742417c65d1ce5f",
       "project": "abstractions",
       "types": [
         "IFramePool"
@@ -2533,7 +2533,7 @@
       "page": "api/abstractions/interfaces-frames-iframepoolaware",
       "pageZh": "zh/api/abstractions/interfaces-frames-iframepoolaware",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFramePoolAware.cs",
-      "sourceHash": "5f27175c571ce4bd45eb634a067016b81b8500992a01995e02cfddfec3709c46",
+      "sourceHash": "ddf6d19ea6b808a9a90c58faa37aa7a4b4be42dced5f0cf7ec889d22c0f88148",
       "project": "abstractions",
       "types": [
         "IFramePoolAware"
@@ -2543,7 +2543,7 @@
       "page": "api/abstractions/interfaces-frames-iframeresource",
       "pageZh": "zh/api/abstractions/interfaces-frames-iframeresource",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFrameResource.cs",
-      "sourceHash": "45400e8388271e8ee27ec95e9558c68cdb1b6ac1bda7afcf8b0a9c846e5b99ab",
+      "sourceHash": "69a4ac71c67744014c6697ed0d5bad8e2d2841a540d2d16a893b4a28774f44ac",
       "project": "abstractions",
       "types": [
         "IFrameResource"
@@ -2553,7 +2553,7 @@
       "page": "api/abstractions/interfaces-frames-igpuframeproducer",
       "pageZh": "zh/api/abstractions/interfaces-frames-igpuframeproducer",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuFrameProducer.cs",
-      "sourceHash": "4d840373e19f4fb4730860f2f8dcbcb97b65757fdc6ef55364c94b8f79ffcce6",
+      "sourceHash": "cabaa4fbf21c1f738620b050a6b24da68b544389a751589e3471b21b95f2e400",
       "project": "abstractions",
       "types": [
         "GpuFrameImportKind",
@@ -2565,7 +2565,7 @@
       "page": "api/abstractions/interfaces-frames-igputextureresource",
       "pageZh": "zh/api/abstractions/interfaces-frames-igputextureresource",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuTextureResource.cs",
-      "sourceHash": "031302e7979a6c1a19e2b012c03e319405d60e6d20850d4c260c1bbe5eeb91c8",
+      "sourceHash": "d9397c7e6eff53a4d79e924a645866c1d8bcd2c6eb6c692d7d1c26fd2adc2320",
       "project": "abstractions",
       "types": [
         "IGpuTextureResource"
@@ -2575,7 +2575,7 @@
       "page": "api/abstractions/interfaces-frames-ivaapiexport",
       "pageZh": "zh/api/abstractions/interfaces-frames-ivaapiexport",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IVaApiExport.cs",
-      "sourceHash": "5790536953180b61d7ffc4dcaaf3fce03740d2aef4386e1de446138ab66e7910",
+      "sourceHash": "15da56badf87866f42fb516e280e92198cdb50521efdee296f8914632ccdebaa",
       "project": "abstractions",
       "types": [
         "IVaApiExport",
@@ -2596,7 +2596,7 @@
       "page": "api/abstractions/interfaces-gpu-isharedgpusurfacesource",
       "pageZh": "zh/api/abstractions/interfaces-gpu-isharedgpusurfacesource",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/ISharedGpuSurfaceSource.cs",
-      "sourceHash": "ec4ed56c49de30f5b69591087f24977cb0339c9f0ea19fc172aa3c59c1e19642",
+      "sourceHash": "2d7cb0739e4a171b9b57257cd993d39d3fda9a597e6f4f1aafe4b21f0c851f5b",
       "project": "abstractions",
       "types": [
         "ISharedGpuSurfaceSource",
@@ -2617,7 +2617,7 @@
       "page": "api/abstractions/interfaces-outputs-iaudioengine",
       "pageZh": "zh/api/abstractions/interfaces-outputs-iaudioengine",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioEngine.cs",
-      "sourceHash": "454fca0be8b3d2a6ce6428c3c45758238f052b168ac38ff6f70405b6bc837030",
+      "sourceHash": "68e06a8d41533a56b13addc951e861dedf3be28d86ba8fd92b52d36da53fc2c6",
       "project": "abstractions",
       "types": [
         "IAudioEngine"
@@ -2627,7 +2627,7 @@
       "page": "api/abstractions/interfaces-outputs-iaudiooutput",
       "pageZh": "zh/api/abstractions/interfaces-outputs-iaudiooutput",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioOutput.cs",
-      "sourceHash": "280634a175484501a737092d254ad584a12c32a51425672beec4d1f98fbd3fa9",
+      "sourceHash": "ecf7f673df103eda746fbc33a1a8ce607478a3114b87c98f7fda8f2e166b8e5a",
       "project": "abstractions",
       "types": [
         "IAudioOutput"
@@ -2637,7 +2637,7 @@
       "page": "api/abstractions/interfaces-outputs-iaudiooutputfactory",
       "pageZh": "zh/api/abstractions/interfaces-outputs-iaudiooutputfactory",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioOutputFactory.cs",
-      "sourceHash": "93549672baef7457bad5f1fe04d8294bbb736f33e664a6de1bec7d40859ce1f5",
+      "sourceHash": "f9d2fe0abfba4e6a1a8c0e92b5fba6f52f33844fa9227789c9569fd8aeb7e2a6",
       "project": "abstractions",
       "types": [
         "IAudioOutputFactory"
@@ -2647,7 +2647,7 @@
       "page": "api/abstractions/interfaces-outputs-ibatchaudiosubmit",
       "pageZh": "zh/api/abstractions/interfaces-outputs-ibatchaudiosubmit",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IBatchAudioSubmit.cs",
-      "sourceHash": "fdb269a764ea8fac8df086d4370a934f105162d5aa2db404cd4157b090ff6909",
+      "sourceHash": "4d19b1b8a03a9ca97885c2202603716af568e31cfb4fdafb20f53dd1182178e2",
       "project": "abstractions",
       "types": [
         "IBatchAudioSubmit"
@@ -2677,7 +2677,7 @@
       "page": "api/abstractions/interfaces-player-imediaplayer",
       "pageZh": "zh/api/abstractions/interfaces-player-imediaplayer",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs",
-      "sourceHash": "52a7626cbcc464167d17fa94cd35e580715c5186d396373c0ede417c7c7a6d35",
+      "sourceHash": "9126c6f9db2d23b268ab981e94b967857ba8bce9b2abab31718d76d5417e818b",
       "project": "abstractions",
       "types": [
         "IMediaPlayer"
@@ -2687,7 +2687,7 @@
       "page": "api/abstractions/interfaces-player-imediaplayerfactory",
       "pageZh": "zh/api/abstractions/interfaces-player-imediaplayerfactory",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayerFactory.cs",
-      "sourceHash": "65d20a733b51377c7c5ee8fbd66b459d4931d3ef70585dbc34c5f87422c30074",
+      "sourceHash": "320f28da4d0a306bd498e5c873e4843ff30aefaed5141dde036c18dd1e89e05f",
       "project": "abstractions",
       "types": [
         "IMediaPlayerFactory"
@@ -2697,7 +2697,7 @@
       "page": "api/abstractions/interfaces-player-imediasession",
       "pageZh": "zh/api/abstractions/interfaces-player-imediasession",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaSession.cs",
-      "sourceHash": "76dec8f8bbc777c8f25637ffc6daa425399a215660b7775f4be70136149c7615",
+      "sourceHash": "bc23d87d0795d14253e67644a290889a8a0123e62dda1505324b27a5d96d1188",
       "project": "abstractions",
       "types": [
         "IMediaSession"
@@ -2707,7 +2707,7 @@
       "page": "api/abstractions/interfaces-player-mediabackendunsupportedexception",
       "pageZh": "zh/api/abstractions/interfaces-player-mediabackendunsupportedexception",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/MediaBackendUnsupportedException.cs",
-      "sourceHash": "676f56568f2405e4a048f108a9783322bb5238d1af447b7c043dfa0434fec2a5",
+      "sourceHash": "6e51a0cf954120a99672a1d2fe91e55d43857a106c1ff124b078a80433017a0b",
       "project": "abstractions",
       "types": [
         "MediaBackendUnsupportedException"
@@ -2717,7 +2717,7 @@
       "page": "api/abstractions/interfaces-renderers-irendererhealth",
       "pageZh": "zh/api/abstractions/interfaces-renderers-irendererhealth",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IRendererHealth.cs",
-      "sourceHash": "a79116dd89f7f6761828adb06a3f299f5d2d8715daf285ebd2f127d9bf1aa40d",
+      "sourceHash": "974f19027e1fe053ad40c356faa6a195c062ff9824b299dc308831cd75238164",
       "project": "abstractions",
       "types": [
         "IRendererHealth"
@@ -2737,7 +2737,7 @@
       "page": "api/abstractions/interfaces-renderers-ivideorenderer",
       "pageZh": "zh/api/abstractions/interfaces-renderers-ivideorenderer",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IVideoRenderer.cs",
-      "sourceHash": "c6190da9d98604aff80a8dbee7fef51623899b2c8747c9f54d23ad36cef30cf0",
+      "sourceHash": "e96cf94d327042614f107ef33fdfcab5f1ddc4aa238ad1e7c2120e765ed5df69",
       "project": "abstractions",
       "types": [
         "IVideoRenderer"
@@ -2747,7 +2747,7 @@
       "page": "api/abstractions/interfaces-renderers-ivideorendererfactory",
       "pageZh": "zh/api/abstractions/interfaces-renderers-ivideorendererfactory",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IVideoRendererFactory.cs",
-      "sourceHash": "6501dccc3c69b5c0197de61e087df2370e8e2063003a49e2c7bb38decbc92fcf",
+      "sourceHash": "dc9e24fdd755e541d4ea851b8766911fbe83dab20a1cbb57e8fc8a1cb467a602",
       "project": "abstractions",
       "types": [
         "IVideoRendererFactory"
@@ -2777,7 +2777,7 @@
       "page": "api/abstractions/interfaces-source-imediastream",
       "pageZh": "zh/api/abstractions/interfaces-source-imediastream",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaStream.cs",
-      "sourceHash": "d933a3c61a13b05eaaf1d4f6c27bfd745e6844b67f09b895176754dfda7dda1e",
+      "sourceHash": "d148d2cc8f6f40a6621494c458893a73dffa01c091b7d367ea3b5cecedbedfd3",
       "project": "abstractions",
       "types": [
         "IMediaStream"
@@ -2787,7 +2787,7 @@
       "page": "api/abstractions/interfaces-source-imediastreamfactory",
       "pageZh": "zh/api/abstractions/interfaces-source-imediastreamfactory",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaStreamFactory.cs",
-      "sourceHash": "44d39324cea9682374ab9ac6948d56cd72cffa569906ab4eb6f13173568ff593",
+      "sourceHash": "0350e76e4691b45aa964405d20cd438f4ba4a49cd2c97b497bb40939b9f34b47",
       "project": "abstractions",
       "types": [
         "IMediaStreamFactory"
@@ -2797,7 +2797,7 @@
       "page": "api/abstractions/models-frames-audioframe",
       "pageZh": "zh/api/abstractions/models-frames-audioframe",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/AudioFrame.cs",
-      "sourceHash": "52f34755c4c0bacab82930e3f197198dfea75d5ca004a3ad8c49c3609925e881",
+      "sourceHash": "31bb4233fa825a6d415f3cc929961b2847670f7aa9fa1521f3ac5f55197bbfb8",
       "project": "abstractions",
       "types": [
         "AudioFrame"
@@ -2807,7 +2807,7 @@
       "page": "api/abstractions/models-frames-gputexturereadback",
       "pageZh": "zh/api/abstractions/models-frames-gputexturereadback",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/GpuTextureReadback.cs",
-      "sourceHash": "8ae1a1f3ae8a4ac5ad2bc7a9ad007c9bc74ce65656dd4e6e5c6ec0c1610edd39",
+      "sourceHash": "63bba4da28c32fdb7979b4502f50ea7f462ccc5d5034307f2aec39294f509116",
       "project": "abstractions",
       "types": [
         "GpuTextureReadback"
@@ -2827,7 +2827,7 @@
       "page": "api/abstractions/models-frames-softwareframeresource",
       "pageZh": "zh/api/abstractions/models-frames-softwareframeresource",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/SoftwareFrameResource.cs",
-      "sourceHash": "a7777774968fafa5365b09b8e8c9d564a95afd8b49207448b02af0473c9916e0",
+      "sourceHash": "5593014d977f018efce2aff0f91f592a87faedc351cc6a42c734d1c761f11dd8",
       "project": "abstractions",
       "types": [
         "SoftwareFrameResource"
@@ -2837,7 +2837,7 @@
       "page": "api/abstractions/models-frames-subtitleframe",
       "pageZh": "zh/api/abstractions/models-frames-subtitleframe",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/SubtitleFrame.cs",
-      "sourceHash": "69e75d24c4af8831831a90776a4e2aad74b5d945abbf191205bbd681fb26d865",
+      "sourceHash": "aa6d2f464128c33796dcd252941fdab3814f9ed9b7423f031c39be7f0394d364",
       "project": "abstractions",
       "types": [
         "SubtitleFrame"
@@ -2847,7 +2847,7 @@
       "page": "api/abstractions/models-frames-videocolorinfo",
       "pageZh": "zh/api/abstractions/models-frames-videocolorinfo",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/VideoColorInfo.cs",
-      "sourceHash": "134b99c1531a4ece58c857445ace6e8131f45ae5812bfc6b037ed65ce5da3b0a",
+      "sourceHash": "3ba86d5fecd39e8f5dbb63abba017f3497eabf38fe6bd0c846a544355ae00d78",
       "project": "abstractions",
       "types": [
         "struct"
@@ -2857,7 +2857,7 @@
       "page": "api/abstractions/models-frames-videoframe",
       "pageZh": "zh/api/abstractions/models-frames-videoframe",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/VideoFrame.cs",
-      "sourceHash": "dc8d85c21074b7b8f017fa47377cca399d37bc04f146a6ad5b4739d8bfeab02a",
+      "sourceHash": "fd8ccca85bf9ba72eea974006687bb7dbc15d00f2c39f1b8672c1dad4d008cbe",
       "project": "abstractions",
       "types": [
         "VideoFrame"
@@ -2887,7 +2887,7 @@
       "page": "api/abstractions/models-gpu-sharedgpusurfacedescriptor",
       "pageZh": "zh/api/abstractions/models-gpu-sharedgpusurfacedescriptor",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSurfaceDescriptor.cs",
-      "sourceHash": "12558ae45e4dd5b5b9918d679f816b31822c26ba8c500c7667ee08157f84dda8",
+      "sourceHash": "adeb8b28f27c8ceb497b96db659ad55a73db68f84a48c3dfcd6b87d4077fde8e",
       "project": "abstractions",
       "types": [
         "SharedGpuHandleKind",
@@ -2912,7 +2912,7 @@
       "page": "api/abstractions/models-mediacookie",
       "pageZh": "zh/api/abstractions/models-mediacookie",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/MediaCookie.cs",
-      "sourceHash": "9d17dd76f2f1a5834f985521699b99321f7f848cdeddd616a6b46fbade36e799",
+      "sourceHash": "18c795f97d2cc4fd3aa1c4448480dee2faa9efab984c9f26a747719435a5a21d",
       "project": "abstractions",
       "types": [
         "MediaCookie"
@@ -2922,7 +2922,7 @@
       "page": "api/abstractions/models-mediaformatprofile",
       "pageZh": "zh/api/abstractions/models-mediaformatprofile",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/MediaFormatProfile.cs",
-      "sourceHash": "9087062e34dc09429a099282360e6d02654544f93913faa31b0c3830e5e23923",
+      "sourceHash": "b2607f2538b7a8c583f3a43786de8ea3f8876e0c60fe8eff99dfe6b6b67d7bd0",
       "project": "abstractions",
       "types": [
         "MediaFormatProfile"
@@ -2962,7 +2962,7 @@
       "page": "api/abstractions/models-settings-audioeffectparameter",
       "pageZh": "zh/api/abstractions/models-settings-audioeffectparameter",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/AudioEffectParameter.cs",
-      "sourceHash": "dff255bb696452057ec472b32afe63b999dba22866107e5a9593cdd3beb11674",
+      "sourceHash": "87ad6501e75ae8e7c6f37f14966a9fc685fda5629f8df01cff88390c09560b9c",
       "project": "abstractions",
       "types": [
         "AudioEffectParameter"
@@ -2982,7 +2982,7 @@
       "page": "api/abstractions/models-settings-decodepreferencepolicy",
       "pageZh": "zh/api/abstractions/models-settings-decodepreferencepolicy",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/DecodePreferencePolicy.cs",
-      "sourceHash": "61bd4dcb929667b877df8010311596b792af971ffc9bda9fb2bc6c83b8a33fbc",
+      "sourceHash": "fa081ba26d30d0496fcf88d96c280441c51da245c18ad7ba0d59571c9a3acbff",
       "project": "abstractions",
       "types": [
         "DecodePreferencePolicy"
@@ -3052,7 +3052,7 @@
       "page": "api/extensions/backendstubs",
       "pageZh": "zh/api/extensions/backendstubs",
       "source": "src/Infrastructure/LingFan.Media.Extensions/BackendStubs.cs",
-      "sourceHash": "09fbceb536f80b05e06c9b756a62a2e5e306f994ed403312f039707a0253e9bc",
+      "sourceHash": "5f6ca38ce107749916a1c59b56fc699a9a28b580a4fbe6c38d7c8605c016db3e",
       "project": "extensions",
       "types": [
         "BackendStubs",
@@ -3064,7 +3064,7 @@
       "page": "api/extensions/mediabuilderpipelineextensions",
       "pageZh": "zh/api/extensions/mediabuilderpipelineextensions",
       "source": "src/Infrastructure/LingFan.Media.Extensions/MediaBuilderPipelineExtensions.cs",
-      "sourceHash": "2620184341c05a6e8175d756ca1d89f336e9dba4a5d070279f59b47d8f779f58",
+      "sourceHash": "736a32caf2d54ea3ae6b143a2230d3986decbe9a4b6e3c9d88974a700fe3a913",
       "project": "extensions",
       "types": [
         "MediaBuilderPipelineExtensions"
@@ -3074,7 +3074,7 @@
       "page": "api/extensions/moduleextensions",
       "pageZh": "zh/api/extensions/moduleextensions",
       "source": "src/Infrastructure/LingFan.Media.Extensions/ModuleExtensions.cs",
-      "sourceHash": "5c7882d89bbc2f42ddaba1137b67e551fb8205db7de0a7e5c52c4439c307cfea",
+      "sourceHash": "9fc60a27f6471ee6420910f601c4a94c40ea749656208d1acd77ac535f73e5bd",
       "project": "extensions",
       "types": [
         "ModuleExtensions"
@@ -3084,7 +3084,7 @@
       "page": "api/extensions/servicecollectionextensions",
       "pageZh": "zh/api/extensions/servicecollectionextensions",
       "source": "src/Infrastructure/LingFan.Media.Extensions/ServiceCollectionExtensions.cs",
-      "sourceHash": "66d5786ce201bf7f683b0b5b55d9b165dddb50abf90b8374970a614179e356a6",
+      "sourceHash": "be5145f93c96cb5dd55d2b75e39c6f74d3acecc263c4f02c86e30a36f9ad5dbe",
       "project": "extensions",
       "types": [
         "ServiceCollectionExtensions"

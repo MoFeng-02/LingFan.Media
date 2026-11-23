@@ -94,6 +94,12 @@ Task StartAsync(CancellationToken ct = default);
 
 开始缓冲（预读取）。支持取消。
 
+**Parameters**
+
+- `ct`: 取消令牌；取消后预读取停止。
+
+**Returns**: 预读取完成或被取消时结束的任务。
+
 ### Stop
 
 ```csharp

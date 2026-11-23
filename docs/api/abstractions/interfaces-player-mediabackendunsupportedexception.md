@@ -31,8 +31,14 @@ public MediaBackendUnsupportedException(string source)
     : base($"没有已注册的后端能够打开该媒体源：{source}") { }
 
 /// <summary>构造异常并携带导致穷尽回退的内部异常。</summary>
+/// <param name="source">媒体源标识。</param>
+/// <param name="innerException">导致穷尽回退的内部异常。</param>
 public MediaBackendUnsupportedException(string source, Exception innerException)
     : base($"没有已注册的后端能够打开该媒体源：{source}", innerException) { }
 ```
 
 构造异常，source 为媒体源标识（`Identifier`）。
+
+**Parameters**
+
+- `source`: 媒体源标识。

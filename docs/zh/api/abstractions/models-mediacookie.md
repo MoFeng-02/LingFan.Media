@@ -85,3 +85,12 @@ public MediaCookie(
 ```
 
 初始化 `MediaCookie` 的新实例。
+
+**参数**
+
+- `name`：Cookie 名称。
+- `value`：Cookie 值。
+- `domain`：域（可为 null）。
+- `path`：路径（可为 null）。
+- `secure`：是否仅 HTTPS。
+- `httpOnly`：是否仅 HTTP（不可通过 JS 访问）。

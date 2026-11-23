@@ -37,3 +37,5 @@ IVideoRenderer Create();
 ```
 
 创建新的 IVideoRenderer 实例（共享 GPU Device，独立 SwapChain）。
+
+**返回**：新创建的视频渲染器实例（未绑定渲染目标，须调用 `Attach`）。

@@ -63,3 +63,10 @@ public AudioEffectParameter(string name, float value, float minValue, float maxV
 ```
 
 初始化 `AudioEffectParameter` 的新实例。
+
+**Parameters**
+
+- `name`: 参数名（如 "Frequency"、"Gain"）。
+- `value`: 参数值。
+- `minValue`: 最小值。
+- `maxValue`: 最大值。

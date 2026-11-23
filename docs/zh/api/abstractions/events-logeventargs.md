@@ -63,3 +63,10 @@ public LogEventArgs(LogLevel level, string message, string? source = null, Excep
 ```
 
 初始化 `LogEventArgs` 的新实例。
+
+**参数**
+
+- `level`：日志级别。
+- `message`：日志消息。
+- `source`：来源模块（可为 null）。
+- `exception`：关联异常（可为 null）。

@@ -103,7 +103,6 @@ public bool HasNativeImage =>
 
 **用途**：供消费方在导入前做守卫——为 `false` 表示描述符不足以走
 `VulkanNativeImage` 直采样路径，应回退到导出/导入路径。
-当前消费侧仍按 `Kind` 分派，暂无调用方；它是契约约定的守卫，不属于可删死码。
 
 **判据只看上述四个字段、不看 `Kind`**：按字段语义表，非
 `VulkanNativeImage` 的 Kind 不应填这些字段，故结果自然为

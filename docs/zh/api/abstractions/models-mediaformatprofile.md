@@ -41,11 +41,23 @@ public readonly ContainerFormat Container;
 
 容器格式（如 MP4 / WebM）。
 
-### MediaFormatProfile
+### Video
 
 ```csharp
 public readonly VideoCodec Video;
-public MediaFormatProfile(ContainerFormat container, VideoCodec video);
 ```
 
 主视频编码（探测不到为 `Unknown`）。
+
+### 构造函数
+
+```csharp
+public MediaFormatProfile(ContainerFormat container, VideoCodec video);
+```
+
+初始化格式组合画像。
+
+**参数**
+
+- `container`：容器格式。
+- `video`：主视频编码（探测不到时为 &lt;see cref="VideoCodec.Unknown"/&gt;）。
