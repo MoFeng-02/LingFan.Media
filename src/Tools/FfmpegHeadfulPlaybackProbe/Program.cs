@@ -130,49 +130,9 @@ internal static partial class Program
             return 2;
         }
 
-        var loggerFactory = LoggerFactory.Create(b => b
-            .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "[HH:mm:ss.fff] "; })
-            .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information));
-
-        var services = new ServiceCollection();
-        services.AddSingleton<ILoggerFactory>(loggerFactory);
-        var builder = services.AddLingFanMedia()
-            .AddFFmpeg(o =>
-            {
-                o.FFmpegLibraryPath = AppContext.BaseDirectory;
-                o.LogLevel = verbose ? 32 /* AV_LOG_DEBUG */ : 16 /* AV_LOG_ERROR */;
-                // 两套测试的关键差异：默认软件解码(测试1)，--hw 走 D3D11VA 零拷贝(测试2)。
-                o.HardwareAcceleration = useHw;
-            });
-
-        // —— 视频侧（同 MF 探针：手动装饰 D3D11RendererFactory 以精确统计 Present，并补回 IGpuDeviceContext）——
-        CountingVideoRendererFactory? countingFactory = null;
-        if (doVideo)
-        {
-            var d3d11Factory = new D3D11RendererFactory(loggerFactory);
-            countingFactory = new CountingVideoRendererFactory(d3d11Factory, saveFrames, saveDir);
-            builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
-            // 保住 IGpuDeviceContext：--hw 时 FFmpeg D3D11VA 取它作共享设备进行零拷贝；软解时它供上屏上传。
-            builder.Services.AddSingleton<IGpuDeviceContext>(sp => d3d11Factory.Context);
-        }
-        else
-        {
-            builder.AddHeadlessRenderer();
-        }
-
-        // —— 音频侧 ——
-        if (doAudio)
-            builder.AddWasapiOutput(o =>
-            {
-                o.EnableBackgroundCapableSession = enableCategory;
-                o.ExclusiveMode = exclusiveMode;
-                o.EventDrivenMode = !pollingMode;
-            });
-        else
-            builder.AddSilentAudioOutput();
-
-        await using var sp = services.BuildServiceProvider();
-        var player = sp.GetRequiredService<IMediaPlayer>();
+        var (sp, player, countingFactory) = BuildPlayer(
+            verbose, useHw, doVideo, doAudio, enableCategory, exclusiveMode, pollingMode, saveFrames, saveDir);
+        await using var _sp = sp;
 
         // 音频进度观测量（确认音频经 ffmpeg 解码并真实出声）
         long submittedSamples = 0;
@@ -337,44 +297,8 @@ internal static partial class Program
                     Console.WriteLine($"  [HEADFUL-AUDIO-GAP] 注：stalls={audioStallCount} 均发生在 backlog=0 的连续播放中，属批量提交节奏（非欠载）。");
             }
 
-            // —— 重播验证：Ended→Playing 无缝从头 ——
             if (replayTest)
-            {
-                Console.WriteLine();
-                Console.WriteLine("[HEADFUL-REPLAY] 第一次播放已 Ended，立即二次 PlayAsync 验证重播无缝从头…");
-                double posBeforeReplay = player.Position.TotalSeconds;
-                int presentBeforeReplay = presentCount;
-                await player.PlayAsync();
-                double posAfterReplay = player.Position.TotalSeconds;
-                Console.WriteLine($"  [HEADFUL-REPLAY] 二次 PlayAsync 后：state={player.State} " +
-                                  $"pos={player.Position:g}（重播前 pos={posBeforeReplay:F2}s）");
-                bool replayStateOk = player.State == MediaState.Playing && posAfterReplay < 1.0;
-
-                var replayPoll = Stopwatch.StartNew();
-                while (true)
-                {
-                    await Task.Delay(500);
-                    if (doVideo && countingFactory?.Last is not null)
-                        presentCount = countingFactory.Last.PresentCount;
-                    if (visible || verbose)
-                        Console.WriteLine($"  [REPLAY] t={replayPoll.Elapsed.TotalSeconds:F1}s " +
-                                          $"pos={player.Position:g} present={presentCount} state={player.State}");
-                    if (player.State == MediaState.Ended) break;
-                    double cap = player.Duration.TotalSeconds + 8;
-                    if (replayPoll.Elapsed.TotalSeconds > cap)
-                    {
-                        Console.WriteLine("  [HEADFUL-REPLAY] 超时未收到第二次 Ended（兜底退出）");
-                        break;
-                    }
-                }
-                int presentAfterReplay = presentCount;
-                int replayPresentDelta = presentAfterReplay - presentBeforeReplay;
-                bool replayPresentOk = !doVideo || replayPresentDelta >= 900;
-                replayPass = replayStateOk && replayPresentOk;
-                Console.WriteLine($"  [HEADFUL-REPLAY] 二次播放结束 state={player.State} present 增量={replayPresentDelta}");
-                Console.WriteLine($"  [HEADFUL-REPLAY] => {(replayPass ? "PASS" : "FAIL")} " +
-                                  $"(state重启={replayStateOk}, 二次呈现≈{replayPresentDelta}{(doVideo ? "" : "[无视频跳过计数]")})");
-            }
+                replayPass = await RunReplayAsync(player, countingFactory, doVideo, visible, verbose, presentCount);
 
             await player.StopAsync(CancellationToken.None);
         }
