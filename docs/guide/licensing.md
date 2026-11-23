@@ -1,39 +1,58 @@
-# Licensing & Third-Party Compliance
+---
+title: Licensing
+sources: ["README.zh.md", "THIRD_PARTY_NOTICES.md", "src/Backends/LingFan.Media.Backends.FFmpeg/FFmpegOptions.cs", "src/Backends/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj"]
+symbols: ["FFmpegOptions"]
+lang: en
+---
 
-LingFan.Media's own source code is released under **Apache-2.0**. It optionally relies on two native backends — **FFmpeg** and **LibVLC (VLC)** — both distributed under **LGPL 2.1 or later**. This page explains how the project reaches LGPL compliance through *dynamic linking only*, and why its own license is never "infected" by the LGPL backends.
+# Licensing
 
-## Core principle: dynamic linking only
+LingFan.Media's own code is licensed under **Apache-2.0**. The optional native
+backends (FFmpeg, LibVLC) are **LGPL 2.1+** and are used through dynamic linking
+only, so a product built on LingFan.Media is not a derivative work of those
+libraries under LGPL 2.1 §6.
 
-LingFan.Media never statically merges FFmpeg or LibVLC into its own assemblies, and never modifies their source. It loads them at runtime as shared libraries:
+## How the native libraries are used
 
-- **FFmpeg** is consumed through LingFan.Media's own Apache-2.0 P/Invoke binding (self-written `[LibraryImport]` + `NativeLibrary` version-adaptive loading), which resolves the shared libraries (`avcodec-*.dll`, etc.) at runtime.
-- **LibVLC** is consumed through LingFan.Media's own Apache-2.0 P/Invoke binding (`VLCNative`), which dynamically loads `libvlc` / `libvlccore` at runtime.
+| Library | License | Loading |
+|---|---|---|
+| FFmpeg | LGPL 2.1+ | Hand-written `[LibraryImport]` bindings + `NativeLibrary` version-adaptive loading (`avcodec-*.dll` / `.so` / `.dylib`). Dynamically linked, never static. |
+| LibVLC | LGPL 2.1+ | The VLCNative backend dynamically loads `libvlc` / `libvlccore`. |
 
-Because the project only links dynamically, copies the libraries unmodified, and does not combine them into its own binary, **LingFan.Media's own code is not a derivative work of the LGPL libraries** (LGPL 2.1, section 6). Its source and assemblies remain **Apache-2.0** — pure and unencumbered. The LGPL obligations attach only to the distributed native binaries themselves.
+Because the libraries are dynamically linked and replaceable by the user, the
+LGPL terms are satisfied without imposing LGPL on your own application code.
 
-## Only LGPL builds are used (no GPL contamination)
+## Only LGPL builds — no GPL
 
-- **FFmpeg** is used as an **LGPL shared build** — the BtbN `lgpl-shared` variant, with neither `--enable-gpl` nor `--enable-nonfree`. This excludes every GPL-only codec. Builds such as gyan.dev `full_build-shared` / `essentials_build` (which enable GPL / static linking) must **not** be used.
-- **LibVLC** loads only the LGPL-licensed engine and playback modules (protocol, demux, decode, filter, output). The few remaining GPLv2 modules (streaming / transcode, UI, and DVD's `libdvdcss`) are never loaded for local playback, so their GPL terms never reach the project.
+- **FFmpeg:** use an LGPL shared build (e.g. the BtbN `lgpl-shared` artifacts),
+  configured without `--enable-gpl` / `--enable-nonfree`. Do **not** use GPL
+  builds such as gyan.dev `full_build-shared` / `essentials_build`.
+- **LibVLC:** only the LGPL engine playback modules are loaded. GPL components
+  (streaming / transcode / UI modules, `libdvdcss`) are not loaded.
 
 ## Compliance checklist
 
-| Requirement | How LingFan.Media satisfies it |
-| --- | --- |
-| Dynamic linking (no static merge) | Self-written FF binding (`NativeLibrary` version-adaptive loading) loads shared libraries at runtime |
-| No GPL code path | LGPL shared builds only; wrappers call only public LGPL APIs |
-| User may replace / upgrade the native libs | `FFmpegOptions.FFmpegLibraryPath` is configurable; DLLs are not embedded |
-| License & attribution provided | This file (`THIRD_PARTY_NOTICES.md`) ships with the product |
-| FFmpeg source not modified | Called only, never vendored or patched |
-| LibVLC replaceable | Native shared libs live in an independent `libvlc/` directory, provided per-RID by NuGet, not committed |
-| Project license not "infected" | Dynamic linking + unmodified sources ⇒ own code stays Apache-2.0 |
+| Requirement | How it is met |
+|---|---|
+| Dynamic linking | FFmpeg and LibVLC are loaded at runtime, not statically linked. |
+| No GPL code path | Only LGPL builds / modules are used. |
+| User can replace the library | `FFmpegOptions.FFmpegLibraryPath` (and the loader search order) lets the user point at their own build. |
+| Notices ship with the product | `THIRD_PARTY_NOTICES.md` is included with distributions. |
+| FFmpeg source unmodified | The shared build is used as-is; no FFmpeg source changes. |
+| LibVLC kept separate | `libvlc` / `libvlccore` remain independent dynamic libraries. |
+| Per-RID natives not committed | Native runtime directories are not committed to the repository; they are fetched per runtime identifier. |
+| Own code Apache-2.0 | All LingFan.Media source is Apache-2.0. |
 
-## Copyright & patent risk — evaluated by you
+## Patent risk
 
-LGPL (and the codecs it covers) carry **patent and copyright considerations that vary by jurisdiction, media format, and use case**. LingFan.Media provides the technical compliance path described above; it makes **no representation about patent licensing**.
+Codec patents (H.264, H.265 / HEVC, AV1, etc.) are a separate matter from
+copyright licensing and are the user's responsibility to assess for their
+distribution (e.g. MPEG-LA, HEVC Advance pools). LingFan.Media does not grant any
+patent license.
 
-**You are responsible for assessing** whether your specific use — particular codecs (e.g., H.264 / H.265 / AV1), distribution region, or commercial deployment — requires separate patent licenses (such as via MPEG-LA, HEVC Advance, or similar pools). Consult legal counsel for production deployments.
+## Authoritative notices
 
-## Authoritative notice
-
-The version-stamped text — exact binary sources, per-module licensing, and the mobile (iOS / Android) relinking note — lives in [`THIRD_PARTY_NOTICES.md`](https://github.com/MoFeng-02/LingFan.Media/blob/main/THIRD_PARTY_NOTICES.md) at the repository root.
+The authoritative third-party notice file is
+[`THIRD_PARTY_NOTICES.md`](https://github.com/MoFeng-02/LingFan.Media/blob/main/THIRD_PARTY_NOTICES.md)
+in the repository root. Ship it with any product that bundles the native
+backends.

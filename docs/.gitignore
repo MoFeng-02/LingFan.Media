@@ -1,4 +1,5 @@
 node_modules
 .vitepress/dist
+.vitepress/dist_custom_mm
 .vitepress/cache
 .vitepress/*.timestamp-*.mjs

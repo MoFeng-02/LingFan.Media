@@ -1,60 +1,89 @@
-# Linux Deployment & Playback Guide (FFmpeg route)
+---
+title: Linux Deployment
+sources: ["src/Backends/LingFan.Media.Backends.FFmpeg/Interop/Loading/FFmpegLibraryLoader.cs", "src/Renderers/LingFan.Media.Renderers.Vulkan/LingFan.Media.Renderers.Vulkan.csproj", "src/Renderers/LingFan.Media.Renderers.OpenGL/LingFan.Media.Renderers.OpenGL.csproj", "src/Outputs/LingFan.Media.Outputs/LingFan.Media.Outputs.csproj"]
+symbols: ["IVideoRenderer", "IAudioOutput", "IFrameResource", "GPUApiType"]
+lang: en
+---
 
-> Compiled from real testing on **Ubuntu 24.04 LTS + Intel UHD 630 (dual-GPU machine)**; other distributions follow the same checklist. Scope: the FFmpeg backend (the VLC backend is implemented on Linux but pending validation); local-file playback is validated end-to-end, network sources and streaming are not yet verified.
+# Linux Deployment
 
-## 1. Runtime prerequisites
+This page covers the runtime prerequisites and hardware-decode setup for running
+LingFan.Media on Linux. The validated zero-copy path is FFmpeg + VAAPI → Vulkan;
+OpenGL is supported with a CPU-upload fallback where driver import is limited.
+See [Platform Support](/guide/platforms) for the support matrix.
 
-| Dependency | Notes |
-| --- | --- |
-| **.NET 10 runtime** | Or a self-contained publish |
-| **FFmpeg shared libraries** | An n8.x shared build is required (`libavutil` / `libavcodec` / `libavformat` / `libswscale` / `libswresample` / `libavfilter` / `libavdevice`, including version-alias files). The loader resolves in this order: **system libraries → application directory → recursive scan of the application tree (highest version wins)**; alternatively point `LF_FFMPEG_LIB` at the library directory explicitly. A version gate and structural mirror self-check run after loading and produce clear errors on failure |
-| **OpenAL** (audio) | `sudo apt install libopenal1`; without it the probe falls back to a silent output (playback works, no sound) |
-| Desktop audio service | Audible output requires PulseAudio / PipeWire to be running |
+## Runtime prerequisites
 
-::: warning Cross-platform sync pitfall
-When syncing the workspace between Windows ↔ Linux, FFmpeg's **version symbolic links degrade into text files** (e.g. `libavcodec.so.60` becomes a few dozen bytes of text). Extract the FFmpeg release tarball on the Linux side to get real ELF files, or deploy plain file copies.
-:::
+| Component | Requirement |
+|---|---|
+| .NET | .NET 10 runtime (or a self-contained / AOT publish). |
+| FFmpeg | Shared libraries (LGPL build): `libavutil`, `libavcodec`, `libavformat`, `libswscale`, `libswresample`, `libavfilter`, `libavdevice`, with the usual version-alias symlinks. |
+| OpenAL | `libopenal1` for audio output. If absent, audio falls back to silence rather than failing playback. |
+| Audio server | PulseAudio or PipeWire (whatever OpenAL targets). |
 
-## 2. Software-decode playback (minimum viable)
+The FFmpeg loader searches, in order: the system library path, the application
+directory, then a recursive scan (highest version wins). You can pin a specific
+library with the `LF_FFMPEG_LIB` environment variable.
 
-With section 1 satisfied, **local files play out of the box**: FFmpeg software decode → renderer CPU upload → windowed presentation, audio through OpenAL. Display-less environments (servers / Xvfb) can still exercise the decode and audio chain (validated by the headless probe).
+> When syncing FFmpeg between Windows and Linux, version symlinks degrade to plain
+> text files. Extract the Linux tarball on the Linux side so the shared-object
+> symlinks are real.
 
-## 3. VAAPI hardware decode (optional, validated on Intel)
+## Software decode (minimum viable)
 
-Hardware decode needs all three of the following; otherwise startup falls back to software decode (with a clear log):
+With just the FFmpeg shared libraries and OpenAL installed, software decoding and
+playback work out of the box — no GPU setup required. This is the simplest path to
+verify a deployment.
 
-1. **libva ≥ 2.21**. Ubuntu 24.04 (noble) ships 2.20, which lacks `vaMapBuffer2` (required by FFmpeg's VAAPI trampoline). Upgrade options: the repository ships 2.24.1 debs under `ThirdParty/va/` (`sudo dpkg -i ThirdParty/va/libva2_2.24.1-*.deb ThirdParty/va/libva-drm2_2.24.1-*.deb`), or use noble-updates 2.22+. The loader probes the system libva first (via `vaMapBuffer2`) and reuses it when adequate.
-2. **VA-API driver**: `sudo apt install intel-media-va-driver-non-free` (iHD) for Intel.
-3. **Device access**: the current user must be in the `render` / `video` groups (access to `/dev/dri/renderD128`). Verify with `vainfo`.
+## VAAPI hardware decode
 
-Implementation detail (for troubleshooting): FFmpeg's VAAPI trampoline resolves symbols via `dlopen("libva.so.2")`, and glibc's `dlopen` does **not** consume the ffmpeg libraries' own `DT_RUNPATH` — so the loader preloads libva by absolute path before loading ffmpeg (reusing the system library when it satisfies the version, otherwise preloading the bundled copy). No manual steps are required.
+Hardware decode through VAAPI needs three things:
 
-## 4. Windowed presentation
+1. **libva ≥ 2.21.** Older libva (e.g. 2.20) lacks `vaMapBuffer2`, which the
+   zero-copy export path uses. Install a newer libva (your distribution's updates
+   repository or a packaged build).
+2. **An Intel media driver.** `intel-media-va-driver-non-free` (the iHD driver)
+   for Intel GPUs.
+3. **DRM render node access.** The process must be able to open
+   `/dev/dri/renderD128` (add the user to the `render` / `video` groups). Verify
+   with `vainfo`.
 
-| Renderer | Prerequisites | Notes |
-| --- | --- | --- |
-| **Vulkan** (recommended; zero-copy validated) | `mesa-vulkan-drivers` (Intel ANV) | The decoded dma_buf is imported directly as a Vulkan image; **the renderer automatically selects a device from the same vendor as the decode GPU** (cross-vendor imports are not supported — tiled layouts carry vendor-private semantics) |
-| **OpenGL** | `libegl1` / `libgl1` | Same dma_buf import route; some Mesa drivers have limited support for single-plane tiled combinations — the renderer falls back to CPU upload automatically and **the picture always stays correct** (no zero-copy acceleration) |
+The native loader `dlopen`s `libva.so.2` and does not consume `DT_RUNPATH`, so a
+non-system libva must be preloaded by absolute path (e.g. via `LD_LIBRARY_PATH`
+or the loader's pinning mechanism).
 
-- Presentation requires an X11 session; headless displays such as Xvfb can exercise the full chain (no visible output — good for automated verification). To watch the picture, use a real display or a screenshot tool.
-- Multi-GPU machines: renderer/decoder GPU vendor alignment is automatic; the OpenGL route accepts `LINGFAN_EGL_DEVICE_DRM=renderD129` to pin an EGL device explicitly (`1` = auto).
-- Every export path issues a `vaSyncSurface` fence before export so external consumers always observe fully decoded frames.
+## Windowed rendering
 
-## 5. Verification & diagnostics
+| Renderer | Packages | Zero-copy behavior |
+|---|---|---|
+| Vulkan | `mesa-vulkan-drivers` (ANV for Intel) | dma-buf import; the Vulkan physical device is auto-aligned to the decode GPU (same vendor). |
+| OpenGL | `libegl1`, `libgl1` | Same dma-buf import path; falls back to CPU upload where Mesa's single-plane tiling import is limited. Picture remains correct. |
 
-Three Linux probes live under `src/Tools/` (`dotnet run --project ...`):
+A `vaSyncSurface` fence is issued before a hardware surface is exported/consumed.
+On mixed-GPU machines you can pin the EGL device with `LINGFAN_EGL_DEVICE_DRM`
+(e.g. `renderD129`). Cross-vendor tiling import is not supported; the decoder and
+renderer GPU are aligned to the same vendor automatically.
 
-| Probe | Coverage | Key reads |
-| --- | --- | --- |
-| `LinuxHeadlessProbe` | Decode + audio (no presentation) | `[SYNC]` snapshots, the final "verdict" line |
-| `LinuxHeadlessVulkanProbe` | Decode + Vulkan presentation (`--hw` enables VAAPI hardware decode + zero-copy) | the "GPU texture frames" counter, `[VULKAN-INIT]` device name |
-| `LinuxHeadlessOpenGlProbe` | Decode + OpenGL presentation (same) | `[OPENGL-ZEROCOPY]` import result and display support surface |
+## Verification probes
 
-Diagnostic logs contain layered traces (loader, decode, sync, presentation); on native-layer failures the last trace line is the location anchor.
+The repository ships headless probes under `src/Tools/` that exercise the real
+pipeline and print diagnostics to stdout. Run them on the target machine:
 
-## 6. Known limitations
+| Probe | What it checks |
+|---|---|
+| `LinuxHeadlessProbe` | Clock / sync progression (`[SYNC]` diagnostics). |
+| `LinuxHeadlessVulkanProbe --hw` | Vulkan hardware decode + GPU texture frames (`[VULKAN-INIT]`). |
+| `LinuxHeadlessOpenGlProbe` | OpenGL zero-copy / fallback path (`[OPENGL-ZEROCOPY]`). |
 
-- The **LibVLC backend** is implemented on Linux but pending validation; network sources and streaming playback are not yet runtime-verified.
-- **Cross-vendor** dma_buf imports are not supported (tiled layouts carry vendor-private semantics) — the renderer aligns to the decode GPU automatically.
-- **Xvfb** software stacks have limited capabilities (ES contexts, narrow import support) — fine for chain verification; watch the picture on a real display.
-- Windows-side MediaFoundation / D3D11 capabilities do not apply to Linux (platform API difference, by design).
+```bash
+dotnet run --project src/Tools/LinuxHeadlessVulkanProbe -- --hw
+```
+
+## Known limitations
+
+- LibVLC on Linux is implemented but validation is pending.
+- Network-source playback on Linux is not yet fully validated.
+- Cross-vendor GPU import (decode on one vendor, render on another) is not
+  supported.
+- Headless virtual displays (e.g. Xvfb) have limited GPU support.
+- The Windows Media Foundation / D3D11 path does not apply to Linux.

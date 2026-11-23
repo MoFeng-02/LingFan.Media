@@ -1,31 +1,38 @@
+---
+title: 媒体源
+sources: ["src/Infrastructure/LingFan.Media.Sources/Sources/FileMediaSource.cs", "src/Infrastructure/LingFan.Media.Sources/Sources/NetworkMediaSource.cs", "src/Infrastructure/LingFan.Media.Sources/Sources/StreamMediaSource.cs", "src/Infrastructure/LingFan.Media.Sources/Factories/MediaStreamFactory.cs", "src/Infrastructure/LingFan.Media.Sources/Security/SsrfConnectGuard.cs"]
+symbols: ["IMediaSource", "IMediaStream", "IMediaStreamFactory", "FileMediaSource", "NetworkMediaSource", "StreamMediaSource", "MediaSourceType"]
+lang: zh
+---
+
 # 媒体源
 
-**媒体源**描述**要播放什么**——本地文件、远程 URL，还是内存中的流。它与**如何读取**完全解耦：`MediaStreamFactory` 把任意 `IMediaSource` 转换为 `IMediaStream`，其后的所有环节（解封装、解码、同步器）都与源无关。
+媒体源描述媒体从何而来。流工厂把源变成解封装器可读取的 `IMediaStream`。支持三种源。
 
 ## 源类型
 
-| 源 | 类 | 产出的流 | 状态 |
-| --- | --- | --- | --- |
-| **文件** | `FileMediaSource` | `FileMediaStream` | ✅ 已实现——主要路径，经测试最充分 |
-| **网络**（HTTP / HTTPS） | `NetworkMediaSource` | `NetworkMediaStream` | ✅ 已端到端验证——异步建连、SSRF 防护、Range 定位、自定义请求头 / Cookie / 超时 |
-| **内存流** | `StreamMediaSource` | `PassThroughMediaStream` | ✅ 已实现——包装任意 `System.IO.Stream`，与文件源走同一条路径 |
-
-文件是参考路径。网络源同样已端到端验证：播放、Range 定位与播放中定位均对支持 `Accept-Ranges` 的 HTTP 源实测，每次都播到自然结束且零丢帧。内存流路径在文件源被包装成流时一并被覆盖。
-
-三者均已端到端打通：`MediaPlayer.OpenAsync(IMediaSource)` 调用 `streamFactory.CreateAsync(source)`，返回每个后端 demuxer 都统一消费的 `IMediaStream`。管线中**不存在按源分支**的逻辑。
-
-## 源如何变为流
+| 源 | 种类 | 产出的流 | 说明 |
+|---|---|---|---|
+| `FileMediaSource` | 文件 | `FileMediaStream` | 本地文件；文件播放的主路径。 |
+| `NetworkMediaSource` | 网络（HTTP/HTTPS） | `NetworkMediaStream` | 带 SSRF 防护；支持基于 Range 的定位、自定义头、Cookie 与读超时。 |
+| `StreamMediaSource` | 流 | `PassThroughMediaStream` | 包装调用方提供的 `System.IO.Stream`。 |
 
 ```mermaid
 flowchart TD
-    A["IMediaSource<br/>FileMediaSource · NetworkMediaSource · StreamMediaSource"] -->|"MediaStreamFactory.CreateAsync（按 Type 模式匹配）"| B["IMediaStream<br/>FileMediaStream · NetworkMediaStream · PassThroughMediaStream"]
-    B -->|"被每个后端 demuxer 统一消费"| C["Demuxer → 解码器 → 同步器"]
-    style A stroke:#3b82f6,stroke-width:2px
+    SRC["IMediaSource"] --> F["MediaStreamFactory.CreateAsync"]
+    F -->|文件| FS["FileMediaStream"]
+    F -->|网络| NS["NetworkMediaStream"]
+    F -->|流| PS["PassThroughMediaStream"]
 ```
 
-## 实现说明
+工厂按 `IMediaSource.Type`（`MediaSourceType`）模式匹配，构造对应的流。
 
-- **`NetworkMediaSource`** 内置 **SSRF 防护**：拒绝 `file://`，默认拒绝私网 / 内网 IP 段。DNS 解析在防护校验之前完成，并把解析出的 IP 透传下去以避免二次解析窗口。
-- **`StreamMediaSource`** 把一个外部 `Stream` 交给管线；该流的线程安全性由调用方保证。
-- **`IsLive`** 在会话创建时由 `source.Type == MediaSourceType.Network` 推导得出。
-- 对于不可定位的源（直播网络流、任意 `Stream`），是否支持拖动取决于底层流的能力；`FileMediaSource` 是完整拖动 / 特技播放的参考路径。
+## 实现要点
+
+- **网络 SSRF 防护。** `NetworkMediaSource` 拒绝 `file://` 等非 HTTP(S)  scheme，默认拒绝私有 / 回环 / 链路本地地址。DNS 在防护检查前解析，解析出的 IP 被钉住用于连接，关闭了重定向可能借以触达内网地址的再解析窗口。
+- **基于 Range 的定位。** 网络定位以 HTTP `Range` 请求重开连接，而非 seek 套接字。忽略 `Range` 的服务器（回 `200` 而非 `206`）会被识别并拒绝，因此不可定位的流绝不会被悄悄当作可定位。
+- **打开头。** User-agent、自定义头与 Cookie 汇总在流契约上，供地址式后端透传。
+- **流源。** `StreamMediaSource` 包装调用方拥有的流；该流的线程安全与生命周期由调用方负责。
+- **直播标志。** `IsLive` 由源种类派生（网络源视为可能直播）；不可定位源的定位取决于底层流的能力。
+
+打开的流如何交给解封装器见[解码后端](/zh/guide/backends)；`IMediaSource` / `IMediaStream` 的精确签名见 [API 参考](/zh/api/)。

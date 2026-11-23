@@ -1,0 +1,58 @@
+name: Docs CI
+
+# Validates the documentation on every pull request that touches the docs or the
+# contract source the API reference is generated from. The drift gate runs against
+# the committed state BEFORE regeneration, so a stale generated reference (source
+# changed but docs not regenerated) fails the check instead of being silently fixed.
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'src/Infrastructure/LingFan.Media.Abstractions/**'
+      - 'src/Infrastructure/LingFan.Media.Extensions/**'
+      - '.github/workflows/docs-ci.yml'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: docs
+        run: pnpm install --frozen-lockfile
+
+      - name: Drift gate (committed docs vs source)
+        working-directory: docs
+        run: pnpm docs:check
+
+      - name: Generate API reference
+        working-directory: docs
+        run: pnpm docs:gen
+
+      - name: Build site
+        working-directory: docs
+        run: pnpm docs:build

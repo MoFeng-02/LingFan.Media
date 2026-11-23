@@ -1,109 +1,80 @@
-# 后端与平台路线
+---
+title: 解码后端
+sources: ["src/Backends/LingFan.Media.Backends.FFmpeg/FFmpegExtensions.cs", "src/Backends/LingFan.Media.Backends.FFmpeg/Decoders/FFmpegVideoDecoder.cs", "src/Backends/LingFan.Media.Backends.FFmpeg/Demuxer/FFmpegDemuxer.cs", "src/Backends/LingFan.Media.Backends.MediaCodec/LingFan.Media.Backends.MediaCodec.csproj", "src/Backends/LingFan.Media.Backends.MediaFoundation/LingFan.Media.Backends.MediaFoundation.csproj", "src/Backends/LingFan.Media.Backends.VLCNative/LingFan.Media.Backends.VLCNative.csproj", "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Demuxer/IMediaDemuxer.cs"]
+symbols: ["IMediaDemuxer", "IMediaDemuxerFactory", "IVideoDecoder", "IAudioDecoder", "IMediaSource", "IMediaStream", "IFrameChannel", "MediaBackendUnsupportedException"]
+lang: zh
+---
 
-LingFan.Media 通过**可插拔后端**驱动播放，所有后端都隐藏在 `Abstractions` 接口之后。回退中间件（`IMediaPlayerFactory`）按 DI 注册顺序依次尝试各后端，并在某个后端失败时自动切换。本页梳理当前已实现的内容、仅剩脚手架的部分，以及平台边界——包括 **Linux 的状态**（无原生后端；播放经 FFmpeg / VLC 跨平台后端实现并已实测，VAAPI 硬解 + Vulkan 零拷贝同样可用）。Linux 的部署清单与播放指南见 **[Linux 部署与播放指南](./linux)**。
+# 解码后端
+
+后端在共享契约后提供解封装与解码。后端可互换：注册不同后端只改一行 DI，核心、渲染器与输出不受影响。逐平台的权威可用性矩阵见[平台支持](/zh/guide/platforms)。
 
 ## 后端架构
 
 ```mermaid
 flowchart TD
-    A["IMediaSource<br/>File · Network · Stream"] -->|"MediaStreamFactory.CreateAsync"| B["IMediaStream<br/>File · Network · PassThrough"]
-    B -->|"DemuxerFactory.Create"| C["IDemuxer — 可切换后端<br/>FFmpeg（主）· MediaFoundation · LibVLC"]
-    C --> D["解码器 → FrameChannel (IFrameChannel) → Sinks<br/>VideoView · AudioOutput · 计算机视觉管线"]
-    style C stroke:#3b82f6,stroke-width:2px
+    SRC["IMediaSource"] --> MSF["MediaStreamFactory.CreateAsync"]
+    MSF --> STREAM["IMediaStream"]
+    STREAM --> DMX["IMediaDemuxer (来自 IMediaDemuxerFactory)"]
+    DMX --> VD["IVideoDecoder"]
+    DMX --> AD["IAudioDecoder"]
+    VD --> CH["IFrameChannel"]
+    AD --> OUT["IAudioOutput.Submit"]
+    CH --> SINKS["帧 sink / UI"]
 ```
 
-管线从不因「当前是哪个后端」而分支；后端选择是由回退中间件解决的纯实现细节。
+解封装工厂以有序集合注册（经各后端的 `AddXxx()`），因此播放器可按序尝试并回退。若没有已注册后端能打开某源，`Create`/`Open` 会抛出 `MediaBackendUnsupportedException`，而非悄悄失败。
 
-> 文字版：任意源先变成 `IMediaStream`，再由回退中间件挑选 demuxer；解码器把帧投到 `IFrameChannel`，各 sink（视频视图、音频输出、CV 管线）统一消费。
+## 跨平台后端
 
-## 跨平台后端（保底）
+| 后端 | 许可 | 角色 | 平台 |
+|---|---|---|---|
+| FFmpeg | LGPL 2.1+（共享构建） | 主解码/解封装 | Windows、Linux、Android、macOS、iOS |
+| LibVLC | LGPL 2.1+ | 回退引擎 | Windows、Linux（其他平台视支持情况） |
 
-FFmpeg 与 LibVLC 是**跨平台保底**。二者均为 LGPL 授权，可在每一个目标平台运行——**Windows、Linux、macOS、iOS、Android**——因此无论平台原生支持如何，播放始终可用。它们仅以动态链接方式被消费（见[许可](./licensing)）。
+两者均在运行时动态加载，都不静态链接。合规模型见[许可](/zh/guide/licensing)。
 
-| 后端 | 许可证 | 平台 | 角色 | 状态 |
-| --- | --- | --- | --- | --- |
-| **FFmpeg** | LGPL 2.1+（共享构建） | Windows、Linux、macOS、iOS、Android | 主解封装 / 解码，经自写原生绑定 | ✅ 已实现（Windows / Linux 已实测） |
-| **LibVLC / VLC** | LGPL 2.1+ | Windows、Linux、macOS、iOS、Android | 回退播放后端，由中间件自动切换 | ✅ 已实现（Windows 已实测；Linux 待验证） |
+## 各后端的 GPU 零拷贝
 
-二者今天已在 Windows 上实测（本地文件端到端）；Linux 上 FFmpeg 已实测（VAAPI 硬解 + Vulkan 零拷贝 + OpenAL），LibVLC 待验证；并可发布到 macOS、iOS、Android。**Linux 不设原生后端**，播放全部经 FFmpeg / LibVLC 跨平台后端实现——「排除」仅针对构建*原生* Linux 后端。
+| 后端 | 零拷贝 | 路径 |
+|---|---|---|
+| FFmpeg | 是 | Windows：D3D11VA / DXVA2 → D3D11（及 Vulkan/OpenGL 导入）。Linux：VAAPI → dma-buf → Vulkan（驱动导入面受限时 OpenGL 回落 CPU 上传）。 |
+| MediaCodec | 是 | Android：Surface 输出 → AHardwareBuffer → GLES/EGL 桥接 → 同设备 Skia GPU 采样；保留 ByteBuffer CPU 路径作跨厂商回落。 |
+| Media Foundation | 否 | MFT 管线在此路径不暴露可导入的共享纹理；帧经 CPU 内存交回（管线固有属性，非缺陷）。 |
+| LibVLC | 否 | 3.x 回调 API 交付 CPU 像素，故此路径用 CPU 拷贝。真零拷贝需 libvlc 4.0，尚未采用。 |
 
-## 各后端 GPU 零拷贝能力
+此处「零拷贝」指解码帧从解码器到渲染器始终保持 GPU 资源（`IFrameResource`）形态，无 CPU 往返。当平台或驱动无法导入该表面时，渲染器回落到正确的 CPU 上传——画面仍正确，只是拷贝路径不同。
 
-零拷贝指解码出的 GPU 纹理不经过 CPU 回拷、直接交给渲染器上屏。由于帧路由与后端无关，该能力取决于解码后端能否暴露可被导入的 GPU 纹理：
-
-| 后端 | 硬件解码 | GPU 零拷贝 | 说明 |
-| --- | --- | --- | --- |
-| **FFmpeg** | 是（Windows：D3D11VA / DXVA2；Linux：VAAPI） | **是**（Windows：D3D11、Vulkan、OpenGL；Linux：Vulkan ✅ 实测、OpenGL 视显示支持面） | Windows 上解码帧导出为 D3D11 共享纹理并由渲染器导入，含混合显卡场景（Vulkan 设备自动对齐 D3D11 适配器）。Linux 上经 VAAPI 硬解、导出 dma_buf（导出前执行 `vaSyncSurface` 栅栏），Vulkan 渲染器零拷贝导入实测通过；渲染器与解码 GPU 的厂商对齐自动完成（跨厂商导入受 tiling 布局厂商私有语义限制，不作支持）。OpenGL 渲染器走同一导入，部分 Mesa 驱动对单平面 tiling 组合支持面有限，不支持时自动回落 CPU 上传（画面始终正确）。 |
-| **MediaCodec（Android）** | 是（c2 / 厂商硬解，c2 优先） | **是**（AHB → Skia GPU 采样，真机验证） | 解码输出经 Surface/AHB，由 GLES/EGL 桥接为 RGBA AHB，Skia GPU 渲染器同设备直采；ByteBuffer CPU 路径保留为跨厂商回落。 |
-| **Media Foundation** | 是（DXVA2 / D3D11VA） | 否 | MFT 管线不暴露可外部导入的共享纹理，因此帧经 CPU 内存拷贝。 |
-| **LibVLC / VLC** | 是 | 否（3.x 下） | `libvlc_video_set_callbacks` API 交付 CPU 像素。真·零拷贝需要 libvlc 4.0 的 output-callbacks API，目前尚未采用。 |
-
-## 平台原生后端（逐步集成）
-
-当某平台提供第一方媒体 API 时，LingFan.Media 会**按平台逐步集成**——这不是因为跨平台后端不够用，而是为了使用最高效、由操作系统提供的管线。Linux 是例外：它**没有标准的第一方媒体 API**（不像 Media Foundation、AVFoundation 或 MediaCodec），因此不设原生 Linux 后端；硬件解码改由 FFmpeg 的 VAAPI 路线承担。
+## 平台原生后端
 
 | 平台 | 原生后端 | 状态 |
-| --- | --- | --- |
-| **Windows** | Media Foundation（操作系统内置组件） | ✅ 已实现——无需额外第三方授权 |
-| **Apple（macOS / iOS）** | AVFoundation（部分实现就绪：Metal 渲染器、AVAudioEngine / AudioUnit 音频） | **暂缓——缺设备，暂时无法实现与测试（请等待）** |
-| **Android** | MediaCodec（系统内置组件） | ✅ 已实现（真机验证：硬解 + AHB 零拷贝上屏） |
-| **Linux** | —（硬件解码走 FFmpeg VAAPI 路线） | 不设原生后端——播放与硬解已实测可用 |
+|---|---|---|
+| Windows | Media Foundation | 可用 |
+| Android | MediaCodec | 可用（真机已验证） |
+| Apple（macOS / iOS） | AVFoundation | 部分；尚未完整验证 |
+| Linux | 无原生 | 使用 FFmpeg 配 VAAPI 硬解 |
 
-目前 Media Foundation（Windows）与 MediaCodec（Android，真机验证）已接入。AVFoundation 在路线之上；它的缺失**不会**阻塞播放，因为 FFmpeg / LibVLC 已覆盖这些平台。
+## 未实现
 
-## 不在路线中
+| 后端 | 状态 |
+|---|---|
+| GStreamer | 空脚手架；无实现。不在路线内。 |
+| WebRTC | 抛 `PlatformNotSupportedException` 的桩。不在路线内。 |
 
-| 工程 | 状态 | 说明 |
-| --- | --- | --- |
-| **GStreamer** | 空脚手架（0 个源文件） | 不计划 |
-| **WebRTC** | 存根（抛出 `PlatformNotSupportedException`） | 不计划 |
-
-## 平台路线
-
-<div style="display:flex;flex-direction:column;gap:10px;margin:12px 0;font-size:14px;">
-
-  <div style="display:flex;gap:12px;align-items:flex-start;">
-    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-brand-1);border-radius:999px;background:var(--vp-c-brand-1);color:#fff;text-align:center;font-size:12px;">V1 · 现在</span>
-    <div><strong>Windows — 已实现并测试。</strong> Media Foundation、FFmpeg、LibVLC 均已接入，配合 D3D11（+ DirectComposition）视频与 WASAPI 音频。这是第一个受支持且已测试的表面。</div>
-  </div>
-
-  <div style="display:flex;gap:12px;align-items:flex-start;">
-    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-brand-1);border-radius:999px;background:var(--vp-c-bg-soft);color:var(--vp-c-brand-1);text-align:center;font-size:12px;">Android · 真机</span>
-    <div><strong>Android —— MediaCodec 原生后端已集成并真机验证。</strong>硬件解码经 Surface/AHardwareBuffer 输出（c2 硬解优先），由 GLES/EGL 桥接为 AHB、Skia GPU 渲染器同设备零拷贝采样上屏；跨厂商设备保留 ByteBuffer CPU 回落。音频经 OpenSL ES / AAudio 输出（已实现）。FFmpeg / LibVLC 亦已实现。</div>
-  </div>
-
-  <div style="display:flex;gap:12px;align-items:flex-start;">
-    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-divider);border-radius:999px;background:var(--vp-c-bg-soft);text-align:center;font-size:12px;">暂缓 · 缺设备</span>
-    <div><strong>macOS · iOS —— 暂缓，暂时无法实现与测试（请等待）。</strong> FFmpeg 与 LibVLC 跨平台库本身可在这些平台运行，Metal 渲染器与 AVAudioEngine / AudioUnit 音频已部分实现；待有设备后继续集成 AVFoundation 并完成验证。</div>
-  </div>
-
-  <div style="display:flex;gap:12px;align-items:flex-start;">
-    <span style="flex:0 0 92px;padding:4px 8px;border:1px solid var(--vp-c-brand-1);border-radius:999px;background:var(--vp-c-bg-soft);color:var(--vp-c-brand-1);text-align:center;font-size:12px;">Linux · 已实测</span>
-    <div><strong>Linux —— 经跨平台后端路线支持并实测。</strong>播放与音频由 FFmpeg / LibVLC 与 OpenAL 提供（不设原生后端——Linux 没有标准的第一方媒体 API）。硬解经 FFmpeg 的 VAAPI 路线（Intel iHD 实测），导出的 dma_buf 由 Vulkan 渲染器零拷贝上屏，渲染器与解码 GPU 的厂商对齐自动完成；OpenGL 渲染器在 Mesa 支持面不足时自动回落 CPU 上传，画面始终正确。</div>
-  </div>
-
-</div>
-
-> **范畴说明：**「受支持平台」指项目*目标并已测试*的表面，区别于第三方库本身的技术能力。**Vulkan** 渲染器已在 Windows 与 Linux 的 FFmpeg 零拷贝路径上验证；OpenGL / Metal 仍为部分实现。
-
-## 打开 → 就绪 时序
+## 从打开到就绪
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant Caller as 调用方
-    participant Player as MediaPlayer
-    participant Factory as streamFactory
-    participant Demux as Demuxer
-    participant Session as MediaSession
-    Caller->>Player: OpenAsync(IMediaSource)
-    Player->>Factory: CreateAsync(source)
-    Note over Factory: Network 走 DNS + SSRF 防护
-    Factory-->>Player: IMediaStream
-    Player->>Demux: demuxerFactory.Create(stream) → OpenAsync(stream)
-    Demux-->>Session: 轨道、元数据、时长、isLive
-    Session-->>Player: 就绪（解码器 / 渲染器 / 音频已初始化）
-    Player-->>Caller: 就绪 → Play() / Pause() / Seek()
+    participant App
+    participant Player as IMediaPlayer
+    participant Stream as IMediaStream
+    participant Demux as IMediaDemuxer
+    App->>Player: OpenAsync(source)
+    Player->>Stream: CreateAsync（网络源走 DNS + SSRF 防护）
+    Player->>Demux: factory.Create + OpenAsync
+    Demux-->>Player: 轨道 / 元数据 / 时长 / isLive
+    Player-->>App: 会话就绪（PlayAsync 时 Buffering → Playing）
+    App->>Player: PlayAsync / PauseAsync / SeekAsync
 ```
 
-> 文字摘要：`OpenAsync` 先创建流，再探测并打开 demuxer，构建 MediaSession，初始化渲染器，最后报告就绪。`Play`、`Pause`、`Seek` 只在此之后发生。
+`OpenAsync` 执行真实 I/O（创建流、打开解封装器、初始缓冲）。`PlayAsync` / `PauseAsync` 是内存态切换。`SeekAsync` 经流重新定位（网络源以 Range 重开连接）。

@@ -9,7 +9,13 @@
   "scripts": {
     "dev": "vitepress dev",
     "build": "vitepress build",
-    "preview": "vitepress preview"
+    "preview": "vitepress preview",
+    "docs:gen": "node scripts/gen-api.mjs",
+    "docs:check": "node scripts/check-docs.mjs",
+    "docs:ci": "pnpm docs:check && pnpm docs:gen && pnpm docs:build",
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
   },
   "devDependencies": {
     "dayjs": "^1.11.21",

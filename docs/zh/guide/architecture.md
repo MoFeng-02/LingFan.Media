@@ -1,65 +1,82 @@
-# 架构
+---
+title: 架构总览
+sources: ["src/Infrastructure/LingFan.Media.Core/MediaPlayer/MediaPlayer.cs", "src/Infrastructure/LingFan.Media.Core/Playback/VideoPipeline.cs", "src/Infrastructure/LingFan.Media.Core/Playback/FrameChannel.cs", "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IFrameChannel.cs", "src/Infrastructure/LingFan.Media.Consumers/ProcessingFrameSink.cs"]
+symbols: ["IMediaPlayer", "IFrameChannel", "IFrameSink", "IVideoRenderer", "IAudioOutput", "IMediaClock", "IBufferManager", "IMediaSession", "IHeadlessFrameConsumer", "IHeadlessAudioConsumer", "VideoFrame", "AudioFrame"]
+lang: zh
+---
 
-LingFan.Media 组织为一个位于一组**基础设施模块**之上的**契约层**（`Abstractions`），其上还叠加了可插拔的 **后端**、**渲染器**、**输出** 与 **UI** 层。其决定性原则是：*契约层是根基；其余一切都要适应它。*
+# 架构总览
 
-## 依赖反转就是全部要点
+LingFan.Media 是一个分层、契约驱动的系统。契约层是其余各层共同依赖的「法律」；核心编排播放，不感知任何具体后端或 UI；后端、渲染器与输出经依赖注入接入。
 
-`Abstractions` 只包含签名、自动属性与纯数据模型。它不依赖 BCL 与 `Microsoft.Extensions.Logging.Abstractions`、`Microsoft.Extensions.DependencyInjection.Abstractions` 之外的**任何东西**。正因为如此：
+## 模块图
 
-- 后端、渲染器、输出、平台 与 UI 可以在不触及契约的情况下被添加、移除或重写。
-- 契约层被允许*增长*（可以添加新的方法签名），但它必须**永远不引用某个具体的 后端 类型**——那将破坏依赖反转的分层。
+| 模块 | 职责 |
+|---|---|
+| Abstractions | 纯契约：接口、模型、枚举、事件。零实现，零外部引用。 |
+| Core | 播放编排：时钟、缓冲、帧路由、管线宿主、会话生命周期。不感知后端或 UI。 |
+| Sources | 媒体来源：文件、网络（HTTP/HTTPS）、包装流；流工厂与 SSRF 防护。 |
+| Formats | 容器解析与解封装辅助、格式探测。 |
+| Video | 视频轨道模型、处理链与配置。 |
+| Audio | 音频轨道模型、混音、音效与配置。 |
+| Backends | 可插拔解码/解封装：FFmpeg、LibVLC、Media Foundation、MediaCodec、AVFoundation。 |
+| Renderers | GPU 视频输出：D3D11、Vulkan、OpenGL、OpenGL ES、Metal。 |
+| Outputs | 音频输出：WASAPI、OpenAL、OpenSL ES、AAudio、AVAudioEngine。 |
+| Platforms | 平台服务与原生互操作辅助。 |
+| Extensions | DI 组合根：`AddLingFanMedia()` 与各模块注册扩展。 |
+| UI（Avalonia） | 可选呈现层：`VideoView`、呈现器、控件。依赖 Core，绝不反向。 |
 
-> **启发式原则：** 如果一个类型被两个或更多层引用，它就属于 `Abstractions`。如果只有一个模块使用它，它就留在那个模块中。
+## 依赖方向
 
-## 12 个逻辑模块
+依赖单向指向契约：
 
-| # | Module | Responsibility |
-|---|--------|----------------|
-| 01 | `Abstractions` | 跨层契约：接口、模型、枚举、事件（零实现） |
-| 02 | `Core` | `MediaPlayer`、`MediaSession`、`VideoPipeline`、`AudioPipeline`、`MediaClock`、`Synchronizer`、`BufferManager` |
-| 03 | `Sources` | `FileMediaSource` / `NetworkMediaSource` / `StreamMediaSource` + `MediaStreamFactory` |
-| 04 | `Formats` | `FormatDetector`、`DemuxerFactory`、metadata extraction |
-| 05 | `Video` | 视频 track、processor chain、deinterlace/scale/color、stats |
-| 06 | `Audio` | 音频 track、mixer、volume、effects chain、stats |
-| 07 | `Backends` | `FFmpeg` / `VLC` / `MediaFoundation`（实现）；`WebRTC`（stub） |
-| 08 | `Renderers` | `D3D11`（实现）；`Vulkan`（已验证，FFmpeg 零拷贝，Windows）/ `Metal` / `OpenGL`（部分） |
-| 09 | `Outputs` | `WASAPI`、`OpenAL`、`OpenSL ES`、`AAudio`、… |
-| 10 | `Platforms` | 平台能力探测与 interop |
-| 11 | `Avalonia` | `VideoView`、`MediaControl`、Skia / Composition presenters |
-| 12 | `Extensions` | `AddLingFanMedia()`、`MediaBuilder`、codec registry、后端 auto-selection |
-
-## 帧路由 —— 一条路径，多种 Sink
-
-一个视频帧离开 管线 所走的路径恰好只有**一条**：
-
-```
-VideoPipeline → _videoFrameSink(frame) → _frameChannel.Emit(frame) → every subscribed IFrameSink
-```
-
-`MediaPlayer` 向管线注入一个单一的 sink 委托：`frame => _frameChannel.Emit(frame)`。管线永远不会根据后端或渲染器而分支。`FrameChannel.Emit` 扇出给所有已订阅的 `IFrameSink`。一个有界面的渲染器（`Composition` / `Skia` / `D3D11`）与一个无界面的消费者（`ProcessingFrameSink`）实现*同一个* `IFrameSink` 契约，并从同一通道取用——它们仅在终止动作（present 还是喂给某个算法）与能力（能否消费 GPU 纹理帧）上有所不同。
-
-> **零拷贝是一种 Sink 能力，而非一条独立的分支。** 一个帧是否以零拷贝方式呈现，取决于 Sink 能做什么，而非取决于产生它的代码走的是哪个分支。
-
-## 统一的输出端口
-
-生产与消费被刻意解耦。"做改动"只会在*统一的端口内部*发生。
-
-- **视频输出端口 = `IFrameChannel` + `IFrameSink`。** 全部三种解码 后端 都把帧产出到这一个通道。新的终止能力（recorder Sink、thumbnail Sink、transform chain）通过订阅一个新的 `IFrameSink` 来添加——无需改动 后端 或 管线。
-- **音频输出端口 = `IAudioOutput`。** `AudioPipeline` 把每个 后端 解码出的音频归一化进 `IAudioOutput.Submit`。音频被**直接提交给 `IAudioOutput` 并绕过同步器**——音频/视频的不对称是有意为之；我们不会仅仅为了对称就给音频加一条同步分支。无界面的消费者（`ProcessingAudioSink`）与 `WASAPIOutput` 共享 `IAudioOutput` 契约。
-
-## 无界面优先
-
-有界面的路径在字面上就是*无界面 管线 加上一个订阅的 Present Sink*：
-
-```
-IVideoRenderer.Present  ←  VideoView.PresentFrame  ←  (subscribed to IFrameChannel)
+```mermaid
+flowchart TD
+    UI["UI (Avalonia)"] --> Core
+    Ext["Extensions (组合根)"] --> Core
+    Core --> Abs["Abstractions (契约)"]
+    Sources --> Abs
+    Formats --> Abs
+    Backends --> Abs
+    Renderers --> Abs
+    Outputs --> Abs
+    Video --> Abs
+    Audio --> Abs
 ```
 
-`VideoView` 订阅帧通道并将其桥接到 `IVideoRenderer.Present`。契约保持中立；只有终止 Sink 不同。
+- `Abstractions` 除 BCL 与日志抽象外不引用任何东西。
+- `Core` 只引用 `Abstractions`——绝不引用后端、渲染器或 UI 框架。
+- 后端、渲染器、输出引用 `Abstractions`（及 GPU 胶水层），彼此不互相引用，也不引用 UI。
+- 被两个以上层引用的类型住在 `Abstractions`；仅单模块使用的类型留在该模块内。
 
-## 会话隔离与 DI 分层
+## 帧路由
 
-- **系统级工厂是 `Singleton`。** `IMediaStreamFactory`、`IFormatDetector`、`ICodecRegistry`、各 后端 工厂，以及 `BackendFallbackMediaPlayerFactory` 都存活于进程生命周期内。
-- **每次播放的状态是 `Transient`（一个 Session）。** `MediaPlayer` 在 `OpenAsync` 内部创建它的 `MediaSession`、`MediaClock`、`BufferManager` 与 管线。每个 `IMediaPlayer` 都拥有一个独立的会话；拆除其中一个永远不会干扰另一个。
+视频帧经唯一通道流动。无头消费者与 UI 消费者之间不存在第二条分歧投递路径。
 
-> 公共门面是 `MediaPlayer`（位于 `Core`）以及 `FallbackMediaPlayer` / `BackendFallbackMediaPlayerFactory`（位于 `Playback`）。不存在单一的 `MediaGraph` 类型——播放由这些门面加上 DI 容器组合而成。
+```mermaid
+flowchart LR
+    VP["VideoPipeline"] --> Sink["_videoFrameSink"]
+    Sink --> CH["FrameChannel.Emit"]
+    CH --> S1["IFrameSink 订阅者"]
+    CH --> S2["IFrameSink 订阅者"]
+    CH --> EV["VideoFrameAvailable 事件外观"]
+```
+
+- `IFrameChannel` 是端口：`Subscribe(IFrameSink)`、`Unsubscribe(IFrameSink)`、`Emit(VideoFrame)`。`IFrameSink.OnFrame(VideoFrame)` 收到的是**只读借用**——sink 不得释放该帧，也不得在调用返回后持有引用（多播订阅下这样做会导致释放后使用）。
+- 公共的 `IMediaPlayer.VideoFrameAvailable` 事件是该通道之上的 `Action<VideoFrame>` 适配器。高级消费者（录制、缩略图、推理）可直接实现 `IFrameSink` 并订阅。
+- 无头消费者辅助类（`ProcessingFrameSink`、`ProcessingAudioSink`）实现 `IHeadlessFrameConsumer` / `IHeadlessAudioConsumer` 并接入管线；UI 的 `VideoView` 订阅通道并呈现帧。
+
+## 统一端口（及一处有意的非对称）
+
+- **视频**经 `IFrameChannel` / `IFrameSink` 路由，任意数量的消费者可观察同一批解码帧。
+- **音频**直接提交到 `IAudioOutput.Submit`，绕过视频同步器。这一非对称是有意的：音频是计时主时钟，按自身时钟推送到设备，而视频相对该时钟节流。
+
+## 无头优先
+
+`IVideoRenderer.Present` 由无头消费者使用的同一帧通道驱动。在 UI 中，`VideoView` 订阅通道并经平台合成器呈现（DirectComposition、CAMetalLayer、SurfaceFlinger、Wayland 子表面）。核心绝不自行创建原生窗口——渲染总是合成进宿主表面，因此 UI 控件可自由覆盖视频。
+
+## 会话隔离与 DI 生命周期
+
+- 系统级工厂（流工厂、解码/渲染/输出工厂、编解码注册表）是**单例**，在组合根注册一次。
+- 每个 `IMediaPlayer` 拥有独立**会话**（`IMediaSession`）：自己的 `IMediaClock`、`IBufferManager` 与管线。会话对象在 `OpenAsync` 内创建，而非构造函数中，因此播放器可廉价构造、稍后打开。
+- 这使并发播放器完全隔离——会话之间不共享时钟、缓冲或管线状态。

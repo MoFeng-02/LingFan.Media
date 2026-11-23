@@ -1,73 +1,47 @@
+---
+title: 设计哲学
+sources: ["Directory.Build.props", "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs", "src/Infrastructure/LingFan.Media.Core/Clock/MediaClock.cs", "src/Infrastructure/LingFan.Media.Core/MediaPlayer/MediaPlayer.Dispose.cs"]
+symbols: ["IMediaPlayer", "IFrameResource", "IVideoRenderer", "IAudioOutput", "IMediaClock", "IMediaSession", "VideoFrame"]
+lang: zh
+---
+
 # 设计哲学
 
-LingFan.Media 中的每一个设计决策都可以追溯到十条原则。
+这些原则解释了代码为何长成这样。它们是约束性条文，不是愿景——新代码应当遵从。
 
-## 1. DI 驱动
+## 十条原则
 
-一切皆通过 `Microsoft.Extensions.DependencyInjection` 接线。你通过注册服务来组合一个媒体栈：`services.AddLingFanMedia().AddFFmpeg().AddD3D11Renderer().AddWasapiOutput()`。没有静态初始化器，没有全局状态。
+1. **DI 驱动装配。** 组件显式注册：`AddLingFanMedia().AddFFmpeg().AddD3D11Renderer().AddWasapiOutput()`。接线可见可控，不藏在反射或自动扫描背后。
 
-## 2. AOT 友好
+2. **AOT 友好。** 零反射激活、sealed 类型、热路径用 `ValueTask`、编译期确定类型。所有原生调用使用源生成的 `[LibraryImport]`（绝不用 `[DllImport]`，其运行时封送不兼容 NativeAOT）。每个库声明 `IsAotCompatible`；启用 trim 与 AOT 分析器，警告视为错误。
 
-该库必须以零 trim/analyze 警告的形式作为 NativeAOT 二进制发布。
+3. **后端可替换。** FFmpeg、LibVLC、Media Foundation、MediaCodec、AVFoundation 在同一契约后可互换。新增后端 = 新增一个实现 + 一行注册。
 
-- **零反射** —— 没有运行时类型发现，没有 `Dictionary<string, object>` 能力映射。
-- **`[LibraryImport]`，绝不 `[DllImport]`** —— P/Invoke 使用源生成的封送（`[LibraryImport]`），这是唯一 AOT 正确的静态 P/Invoke。`[DllImport]` 依赖基于运行时反射的封送器，因此被禁用。
-- **密封类型、`ValueTask` 热路径、编译期已知类型。**
+4. **不绑定任何 UI 框架。** 核心不感知 Avalonia（或任何其他 UI）。只有可选 UI 层依赖框架，且它依赖核心——绝不反向。
 
-### 当前的局限性
+5. **GPU 零拷贝。** 解码帧以 `IFrameResource` 承载，统一 CPU 与 GPU 资源。硬解帧在平台支持导入时留在 GPU 上；其余情形使用正确的 CPU 回落。
 
-代码库本身是完整 AOT 正确编写的——零反射、`[LibraryImport]`、密封类型、编译期已知类型。目前主要的残余摩擦来自**第三方 GPU 互操作库**（Vortice / SharpGen 生成的 Direct3D 绑定），它们依赖生成的、基于反射的封送，因此在 `PublishAot` 下会产生 trim/analyze 警告。
+6. **无头渲染。** 库绝不创建独立原生窗口。帧经平台合成器合成进宿主表面（Windows 的 DirectComposition、Apple 平台的 CAMetalLayer、Android 的 SurfaceFlinger、Linux 的 Wayland 子表面）。每个平台在统一的 `IVideoRenderer` 契约后各有正确实现。Linux 是受支持目标，具备已验证的 FFmpeg + VAAPI + Vulkan 零拷贝路径。
 
-今天对此是「受控而非消除」，通过：
+7. **内存安全。** 帧所有权显式转移；数组池化；原生资源用 `SafeHandle` 加分层 `Dispose`。无悬垂引用：借用的帧不得活过其回调。
 
-- `TrimmerRootAssembly` 条目，避免相关绑定被激进裁剪；以及
-- 针对这些绑定所引发的已知 IL2xxx 分析器 ID 进行定向 `NoWarn` 抑制。
+8. **管线同步，I/O 边界异步。** 管线控制方法（启动 / 暂停 / 停止 / 刷新）同步且纯内存；`Stop` 只发取消信号。真正的异步工作在 I/O 边界（打开、定位、读取、网络）与优雅释放中，后者以有界超时 join 管线线程。见[异步与同步纪律](/zh/guide/async-sync)。
 
-这保证了发布的二进制完全可用且可 AOT 发布；警告是在工具链层面被抑制，而非在源头消除。
+9. **取消令牌在边界。** `CancellationToken` 在 I/O 与会话生命周期边界（`OpenAsync`、`SeekAsync`、`StopAsync`、读包）接受，不在解码 / 呈现 / 提交等热路径。
 
-计划中的方向是**逐步用原生动态互操作替换基于反射的绑定层**——在裸函数指针之上做显式 vtable 分派（这也是我们所有 COM/P/Invoke 边界已采用的方式）。随着更多第三方绑定被纳入这一模型，根程序集垫片与警告抑制便可退役，从而在不依赖抑制的前提下达成零 trim/analyze 警告的目标。
-
-总之：这一局限存在且已被认知，不会阻碍 AOT 发布，并且已处于明确的消除路径上。
-
-## 3. 后端 可替换
-
-FFmpeg / VLC / MediaFoundation 可互操作且可独立选择。你的应用代码永远不应指名某个 后端。
-
-## 4. 不绑定于 Avalonia
-
-`Core` 不知道 Avalonia 的存在。只有 `LingFan.Media.Avalonia` 模块引用 UI。同一个 `IMediaPlayer` 既能驱动无界面服务端，也能驱动桌面应用。
-
-## 5. 通过 `IFrameResource` 实现 GPU 零拷贝
-
-一个视频帧是一个 `IFrameResource`，可能携带 CPU 或 GPU 内存。帧 管线 对像素位于何处保持不可知；零拷贝呈现是一种 Sink 能力。
-
-## 6. 无界面渲染
-
-一个视频帧以 GPU 纹理的形式交付给平台合成器（Windows → DirectComposition，macOS/iOS → CAMetalLayer + CoreAnimation，Android → TextureView + SurfaceFlinger）。每个受支持平台都正确地实现一次；用户通过一个 `IVideoRenderer` 契约获得每个受支持平台的无界面体验。（Linux 已排除在目标表面之外——见[后端与平台路线](./backends)。）
-
-## 7. 内存安全
-
-帧所有权转移语义、`ArrayPool` 复用、`SafeHandle` + 显式 `Dispose` 分层。一个 Sink 以只读方式借用一帧，并且**绝不可 Dispose 它**；生命周期由生产者拥有。
-
-## 8. 管线 同步方法，I/O 边界真正异步
-
-`VideoPipeline` / `AudioPipeline` / `SubtitleProcessor` / `MediaPipelineHost` 把 `Start` / `Pause` / `Stop` / `Flush` 暴露为**同步 `void`**（纯内存工作；`Stop` 只发出取消信号，它不 join 线程）。线程 join（5 秒超时）发生在 `DisposeAsync` 中。`IMediaPlayer.PlayAsync` / `PauseAsync` / `StopAsync` 作为接口契约返回 `Task`，并且由于是纯内存操作，返回 `Task.CompletedTask`——这**不是**伪异步。真正的 `await` 留给真正的 I/O 边界（`OpenAsync`、`SeekAsync`、`ReadPacketAsync`、网络连接、`DisposeAsync` 的 join）。
-
-## 9. CancellationToken 仅出现在 I/O 边界
-
-`CancellationToken` 出现在 I/O 边界与会话生命周期（`OpenAsync`、`StopAsync`、`SeekAsync`、`ReadPacketAsync`）。它刻意**不出现在热路径**中（`DecodeAsync`、`Present`、`Submit`），因为在那些地方它会带来开销与争用。
-
-## 10. 会话隔离
-
-每个 `IMediaPlayer` 都拥有一个独立的会话——它自己的时钟、缓冲与 管线。DI 提供系统级工厂（Singleton）；会话是 Transient 的，并在 `OpenAsync` 内部创建。
+10. **会话隔离。** 每个 `IMediaPlayer` 有自己的时钟、缓冲与管线。DI 提供系统级工厂；会话对象按每次打开创建。并发播放器绝不共享可变播放状态。
 
 ## 契约层演进
 
-`Abstractions` 层**并非冻结**。当确有需要时，方法签名（同步或异步）可以*添加*——这避免了两种失败模式：(a) 缺少某个异步签名会迫使调用方陷入 `.Wait()` / `.Result` 硬性阻塞或伪异步 后端；(b) 缺少某个同步签名会迫使原生边界的调用方绕过 `await` 工作。
+`Abstractions` 是系统的法律，但并非冻结。确有需求时，可在接口与模型上新增方法签名。这避免两种失败模式：缺异步签名迫使调用方同步阻塞，或缺同步签名迫使在无法 await 的原生边界绕路。
 
-任何添加都遵循两条原则：
+每次增补必须满足四条硬规则：
 
-1. **零外部引用。** 新签名的参数/返回类型必须是 BCL 类型（`IDisposable`、`Memory<byte>`、`Stream`、`CancellationToken`、`Task` / `ValueTask`）或已在 `Abstractions` 中定义的类型。绝不引用 后端 / 渲染器 / UI 的具体类型。*依赖反转真正的回报：* 让契约保持零外部引用，后端 / 渲染器 / UI 就可以自由替换。
-2. **零实现。** `Abstractions` 只持有签名、自动属性与纯数据模型（包括 `Dispose` 释放其自身中立资源）。没有业务逻辑，没有对具体实现进行 `new`。
+| 规则 | 含义 |
+|---|---|
+| 零外部引用 | 签名只能使用 BCL 类型或已在 `Abstractions` 内定义的类型。后端、渲染器或 UI 类型不得出现在契约签名中。 |
+| 零实现 | 只有签名、自动属性与纯数据模型。无业务逻辑，不构造具体实现。 |
+| 异步/同步按本质 | 新签名是异步还是同步遵循真实 I/O 规则，而非图省事。 |
+| 只增不改 | 优先新增签名而非破坏既有签名。确需改动时，所有实现与调用方一并核查。 |
 
-> 优先*添加*签名，而非修改已有签名。如果必须修改签名，请审计每一个实现与调用方。
+例如一个中立的 `IDisposable?` 所有者字段，让后端交回原生帧所有权，而契约层从不指名任何后端特有的句柄类型。这正是依赖倒置的回报：只要契约层保持纯净，后端、渲染器、输出与 UI 可自由替换，下游各层围绕稳定契约适配。

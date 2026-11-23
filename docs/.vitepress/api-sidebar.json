@@ -1,0 +1,1098 @@
+{
+  "en": [
+    {
+      "text": "Abstractions",
+      "collapsed": false,
+      "items": [
+        {
+          "text": "Enums",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "AspectRatioMode",
+              "link": "/api/abstractions/enums-aspectratiomode"
+            },
+            {
+              "text": "AudioCodec",
+              "link": "/api/abstractions/enums-audiocodec"
+            },
+            {
+              "text": "BufferState",
+              "link": "/api/abstractions/enums-bufferstate"
+            },
+            {
+              "text": "ClockSyncSource",
+              "link": "/api/abstractions/enums-clocksyncsource"
+            },
+            {
+              "text": "ColorRange",
+              "link": "/api/abstractions/enums-colorrange"
+            },
+            {
+              "text": "ColorStandard",
+              "link": "/api/abstractions/enums-colorstandard"
+            },
+            {
+              "text": "ColorTransfer",
+              "link": "/api/abstractions/enums-colortransfer"
+            },
+            {
+              "text": "ContainerFormat",
+              "link": "/api/abstractions/enums-containerformat"
+            },
+            {
+              "text": "GPUApiType",
+              "link": "/api/abstractions/enums-gpuapitype"
+            },
+            {
+              "text": "MediaErrorCode",
+              "link": "/api/abstractions/enums-mediaerrorcode"
+            },
+            {
+              "text": "MediaSourceType",
+              "link": "/api/abstractions/enums-mediasourcetype"
+            },
+            {
+              "text": "MediaState",
+              "link": "/api/abstractions/enums-mediastate"
+            },
+            {
+              "text": "PixelFormat",
+              "link": "/api/abstractions/enums-pixelformat"
+            },
+            {
+              "text": "RenderHandleType",
+              "link": "/api/abstractions/enums-renderhandletype"
+            },
+            {
+              "text": "RenderTargetType",
+              "link": "/api/abstractions/enums-rendertargettype"
+            },
+            {
+              "text": "SampleFormat",
+              "link": "/api/abstractions/enums-sampleformat"
+            },
+            {
+              "text": "SubtitleAlignment",
+              "link": "/api/abstractions/enums-subtitlealignment"
+            },
+            {
+              "text": "SubtitleCodec",
+              "link": "/api/abstractions/enums-subtitlecodec"
+            },
+            {
+              "text": "SubtitlePosition",
+              "link": "/api/abstractions/enums-subtitleposition"
+            },
+            {
+              "text": "TrackType",
+              "link": "/api/abstractions/enums-tracktype"
+            },
+            {
+              "text": "VideoCodec",
+              "link": "/api/abstractions/enums-videocodec"
+            },
+            {
+              "text": "VisualizerType",
+              "link": "/api/abstractions/enums-visualizertype"
+            }
+          ]
+        },
+        {
+          "text": "Events",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "BufferProgressEventArgs",
+              "link": "/api/abstractions/events-bufferprogresseventargs"
+            },
+            {
+              "text": "LogEventArgs",
+              "link": "/api/abstractions/events-logeventargs"
+            },
+            {
+              "text": "MediaErrorEventArgs",
+              "link": "/api/abstractions/events-mediaerroreventargs"
+            },
+            {
+              "text": "MediaStateChangedEventArgs",
+              "link": "/api/abstractions/events-mediastatechangedeventargs"
+            },
+            {
+              "text": "TrackChangedEventArgs",
+              "link": "/api/abstractions/events-trackchangedeventargs"
+            }
+          ]
+        },
+        {
+          "text": "Exceptions",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "GpuDeviceLostException",
+              "link": "/api/abstractions/exceptions-gpudevicelostexception"
+            }
+          ]
+        },
+        {
+          "text": "Interfaces",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "IRealtimePacedOutput",
+              "link": "/api/abstractions/interfaces-irealtimepacedoutput"
+            },
+            {
+              "text": "Codecs",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "ICodecRegistry",
+                  "link": "/api/abstractions/interfaces-codecs-icodecregistry"
+                }
+              ]
+            },
+            {
+              "text": "Consumers",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IHeadlessAudioConsumer",
+                  "link": "/api/abstractions/interfaces-consumers-iheadlessaudioconsumer"
+                },
+                {
+                  "text": "IHeadlessFrameConsumer",
+                  "link": "/api/abstractions/interfaces-consumers-iheadlessframeconsumer"
+                }
+              ]
+            },
+            {
+              "text": "Core",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IBufferManager",
+                  "link": "/api/abstractions/interfaces-core-ibuffermanager"
+                },
+                {
+                  "text": "IFrameChannel",
+                  "link": "/api/abstractions/interfaces-core-iframechannel"
+                },
+                {
+                  "text": "IMediaClock",
+                  "link": "/api/abstractions/interfaces-core-imediaclock"
+                },
+                {
+                  "text": "IMediaComponent",
+                  "link": "/api/abstractions/interfaces-core-imediacomponent"
+                }
+              ]
+            },
+            {
+              "text": "Decoders",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IAudioDecoder",
+                  "link": "/api/abstractions/interfaces-decoders-iaudiodecoder"
+                },
+                {
+                  "text": "IAudioDecoderFactory",
+                  "link": "/api/abstractions/interfaces-decoders-iaudiodecoderfactory"
+                },
+                {
+                  "text": "IAudioSourceFormatAware",
+                  "link": "/api/abstractions/interfaces-decoders-iaudiosourceformataware"
+                },
+                {
+                  "text": "ISubtitleDecoder",
+                  "link": "/api/abstractions/interfaces-decoders-isubtitledecoder"
+                },
+                {
+                  "text": "ISubtitleDecoderFactory",
+                  "link": "/api/abstractions/interfaces-decoders-isubtitledecoderfactory"
+                },
+                {
+                  "text": "IVideoDecoder",
+                  "link": "/api/abstractions/interfaces-decoders-ivideodecoder"
+                },
+                {
+                  "text": "IVideoDecoderFactory",
+                  "link": "/api/abstractions/interfaces-decoders-ivideodecoderfactory"
+                }
+              ]
+            },
+            {
+              "text": "Demuxer",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IMediaDemuxer",
+                  "link": "/api/abstractions/interfaces-demuxer-imediademuxer"
+                },
+                {
+                  "text": "IMediaDemuxerFactory",
+                  "link": "/api/abstractions/interfaces-demuxer-imediademuxerfactory"
+                }
+              ]
+            },
+            {
+              "text": "Detection",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IFormatDetector",
+                  "link": "/api/abstractions/interfaces-detection-iformatdetector"
+                }
+              ]
+            },
+            {
+              "text": "Frames",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IDisposableFrame",
+                  "link": "/api/abstractions/interfaces-frames-idisposableframe"
+                },
+                {
+                  "text": "IFramePool",
+                  "link": "/api/abstractions/interfaces-frames-iframepool"
+                },
+                {
+                  "text": "IFramePoolAware",
+                  "link": "/api/abstractions/interfaces-frames-iframepoolaware"
+                },
+                {
+                  "text": "IFrameResource",
+                  "link": "/api/abstractions/interfaces-frames-iframeresource"
+                },
+                {
+                  "text": "IGpuFrameProducer",
+                  "link": "/api/abstractions/interfaces-frames-igpuframeproducer"
+                },
+                {
+                  "text": "IGpuTextureResource",
+                  "link": "/api/abstractions/interfaces-frames-igputextureresource"
+                },
+                {
+                  "text": "IVaApiExport",
+                  "link": "/api/abstractions/interfaces-frames-ivaapiexport"
+                }
+              ]
+            },
+            {
+              "text": "Gpu",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IGpuDeviceContext",
+                  "link": "/api/abstractions/interfaces-gpu-igpudevicecontext"
+                },
+                {
+                  "text": "ISharedGpuSurfaceSource",
+                  "link": "/api/abstractions/interfaces-gpu-isharedgpusurfacesource"
+                }
+              ]
+            },
+            {
+              "text": "Outputs",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IAudioEngine",
+                  "link": "/api/abstractions/interfaces-outputs-iaudioengine"
+                },
+                {
+                  "text": "IAudioOutput",
+                  "link": "/api/abstractions/interfaces-outputs-iaudiooutput"
+                },
+                {
+                  "text": "IAudioOutputFactory",
+                  "link": "/api/abstractions/interfaces-outputs-iaudiooutputfactory"
+                },
+                {
+                  "text": "IBatchAudioSubmit",
+                  "link": "/api/abstractions/interfaces-outputs-ibatchaudiosubmit"
+                }
+              ]
+            },
+            {
+              "text": "Player",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "BackendDescriptor",
+                  "link": "/api/abstractions/interfaces-player-backenddescriptor"
+                },
+                {
+                  "text": "IBackendRegistry",
+                  "link": "/api/abstractions/interfaces-player-ibackendregistry"
+                },
+                {
+                  "text": "IMediaPlayer",
+                  "link": "/api/abstractions/interfaces-player-imediaplayer"
+                },
+                {
+                  "text": "IMediaPlayerFactory",
+                  "link": "/api/abstractions/interfaces-player-imediaplayerfactory"
+                },
+                {
+                  "text": "IMediaSession",
+                  "link": "/api/abstractions/interfaces-player-imediasession"
+                },
+                {
+                  "text": "MediaBackendUnsupportedException",
+                  "link": "/api/abstractions/interfaces-player-mediabackendunsupportedexception"
+                }
+              ]
+            },
+            {
+              "text": "Renderers",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IRendererHealth",
+                  "link": "/api/abstractions/interfaces-renderers-irendererhealth"
+                },
+                {
+                  "text": "IRenderTarget",
+                  "link": "/api/abstractions/interfaces-renderers-irendertarget"
+                },
+                {
+                  "text": "IVideoRenderer",
+                  "link": "/api/abstractions/interfaces-renderers-ivideorenderer"
+                },
+                {
+                  "text": "IVideoRendererFactory",
+                  "link": "/api/abstractions/interfaces-renderers-ivideorendererfactory"
+                }
+              ]
+            },
+            {
+              "text": "Source",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IMediaSource",
+                  "link": "/api/abstractions/interfaces-source-imediasource"
+                },
+                {
+                  "text": "IMediaSourceMetadata",
+                  "link": "/api/abstractions/interfaces-source-imediasourcemetadata"
+                },
+                {
+                  "text": "IMediaStream",
+                  "link": "/api/abstractions/interfaces-source-imediastream"
+                },
+                {
+                  "text": "IMediaStreamFactory",
+                  "link": "/api/abstractions/interfaces-source-imediastreamfactory"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "text": "Models",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "MediaCookie",
+              "link": "/api/abstractions/models-mediacookie"
+            },
+            {
+              "text": "MediaFormatProfile",
+              "link": "/api/abstractions/models-mediaformatprofile"
+            },
+            {
+              "text": "MediaMetadata",
+              "link": "/api/abstractions/models-mediametadata"
+            },
+            {
+              "text": "ProcessingMode",
+              "link": "/api/abstractions/models-processingmode"
+            },
+            {
+              "text": "Rational",
+              "link": "/api/abstractions/models-rational"
+            },
+            {
+              "text": "SubtitleStyle",
+              "link": "/api/abstractions/models-subtitlestyle"
+            },
+            {
+              "text": "Frames",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "AudioFrame",
+                  "link": "/api/abstractions/models-frames-audioframe"
+                },
+                {
+                  "text": "GpuTextureReadback",
+                  "link": "/api/abstractions/models-frames-gputexturereadback"
+                },
+                {
+                  "text": "MediaPacket",
+                  "link": "/api/abstractions/models-frames-mediapacket"
+                },
+                {
+                  "text": "SoftwareFrameResource",
+                  "link": "/api/abstractions/models-frames-softwareframeresource"
+                },
+                {
+                  "text": "struct",
+                  "link": "/api/abstractions/models-frames-videocolorinfo"
+                },
+                {
+                  "text": "SubtitleFrame",
+                  "link": "/api/abstractions/models-frames-subtitleframe"
+                },
+                {
+                  "text": "VideoFrame",
+                  "link": "/api/abstractions/models-frames-videoframe"
+                }
+              ]
+            },
+            {
+              "text": "Gpu",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "GpuDeviceCapabilities",
+                  "link": "/api/abstractions/models-gpu-gpudevicecapabilities"
+                },
+                {
+                  "text": "SharedGpuSourcePolicy",
+                  "link": "/api/abstractions/models-gpu-sharedgpusourcepolicy"
+                },
+                {
+                  "text": "SharedGpuSurfaceDescriptor",
+                  "link": "/api/abstractions/models-gpu-sharedgpusurfacedescriptor"
+                },
+                {
+                  "text": "SharedGpuSyncModel",
+                  "link": "/api/abstractions/models-gpu-sharedgpusyncmodel"
+                }
+              ]
+            },
+            {
+              "text": "Settings",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "AudioEffectParameter",
+                  "link": "/api/abstractions/models-settings-audioeffectparameter"
+                },
+                {
+                  "text": "AudioSettings",
+                  "link": "/api/abstractions/models-settings-audiosettings"
+                },
+                {
+                  "text": "DecodePreferencePolicy",
+                  "link": "/api/abstractions/models-settings-decodepreferencepolicy"
+                },
+                {
+                  "text": "MediaPlayerOptions",
+                  "link": "/api/abstractions/models-settings-mediaplayeroptions"
+                },
+                {
+                  "text": "VideoSettings",
+                  "link": "/api/abstractions/models-settings-videosettings"
+                }
+              ]
+            },
+            {
+              "text": "Tracks",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "AudioTrackInfo",
+                  "link": "/api/abstractions/models-tracks-audiotrackinfo"
+                },
+                {
+                  "text": "MediaTrack",
+                  "link": "/api/abstractions/models-tracks-mediatrack"
+                },
+                {
+                  "text": "VideoTrackInfo",
+                  "link": "/api/abstractions/models-tracks-videotrackinfo"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "text": "Extensions",
+      "collapsed": false,
+      "items": [
+        {
+          "text": "BackendStubs",
+          "link": "/api/extensions/backendstubs"
+        },
+        {
+          "text": "MediaBuilderPipelineExtensions",
+          "link": "/api/extensions/mediabuilderpipelineextensions"
+        },
+        {
+          "text": "ModuleExtensions",
+          "link": "/api/extensions/moduleextensions"
+        },
+        {
+          "text": "ServiceCollectionExtensions",
+          "link": "/api/extensions/servicecollectionextensions"
+        }
+      ]
+    }
+  ],
+  "zh": [
+    {
+      "text": "抽象契约层",
+      "collapsed": false,
+      "items": [
+        {
+          "text": "Enums",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "AspectRatioMode",
+              "link": "/zh/api/abstractions/enums-aspectratiomode"
+            },
+            {
+              "text": "AudioCodec",
+              "link": "/zh/api/abstractions/enums-audiocodec"
+            },
+            {
+              "text": "BufferState",
+              "link": "/zh/api/abstractions/enums-bufferstate"
+            },
+            {
+              "text": "ClockSyncSource",
+              "link": "/zh/api/abstractions/enums-clocksyncsource"
+            },
+            {
+              "text": "ColorRange",
+              "link": "/zh/api/abstractions/enums-colorrange"
+            },
+            {
+              "text": "ColorStandard",
+              "link": "/zh/api/abstractions/enums-colorstandard"
+            },
+            {
+              "text": "ColorTransfer",
+              "link": "/zh/api/abstractions/enums-colortransfer"
+            },
+            {
+              "text": "ContainerFormat",
+              "link": "/zh/api/abstractions/enums-containerformat"
+            },
+            {
+              "text": "GPUApiType",
+              "link": "/zh/api/abstractions/enums-gpuapitype"
+            },
+            {
+              "text": "MediaErrorCode",
+              "link": "/zh/api/abstractions/enums-mediaerrorcode"
+            },
+            {
+              "text": "MediaSourceType",
+              "link": "/zh/api/abstractions/enums-mediasourcetype"
+            },
+            {
+              "text": "MediaState",
+              "link": "/zh/api/abstractions/enums-mediastate"
+            },
+            {
+              "text": "PixelFormat",
+              "link": "/zh/api/abstractions/enums-pixelformat"
+            },
+            {
+              "text": "RenderHandleType",
+              "link": "/zh/api/abstractions/enums-renderhandletype"
+            },
+            {
+              "text": "RenderTargetType",
+              "link": "/zh/api/abstractions/enums-rendertargettype"
+            },
+            {
+              "text": "SampleFormat",
+              "link": "/zh/api/abstractions/enums-sampleformat"
+            },
+            {
+              "text": "SubtitleAlignment",
+              "link": "/zh/api/abstractions/enums-subtitlealignment"
+            },
+            {
+              "text": "SubtitleCodec",
+              "link": "/zh/api/abstractions/enums-subtitlecodec"
+            },
+            {
+              "text": "SubtitlePosition",
+              "link": "/zh/api/abstractions/enums-subtitleposition"
+            },
+            {
+              "text": "TrackType",
+              "link": "/zh/api/abstractions/enums-tracktype"
+            },
+            {
+              "text": "VideoCodec",
+              "link": "/zh/api/abstractions/enums-videocodec"
+            },
+            {
+              "text": "VisualizerType",
+              "link": "/zh/api/abstractions/enums-visualizertype"
+            }
+          ]
+        },
+        {
+          "text": "Events",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "BufferProgressEventArgs",
+              "link": "/zh/api/abstractions/events-bufferprogresseventargs"
+            },
+            {
+              "text": "LogEventArgs",
+              "link": "/zh/api/abstractions/events-logeventargs"
+            },
+            {
+              "text": "MediaErrorEventArgs",
+              "link": "/zh/api/abstractions/events-mediaerroreventargs"
+            },
+            {
+              "text": "MediaStateChangedEventArgs",
+              "link": "/zh/api/abstractions/events-mediastatechangedeventargs"
+            },
+            {
+              "text": "TrackChangedEventArgs",
+              "link": "/zh/api/abstractions/events-trackchangedeventargs"
+            }
+          ]
+        },
+        {
+          "text": "Exceptions",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "GpuDeviceLostException",
+              "link": "/zh/api/abstractions/exceptions-gpudevicelostexception"
+            }
+          ]
+        },
+        {
+          "text": "Interfaces",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "IRealtimePacedOutput",
+              "link": "/zh/api/abstractions/interfaces-irealtimepacedoutput"
+            },
+            {
+              "text": "Codecs",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "ICodecRegistry",
+                  "link": "/zh/api/abstractions/interfaces-codecs-icodecregistry"
+                }
+              ]
+            },
+            {
+              "text": "Consumers",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IHeadlessAudioConsumer",
+                  "link": "/zh/api/abstractions/interfaces-consumers-iheadlessaudioconsumer"
+                },
+                {
+                  "text": "IHeadlessFrameConsumer",
+                  "link": "/zh/api/abstractions/interfaces-consumers-iheadlessframeconsumer"
+                }
+              ]
+            },
+            {
+              "text": "Core",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IBufferManager",
+                  "link": "/zh/api/abstractions/interfaces-core-ibuffermanager"
+                },
+                {
+                  "text": "IFrameChannel",
+                  "link": "/zh/api/abstractions/interfaces-core-iframechannel"
+                },
+                {
+                  "text": "IMediaClock",
+                  "link": "/zh/api/abstractions/interfaces-core-imediaclock"
+                },
+                {
+                  "text": "IMediaComponent",
+                  "link": "/zh/api/abstractions/interfaces-core-imediacomponent"
+                }
+              ]
+            },
+            {
+              "text": "Decoders",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IAudioDecoder",
+                  "link": "/zh/api/abstractions/interfaces-decoders-iaudiodecoder"
+                },
+                {
+                  "text": "IAudioDecoderFactory",
+                  "link": "/zh/api/abstractions/interfaces-decoders-iaudiodecoderfactory"
+                },
+                {
+                  "text": "IAudioSourceFormatAware",
+                  "link": "/zh/api/abstractions/interfaces-decoders-iaudiosourceformataware"
+                },
+                {
+                  "text": "ISubtitleDecoder",
+                  "link": "/zh/api/abstractions/interfaces-decoders-isubtitledecoder"
+                },
+                {
+                  "text": "ISubtitleDecoderFactory",
+                  "link": "/zh/api/abstractions/interfaces-decoders-isubtitledecoderfactory"
+                },
+                {
+                  "text": "IVideoDecoder",
+                  "link": "/zh/api/abstractions/interfaces-decoders-ivideodecoder"
+                },
+                {
+                  "text": "IVideoDecoderFactory",
+                  "link": "/zh/api/abstractions/interfaces-decoders-ivideodecoderfactory"
+                }
+              ]
+            },
+            {
+              "text": "Demuxer",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IMediaDemuxer",
+                  "link": "/zh/api/abstractions/interfaces-demuxer-imediademuxer"
+                },
+                {
+                  "text": "IMediaDemuxerFactory",
+                  "link": "/zh/api/abstractions/interfaces-demuxer-imediademuxerfactory"
+                }
+              ]
+            },
+            {
+              "text": "Detection",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IFormatDetector",
+                  "link": "/zh/api/abstractions/interfaces-detection-iformatdetector"
+                }
+              ]
+            },
+            {
+              "text": "Frames",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IDisposableFrame",
+                  "link": "/zh/api/abstractions/interfaces-frames-idisposableframe"
+                },
+                {
+                  "text": "IFramePool",
+                  "link": "/zh/api/abstractions/interfaces-frames-iframepool"
+                },
+                {
+                  "text": "IFramePoolAware",
+                  "link": "/zh/api/abstractions/interfaces-frames-iframepoolaware"
+                },
+                {
+                  "text": "IFrameResource",
+                  "link": "/zh/api/abstractions/interfaces-frames-iframeresource"
+                },
+                {
+                  "text": "IGpuFrameProducer",
+                  "link": "/zh/api/abstractions/interfaces-frames-igpuframeproducer"
+                },
+                {
+                  "text": "IGpuTextureResource",
+                  "link": "/zh/api/abstractions/interfaces-frames-igputextureresource"
+                },
+                {
+                  "text": "IVaApiExport",
+                  "link": "/zh/api/abstractions/interfaces-frames-ivaapiexport"
+                }
+              ]
+            },
+            {
+              "text": "Gpu",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IGpuDeviceContext",
+                  "link": "/zh/api/abstractions/interfaces-gpu-igpudevicecontext"
+                },
+                {
+                  "text": "ISharedGpuSurfaceSource",
+                  "link": "/zh/api/abstractions/interfaces-gpu-isharedgpusurfacesource"
+                }
+              ]
+            },
+            {
+              "text": "Outputs",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IAudioEngine",
+                  "link": "/zh/api/abstractions/interfaces-outputs-iaudioengine"
+                },
+                {
+                  "text": "IAudioOutput",
+                  "link": "/zh/api/abstractions/interfaces-outputs-iaudiooutput"
+                },
+                {
+                  "text": "IAudioOutputFactory",
+                  "link": "/zh/api/abstractions/interfaces-outputs-iaudiooutputfactory"
+                },
+                {
+                  "text": "IBatchAudioSubmit",
+                  "link": "/zh/api/abstractions/interfaces-outputs-ibatchaudiosubmit"
+                }
+              ]
+            },
+            {
+              "text": "Player",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "BackendDescriptor",
+                  "link": "/zh/api/abstractions/interfaces-player-backenddescriptor"
+                },
+                {
+                  "text": "IBackendRegistry",
+                  "link": "/zh/api/abstractions/interfaces-player-ibackendregistry"
+                },
+                {
+                  "text": "IMediaPlayer",
+                  "link": "/zh/api/abstractions/interfaces-player-imediaplayer"
+                },
+                {
+                  "text": "IMediaPlayerFactory",
+                  "link": "/zh/api/abstractions/interfaces-player-imediaplayerfactory"
+                },
+                {
+                  "text": "IMediaSession",
+                  "link": "/zh/api/abstractions/interfaces-player-imediasession"
+                },
+                {
+                  "text": "MediaBackendUnsupportedException",
+                  "link": "/zh/api/abstractions/interfaces-player-mediabackendunsupportedexception"
+                }
+              ]
+            },
+            {
+              "text": "Renderers",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IRendererHealth",
+                  "link": "/zh/api/abstractions/interfaces-renderers-irendererhealth"
+                },
+                {
+                  "text": "IRenderTarget",
+                  "link": "/zh/api/abstractions/interfaces-renderers-irendertarget"
+                },
+                {
+                  "text": "IVideoRenderer",
+                  "link": "/zh/api/abstractions/interfaces-renderers-ivideorenderer"
+                },
+                {
+                  "text": "IVideoRendererFactory",
+                  "link": "/zh/api/abstractions/interfaces-renderers-ivideorendererfactory"
+                }
+              ]
+            },
+            {
+              "text": "Source",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "IMediaSource",
+                  "link": "/zh/api/abstractions/interfaces-source-imediasource"
+                },
+                {
+                  "text": "IMediaSourceMetadata",
+                  "link": "/zh/api/abstractions/interfaces-source-imediasourcemetadata"
+                },
+                {
+                  "text": "IMediaStream",
+                  "link": "/zh/api/abstractions/interfaces-source-imediastream"
+                },
+                {
+                  "text": "IMediaStreamFactory",
+                  "link": "/zh/api/abstractions/interfaces-source-imediastreamfactory"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "text": "Models",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "MediaCookie",
+              "link": "/zh/api/abstractions/models-mediacookie"
+            },
+            {
+              "text": "MediaFormatProfile",
+              "link": "/zh/api/abstractions/models-mediaformatprofile"
+            },
+            {
+              "text": "MediaMetadata",
+              "link": "/zh/api/abstractions/models-mediametadata"
+            },
+            {
+              "text": "ProcessingMode",
+              "link": "/zh/api/abstractions/models-processingmode"
+            },
+            {
+              "text": "Rational",
+              "link": "/zh/api/abstractions/models-rational"
+            },
+            {
+              "text": "SubtitleStyle",
+              "link": "/zh/api/abstractions/models-subtitlestyle"
+            },
+            {
+              "text": "Frames",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "AudioFrame",
+                  "link": "/zh/api/abstractions/models-frames-audioframe"
+                },
+                {
+                  "text": "GpuTextureReadback",
+                  "link": "/zh/api/abstractions/models-frames-gputexturereadback"
+                },
+                {
+                  "text": "MediaPacket",
+                  "link": "/zh/api/abstractions/models-frames-mediapacket"
+                },
+                {
+                  "text": "SoftwareFrameResource",
+                  "link": "/zh/api/abstractions/models-frames-softwareframeresource"
+                },
+                {
+                  "text": "struct",
+                  "link": "/zh/api/abstractions/models-frames-videocolorinfo"
+                },
+                {
+                  "text": "SubtitleFrame",
+                  "link": "/zh/api/abstractions/models-frames-subtitleframe"
+                },
+                {
+                  "text": "VideoFrame",
+                  "link": "/zh/api/abstractions/models-frames-videoframe"
+                }
+              ]
+            },
+            {
+              "text": "Gpu",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "GpuDeviceCapabilities",
+                  "link": "/zh/api/abstractions/models-gpu-gpudevicecapabilities"
+                },
+                {
+                  "text": "SharedGpuSourcePolicy",
+                  "link": "/zh/api/abstractions/models-gpu-sharedgpusourcepolicy"
+                },
+                {
+                  "text": "SharedGpuSurfaceDescriptor",
+                  "link": "/zh/api/abstractions/models-gpu-sharedgpusurfacedescriptor"
+                },
+                {
+                  "text": "SharedGpuSyncModel",
+                  "link": "/zh/api/abstractions/models-gpu-sharedgpusyncmodel"
+                }
+              ]
+            },
+            {
+              "text": "Settings",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "AudioEffectParameter",
+                  "link": "/zh/api/abstractions/models-settings-audioeffectparameter"
+                },
+                {
+                  "text": "AudioSettings",
+                  "link": "/zh/api/abstractions/models-settings-audiosettings"
+                },
+                {
+                  "text": "DecodePreferencePolicy",
+                  "link": "/zh/api/abstractions/models-settings-decodepreferencepolicy"
+                },
+                {
+                  "text": "MediaPlayerOptions",
+                  "link": "/zh/api/abstractions/models-settings-mediaplayeroptions"
+                },
+                {
+                  "text": "VideoSettings",
+                  "link": "/zh/api/abstractions/models-settings-videosettings"
+                }
+              ]
+            },
+            {
+              "text": "Tracks",
+              "collapsed": true,
+              "items": [
+                {
+                  "text": "AudioTrackInfo",
+                  "link": "/zh/api/abstractions/models-tracks-audiotrackinfo"
+                },
+                {
+                  "text": "MediaTrack",
+                  "link": "/zh/api/abstractions/models-tracks-mediatrack"
+                },
+                {
+                  "text": "VideoTrackInfo",
+                  "link": "/zh/api/abstractions/models-tracks-videotrackinfo"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "text": "组合根扩展",
+      "collapsed": false,
+      "items": [
+        {
+          "text": "BackendStubs",
+          "link": "/zh/api/extensions/backendstubs"
+        },
+        {
+          "text": "MediaBuilderPipelineExtensions",
+          "link": "/zh/api/extensions/mediabuilderpipelineextensions"
+        },
+        {
+          "text": "ModuleExtensions",
+          "link": "/zh/api/extensions/moduleextensions"
+        },
+        {
+          "text": "ServiceCollectionExtensions",
+          "link": "/zh/api/extensions/servicecollectionextensions"
+        }
+      ]
+    }
+  ]
+}

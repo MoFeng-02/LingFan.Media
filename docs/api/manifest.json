@@ -1,0 +1,3094 @@
+{
+  "generator": "scripts/gen-api.mjs",
+  "note": "Machine-readable index of the generated API reference. Each type maps to its source file and doc page. Regenerate with: pnpm docs:gen",
+  "repoUrl": "https://github.com/MoFeng-02/LingFan.Media/blob/main/",
+  "projects": [
+    {
+      "key": "abstractions",
+      "dir": "src/Infrastructure/LingFan.Media.Abstractions"
+    },
+    {
+      "key": "extensions",
+      "dir": "src/Infrastructure/LingFan.Media.Extensions"
+    }
+  ],
+  "typeCount": 114,
+  "pageCount": 102,
+  "types": [
+    {
+      "name": "AspectRatioMode",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/AspectRatioMode.cs",
+      "page": "api/abstractions/enums-aspectratiomode",
+      "pageZh": "zh/api/abstractions/enums-aspectratiomode",
+      "symbol": "LingFan.Media.Abstractions.AspectRatioMode",
+      "members": [
+        "Fill",
+        "Uniform",
+        "UniformToFill"
+      ],
+      "sourceHash": "2e60e95ee6538eebec0fd0c70ef5b9cb28a250b7f898aa43b9d3dff4dc126ae7",
+      "project": "abstractions"
+    },
+    {
+      "name": "AudioCodec",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/AudioCodec.cs",
+      "page": "api/abstractions/enums-audiocodec",
+      "pageZh": "zh/api/abstractions/enums-audiocodec",
+      "symbol": "LingFan.Media.Abstractions.AudioCodec",
+      "members": [
+        "AAC",
+        "MP3",
+        "Opus",
+        "FLAC",
+        "Vorbis",
+        "PCM",
+        "AC3",
+        "Unknown"
+      ],
+      "sourceHash": "68669b60b9958127bb9854e247d2bd7e95be5017e8f87de628d64602a6527e04",
+      "project": "abstractions"
+    },
+    {
+      "name": "AudioEffectParameter",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/AudioEffectParameter.cs",
+      "page": "api/abstractions/models-settings-audioeffectparameter",
+      "pageZh": "zh/api/abstractions/models-settings-audioeffectparameter",
+      "symbol": "LingFan.Media.Abstractions.AudioEffectParameter",
+      "members": [
+        "Name",
+        "Value",
+        "MinValue",
+        "MaxValue",
+        "AudioEffectParameter"
+      ],
+      "sourceHash": "dff255bb696452057ec472b32afe63b999dba22866107e5a9593cdd3beb11674",
+      "project": "abstractions"
+    },
+    {
+      "name": "AudioFrame",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/AudioFrame.cs",
+      "page": "api/abstractions/models-frames-audioframe",
+      "pageZh": "zh/api/abstractions/models-frames-audioframe",
+      "symbol": "LingFan.Media.Abstractions.AudioFrame",
+      "members": [
+        "Data",
+        "SampleRate",
+        "Channels",
+        "SampleFormat",
+        "Timestamp",
+        "Duration",
+        "FrameCount",
+        "IsDisposed",
+        "AudioFrame",
+        "AudioFrame",
+        "Reset",
+        "Dispose"
+      ],
+      "sourceHash": "52f34755c4c0bacab82930e3f197198dfea75d5ca004a3ad8c49c3609925e881",
+      "project": "abstractions"
+    },
+    {
+      "name": "AudioSettings",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/AudioSettings.cs",
+      "page": "api/abstractions/models-settings-audiosettings",
+      "pageZh": "zh/api/abstractions/models-settings-audiosettings",
+      "symbol": "LingFan.Media.Abstractions.AudioSettings",
+      "members": [
+        "PreferredCodec",
+        "SourceSampleRate",
+        "SourceChannels",
+        "OutputSampleRate",
+        "OutputChannels",
+        "OutputSampleFormat",
+        "CodecConfiguration",
+        "TimeBase"
+      ],
+      "sourceHash": "e020544f62de3a0be84b34008b97cb03da92feed66a257f4a39fecc65f76dca8",
+      "project": "abstractions"
+    },
+    {
+      "name": "AudioTrackInfo",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/AudioTrackInfo.cs",
+      "page": "api/abstractions/models-tracks-audiotrackinfo",
+      "pageZh": "zh/api/abstractions/models-tracks-audiotrackinfo",
+      "symbol": "LingFan.Media.Abstractions.AudioTrackInfo",
+      "members": [
+        "SampleRate",
+        "Channels",
+        "ChannelLayout",
+        "BitsPerSample",
+        "CodecConfiguration",
+        "TimeBase",
+        "Duration"
+      ],
+      "sourceHash": "56df23670190d33453d2cbf34d477b1e5659b1586b88259a483ceec6c62850ef",
+      "project": "abstractions"
+    },
+    {
+      "name": "BackendDescriptor",
+      "kind": "record",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/BackendDescriptor.cs",
+      "page": "api/abstractions/interfaces-player-backenddescriptor",
+      "pageZh": "zh/api/abstractions/interfaces-player-backenddescriptor",
+      "symbol": "LingFan.Media.Abstractions.BackendDescriptor",
+      "members": [
+        "Name",
+        "Demuxer",
+        "VideoDecoder",
+        "AudioDecoder",
+        "SubtitleDecoder"
+      ],
+      "sourceHash": "8c7c7fd1f5a14b1f95f69e291b09bfda3cfb1f567110b33fa1a3b8b1abc32dc4",
+      "project": "abstractions"
+    },
+    {
+      "name": "BufferProgressEventArgs",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/BufferProgressEventArgs.cs",
+      "page": "api/abstractions/events-bufferprogresseventargs",
+      "pageZh": "zh/api/abstractions/events-bufferprogresseventargs",
+      "symbol": "LingFan.Media.Abstractions.BufferProgressEventArgs",
+      "members": [
+        "State",
+        "BufferedDuration",
+        "BufferedBytes",
+        "Progress",
+        "BufferProgressEventArgs"
+      ],
+      "sourceHash": "1ddf89debd7506028046a0f37cfdd78206f8a456efd953fd5c946bf2ecb6e426",
+      "project": "abstractions"
+    },
+    {
+      "name": "BufferState",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/BufferState.cs",
+      "page": "api/abstractions/enums-bufferstate",
+      "pageZh": "zh/api/abstractions/enums-bufferstate",
+      "symbol": "LingFan.Media.Abstractions.BufferState",
+      "members": [
+        "Empty",
+        "Buffering",
+        "Ready",
+        "Starved"
+      ],
+      "sourceHash": "a6b63c9c8f3133152b22727c2083f5adee97d1cfd01fe48ef3e1a4b6188c4ec1",
+      "project": "abstractions"
+    },
+    {
+      "name": "ClockSyncSource",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ClockSyncSource.cs",
+      "page": "api/abstractions/enums-clocksyncsource",
+      "pageZh": "zh/api/abstractions/enums-clocksyncsource",
+      "symbol": "LingFan.Media.Abstractions.ClockSyncSource",
+      "members": [
+        "Audio",
+        "Video",
+        "System"
+      ],
+      "sourceHash": "e93d61a5ae3f1099e1716e850d854675497b15253e74df8b2e3c038a5c40ba2c",
+      "project": "abstractions"
+    },
+    {
+      "name": "ColorRange",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorRange.cs",
+      "page": "api/abstractions/enums-colorrange",
+      "pageZh": "zh/api/abstractions/enums-colorrange",
+      "symbol": "LingFan.Media.Abstractions.ColorRange",
+      "members": [
+        "Unspecified",
+        "Full",
+        "Limited"
+      ],
+      "sourceHash": "f68189ff7bcdd8345c485d6b2bb369c06f95c8039a069d3753d799f8582c1044",
+      "project": "abstractions"
+    },
+    {
+      "name": "ColorStandard",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorStandard.cs",
+      "page": "api/abstractions/enums-colorstandard",
+      "pageZh": "zh/api/abstractions/enums-colorstandard",
+      "symbol": "LingFan.Media.Abstractions.ColorStandard",
+      "members": [
+        "Unspecified",
+        "Bt601",
+        "Bt709",
+        "Bt2020"
+      ],
+      "sourceHash": "ff025ce323fe3df790f946c86204591a18d85a29721e214c483ba40f44e56952",
+      "project": "abstractions"
+    },
+    {
+      "name": "ColorTransfer",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorTransfer.cs",
+      "page": "api/abstractions/enums-colortransfer",
+      "pageZh": "zh/api/abstractions/enums-colortransfer",
+      "symbol": "LingFan.Media.Abstractions.ColorTransfer",
+      "members": [
+        "Unspecified",
+        "Linear",
+        "SdrVideo",
+        "St2084",
+        "Hlg"
+      ],
+      "sourceHash": "7a439875c53fe9e89241d8f828c5cc8aea637ab1f279dc9df54700f1b6faa81f",
+      "project": "abstractions"
+    },
+    {
+      "name": "ContainerFormat",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ContainerFormat.cs",
+      "page": "api/abstractions/enums-containerformat",
+      "pageZh": "zh/api/abstractions/enums-containerformat",
+      "symbol": "LingFan.Media.Abstractions.ContainerFormat",
+      "members": [
+        "MP4",
+        "MKV",
+        "AVI",
+        "TS",
+        "WebM",
+        "FLV",
+        "Unknown"
+      ],
+      "sourceHash": "8e8aba9a01026c091466926ada0cae19d77e6ce2159e9fc14c4f0107d490b2c3",
+      "project": "abstractions"
+    },
+    {
+      "name": "DecodePreferencePolicy",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/DecodePreferencePolicy.cs",
+      "page": "api/abstractions/models-settings-decodepreferencepolicy",
+      "pageZh": "zh/api/abstractions/models-settings-decodepreferencepolicy",
+      "symbol": "LingFan.Media.Abstractions.DecodePreferencePolicy",
+      "members": [
+        "ComputeScore",
+        "ExceedsSoftwareDecodeCapability",
+        "BitDepthOf"
+      ],
+      "sourceHash": "61bd4dcb929667b877df8010311596b792af971ffc9bda9fb2bc6c83b8a33fbc",
+      "project": "abstractions"
+    },
+    {
+      "name": "GPUApiType",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/GPUApiType.cs",
+      "page": "api/abstractions/enums-gpuapitype",
+      "pageZh": "zh/api/abstractions/enums-gpuapitype",
+      "symbol": "LingFan.Media.Abstractions.GPUApiType",
+      "members": [
+        "D3D11",
+        "Vulkan",
+        "Metal",
+        "OpenGL"
+      ],
+      "sourceHash": "7bb4ec8120e3446d7eec68b6f88e3a49ba2eebe15c1fa0ac2326d89a476a82b9",
+      "project": "abstractions"
+    },
+    {
+      "name": "GpuDeviceCapabilities",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/GpuDeviceCapabilities.cs",
+      "page": "api/abstractions/models-gpu-gpudevicecapabilities",
+      "pageZh": "zh/api/abstractions/models-gpu-gpudevicecapabilities",
+      "symbol": "LingFan.Media.Abstractions.GpuDeviceCapabilities",
+      "members": [
+        "GpuDeviceCapabilities",
+        "DeviceName",
+        "DedicatedVideoMemory",
+        "SharedSystemMemory",
+        "MaxTextureSize",
+        "SupportsComputeShaders",
+        "SupportsHardwareDecode",
+        "FeatureLevel"
+      ],
+      "sourceHash": "20b603b0b63c962d4d65bacf04efce781ecfc04a4c44bac4228945a104d7fe26",
+      "project": "abstractions"
+    },
+    {
+      "name": "GpuDeviceLostException",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Exceptions/GpuDeviceLostException.cs",
+      "page": "api/abstractions/exceptions-gpudevicelostexception",
+      "pageZh": "zh/api/abstractions/exceptions-gpudevicelostexception",
+      "symbol": "LingFan.Media.Abstractions.GpuDeviceLostException",
+      "members": [
+        "GpuDeviceLostException",
+        "GpuDeviceLostException",
+        "GpuDeviceLostException"
+      ],
+      "sourceHash": "635f79c13436914c434e5d58f0c9ccf61a0cb76ccef193a2167df473daa15d61",
+      "project": "abstractions"
+    },
+    {
+      "name": "GpuFrameImportKind",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuFrameProducer.cs",
+      "page": "api/abstractions/interfaces-frames-igpuframeproducer",
+      "pageZh": "zh/api/abstractions/interfaces-frames-igpuframeproducer",
+      "symbol": "LingFan.Media.Abstractions.GpuFrameImportKind",
+      "members": [
+        "Unknown",
+        "D3D11SharedHandle",
+        "LinuxDmaBufFd",
+        "AndroidHardwareBuffer",
+        "IOSurface",
+        "VulkanImage"
+      ],
+      "sourceHash": "4d840373e19f4fb4730860f2f8dcbcb97b65757fdc6ef55364c94b8f79ffcce6",
+      "project": "abstractions"
+    },
+    {
+      "name": "GpuFrameImportSource",
+      "kind": "struct",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuFrameProducer.cs",
+      "page": "api/abstractions/interfaces-frames-igpuframeproducer",
+      "pageZh": "zh/api/abstractions/interfaces-frames-igpuframeproducer",
+      "symbol": "LingFan.Media.Abstractions.GpuFrameImportSource",
+      "members": [
+        "GpuFrameImportSource",
+        "Kind",
+        "Handle",
+        "Width",
+        "Height",
+        "Format",
+        "SubresourceIndex",
+        "ArrayLayers",
+        "DrmModifier",
+        "DrmFourcc",
+        "PlaneCount",
+        "PlaneFds",
+        "PlaneOffsets",
+        "PlanePitches"
+      ],
+      "sourceHash": "4d840373e19f4fb4730860f2f8dcbcb97b65757fdc6ef55364c94b8f79ffcce6",
+      "project": "abstractions"
+    },
+    {
+      "name": "GpuTextureReadback",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/GpuTextureReadback.cs",
+      "page": "api/abstractions/models-frames-gputexturereadback",
+      "pageZh": "zh/api/abstractions/models-frames-gputexturereadback",
+      "symbol": "LingFan.Media.Abstractions.GpuTextureReadback",
+      "members": [
+        "Width",
+        "Height",
+        "Format",
+        "Data",
+        "Stride",
+        "GpuTextureReadback",
+        "GpuTextureReadback",
+        "Dispose"
+      ],
+      "sourceHash": "8ae1a1f3ae8a4ac5ad2bc7a9ad007c9bc74ce65656dd4e6e5c6ec0c1610edd39",
+      "project": "abstractions"
+    },
+    {
+      "name": "IAudioDecoder",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioDecoder.cs",
+      "page": "api/abstractions/interfaces-decoders-iaudiodecoder",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiodecoder",
+      "symbol": "LingFan.Media.Abstractions.IAudioDecoder",
+      "members": [
+        "Initialize",
+        "DecodeAsync",
+        "FlushAsync",
+        "Reset",
+        "Codec",
+        "OutputSampleRate",
+        "OutputChannels"
+      ],
+      "sourceHash": "cc5bd1ba5303aa3c3ace80c247cfdcfc06bf4577d61bb161f84af81c3ae0be68",
+      "project": "abstractions"
+    },
+    {
+      "name": "IAudioDecoderFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioDecoderFactory.cs",
+      "page": "api/abstractions/interfaces-decoders-iaudiodecoderfactory",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiodecoderfactory",
+      "symbol": "LingFan.Media.Abstractions.IAudioDecoderFactory",
+      "members": [
+        "Create",
+        "CreateAsync"
+      ],
+      "sourceHash": "0310cb7e48a766a3abffa10d5bb2ddc3bbd969114c18e31b1701bfa5e2edd3f1",
+      "project": "abstractions"
+    },
+    {
+      "name": "IAudioEngine",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioEngine.cs",
+      "page": "api/abstractions/interfaces-outputs-iaudioengine",
+      "pageZh": "zh/api/abstractions/interfaces-outputs-iaudioengine",
+      "symbol": "LingFan.Media.Abstractions.IAudioEngine",
+      "members": [
+        "IsWarm",
+        "Warmup",
+        "WarmupAsync"
+      ],
+      "sourceHash": "454fca0be8b3d2a6ce6428c3c45758238f052b168ac38ff6f70405b6bc837030",
+      "project": "abstractions"
+    },
+    {
+      "name": "IAudioOutput",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioOutput.cs",
+      "page": "api/abstractions/interfaces-outputs-iaudiooutput",
+      "pageZh": "zh/api/abstractions/interfaces-outputs-iaudiooutput",
+      "symbol": "LingFan.Media.Abstractions.IAudioOutput",
+      "members": [
+        "Initialize",
+        "Submit",
+        "Pause",
+        "Resume",
+        "BeginStreamingAsync",
+        "Flush",
+        "GetPlaybackPosition",
+        "GetPlaybackPositionDirect",
+        "ResetPlaybackClock",
+        "Latency",
+        "Volume"
+      ],
+      "sourceHash": "280634a175484501a737092d254ad584a12c32a51425672beec4d1f98fbd3fa9",
+      "project": "abstractions"
+    },
+    {
+      "name": "IAudioOutputFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioOutputFactory.cs",
+      "page": "api/abstractions/interfaces-outputs-iaudiooutputfactory",
+      "pageZh": "zh/api/abstractions/interfaces-outputs-iaudiooutputfactory",
+      "symbol": "LingFan.Media.Abstractions.IAudioOutputFactory",
+      "members": [
+        "Create"
+      ],
+      "sourceHash": "93549672baef7457bad5f1fe04d8294bbb736f33e664a6de1bec7d40859ce1f5",
+      "project": "abstractions"
+    },
+    {
+      "name": "IAudioSourceFormatAware",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioSourceFormatAware.cs",
+      "page": "api/abstractions/interfaces-decoders-iaudiosourceformataware",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiosourceformataware",
+      "symbol": "LingFan.Media.Abstractions.IAudioSourceFormatAware",
+      "members": [
+        "SetSourceFormat"
+      ],
+      "sourceHash": "d48ee4dfcbddd7a21f2c3c7df62a1694f2f31672be120a901bfb401d95df09af",
+      "project": "abstractions"
+    },
+    {
+      "name": "IBackendRegistry",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IBackendRegistry.cs",
+      "page": "api/abstractions/interfaces-player-ibackendregistry",
+      "pageZh": "zh/api/abstractions/interfaces-player-ibackendregistry",
+      "symbol": "LingFan.Media.Abstractions.IBackendRegistry",
+      "members": [
+        "Backends"
+      ],
+      "sourceHash": "45d7701e0bf95bd222e0a4d3c70464b96c4d37667e510bdf12cf3502fc201fe9",
+      "project": "abstractions"
+    },
+    {
+      "name": "IBatchAudioSubmit",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IBatchAudioSubmit.cs",
+      "page": "api/abstractions/interfaces-outputs-ibatchaudiosubmit",
+      "pageZh": "zh/api/abstractions/interfaces-outputs-ibatchaudiosubmit",
+      "symbol": "LingFan.Media.Abstractions.IBatchAudioSubmit",
+      "members": [
+        "SubmitBatch",
+        "SubmitBatch"
+      ],
+      "sourceHash": "fdb269a764ea8fac8df086d4370a934f105162d5aa2db404cd4157b090ff6909",
+      "project": "abstractions"
+    },
+    {
+      "name": "IBufferManager",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IBufferManager.cs",
+      "page": "api/abstractions/interfaces-core-ibuffermanager",
+      "pageZh": "zh/api/abstractions/interfaces-core-ibuffermanager",
+      "symbol": "LingFan.Media.Abstractions.IBufferManager",
+      "members": [
+        "BufferedDuration",
+        "BufferedBytes",
+        "IsReady",
+        "State",
+        "TargetDuration",
+        "BufferProgressChanged",
+        "StartAsync",
+        "Stop",
+        "Clear"
+      ],
+      "sourceHash": "8ef392acda6754d2616481c9e0f4851b584fc1fcee0a5024503421c812b7caea",
+      "project": "abstractions"
+    },
+    {
+      "name": "ICodecRegistry",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Codecs/ICodecRegistry.cs",
+      "page": "api/abstractions/interfaces-codecs-icodecregistry",
+      "pageZh": "zh/api/abstractions/interfaces-codecs-icodecregistry",
+      "symbol": "LingFan.Media.Abstractions.ICodecRegistry",
+      "members": [
+        "IsCodecSupported",
+        "IsCodecSupported",
+        "GetDefaultVideoCodec",
+        "GetDefaultAudioCodec"
+      ],
+      "sourceHash": "3daf48070cb17122ed10eb05b8bc3e4c9ea62d2b46741de34431cd1f9779fced",
+      "project": "abstractions"
+    },
+    {
+      "name": "IDisposableFrame",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IDisposableFrame.cs",
+      "page": "api/abstractions/interfaces-frames-idisposableframe",
+      "pageZh": "zh/api/abstractions/interfaces-frames-idisposableframe",
+      "symbol": "LingFan.Media.Abstractions.IDisposableFrame",
+      "members": [
+        "IsDisposed"
+      ],
+      "sourceHash": "85291f52482f7a7e27a1c9dedcac7b1f7cfa008cbfa6ab121b37032fbebb13be",
+      "project": "abstractions"
+    },
+    {
+      "name": "IFormatDetector",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Detection/IFormatDetector.cs",
+      "page": "api/abstractions/interfaces-detection-iformatdetector",
+      "pageZh": "zh/api/abstractions/interfaces-detection-iformatdetector",
+      "symbol": "LingFan.Media.Abstractions.IFormatDetector",
+      "members": [
+        "DetectProfile",
+        "DetectProfileAsync"
+      ],
+      "sourceHash": "7bbf5730376f731b3bccb63d64164b9ab76d5f93531251660e9b601c946d1c30",
+      "project": "abstractions"
+    },
+    {
+      "name": "IFrameChannel",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IFrameChannel.cs",
+      "page": "api/abstractions/interfaces-core-iframechannel",
+      "pageZh": "zh/api/abstractions/interfaces-core-iframechannel",
+      "symbol": "LingFan.Media.Abstractions.IFrameChannel",
+      "members": [
+        "Subscribe",
+        "Unsubscribe",
+        "Emit"
+      ],
+      "sourceHash": "73772ef8df5385f20780cf039b21442d668ca4ba386c1cbf2874d93f4d55c56b",
+      "project": "abstractions"
+    },
+    {
+      "name": "IFramePool",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFramePool.cs",
+      "page": "api/abstractions/interfaces-frames-iframepool",
+      "pageZh": "zh/api/abstractions/interfaces-frames-iframepool",
+      "symbol": "LingFan.Media.Abstractions.IFramePool",
+      "members": [
+        "Rent",
+        "Return"
+      ],
+      "sourceHash": "595683b137b8a79d35206440be93950ada58110de476bf7af4444e64811a430f",
+      "project": "abstractions"
+    },
+    {
+      "name": "IFramePoolAware",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFramePoolAware.cs",
+      "page": "api/abstractions/interfaces-frames-iframepoolaware",
+      "pageZh": "zh/api/abstractions/interfaces-frames-iframepoolaware",
+      "symbol": "LingFan.Media.Abstractions.IFramePoolAware",
+      "members": [
+        "SetFramePool"
+      ],
+      "sourceHash": "5f27175c571ce4bd45eb634a067016b81b8500992a01995e02cfddfec3709c46",
+      "project": "abstractions"
+    },
+    {
+      "name": "IFrameResource",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFrameResource.cs",
+      "page": "api/abstractions/interfaces-frames-iframeresource",
+      "pageZh": "zh/api/abstractions/interfaces-frames-iframeresource",
+      "symbol": "LingFan.Media.Abstractions.IFrameResource",
+      "members": [
+        "Width",
+        "Height",
+        "Format"
+      ],
+      "sourceHash": "45400e8388271e8ee27ec95e9558c68cdb1b6ac1bda7afcf8b0a9c846e5b99ab",
+      "project": "abstractions"
+    },
+    {
+      "name": "IFrameSink",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IFrameChannel.cs",
+      "page": "api/abstractions/interfaces-core-iframechannel",
+      "pageZh": "zh/api/abstractions/interfaces-core-iframechannel",
+      "symbol": "LingFan.Media.Abstractions.IFrameSink",
+      "members": [
+        "OnFrame"
+      ],
+      "sourceHash": "73772ef8df5385f20780cf039b21442d668ca4ba386c1cbf2874d93f4d55c56b",
+      "project": "abstractions"
+    },
+    {
+      "name": "IGpuDeviceContext",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/IGpuDeviceContext.cs",
+      "page": "api/abstractions/interfaces-gpu-igpudevicecontext",
+      "pageZh": "zh/api/abstractions/interfaces-gpu-igpudevicecontext",
+      "symbol": "LingFan.Media.Abstractions.IGpuDeviceContext",
+      "members": [
+        "ApiType",
+        "DeviceHandle",
+        "ContextHandle",
+        "SharedDevice",
+        "SharedPhysicalDevice",
+        "VideoQueueFamilyIndex",
+        "GraphicsQueueFamilyIndex",
+        "IsInitialized",
+        "InitializeAsync",
+        "GetCapabilities"
+      ],
+      "sourceHash": "72344ec7fd8ede39f1a1a89cc2c422b01384fbf32f10bfb1b2e9d44f615bf0f1",
+      "project": "abstractions"
+    },
+    {
+      "name": "IGpuFrameProducer",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuFrameProducer.cs",
+      "page": "api/abstractions/interfaces-frames-igpuframeproducer",
+      "pageZh": "zh/api/abstractions/interfaces-frames-igpuframeproducer",
+      "symbol": "LingFan.Media.Abstractions.IGpuFrameProducer",
+      "members": [
+        "ApiType",
+        "TryImport",
+        "IsImportSupported"
+      ],
+      "sourceHash": "4d840373e19f4fb4730860f2f8dcbcb97b65757fdc6ef55364c94b8f79ffcce6",
+      "project": "abstractions"
+    },
+    {
+      "name": "IGpuTextureResource",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuTextureResource.cs",
+      "page": "api/abstractions/interfaces-frames-igputextureresource",
+      "pageZh": "zh/api/abstractions/interfaces-frames-igputextureresource",
+      "symbol": "LingFan.Media.Abstractions.IGpuTextureResource",
+      "members": [
+        "NativeTextureHandle",
+        "SubresourceIndex",
+        "ReadbackToCpu"
+      ],
+      "sourceHash": "031302e7979a6c1a19e2b012c03e319405d60e6d20850d4c260c1bbe5eeb91c8",
+      "project": "abstractions"
+    },
+    {
+      "name": "IHeadlessAudioConsumer",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Consumers/IHeadlessAudioConsumer.cs",
+      "page": "api/abstractions/interfaces-consumers-iheadlessaudioconsumer",
+      "pageZh": "zh/api/abstractions/interfaces-consumers-iheadlessaudioconsumer",
+      "symbol": "LingFan.Media.Abstractions.IHeadlessAudioConsumer",
+      "members": [
+        "Consume"
+      ],
+      "sourceHash": "46a3a8274eab578ec35914d391a31eb59129c2e5d8a6371ddac2a14fa15a2739",
+      "project": "abstractions"
+    },
+    {
+      "name": "IHeadlessFrameConsumer",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Consumers/IHeadlessFrameConsumer.cs",
+      "page": "api/abstractions/interfaces-consumers-iheadlessframeconsumer",
+      "pageZh": "zh/api/abstractions/interfaces-consumers-iheadlessframeconsumer",
+      "symbol": "LingFan.Media.Abstractions.IHeadlessFrameConsumer",
+      "members": [
+        "Consume"
+      ],
+      "sourceHash": "2b5048bf57092af9d9b21967f33e629576f0a18d55d44fd98e3ad1b06693884f",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaClock",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IMediaClock.cs",
+      "page": "api/abstractions/interfaces-core-imediaclock",
+      "pageZh": "zh/api/abstractions/interfaces-core-imediaclock",
+      "symbol": "LingFan.Media.Abstractions.IMediaClock",
+      "members": [
+        "Position",
+        "Speed",
+        "IsRunning",
+        "SyncSource",
+        "SyncThreshold",
+        "DropThreshold",
+        "Start",
+        "Pause",
+        "Reset",
+        "SeekTo",
+        "SyncTo"
+      ],
+      "sourceHash": "1e486475e9ec1089397315a7f024afd6c271596f51f3ef58fc906934ae51e1fc",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaComponent",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IMediaComponent.cs",
+      "page": "api/abstractions/interfaces-core-imediacomponent",
+      "pageZh": "zh/api/abstractions/interfaces-core-imediacomponent",
+      "symbol": "LingFan.Media.Abstractions.IMediaComponent",
+      "members": [
+        "InitializeAsync"
+      ],
+      "sourceHash": "0ad18483bd74af2d1c3f650df007e7db01eb09f0e682d561f8eaca9bfeff1248",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaDemuxer",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Demuxer/IMediaDemuxer.cs",
+      "page": "api/abstractions/interfaces-demuxer-imediademuxer",
+      "pageZh": "zh/api/abstractions/interfaces-demuxer-imediademuxer",
+      "symbol": "LingFan.Media.Abstractions.IMediaDemuxer",
+      "members": [
+        "OpenAsync",
+        "Tracks",
+        "Metadata",
+        "ReadPacketAsync",
+        "SeekAsync",
+        "Close"
+      ],
+      "sourceHash": "c3eb92ef1b26652689c7ca6587390c673874413aaaabfc505c7dc15ddbf629da",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaDemuxerFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Demuxer/IMediaDemuxerFactory.cs",
+      "page": "api/abstractions/interfaces-demuxer-imediademuxerfactory",
+      "pageZh": "zh/api/abstractions/interfaces-demuxer-imediademuxerfactory",
+      "symbol": "LingFan.Media.Abstractions.IMediaDemuxerFactory",
+      "members": [
+        "Create",
+        "CreateAsync"
+      ],
+      "sourceHash": "c3e0922494e563ffe53e585c32c6e4918e4c63e8c5af65e584c0d51afb76b8f1",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaPlayer",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs",
+      "page": "api/abstractions/interfaces-player-imediaplayer",
+      "pageZh": "zh/api/abstractions/interfaces-player-imediaplayer",
+      "symbol": "LingFan.Media.Abstractions.IMediaPlayer",
+      "members": [
+        "OpenAsync",
+        "PlayAsync",
+        "PauseAsync",
+        "StopAsync",
+        "SeekAsync",
+        "State",
+        "Position",
+        "Duration",
+        "Volume",
+        "IsMuted",
+        "PlaybackRate",
+        "Mode",
+        "Session",
+        "StateChanged",
+        "ErrorOccurred",
+        "PositionChanged",
+        "SubtitleReceived",
+        "AudioDataAvailable",
+        "VideoFrameAvailable",
+        "VideoDroppedFrames"
+      ],
+      "sourceHash": "309e5e0db6e029748a760875b4262ad88b35829b8113f0ca1523f3af07a361d9",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaPlayerFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayerFactory.cs",
+      "page": "api/abstractions/interfaces-player-imediaplayerfactory",
+      "pageZh": "zh/api/abstractions/interfaces-player-imediaplayerfactory",
+      "symbol": "LingFan.Media.Abstractions.IMediaPlayerFactory",
+      "members": [
+        "Create",
+        "Create"
+      ],
+      "sourceHash": "65d20a733b51377c7c5ee8fbd66b459d4931d3ef70585dbc34c5f87422c30074",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaSession",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaSession.cs",
+      "page": "api/abstractions/interfaces-player-imediasession",
+      "pageZh": "zh/api/abstractions/interfaces-player-imediasession",
+      "symbol": "LingFan.Media.Abstractions.IMediaSession",
+      "members": [
+        "Source",
+        "Metadata",
+        "VideoTracks",
+        "AudioTracks",
+        "SubtitleTracks",
+        "SelectedVideoTrack",
+        "SelectedAudioTrack",
+        "SelectedSubtitleTrack",
+        "Duration",
+        "IsLive",
+        "CloseAsync"
+      ],
+      "sourceHash": "76dec8f8bbc777c8f25637ffc6daa425399a215660b7775f4be70136149c7615",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaSource",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaSource.cs",
+      "page": "api/abstractions/interfaces-source-imediasource",
+      "pageZh": "zh/api/abstractions/interfaces-source-imediasource",
+      "symbol": "LingFan.Media.Abstractions.IMediaSource",
+      "members": [
+        "Type",
+        "Identifier"
+      ],
+      "sourceHash": "73e2edc669366eef0bf88dfed0d13f201e771518e9efee87af070190c59d6e26",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaSourceMetadata",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaSourceMetadata.cs",
+      "page": "api/abstractions/interfaces-source-imediasourcemetadata",
+      "pageZh": "zh/api/abstractions/interfaces-source-imediasourcemetadata",
+      "symbol": "LingFan.Media.Abstractions.IMediaSourceMetadata",
+      "members": [
+        "Name",
+        "ContentType",
+        "IsLive",
+        "ExtraFields"
+      ],
+      "sourceHash": "e231bf3583eb4cc6e99454f8c623c58efcd0392b12efe5c1f402e141a08cb0e9",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaStream",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaStream.cs",
+      "page": "api/abstractions/interfaces-source-imediastream",
+      "pageZh": "zh/api/abstractions/interfaces-source-imediastream",
+      "symbol": "LingFan.Media.Abstractions.IMediaStream",
+      "members": [
+        "Read",
+        "ReadAsync",
+        "ConnectAsync",
+        "Length",
+        "Position",
+        "CanSeek",
+        "Location",
+        "Seek",
+        "SuggestedOpenHeaders",
+        "Close"
+      ],
+      "sourceHash": "d933a3c61a13b05eaaf1d4f6c27bfd745e6844b67f09b895176754dfda7dda1e",
+      "project": "abstractions"
+    },
+    {
+      "name": "IMediaStreamFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaStreamFactory.cs",
+      "page": "api/abstractions/interfaces-source-imediastreamfactory",
+      "pageZh": "zh/api/abstractions/interfaces-source-imediastreamfactory",
+      "symbol": "LingFan.Media.Abstractions.IMediaStreamFactory",
+      "members": [
+        "Create",
+        "CreateAsync"
+      ],
+      "sourceHash": "44d39324cea9682374ab9ac6948d56cd72cffa569906ab4eb6f13173568ff593",
+      "project": "abstractions"
+    },
+    {
+      "name": "IRealtimePacedOutput",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/IRealtimePacedOutput.cs",
+      "page": "api/abstractions/interfaces-irealtimepacedoutput",
+      "pageZh": "zh/api/abstractions/interfaces-irealtimepacedoutput",
+      "symbol": "LingFan.Media.Abstractions.IRealtimePacedOutput",
+      "members": [
+        "PaceRealTime"
+      ],
+      "sourceHash": "adae71aaa544dad6f9210d0fd89d04b2263b2e7947221071ccb6d80265dc3dac",
+      "project": "abstractions"
+    },
+    {
+      "name": "IRendererHealth",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IRendererHealth.cs",
+      "page": "api/abstractions/interfaces-renderers-irendererhealth",
+      "pageZh": "zh/api/abstractions/interfaces-renderers-irendererhealth",
+      "symbol": "LingFan.Media.Abstractions.IRendererHealth",
+      "members": [
+        "Unhealthy"
+      ],
+      "sourceHash": "a79116dd89f7f6761828adb06a3f299f5d2d8715daf285ebd2f127d9bf1aa40d",
+      "project": "abstractions"
+    },
+    {
+      "name": "IRenderTarget",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IRenderTarget.cs",
+      "page": "api/abstractions/interfaces-renderers-irendertarget",
+      "pageZh": "zh/api/abstractions/interfaces-renderers-irendertarget",
+      "symbol": "LingFan.Media.Abstractions.IRenderTarget",
+      "members": [
+        "Type",
+        "HandleType",
+        "NativeHandle",
+        "Width",
+        "Height",
+        "Scale"
+      ],
+      "sourceHash": "ca02f58fa0eb21894a28eecda87e7e0638bd047fd6a7424e23827b0997304b95",
+      "project": "abstractions"
+    },
+    {
+      "name": "ISharedGpuSurfaceSource",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/ISharedGpuSurfaceSource.cs",
+      "page": "api/abstractions/interfaces-gpu-isharedgpusurfacesource",
+      "pageZh": "zh/api/abstractions/interfaces-gpu-isharedgpusurfacesource",
+      "symbol": "LingFan.Media.Abstractions.ISharedGpuSurfaceSource",
+      "members": [
+        "HandleKind",
+        "SyncMode",
+        "ConsumerAcquireKey",
+        "ConsumerReleaseKey",
+        "Semaphores",
+        "TryWriteFrame"
+      ],
+      "sourceHash": "ec4ed56c49de30f5b69591087f24977cb0339c9f0ea19fc172aa3c59c1e19642",
+      "project": "abstractions"
+    },
+    {
+      "name": "ISharedGpuSurfaceSourceFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/ISharedGpuSurfaceSource.cs",
+      "page": "api/abstractions/interfaces-gpu-isharedgpusurfacesource",
+      "pageZh": "zh/api/abstractions/interfaces-gpu-isharedgpusurfacesource",
+      "symbol": "LingFan.Media.Abstractions.ISharedGpuSurfaceSourceFactory",
+      "members": [
+        "HandleKind",
+        "IsAvailable",
+        "Create"
+      ],
+      "sourceHash": "ec4ed56c49de30f5b69591087f24977cb0339c9f0ea19fc172aa3c59c1e19642",
+      "project": "abstractions"
+    },
+    {
+      "name": "ISubtitleDecoder",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/ISubtitleDecoder.cs",
+      "page": "api/abstractions/interfaces-decoders-isubtitledecoder",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-isubtitledecoder",
+      "symbol": "LingFan.Media.Abstractions.ISubtitleDecoder",
+      "members": [
+        "DecodeAsync",
+        "FlushAsync",
+        "Reset",
+        "SubtitleCodec"
+      ],
+      "sourceHash": "e1165e982666c0bf528d2405543ab774fe75f9f1fbe51b4eecea25c0cb16d6ea",
+      "project": "abstractions"
+    },
+    {
+      "name": "ISubtitleDecoderFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/ISubtitleDecoderFactory.cs",
+      "page": "api/abstractions/interfaces-decoders-isubtitledecoderfactory",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-isubtitledecoderfactory",
+      "symbol": "LingFan.Media.Abstractions.ISubtitleDecoderFactory",
+      "members": [
+        "Create",
+        "CreateAsync"
+      ],
+      "sourceHash": "c2579ff8955b1994b6fbe47f8164e847baf3b567a8f32ac8f402f13125ad7afe",
+      "project": "abstractions"
+    },
+    {
+      "name": "IVaApiExport",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IVaApiExport.cs",
+      "page": "api/abstractions/interfaces-frames-ivaapiexport",
+      "pageZh": "zh/api/abstractions/interfaces-frames-ivaapiexport",
+      "symbol": "LingFan.Media.Abstractions.IVaApiExport",
+      "members": [
+        "TryExportSurfaceToDmaBuf"
+      ],
+      "sourceHash": "5790536953180b61d7ffc4dcaaf3fce03740d2aef4386e1de446138ab66e7910",
+      "project": "abstractions"
+    },
+    {
+      "name": "IVideoDecoder",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IVideoDecoder.cs",
+      "page": "api/abstractions/interfaces-decoders-ivideodecoder",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-ivideodecoder",
+      "symbol": "LingFan.Media.Abstractions.IVideoDecoder",
+      "members": [
+        "Initialize",
+        "DecodeAsync",
+        "FlushAsync",
+        "Reset",
+        "Codec",
+        "IsHardwareAccelerated"
+      ],
+      "sourceHash": "694c8136e9798d36ef45b43de65272806f0e3c5b6c005d7fc48d96e8c4b26442",
+      "project": "abstractions"
+    },
+    {
+      "name": "IVideoDecoderFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IVideoDecoderFactory.cs",
+      "page": "api/abstractions/interfaces-decoders-ivideodecoderfactory",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-ivideodecoderfactory",
+      "symbol": "LingFan.Media.Abstractions.IVideoDecoderFactory",
+      "members": [
+        "Create",
+        "CreateAsync"
+      ],
+      "sourceHash": "6344cb9bf512ef3a17e3452f29ec3ce41f548ec4a9eaa0ab5656c6c39f94761c",
+      "project": "abstractions"
+    },
+    {
+      "name": "IVideoRenderer",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IVideoRenderer.cs",
+      "page": "api/abstractions/interfaces-renderers-ivideorenderer",
+      "pageZh": "zh/api/abstractions/interfaces-renderers-ivideorenderer",
+      "symbol": "LingFan.Media.Abstractions.IVideoRenderer",
+      "members": [
+        "Attach",
+        "Detach",
+        "Present",
+        "Clear",
+        "PresentationLatency"
+      ],
+      "sourceHash": "c6190da9d98604aff80a8dbee7fef51623899b2c8747c9f54d23ad36cef30cf0",
+      "project": "abstractions"
+    },
+    {
+      "name": "IVideoRendererFactory",
+      "kind": "interface",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IVideoRendererFactory.cs",
+      "page": "api/abstractions/interfaces-renderers-ivideorendererfactory",
+      "pageZh": "zh/api/abstractions/interfaces-renderers-ivideorendererfactory",
+      "symbol": "LingFan.Media.Abstractions.IVideoRendererFactory",
+      "members": [
+        "Create"
+      ],
+      "sourceHash": "6501dccc3c69b5c0197de61e087df2370e8e2063003a49e2c7bb38decbc92fcf",
+      "project": "abstractions"
+    },
+    {
+      "name": "LogEventArgs",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/LogEventArgs.cs",
+      "page": "api/abstractions/events-logeventargs",
+      "pageZh": "zh/api/abstractions/events-logeventargs",
+      "symbol": "LingFan.Media.Abstractions.LogEventArgs",
+      "members": [
+        "Level",
+        "Message",
+        "Source",
+        "Exception",
+        "LogEventArgs"
+      ],
+      "sourceHash": "67d90ae98df9396b1e5bb7955e83d9d268b2a1f9c1076eaf19d8a9414d7f7a2e",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaBackendUnsupportedException",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/MediaBackendUnsupportedException.cs",
+      "page": "api/abstractions/interfaces-player-mediabackendunsupportedexception",
+      "pageZh": "zh/api/abstractions/interfaces-player-mediabackendunsupportedexception",
+      "symbol": "LingFan.Media.Abstractions.MediaBackendUnsupportedException",
+      "members": [
+        "MediaBackendUnsupportedException",
+        "MediaBackendUnsupportedException"
+      ],
+      "sourceHash": "676f56568f2405e4a048f108a9783322bb5238d1af447b7c043dfa0434fec2a5",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaCookie",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/MediaCookie.cs",
+      "page": "api/abstractions/models-mediacookie",
+      "pageZh": "zh/api/abstractions/models-mediacookie",
+      "symbol": "LingFan.Media.Abstractions.MediaCookie",
+      "members": [
+        "Name",
+        "Value",
+        "Domain",
+        "Path",
+        "Secure",
+        "HttpOnly",
+        "MediaCookie"
+      ],
+      "sourceHash": "9d17dd76f2f1a5834f985521699b99321f7f848cdeddd616a6b46fbade36e799",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaErrorCode",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/MediaErrorCode.cs",
+      "page": "api/abstractions/enums-mediaerrorcode",
+      "pageZh": "zh/api/abstractions/enums-mediaerrorcode",
+      "symbol": "LingFan.Media.Abstractions.MediaErrorCode",
+      "members": [
+        "None",
+        "SourceNotFound",
+        "SourceOpenFailed",
+        "FormatNotSupported",
+        "CodecNotSupported",
+        "DecoderError",
+        "RendererError",
+        "AudioOutputError",
+        "NetworkError",
+        "BufferUnderrun",
+        "SeekFailed",
+        "OutOfMemory",
+        "GPUError",
+        "Unknown"
+      ],
+      "sourceHash": "33c0c36766b8601244d768fc91c2020e90787906224f749385a336d3e01dd046",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaErrorEventArgs",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/MediaErrorEventArgs.cs",
+      "page": "api/abstractions/events-mediaerroreventargs",
+      "pageZh": "zh/api/abstractions/events-mediaerroreventargs",
+      "symbol": "LingFan.Media.Abstractions.MediaErrorEventArgs",
+      "members": [
+        "ErrorCode",
+        "Message",
+        "Exception",
+        "IsFatal",
+        "Recoverable",
+        "MediaErrorEventArgs"
+      ],
+      "sourceHash": "f38c319ec6fcd3866d2e0f838fae876f2319f8792121ca911ef784ee2b93a06f",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaFormatProfile",
+      "kind": "struct",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/MediaFormatProfile.cs",
+      "page": "api/abstractions/models-mediaformatprofile",
+      "pageZh": "zh/api/abstractions/models-mediaformatprofile",
+      "symbol": "LingFan.Media.Abstractions.MediaFormatProfile",
+      "members": [
+        "Container",
+        "Video",
+        "MediaFormatProfile"
+      ],
+      "sourceHash": "9087062e34dc09429a099282360e6d02654544f93913faa31b0c3830e5e23923",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaMetadata",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/MediaMetadata.cs",
+      "page": "api/abstractions/models-mediametadata",
+      "pageZh": "zh/api/abstractions/models-mediametadata",
+      "symbol": "LingFan.Media.Abstractions.MediaMetadata",
+      "members": [
+        "Title",
+        "Artist",
+        "Album",
+        "Year",
+        "Genre",
+        "Duration",
+        "ContainerFormat",
+        "ExtraFields"
+      ],
+      "sourceHash": "e332714a4125727b3b78db3fa2a62d5598ec785b3786942a3be96204ca1bea56",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaPacket",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/MediaPacket.cs",
+      "page": "api/abstractions/models-frames-mediapacket",
+      "pageZh": "zh/api/abstractions/models-frames-mediapacket",
+      "symbol": "LingFan.Media.Abstractions.MediaPacket",
+      "members": [
+        "TrackIndex",
+        "Data",
+        "Timestamp",
+        "Duration",
+        "KeyFrame",
+        "Width",
+        "Height",
+        "Stride",
+        "SampleRate",
+        "Channels",
+        "Format",
+        "_decodedFrameResource",
+        "_disposed",
+        "MediaPacket",
+        "TakeDecodedFrameResource",
+        "Dispose"
+      ],
+      "sourceHash": "d378f98268c0ebf6089507adddacf670d2907be7ff081c3d700c05d9f123f611",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaPlayerOptions",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/MediaPlayerOptions.cs",
+      "page": "api/abstractions/models-settings-mediaplayeroptions",
+      "pageZh": "zh/api/abstractions/models-settings-mediaplayeroptions",
+      "symbol": "LingFan.Media.Abstractions.MediaPlayerOptions",
+      "members": [
+        "DefaultVolume",
+        "DefaultMuted",
+        "DefaultPlaybackRate",
+        "EnableHardwareAcceleration",
+        "SoftwareDecodeComplexityThreshold",
+        "VideoFrameQueueCapacity",
+        "AudioSampleQueueCapacity",
+        "LocalBufferTarget",
+        "NetworkBufferTarget",
+        "AudioOutputSampleRate",
+        "AudioOutputChannels",
+        "AudioOutputSampleFormat"
+      ],
+      "sourceHash": "f69f169e2dc7874b607f3c5e45547d423c7ddffd7fa49917f2da2b399cbaf80e",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaSourceType",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/MediaSourceType.cs",
+      "page": "api/abstractions/enums-mediasourcetype",
+      "pageZh": "zh/api/abstractions/enums-mediasourcetype",
+      "symbol": "LingFan.Media.Abstractions.MediaSourceType",
+      "members": [
+        "File",
+        "Network",
+        "Stream"
+      ],
+      "sourceHash": "da518175ed1d0172b0f7220fff68e9747e8aa2df5994bbe828f5e7b0ab805c1e",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaState",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/MediaState.cs",
+      "page": "api/abstractions/enums-mediastate",
+      "pageZh": "zh/api/abstractions/enums-mediastate",
+      "symbol": "LingFan.Media.Abstractions.MediaState",
+      "members": [
+        "Idle",
+        "Opening",
+        "Buffering",
+        "Playing",
+        "Paused",
+        "Stopped",
+        "Ended",
+        "Error"
+      ],
+      "sourceHash": "1ca39dda8ab52abe8971f8d4418559e43c2c844d233f8ea946da3008754414fa",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaStateChangedEventArgs",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/MediaStateChangedEventArgs.cs",
+      "page": "api/abstractions/events-mediastatechangedeventargs",
+      "pageZh": "zh/api/abstractions/events-mediastatechangedeventargs",
+      "symbol": "LingFan.Media.Abstractions.MediaStateChangedEventArgs",
+      "members": [
+        "OldState",
+        "NewState",
+        "MediaStateChangedEventArgs"
+      ],
+      "sourceHash": "f5cfbb6e3fe24b96bd8f9318f4bf49decff3967ce548c4322d49bda900c187dd",
+      "project": "abstractions"
+    },
+    {
+      "name": "MediaTrack",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/MediaTrack.cs",
+      "page": "api/abstractions/models-tracks-mediatrack",
+      "pageZh": "zh/api/abstractions/models-tracks-mediatrack",
+      "symbol": "LingFan.Media.Abstractions.MediaTrack",
+      "members": [
+        "Index",
+        "Type",
+        "VideoCodec",
+        "AudioCodec",
+        "SubtitleCodec",
+        "Language",
+        "Title",
+        "IsDefault",
+        "BitRate",
+        "VideoInfo",
+        "AudioInfo"
+      ],
+      "sourceHash": "bc7635d00cca7c2e3781756046757aecb576a794d4a15298566f4b6f4f8549d9",
+      "project": "abstractions"
+    },
+    {
+      "name": "PixelFormat",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/PixelFormat.cs",
+      "page": "api/abstractions/enums-pixelformat",
+      "pageZh": "zh/api/abstractions/enums-pixelformat",
+      "symbol": "LingFan.Media.Abstractions.PixelFormat",
+      "members": [
+        "YUV420P",
+        "YUV422P",
+        "YUV444P",
+        "NV12",
+        "NV21",
+        "P010",
+        "YUV420P10",
+        "BGRA32",
+        "RGBA32",
+        "RGB24"
+      ],
+      "sourceHash": "30c05c2bd6705a0b2d2a9c99cdc8296ec48bc4618c48e883fc10d1d166dfcbbd",
+      "project": "abstractions"
+    },
+    {
+      "name": "ProcessingMode",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/ProcessingMode.cs",
+      "page": "api/abstractions/models-processingmode",
+      "pageZh": "zh/api/abstractions/models-processingmode",
+      "symbol": "LingFan.Media.Abstractions.ProcessingMode",
+      "members": [
+        "RealTime",
+        "Fastest"
+      ],
+      "sourceHash": "5c5075d511618a3c5b9f9e8805c6f6698f0b2bee823ee24048aabc78aa439063",
+      "project": "abstractions"
+    },
+    {
+      "name": "Rational",
+      "kind": "struct",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Rational.cs",
+      "page": "api/abstractions/models-rational",
+      "pageZh": "zh/api/abstractions/models-rational",
+      "symbol": "LingFan.Media.Abstractions.Rational",
+      "members": [
+        "Numerator",
+        "Denominator",
+        "Rational",
+        "ToString",
+        "ToDouble",
+        "Equals",
+        "Equals",
+        "GetHashCode"
+      ],
+      "sourceHash": "f57ed59d7517532881832203c840295c087670f5830cde384a2f244a596c4ece",
+      "project": "abstractions"
+    },
+    {
+      "name": "RenderHandleType",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/RenderHandleType.cs",
+      "page": "api/abstractions/enums-renderhandletype",
+      "pageZh": "zh/api/abstractions/enums-renderhandletype",
+      "symbol": "LingFan.Media.Abstractions.RenderHandleType",
+      "members": [
+        "None",
+        "Pointer",
+        "Texture",
+        "Surface",
+        "Context"
+      ],
+      "sourceHash": "1838596886ea39cd4430701e5226852adf5bec1989a4f9c5ded9e33ef13b62ab",
+      "project": "abstractions"
+    },
+    {
+      "name": "RenderTargetType",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/RenderTargetType.cs",
+      "page": "api/abstractions/enums-rendertargettype",
+      "pageZh": "zh/api/abstractions/enums-rendertargettype",
+      "symbol": "LingFan.Media.Abstractions.RenderTargetType",
+      "members": [
+        "Window",
+        "Texture",
+        "Offscreen",
+        "Custom"
+      ],
+      "sourceHash": "9a3824d032480373f72b29ae82f67b1f0dc79e8f12936a0f6c9bfadfc0bf4780",
+      "project": "abstractions"
+    },
+    {
+      "name": "SampleFormat",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SampleFormat.cs",
+      "page": "api/abstractions/enums-sampleformat",
+      "pageZh": "zh/api/abstractions/enums-sampleformat",
+      "symbol": "LingFan.Media.Abstractions.SampleFormat",
+      "members": [
+        "S16",
+        "S32",
+        "F32"
+      ],
+      "sourceHash": "521b90963398f081c05db3606b999f2eb484ce128411ef33b85795a4106de62c",
+      "project": "abstractions"
+    },
+    {
+      "name": "SharedGpuAdapterIdentity",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSyncModel.cs",
+      "page": "api/abstractions/models-gpu-sharedgpusyncmodel",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusyncmodel",
+      "symbol": "LingFan.Media.Abstractions.SharedGpuAdapterIdentity",
+      "members": [
+        "Unknown",
+        "SharedGpuAdapterIdentity",
+        "DeviceUuid",
+        "DeviceLuid",
+        "MatchesDeviceUuid",
+        "MatchesDeviceLuid"
+      ],
+      "sourceHash": "b10ccfa983812ca85e9a591d3bd2b1703d72fdaaf34dde75fad6a5f04ed36f57",
+      "project": "abstractions"
+    },
+    {
+      "name": "SharedGpuHandleKind",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSurfaceDescriptor.cs",
+      "page": "api/abstractions/models-gpu-sharedgpusurfacedescriptor",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusurfacedescriptor",
+      "symbol": "LingFan.Media.Abstractions.SharedGpuHandleKind",
+      "members": [
+        "D3D11TextureGlobalSharedHandle",
+        "D3D11TextureNtHandle",
+        "VulkanOpaqueNtHandle",
+        "VulkanOpaquePosixFileDescriptor",
+        "IOSurfaceRef",
+        "AndroidHardwareBuffer",
+        "VulkanNativeImage",
+        "GlTexture"
+      ],
+      "sourceHash": "12558ae45e4dd5b5b9918d679f816b31822c26ba8c500c7667ee08157f84dda8",
+      "project": "abstractions"
+    },
+    {
+      "name": "SharedGpuSemaphoreKind",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSyncModel.cs",
+      "page": "api/abstractions/models-gpu-sharedgpusyncmodel",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusyncmodel",
+      "symbol": "LingFan.Media.Abstractions.SharedGpuSemaphoreKind",
+      "members": [
+        "VulkanOpaqueNtHandle",
+        "VulkanOpaquePosixFileDescriptor",
+        "MetalSharedEvent"
+      ],
+      "sourceHash": "b10ccfa983812ca85e9a591d3bd2b1703d72fdaaf34dde75fad6a5f04ed36f57",
+      "project": "abstractions"
+    },
+    {
+      "name": "SharedGpuSourcePolicy",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSourcePolicy.cs",
+      "page": "api/abstractions/models-gpu-sharedgpusourcepolicy",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusourcepolicy",
+      "symbol": "LingFan.Media.Abstractions.SharedGpuSourcePolicy",
+      "members": [],
+      "sourceHash": "1035d9784cd2651f44f87b15a59d975ea0c44c31237618be8c0b678ef8d554c3",
+      "project": "abstractions"
+    },
+    {
+      "name": "SharedGpuSurfaceFormat",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSurfaceDescriptor.cs",
+      "page": "api/abstractions/models-gpu-sharedgpusurfacedescriptor",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusurfacedescriptor",
+      "symbol": "LingFan.Media.Abstractions.SharedGpuSurfaceFormat",
+      "members": [
+        "B8G8R8A8UNorm",
+        "R8G8B8A8UNorm"
+      ],
+      "sourceHash": "12558ae45e4dd5b5b9918d679f816b31822c26ba8c500c7667ee08157f84dda8",
+      "project": "abstractions"
+    },
+    {
+      "name": "SharedGpuSyncMode",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSyncModel.cs",
+      "page": "api/abstractions/models-gpu-sharedgpusyncmodel",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusyncmodel",
+      "symbol": "LingFan.Media.Abstractions.SharedGpuSyncMode",
+      "members": [
+        "KeyedMutex",
+        "Semaphores",
+        "None"
+      ],
+      "sourceHash": "b10ccfa983812ca85e9a591d3bd2b1703d72fdaaf34dde75fad6a5f04ed36f57",
+      "project": "abstractions"
+    },
+    {
+      "name": "SoftwareFrameResource",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/SoftwareFrameResource.cs",
+      "page": "api/abstractions/models-frames-softwareframeresource",
+      "pageZh": "zh/api/abstractions/models-frames-softwareframeresource",
+      "symbol": "LingFan.Media.Abstractions.SoftwareFrameResource",
+      "members": [
+        "Width",
+        "Height",
+        "Format",
+        "Data",
+        "ColorInfo",
+        "Stride",
+        "_disposed",
+        "SoftwareFrameResource",
+        "SoftwareFrameResource",
+        "SoftwareFrameResource",
+        "Dispose"
+      ],
+      "sourceHash": "a7777774968fafa5365b09b8e8c9d564a95afd8b49207448b02af0473c9916e0",
+      "project": "abstractions"
+    },
+    {
+      "name": "struct",
+      "kind": "record",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/VideoColorInfo.cs",
+      "page": "api/abstractions/models-frames-videocolorinfo",
+      "pageZh": "zh/api/abstractions/models-frames-videocolorinfo",
+      "symbol": "LingFan.Media.Abstractions.struct",
+      "members": [],
+      "sourceHash": "134b99c1531a4ece58c857445ace6e8131f45ae5812bfc6b037ed65ce5da3b0a",
+      "project": "abstractions"
+    },
+    {
+      "name": "struct",
+      "kind": "record",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSurfaceDescriptor.cs",
+      "page": "api/abstractions/models-gpu-sharedgpusurfacedescriptor",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusurfacedescriptor",
+      "symbol": "LingFan.Media.Abstractions.struct",
+      "members": [
+        "0"
+      ],
+      "sourceHash": "12558ae45e4dd5b5b9918d679f816b31822c26ba8c500c7667ee08157f84dda8",
+      "project": "abstractions"
+    },
+    {
+      "name": "struct",
+      "kind": "record",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSyncModel.cs",
+      "page": "api/abstractions/models-gpu-sharedgpusyncmodel",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusyncmodel",
+      "symbol": "LingFan.Media.Abstractions.struct",
+      "members": [],
+      "sourceHash": "b10ccfa983812ca85e9a591d3bd2b1703d72fdaaf34dde75fad6a5f04ed36f57",
+      "project": "abstractions"
+    },
+    {
+      "name": "SubtitleAlignment",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitleAlignment.cs",
+      "page": "api/abstractions/enums-subtitlealignment",
+      "pageZh": "zh/api/abstractions/enums-subtitlealignment",
+      "symbol": "LingFan.Media.Abstractions.SubtitleAlignment",
+      "members": [
+        "Left",
+        "Center",
+        "Right"
+      ],
+      "sourceHash": "d40a8fbb88bfcc2a41dbee1d5f5322d7a0acd466a221db2b0fd6532da053d2fb",
+      "project": "abstractions"
+    },
+    {
+      "name": "SubtitleCodec",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitleCodec.cs",
+      "page": "api/abstractions/enums-subtitlecodec",
+      "pageZh": "zh/api/abstractions/enums-subtitlecodec",
+      "symbol": "LingFan.Media.Abstractions.SubtitleCodec",
+      "members": [
+        "SRT",
+        "ASS",
+        "PGS",
+        "VobSub",
+        "WebVTT",
+        "Unknown"
+      ],
+      "sourceHash": "dda8928b81c8277344b77a5987dffa63fb825c8ba983d2c0b06cecd08a7a62b9",
+      "project": "abstractions"
+    },
+    {
+      "name": "SubtitleFrame",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/SubtitleFrame.cs",
+      "page": "api/abstractions/models-frames-subtitleframe",
+      "pageZh": "zh/api/abstractions/models-frames-subtitleframe",
+      "symbol": "LingFan.Media.Abstractions.SubtitleFrame",
+      "members": [
+        "Text",
+        "Start",
+        "End",
+        "Style",
+        "SubtitleFrame"
+      ],
+      "sourceHash": "69e75d24c4af8831831a90776a4e2aad74b5d945abbf191205bbd681fb26d865",
+      "project": "abstractions"
+    },
+    {
+      "name": "SubtitlePosition",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitlePosition.cs",
+      "page": "api/abstractions/enums-subtitleposition",
+      "pageZh": "zh/api/abstractions/enums-subtitleposition",
+      "symbol": "LingFan.Media.Abstractions.SubtitlePosition",
+      "members": [
+        "Bottom",
+        "Top",
+        "Center"
+      ],
+      "sourceHash": "a1f13f197f7176284cef871c6b20dc22c89cf0170d121bd69dfd9157c29fbdbb",
+      "project": "abstractions"
+    },
+    {
+      "name": "SubtitleStyle",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/SubtitleStyle.cs",
+      "page": "api/abstractions/models-subtitlestyle",
+      "pageZh": "zh/api/abstractions/models-subtitlestyle",
+      "symbol": "LingFan.Media.Abstractions.SubtitleStyle",
+      "members": [
+        "FontFamily",
+        "FontSize",
+        "Color",
+        "BackgroundColor",
+        "Position",
+        "Alignment"
+      ],
+      "sourceHash": "668b63828f22cb8536399c2abda4a5298aa40d7f8db3e4309665d43dad097d1d",
+      "project": "abstractions"
+    },
+    {
+      "name": "TrackChangedEventArgs",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/TrackChangedEventArgs.cs",
+      "page": "api/abstractions/events-trackchangedeventargs",
+      "pageZh": "zh/api/abstractions/events-trackchangedeventargs",
+      "symbol": "LingFan.Media.Abstractions.TrackChangedEventArgs",
+      "members": [
+        "TrackType",
+        "OldTrack",
+        "NewTrack",
+        "TrackChangedEventArgs"
+      ],
+      "sourceHash": "555bbe98c65f835115d675ba3b7a20c88c5e6b6647c0f8e37263a2f8f7107074",
+      "project": "abstractions"
+    },
+    {
+      "name": "TrackType",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/TrackType.cs",
+      "page": "api/abstractions/enums-tracktype",
+      "pageZh": "zh/api/abstractions/enums-tracktype",
+      "symbol": "LingFan.Media.Abstractions.TrackType",
+      "members": [
+        "Video",
+        "Audio",
+        "Subtitle"
+      ],
+      "sourceHash": "179256d6d373ef06b8f2da94076cdac3f4d3fedc437d728cd877881f0766c959",
+      "project": "abstractions"
+    },
+    {
+      "name": "VaApiDmaBufDescriptor",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IVaApiExport.cs",
+      "page": "api/abstractions/interfaces-frames-ivaapiexport",
+      "pageZh": "zh/api/abstractions/interfaces-frames-ivaapiexport",
+      "symbol": "LingFan.Media.Abstractions.VaApiDmaBufDescriptor",
+      "members": [
+        "Width",
+        "Height",
+        "DrmFourcc",
+        "Modifier",
+        "ObjectCount",
+        "ObjectFds",
+        "LayerCount",
+        "PlaneObjectIndices",
+        "PlaneOffsets",
+        "PlanePitches"
+      ],
+      "sourceHash": "5790536953180b61d7ffc4dcaaf3fce03740d2aef4386e1de446138ab66e7910",
+      "project": "abstractions"
+    },
+    {
+      "name": "VideoCodec",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/VideoCodec.cs",
+      "page": "api/abstractions/enums-videocodec",
+      "pageZh": "zh/api/abstractions/enums-videocodec",
+      "symbol": "LingFan.Media.Abstractions.VideoCodec",
+      "members": [
+        "H264",
+        "H265",
+        "AV1",
+        "VP9",
+        "MPEG2",
+        "MPEG4",
+        "Unknown"
+      ],
+      "sourceHash": "a99cf07aefd2729f99a5255e1122f939b53cb0d04803f6c44c95e23821713412",
+      "project": "abstractions"
+    },
+    {
+      "name": "VideoFrame",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/VideoFrame.cs",
+      "page": "api/abstractions/models-frames-videoframe",
+      "pageZh": "zh/api/abstractions/models-frames-videoframe",
+      "symbol": "LingFan.Media.Abstractions.VideoFrame",
+      "members": [
+        "Width",
+        "Height",
+        "Format",
+        "Resource",
+        "Timestamp",
+        "Duration",
+        "KeyFrame",
+        "ColorInfo",
+        "RotationDegrees",
+        "IsDisposed",
+        "VideoFrame",
+        "VideoFrame",
+        "Reset",
+        "Dispose"
+      ],
+      "sourceHash": "dc8d85c21074b7b8f017fa47377cca399d37bc04f146a6ad5b4739d8bfeab02a",
+      "project": "abstractions"
+    },
+    {
+      "name": "VideoSettings",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/VideoSettings.cs",
+      "page": "api/abstractions/models-settings-videosettings",
+      "pageZh": "zh/api/abstractions/models-settings-videosettings",
+      "symbol": "LingFan.Media.Abstractions.VideoSettings",
+      "members": [
+        "EnableHardwareAcceleration",
+        "PreferredCodec",
+        "MaxWidth",
+        "MaxHeight",
+        "Width",
+        "Height",
+        "OutputPixelFormat",
+        "CodecConfiguration",
+        "TimeBase"
+      ],
+      "sourceHash": "dd628a4e86643f6d756bba4f6c01260b6286cf2504e6395577371480a8e1c397",
+      "project": "abstractions"
+    },
+    {
+      "name": "VideoTrackInfo",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/VideoTrackInfo.cs",
+      "page": "api/abstractions/models-tracks-videotrackinfo",
+      "pageZh": "zh/api/abstractions/models-tracks-videotrackinfo",
+      "symbol": "LingFan.Media.Abstractions.VideoTrackInfo",
+      "members": [
+        "Width",
+        "Height",
+        "FrameRate",
+        "PixelFormat",
+        "ColorSpace",
+        "Sar",
+        "Duration",
+        "CodecConfiguration",
+        "TimeBase"
+      ],
+      "sourceHash": "fcfd5e0a2f08bf58aaf9601b72dd36605aa562f6ba4fb62c75da330abcd28285",
+      "project": "abstractions"
+    },
+    {
+      "name": "VisualizerType",
+      "kind": "enum",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/VisualizerType.cs",
+      "page": "api/abstractions/enums-visualizertype",
+      "pageZh": "zh/api/abstractions/enums-visualizertype",
+      "symbol": "LingFan.Media.Abstractions.VisualizerType",
+      "members": [
+        "Spectrum",
+        "Waveform",
+        "Bars"
+      ],
+      "sourceHash": "8cbde5e0f2957fe417fd6163512560af742cc8934d759ac4e256a579aae9d3be",
+      "project": "abstractions"
+    },
+    {
+      "name": "BackendStubs",
+      "kind": "class",
+      "namespace": "LingFan.Media.Extensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/BackendStubs.cs",
+      "page": "api/extensions/backendstubs",
+      "pageZh": "zh/api/extensions/backendstubs",
+      "symbol": "LingFan.Media.Extensions.BackendStubs",
+      "members": [
+        "AddGStreamer",
+        "AddWebRTC"
+      ],
+      "sourceHash": "82aae607a7b7a1215d48f94d0a30be9d0e135d0745b529c3d02a2b63e24a9651",
+      "project": "extensions"
+    },
+    {
+      "name": "GStreamerOptions",
+      "kind": "class",
+      "namespace": "LingFan.Media.Extensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/BackendStubs.cs",
+      "page": "api/extensions/backendstubs",
+      "pageZh": "zh/api/extensions/backendstubs",
+      "symbol": "LingFan.Media.Extensions.GStreamerOptions",
+      "members": [
+        "PluginPath",
+        "EnableHardwareDecode"
+      ],
+      "sourceHash": "82aae607a7b7a1215d48f94d0a30be9d0e135d0745b529c3d02a2b63e24a9651",
+      "project": "extensions"
+    },
+    {
+      "name": "MediaBuilderPipelineExtensions",
+      "kind": "class",
+      "namespace": "LingFan.Media.Extensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/MediaBuilderPipelineExtensions.cs",
+      "page": "api/extensions/mediabuilderpipelineextensions",
+      "pageZh": "zh/api/extensions/mediabuilderpipelineextensions",
+      "symbol": "LingFan.Media.Extensions.MediaBuilderPipelineExtensions",
+      "members": [
+        "WithAudioPipeline",
+        "WithAudioTransforms",
+        "WithVideoPipeline",
+        "WithVideoTransforms"
+      ],
+      "sourceHash": "2620184341c05a6e8175d756ca1d89f336e9dba4a5d070279f59b47d8f779f58",
+      "project": "extensions"
+    },
+    {
+      "name": "ModuleExtensions",
+      "kind": "class",
+      "namespace": "LingFan.Media.Extensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/ModuleExtensions.cs",
+      "page": "api/extensions/moduleextensions",
+      "pageZh": "zh/api/extensions/moduleextensions",
+      "symbol": "LingFan.Media.Extensions.ModuleExtensions",
+      "members": [],
+      "sourceHash": "ebe981f1d8cf2b26c3708731027fd87f25b38d751ae69f19dd3b9abb2a1cbe7a",
+      "project": "extensions"
+    },
+    {
+      "name": "ServiceCollectionExtensions",
+      "kind": "class",
+      "namespace": "LingFan.Media.Extensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/ServiceCollectionExtensions.cs",
+      "page": "api/extensions/servicecollectionextensions",
+      "pageZh": "zh/api/extensions/servicecollectionextensions",
+      "symbol": "LingFan.Media.Extensions.ServiceCollectionExtensions",
+      "members": [
+        "AddLingFanMedia",
+        "AddLingFanMedia"
+      ],
+      "sourceHash": "454e611a6c49b5f7b1b6ba6ade994775f5e0d85111fe82fab2430466ca82d0a3",
+      "project": "extensions"
+    },
+    {
+      "name": "WebRTCOptions",
+      "kind": "class",
+      "namespace": "LingFan.Media.Extensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/BackendStubs.cs",
+      "page": "api/extensions/backendstubs",
+      "pageZh": "zh/api/extensions/backendstubs",
+      "symbol": "LingFan.Media.Extensions.WebRTCOptions",
+      "members": [
+        "EnableHardwareDecode"
+      ],
+      "sourceHash": "82aae607a7b7a1215d48f94d0a30be9d0e135d0745b529c3d02a2b63e24a9651",
+      "project": "extensions"
+    }
+  ],
+  "pages": [
+    {
+      "page": "api/abstractions/enums-aspectratiomode",
+      "pageZh": "zh/api/abstractions/enums-aspectratiomode",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/AspectRatioMode.cs",
+      "sourceHash": "2e60e95ee6538eebec0fd0c70ef5b9cb28a250b7f898aa43b9d3dff4dc126ae7",
+      "project": "abstractions",
+      "types": [
+        "AspectRatioMode"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-audiocodec",
+      "pageZh": "zh/api/abstractions/enums-audiocodec",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/AudioCodec.cs",
+      "sourceHash": "68669b60b9958127bb9854e247d2bd7e95be5017e8f87de628d64602a6527e04",
+      "project": "abstractions",
+      "types": [
+        "AudioCodec"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-bufferstate",
+      "pageZh": "zh/api/abstractions/enums-bufferstate",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/BufferState.cs",
+      "sourceHash": "a6b63c9c8f3133152b22727c2083f5adee97d1cfd01fe48ef3e1a4b6188c4ec1",
+      "project": "abstractions",
+      "types": [
+        "BufferState"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-clocksyncsource",
+      "pageZh": "zh/api/abstractions/enums-clocksyncsource",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ClockSyncSource.cs",
+      "sourceHash": "e93d61a5ae3f1099e1716e850d854675497b15253e74df8b2e3c038a5c40ba2c",
+      "project": "abstractions",
+      "types": [
+        "ClockSyncSource"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-colorrange",
+      "pageZh": "zh/api/abstractions/enums-colorrange",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorRange.cs",
+      "sourceHash": "f68189ff7bcdd8345c485d6b2bb369c06f95c8039a069d3753d799f8582c1044",
+      "project": "abstractions",
+      "types": [
+        "ColorRange"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-colorstandard",
+      "pageZh": "zh/api/abstractions/enums-colorstandard",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorStandard.cs",
+      "sourceHash": "ff025ce323fe3df790f946c86204591a18d85a29721e214c483ba40f44e56952",
+      "project": "abstractions",
+      "types": [
+        "ColorStandard"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-colortransfer",
+      "pageZh": "zh/api/abstractions/enums-colortransfer",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorTransfer.cs",
+      "sourceHash": "7a439875c53fe9e89241d8f828c5cc8aea637ab1f279dc9df54700f1b6faa81f",
+      "project": "abstractions",
+      "types": [
+        "ColorTransfer"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-containerformat",
+      "pageZh": "zh/api/abstractions/enums-containerformat",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/ContainerFormat.cs",
+      "sourceHash": "8e8aba9a01026c091466926ada0cae19d77e6ce2159e9fc14c4f0107d490b2c3",
+      "project": "abstractions",
+      "types": [
+        "ContainerFormat"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-gpuapitype",
+      "pageZh": "zh/api/abstractions/enums-gpuapitype",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/GPUApiType.cs",
+      "sourceHash": "7bb4ec8120e3446d7eec68b6f88e3a49ba2eebe15c1fa0ac2326d89a476a82b9",
+      "project": "abstractions",
+      "types": [
+        "GPUApiType"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-mediaerrorcode",
+      "pageZh": "zh/api/abstractions/enums-mediaerrorcode",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/MediaErrorCode.cs",
+      "sourceHash": "33c0c36766b8601244d768fc91c2020e90787906224f749385a336d3e01dd046",
+      "project": "abstractions",
+      "types": [
+        "MediaErrorCode"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-mediasourcetype",
+      "pageZh": "zh/api/abstractions/enums-mediasourcetype",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/MediaSourceType.cs",
+      "sourceHash": "da518175ed1d0172b0f7220fff68e9747e8aa2df5994bbe828f5e7b0ab805c1e",
+      "project": "abstractions",
+      "types": [
+        "MediaSourceType"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-mediastate",
+      "pageZh": "zh/api/abstractions/enums-mediastate",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/MediaState.cs",
+      "sourceHash": "1ca39dda8ab52abe8971f8d4418559e43c2c844d233f8ea946da3008754414fa",
+      "project": "abstractions",
+      "types": [
+        "MediaState"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-pixelformat",
+      "pageZh": "zh/api/abstractions/enums-pixelformat",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/PixelFormat.cs",
+      "sourceHash": "30c05c2bd6705a0b2d2a9c99cdc8296ec48bc4618c48e883fc10d1d166dfcbbd",
+      "project": "abstractions",
+      "types": [
+        "PixelFormat"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-renderhandletype",
+      "pageZh": "zh/api/abstractions/enums-renderhandletype",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/RenderHandleType.cs",
+      "sourceHash": "1838596886ea39cd4430701e5226852adf5bec1989a4f9c5ded9e33ef13b62ab",
+      "project": "abstractions",
+      "types": [
+        "RenderHandleType"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-rendertargettype",
+      "pageZh": "zh/api/abstractions/enums-rendertargettype",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/RenderTargetType.cs",
+      "sourceHash": "9a3824d032480373f72b29ae82f67b1f0dc79e8f12936a0f6c9bfadfc0bf4780",
+      "project": "abstractions",
+      "types": [
+        "RenderTargetType"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-sampleformat",
+      "pageZh": "zh/api/abstractions/enums-sampleformat",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SampleFormat.cs",
+      "sourceHash": "521b90963398f081c05db3606b999f2eb484ce128411ef33b85795a4106de62c",
+      "project": "abstractions",
+      "types": [
+        "SampleFormat"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-subtitlealignment",
+      "pageZh": "zh/api/abstractions/enums-subtitlealignment",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitleAlignment.cs",
+      "sourceHash": "d40a8fbb88bfcc2a41dbee1d5f5322d7a0acd466a221db2b0fd6532da053d2fb",
+      "project": "abstractions",
+      "types": [
+        "SubtitleAlignment"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-subtitlecodec",
+      "pageZh": "zh/api/abstractions/enums-subtitlecodec",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitleCodec.cs",
+      "sourceHash": "dda8928b81c8277344b77a5987dffa63fb825c8ba983d2c0b06cecd08a7a62b9",
+      "project": "abstractions",
+      "types": [
+        "SubtitleCodec"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-subtitleposition",
+      "pageZh": "zh/api/abstractions/enums-subtitleposition",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitlePosition.cs",
+      "sourceHash": "a1f13f197f7176284cef871c6b20dc22c89cf0170d121bd69dfd9157c29fbdbb",
+      "project": "abstractions",
+      "types": [
+        "SubtitlePosition"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-tracktype",
+      "pageZh": "zh/api/abstractions/enums-tracktype",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/TrackType.cs",
+      "sourceHash": "179256d6d373ef06b8f2da94076cdac3f4d3fedc437d728cd877881f0766c959",
+      "project": "abstractions",
+      "types": [
+        "TrackType"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-videocodec",
+      "pageZh": "zh/api/abstractions/enums-videocodec",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/VideoCodec.cs",
+      "sourceHash": "a99cf07aefd2729f99a5255e1122f939b53cb0d04803f6c44c95e23821713412",
+      "project": "abstractions",
+      "types": [
+        "VideoCodec"
+      ]
+    },
+    {
+      "page": "api/abstractions/enums-visualizertype",
+      "pageZh": "zh/api/abstractions/enums-visualizertype",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Enums/VisualizerType.cs",
+      "sourceHash": "8cbde5e0f2957fe417fd6163512560af742cc8934d759ac4e256a579aae9d3be",
+      "project": "abstractions",
+      "types": [
+        "VisualizerType"
+      ]
+    },
+    {
+      "page": "api/abstractions/events-bufferprogresseventargs",
+      "pageZh": "zh/api/abstractions/events-bufferprogresseventargs",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/BufferProgressEventArgs.cs",
+      "sourceHash": "1ddf89debd7506028046a0f37cfdd78206f8a456efd953fd5c946bf2ecb6e426",
+      "project": "abstractions",
+      "types": [
+        "BufferProgressEventArgs"
+      ]
+    },
+    {
+      "page": "api/abstractions/events-logeventargs",
+      "pageZh": "zh/api/abstractions/events-logeventargs",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/LogEventArgs.cs",
+      "sourceHash": "67d90ae98df9396b1e5bb7955e83d9d268b2a1f9c1076eaf19d8a9414d7f7a2e",
+      "project": "abstractions",
+      "types": [
+        "LogEventArgs"
+      ]
+    },
+    {
+      "page": "api/abstractions/events-mediaerroreventargs",
+      "pageZh": "zh/api/abstractions/events-mediaerroreventargs",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/MediaErrorEventArgs.cs",
+      "sourceHash": "f38c319ec6fcd3866d2e0f838fae876f2319f8792121ca911ef784ee2b93a06f",
+      "project": "abstractions",
+      "types": [
+        "MediaErrorEventArgs"
+      ]
+    },
+    {
+      "page": "api/abstractions/events-mediastatechangedeventargs",
+      "pageZh": "zh/api/abstractions/events-mediastatechangedeventargs",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/MediaStateChangedEventArgs.cs",
+      "sourceHash": "f5cfbb6e3fe24b96bd8f9318f4bf49decff3967ce548c4322d49bda900c187dd",
+      "project": "abstractions",
+      "types": [
+        "MediaStateChangedEventArgs"
+      ]
+    },
+    {
+      "page": "api/abstractions/events-trackchangedeventargs",
+      "pageZh": "zh/api/abstractions/events-trackchangedeventargs",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Events/TrackChangedEventArgs.cs",
+      "sourceHash": "555bbe98c65f835115d675ba3b7a20c88c5e6b6647c0f8e37263a2f8f7107074",
+      "project": "abstractions",
+      "types": [
+        "TrackChangedEventArgs"
+      ]
+    },
+    {
+      "page": "api/abstractions/exceptions-gpudevicelostexception",
+      "pageZh": "zh/api/abstractions/exceptions-gpudevicelostexception",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Exceptions/GpuDeviceLostException.cs",
+      "sourceHash": "635f79c13436914c434e5d58f0c9ccf61a0cb76ccef193a2167df473daa15d61",
+      "project": "abstractions",
+      "types": [
+        "GpuDeviceLostException"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-codecs-icodecregistry",
+      "pageZh": "zh/api/abstractions/interfaces-codecs-icodecregistry",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Codecs/ICodecRegistry.cs",
+      "sourceHash": "3daf48070cb17122ed10eb05b8bc3e4c9ea62d2b46741de34431cd1f9779fced",
+      "project": "abstractions",
+      "types": [
+        "ICodecRegistry"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-consumers-iheadlessaudioconsumer",
+      "pageZh": "zh/api/abstractions/interfaces-consumers-iheadlessaudioconsumer",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Consumers/IHeadlessAudioConsumer.cs",
+      "sourceHash": "46a3a8274eab578ec35914d391a31eb59129c2e5d8a6371ddac2a14fa15a2739",
+      "project": "abstractions",
+      "types": [
+        "IHeadlessAudioConsumer"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-consumers-iheadlessframeconsumer",
+      "pageZh": "zh/api/abstractions/interfaces-consumers-iheadlessframeconsumer",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Consumers/IHeadlessFrameConsumer.cs",
+      "sourceHash": "2b5048bf57092af9d9b21967f33e629576f0a18d55d44fd98e3ad1b06693884f",
+      "project": "abstractions",
+      "types": [
+        "IHeadlessFrameConsumer"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-core-ibuffermanager",
+      "pageZh": "zh/api/abstractions/interfaces-core-ibuffermanager",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IBufferManager.cs",
+      "sourceHash": "8ef392acda6754d2616481c9e0f4851b584fc1fcee0a5024503421c812b7caea",
+      "project": "abstractions",
+      "types": [
+        "IBufferManager"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-core-iframechannel",
+      "pageZh": "zh/api/abstractions/interfaces-core-iframechannel",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IFrameChannel.cs",
+      "sourceHash": "73772ef8df5385f20780cf039b21442d668ca4ba386c1cbf2874d93f4d55c56b",
+      "project": "abstractions",
+      "types": [
+        "IFrameSink",
+        "IFrameChannel"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-core-imediaclock",
+      "pageZh": "zh/api/abstractions/interfaces-core-imediaclock",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IMediaClock.cs",
+      "sourceHash": "1e486475e9ec1089397315a7f024afd6c271596f51f3ef58fc906934ae51e1fc",
+      "project": "abstractions",
+      "types": [
+        "IMediaClock"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-core-imediacomponent",
+      "pageZh": "zh/api/abstractions/interfaces-core-imediacomponent",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IMediaComponent.cs",
+      "sourceHash": "0ad18483bd74af2d1c3f650df007e7db01eb09f0e682d561f8eaca9bfeff1248",
+      "project": "abstractions",
+      "types": [
+        "IMediaComponent"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-decoders-iaudiodecoder",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiodecoder",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioDecoder.cs",
+      "sourceHash": "cc5bd1ba5303aa3c3ace80c247cfdcfc06bf4577d61bb161f84af81c3ae0be68",
+      "project": "abstractions",
+      "types": [
+        "IAudioDecoder"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-decoders-iaudiodecoderfactory",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiodecoderfactory",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioDecoderFactory.cs",
+      "sourceHash": "0310cb7e48a766a3abffa10d5bb2ddc3bbd969114c18e31b1701bfa5e2edd3f1",
+      "project": "abstractions",
+      "types": [
+        "IAudioDecoderFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-decoders-iaudiosourceformataware",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-iaudiosourceformataware",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioSourceFormatAware.cs",
+      "sourceHash": "d48ee4dfcbddd7a21f2c3c7df62a1694f2f31672be120a901bfb401d95df09af",
+      "project": "abstractions",
+      "types": [
+        "IAudioSourceFormatAware"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-decoders-isubtitledecoder",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-isubtitledecoder",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/ISubtitleDecoder.cs",
+      "sourceHash": "e1165e982666c0bf528d2405543ab774fe75f9f1fbe51b4eecea25c0cb16d6ea",
+      "project": "abstractions",
+      "types": [
+        "ISubtitleDecoder"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-decoders-isubtitledecoderfactory",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-isubtitledecoderfactory",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/ISubtitleDecoderFactory.cs",
+      "sourceHash": "c2579ff8955b1994b6fbe47f8164e847baf3b567a8f32ac8f402f13125ad7afe",
+      "project": "abstractions",
+      "types": [
+        "ISubtitleDecoderFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-decoders-ivideodecoder",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-ivideodecoder",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IVideoDecoder.cs",
+      "sourceHash": "694c8136e9798d36ef45b43de65272806f0e3c5b6c005d7fc48d96e8c4b26442",
+      "project": "abstractions",
+      "types": [
+        "IVideoDecoder"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-decoders-ivideodecoderfactory",
+      "pageZh": "zh/api/abstractions/interfaces-decoders-ivideodecoderfactory",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IVideoDecoderFactory.cs",
+      "sourceHash": "6344cb9bf512ef3a17e3452f29ec3ce41f548ec4a9eaa0ab5656c6c39f94761c",
+      "project": "abstractions",
+      "types": [
+        "IVideoDecoderFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-demuxer-imediademuxer",
+      "pageZh": "zh/api/abstractions/interfaces-demuxer-imediademuxer",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Demuxer/IMediaDemuxer.cs",
+      "sourceHash": "c3eb92ef1b26652689c7ca6587390c673874413aaaabfc505c7dc15ddbf629da",
+      "project": "abstractions",
+      "types": [
+        "IMediaDemuxer"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-demuxer-imediademuxerfactory",
+      "pageZh": "zh/api/abstractions/interfaces-demuxer-imediademuxerfactory",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Demuxer/IMediaDemuxerFactory.cs",
+      "sourceHash": "c3e0922494e563ffe53e585c32c6e4918e4c63e8c5af65e584c0d51afb76b8f1",
+      "project": "abstractions",
+      "types": [
+        "IMediaDemuxerFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-detection-iformatdetector",
+      "pageZh": "zh/api/abstractions/interfaces-detection-iformatdetector",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Detection/IFormatDetector.cs",
+      "sourceHash": "7bbf5730376f731b3bccb63d64164b9ab76d5f93531251660e9b601c946d1c30",
+      "project": "abstractions",
+      "types": [
+        "IFormatDetector"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-frames-idisposableframe",
+      "pageZh": "zh/api/abstractions/interfaces-frames-idisposableframe",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IDisposableFrame.cs",
+      "sourceHash": "85291f52482f7a7e27a1c9dedcac7b1f7cfa008cbfa6ab121b37032fbebb13be",
+      "project": "abstractions",
+      "types": [
+        "IDisposableFrame"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-frames-iframepool",
+      "pageZh": "zh/api/abstractions/interfaces-frames-iframepool",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFramePool.cs",
+      "sourceHash": "595683b137b8a79d35206440be93950ada58110de476bf7af4444e64811a430f",
+      "project": "abstractions",
+      "types": [
+        "IFramePool"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-frames-iframepoolaware",
+      "pageZh": "zh/api/abstractions/interfaces-frames-iframepoolaware",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFramePoolAware.cs",
+      "sourceHash": "5f27175c571ce4bd45eb634a067016b81b8500992a01995e02cfddfec3709c46",
+      "project": "abstractions",
+      "types": [
+        "IFramePoolAware"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-frames-iframeresource",
+      "pageZh": "zh/api/abstractions/interfaces-frames-iframeresource",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFrameResource.cs",
+      "sourceHash": "45400e8388271e8ee27ec95e9558c68cdb1b6ac1bda7afcf8b0a9c846e5b99ab",
+      "project": "abstractions",
+      "types": [
+        "IFrameResource"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-frames-igpuframeproducer",
+      "pageZh": "zh/api/abstractions/interfaces-frames-igpuframeproducer",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuFrameProducer.cs",
+      "sourceHash": "4d840373e19f4fb4730860f2f8dcbcb97b65757fdc6ef55364c94b8f79ffcce6",
+      "project": "abstractions",
+      "types": [
+        "GpuFrameImportKind",
+        "GpuFrameImportSource",
+        "IGpuFrameProducer"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-frames-igputextureresource",
+      "pageZh": "zh/api/abstractions/interfaces-frames-igputextureresource",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuTextureResource.cs",
+      "sourceHash": "031302e7979a6c1a19e2b012c03e319405d60e6d20850d4c260c1bbe5eeb91c8",
+      "project": "abstractions",
+      "types": [
+        "IGpuTextureResource"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-frames-ivaapiexport",
+      "pageZh": "zh/api/abstractions/interfaces-frames-ivaapiexport",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IVaApiExport.cs",
+      "sourceHash": "5790536953180b61d7ffc4dcaaf3fce03740d2aef4386e1de446138ab66e7910",
+      "project": "abstractions",
+      "types": [
+        "IVaApiExport",
+        "VaApiDmaBufDescriptor"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-gpu-igpudevicecontext",
+      "pageZh": "zh/api/abstractions/interfaces-gpu-igpudevicecontext",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/IGpuDeviceContext.cs",
+      "sourceHash": "72344ec7fd8ede39f1a1a89cc2c422b01384fbf32f10bfb1b2e9d44f615bf0f1",
+      "project": "abstractions",
+      "types": [
+        "IGpuDeviceContext"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-gpu-isharedgpusurfacesource",
+      "pageZh": "zh/api/abstractions/interfaces-gpu-isharedgpusurfacesource",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/ISharedGpuSurfaceSource.cs",
+      "sourceHash": "ec4ed56c49de30f5b69591087f24977cb0339c9f0ea19fc172aa3c59c1e19642",
+      "project": "abstractions",
+      "types": [
+        "ISharedGpuSurfaceSource",
+        "ISharedGpuSurfaceSourceFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-irealtimepacedoutput",
+      "pageZh": "zh/api/abstractions/interfaces-irealtimepacedoutput",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/IRealtimePacedOutput.cs",
+      "sourceHash": "adae71aaa544dad6f9210d0fd89d04b2263b2e7947221071ccb6d80265dc3dac",
+      "project": "abstractions",
+      "types": [
+        "IRealtimePacedOutput"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-outputs-iaudioengine",
+      "pageZh": "zh/api/abstractions/interfaces-outputs-iaudioengine",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioEngine.cs",
+      "sourceHash": "454fca0be8b3d2a6ce6428c3c45758238f052b168ac38ff6f70405b6bc837030",
+      "project": "abstractions",
+      "types": [
+        "IAudioEngine"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-outputs-iaudiooutput",
+      "pageZh": "zh/api/abstractions/interfaces-outputs-iaudiooutput",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioOutput.cs",
+      "sourceHash": "280634a175484501a737092d254ad584a12c32a51425672beec4d1f98fbd3fa9",
+      "project": "abstractions",
+      "types": [
+        "IAudioOutput"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-outputs-iaudiooutputfactory",
+      "pageZh": "zh/api/abstractions/interfaces-outputs-iaudiooutputfactory",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioOutputFactory.cs",
+      "sourceHash": "93549672baef7457bad5f1fe04d8294bbb736f33e664a6de1bec7d40859ce1f5",
+      "project": "abstractions",
+      "types": [
+        "IAudioOutputFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-outputs-ibatchaudiosubmit",
+      "pageZh": "zh/api/abstractions/interfaces-outputs-ibatchaudiosubmit",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IBatchAudioSubmit.cs",
+      "sourceHash": "fdb269a764ea8fac8df086d4370a934f105162d5aa2db404cd4157b090ff6909",
+      "project": "abstractions",
+      "types": [
+        "IBatchAudioSubmit"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-player-backenddescriptor",
+      "pageZh": "zh/api/abstractions/interfaces-player-backenddescriptor",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/BackendDescriptor.cs",
+      "sourceHash": "8c7c7fd1f5a14b1f95f69e291b09bfda3cfb1f567110b33fa1a3b8b1abc32dc4",
+      "project": "abstractions",
+      "types": [
+        "BackendDescriptor"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-player-ibackendregistry",
+      "pageZh": "zh/api/abstractions/interfaces-player-ibackendregistry",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IBackendRegistry.cs",
+      "sourceHash": "45d7701e0bf95bd222e0a4d3c70464b96c4d37667e510bdf12cf3502fc201fe9",
+      "project": "abstractions",
+      "types": [
+        "IBackendRegistry"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-player-imediaplayer",
+      "pageZh": "zh/api/abstractions/interfaces-player-imediaplayer",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs",
+      "sourceHash": "309e5e0db6e029748a760875b4262ad88b35829b8113f0ca1523f3af07a361d9",
+      "project": "abstractions",
+      "types": [
+        "IMediaPlayer"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-player-imediaplayerfactory",
+      "pageZh": "zh/api/abstractions/interfaces-player-imediaplayerfactory",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayerFactory.cs",
+      "sourceHash": "65d20a733b51377c7c5ee8fbd66b459d4931d3ef70585dbc34c5f87422c30074",
+      "project": "abstractions",
+      "types": [
+        "IMediaPlayerFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-player-imediasession",
+      "pageZh": "zh/api/abstractions/interfaces-player-imediasession",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaSession.cs",
+      "sourceHash": "76dec8f8bbc777c8f25637ffc6daa425399a215660b7775f4be70136149c7615",
+      "project": "abstractions",
+      "types": [
+        "IMediaSession"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-player-mediabackendunsupportedexception",
+      "pageZh": "zh/api/abstractions/interfaces-player-mediabackendunsupportedexception",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/MediaBackendUnsupportedException.cs",
+      "sourceHash": "676f56568f2405e4a048f108a9783322bb5238d1af447b7c043dfa0434fec2a5",
+      "project": "abstractions",
+      "types": [
+        "MediaBackendUnsupportedException"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-renderers-irendererhealth",
+      "pageZh": "zh/api/abstractions/interfaces-renderers-irendererhealth",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IRendererHealth.cs",
+      "sourceHash": "a79116dd89f7f6761828adb06a3f299f5d2d8715daf285ebd2f127d9bf1aa40d",
+      "project": "abstractions",
+      "types": [
+        "IRendererHealth"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-renderers-irendertarget",
+      "pageZh": "zh/api/abstractions/interfaces-renderers-irendertarget",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IRenderTarget.cs",
+      "sourceHash": "ca02f58fa0eb21894a28eecda87e7e0638bd047fd6a7424e23827b0997304b95",
+      "project": "abstractions",
+      "types": [
+        "IRenderTarget"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-renderers-ivideorenderer",
+      "pageZh": "zh/api/abstractions/interfaces-renderers-ivideorenderer",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IVideoRenderer.cs",
+      "sourceHash": "c6190da9d98604aff80a8dbee7fef51623899b2c8747c9f54d23ad36cef30cf0",
+      "project": "abstractions",
+      "types": [
+        "IVideoRenderer"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-renderers-ivideorendererfactory",
+      "pageZh": "zh/api/abstractions/interfaces-renderers-ivideorendererfactory",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IVideoRendererFactory.cs",
+      "sourceHash": "6501dccc3c69b5c0197de61e087df2370e8e2063003a49e2c7bb38decbc92fcf",
+      "project": "abstractions",
+      "types": [
+        "IVideoRendererFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-source-imediasource",
+      "pageZh": "zh/api/abstractions/interfaces-source-imediasource",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaSource.cs",
+      "sourceHash": "73e2edc669366eef0bf88dfed0d13f201e771518e9efee87af070190c59d6e26",
+      "project": "abstractions",
+      "types": [
+        "IMediaSource"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-source-imediasourcemetadata",
+      "pageZh": "zh/api/abstractions/interfaces-source-imediasourcemetadata",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaSourceMetadata.cs",
+      "sourceHash": "e231bf3583eb4cc6e99454f8c623c58efcd0392b12efe5c1f402e141a08cb0e9",
+      "project": "abstractions",
+      "types": [
+        "IMediaSourceMetadata"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-source-imediastream",
+      "pageZh": "zh/api/abstractions/interfaces-source-imediastream",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaStream.cs",
+      "sourceHash": "d933a3c61a13b05eaaf1d4f6c27bfd745e6844b67f09b895176754dfda7dda1e",
+      "project": "abstractions",
+      "types": [
+        "IMediaStream"
+      ]
+    },
+    {
+      "page": "api/abstractions/interfaces-source-imediastreamfactory",
+      "pageZh": "zh/api/abstractions/interfaces-source-imediastreamfactory",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaStreamFactory.cs",
+      "sourceHash": "44d39324cea9682374ab9ac6948d56cd72cffa569906ab4eb6f13173568ff593",
+      "project": "abstractions",
+      "types": [
+        "IMediaStreamFactory"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-frames-audioframe",
+      "pageZh": "zh/api/abstractions/models-frames-audioframe",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/AudioFrame.cs",
+      "sourceHash": "52f34755c4c0bacab82930e3f197198dfea75d5ca004a3ad8c49c3609925e881",
+      "project": "abstractions",
+      "types": [
+        "AudioFrame"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-frames-gputexturereadback",
+      "pageZh": "zh/api/abstractions/models-frames-gputexturereadback",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/GpuTextureReadback.cs",
+      "sourceHash": "8ae1a1f3ae8a4ac5ad2bc7a9ad007c9bc74ce65656dd4e6e5c6ec0c1610edd39",
+      "project": "abstractions",
+      "types": [
+        "GpuTextureReadback"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-frames-mediapacket",
+      "pageZh": "zh/api/abstractions/models-frames-mediapacket",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/MediaPacket.cs",
+      "sourceHash": "d378f98268c0ebf6089507adddacf670d2907be7ff081c3d700c05d9f123f611",
+      "project": "abstractions",
+      "types": [
+        "MediaPacket"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-frames-softwareframeresource",
+      "pageZh": "zh/api/abstractions/models-frames-softwareframeresource",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/SoftwareFrameResource.cs",
+      "sourceHash": "a7777774968fafa5365b09b8e8c9d564a95afd8b49207448b02af0473c9916e0",
+      "project": "abstractions",
+      "types": [
+        "SoftwareFrameResource"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-frames-subtitleframe",
+      "pageZh": "zh/api/abstractions/models-frames-subtitleframe",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/SubtitleFrame.cs",
+      "sourceHash": "69e75d24c4af8831831a90776a4e2aad74b5d945abbf191205bbd681fb26d865",
+      "project": "abstractions",
+      "types": [
+        "SubtitleFrame"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-frames-videocolorinfo",
+      "pageZh": "zh/api/abstractions/models-frames-videocolorinfo",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/VideoColorInfo.cs",
+      "sourceHash": "134b99c1531a4ece58c857445ace6e8131f45ae5812bfc6b037ed65ce5da3b0a",
+      "project": "abstractions",
+      "types": [
+        "struct"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-frames-videoframe",
+      "pageZh": "zh/api/abstractions/models-frames-videoframe",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/VideoFrame.cs",
+      "sourceHash": "dc8d85c21074b7b8f017fa47377cca399d37bc04f146a6ad5b4739d8bfeab02a",
+      "project": "abstractions",
+      "types": [
+        "VideoFrame"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-gpu-gpudevicecapabilities",
+      "pageZh": "zh/api/abstractions/models-gpu-gpudevicecapabilities",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/GpuDeviceCapabilities.cs",
+      "sourceHash": "20b603b0b63c962d4d65bacf04efce781ecfc04a4c44bac4228945a104d7fe26",
+      "project": "abstractions",
+      "types": [
+        "GpuDeviceCapabilities"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-gpu-sharedgpusourcepolicy",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusourcepolicy",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSourcePolicy.cs",
+      "sourceHash": "1035d9784cd2651f44f87b15a59d975ea0c44c31237618be8c0b678ef8d554c3",
+      "project": "abstractions",
+      "types": [
+        "SharedGpuSourcePolicy"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-gpu-sharedgpusurfacedescriptor",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusurfacedescriptor",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSurfaceDescriptor.cs",
+      "sourceHash": "12558ae45e4dd5b5b9918d679f816b31822c26ba8c500c7667ee08157f84dda8",
+      "project": "abstractions",
+      "types": [
+        "SharedGpuHandleKind",
+        "SharedGpuSurfaceFormat",
+        "struct"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-gpu-sharedgpusyncmodel",
+      "pageZh": "zh/api/abstractions/models-gpu-sharedgpusyncmodel",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSyncModel.cs",
+      "sourceHash": "b10ccfa983812ca85e9a591d3bd2b1703d72fdaaf34dde75fad6a5f04ed36f57",
+      "project": "abstractions",
+      "types": [
+        "SharedGpuSyncMode",
+        "SharedGpuSemaphoreKind",
+        "struct",
+        "SharedGpuAdapterIdentity"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-mediacookie",
+      "pageZh": "zh/api/abstractions/models-mediacookie",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/MediaCookie.cs",
+      "sourceHash": "9d17dd76f2f1a5834f985521699b99321f7f848cdeddd616a6b46fbade36e799",
+      "project": "abstractions",
+      "types": [
+        "MediaCookie"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-mediaformatprofile",
+      "pageZh": "zh/api/abstractions/models-mediaformatprofile",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/MediaFormatProfile.cs",
+      "sourceHash": "9087062e34dc09429a099282360e6d02654544f93913faa31b0c3830e5e23923",
+      "project": "abstractions",
+      "types": [
+        "MediaFormatProfile"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-mediametadata",
+      "pageZh": "zh/api/abstractions/models-mediametadata",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/MediaMetadata.cs",
+      "sourceHash": "e332714a4125727b3b78db3fa2a62d5598ec785b3786942a3be96204ca1bea56",
+      "project": "abstractions",
+      "types": [
+        "MediaMetadata"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-processingmode",
+      "pageZh": "zh/api/abstractions/models-processingmode",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/ProcessingMode.cs",
+      "sourceHash": "5c5075d511618a3c5b9f9e8805c6f6698f0b2bee823ee24048aabc78aa439063",
+      "project": "abstractions",
+      "types": [
+        "ProcessingMode"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-rational",
+      "pageZh": "zh/api/abstractions/models-rational",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Rational.cs",
+      "sourceHash": "f57ed59d7517532881832203c840295c087670f5830cde384a2f244a596c4ece",
+      "project": "abstractions",
+      "types": [
+        "Rational"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-settings-audioeffectparameter",
+      "pageZh": "zh/api/abstractions/models-settings-audioeffectparameter",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/AudioEffectParameter.cs",
+      "sourceHash": "dff255bb696452057ec472b32afe63b999dba22866107e5a9593cdd3beb11674",
+      "project": "abstractions",
+      "types": [
+        "AudioEffectParameter"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-settings-audiosettings",
+      "pageZh": "zh/api/abstractions/models-settings-audiosettings",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/AudioSettings.cs",
+      "sourceHash": "e020544f62de3a0be84b34008b97cb03da92feed66a257f4a39fecc65f76dca8",
+      "project": "abstractions",
+      "types": [
+        "AudioSettings"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-settings-decodepreferencepolicy",
+      "pageZh": "zh/api/abstractions/models-settings-decodepreferencepolicy",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/DecodePreferencePolicy.cs",
+      "sourceHash": "61bd4dcb929667b877df8010311596b792af971ffc9bda9fb2bc6c83b8a33fbc",
+      "project": "abstractions",
+      "types": [
+        "DecodePreferencePolicy"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-settings-mediaplayeroptions",
+      "pageZh": "zh/api/abstractions/models-settings-mediaplayeroptions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/MediaPlayerOptions.cs",
+      "sourceHash": "f69f169e2dc7874b607f3c5e45547d423c7ddffd7fa49917f2da2b399cbaf80e",
+      "project": "abstractions",
+      "types": [
+        "MediaPlayerOptions"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-settings-videosettings",
+      "pageZh": "zh/api/abstractions/models-settings-videosettings",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/VideoSettings.cs",
+      "sourceHash": "dd628a4e86643f6d756bba4f6c01260b6286cf2504e6395577371480a8e1c397",
+      "project": "abstractions",
+      "types": [
+        "VideoSettings"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-subtitlestyle",
+      "pageZh": "zh/api/abstractions/models-subtitlestyle",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/SubtitleStyle.cs",
+      "sourceHash": "668b63828f22cb8536399c2abda4a5298aa40d7f8db3e4309665d43dad097d1d",
+      "project": "abstractions",
+      "types": [
+        "SubtitleStyle"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-tracks-audiotrackinfo",
+      "pageZh": "zh/api/abstractions/models-tracks-audiotrackinfo",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/AudioTrackInfo.cs",
+      "sourceHash": "56df23670190d33453d2cbf34d477b1e5659b1586b88259a483ceec6c62850ef",
+      "project": "abstractions",
+      "types": [
+        "AudioTrackInfo"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-tracks-mediatrack",
+      "pageZh": "zh/api/abstractions/models-tracks-mediatrack",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/MediaTrack.cs",
+      "sourceHash": "bc7635d00cca7c2e3781756046757aecb576a794d4a15298566f4b6f4f8549d9",
+      "project": "abstractions",
+      "types": [
+        "MediaTrack"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-tracks-videotrackinfo",
+      "pageZh": "zh/api/abstractions/models-tracks-videotrackinfo",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/VideoTrackInfo.cs",
+      "sourceHash": "fcfd5e0a2f08bf58aaf9601b72dd36605aa562f6ba4fb62c75da330abcd28285",
+      "project": "abstractions",
+      "types": [
+        "VideoTrackInfo"
+      ]
+    },
+    {
+      "page": "api/extensions/backendstubs",
+      "pageZh": "zh/api/extensions/backendstubs",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/BackendStubs.cs",
+      "sourceHash": "82aae607a7b7a1215d48f94d0a30be9d0e135d0745b529c3d02a2b63e24a9651",
+      "project": "extensions",
+      "types": [
+        "BackendStubs",
+        "GStreamerOptions",
+        "WebRTCOptions"
+      ]
+    },
+    {
+      "page": "api/extensions/mediabuilderpipelineextensions",
+      "pageZh": "zh/api/extensions/mediabuilderpipelineextensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/MediaBuilderPipelineExtensions.cs",
+      "sourceHash": "2620184341c05a6e8175d756ca1d89f336e9dba4a5d070279f59b47d8f779f58",
+      "project": "extensions",
+      "types": [
+        "MediaBuilderPipelineExtensions"
+      ]
+    },
+    {
+      "page": "api/extensions/moduleextensions",
+      "pageZh": "zh/api/extensions/moduleextensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/ModuleExtensions.cs",
+      "sourceHash": "ebe981f1d8cf2b26c3708731027fd87f25b38d751ae69f19dd3b9abb2a1cbe7a",
+      "project": "extensions",
+      "types": [
+        "ModuleExtensions"
+      ]
+    },
+    {
+      "page": "api/extensions/servicecollectionextensions",
+      "pageZh": "zh/api/extensions/servicecollectionextensions",
+      "source": "src/Infrastructure/LingFan.Media.Extensions/ServiceCollectionExtensions.cs",
+      "sourceHash": "454e611a6c49b5f7b1b6ba6ade994775f5e0d85111fe82fab2430466ca82d0a3",
+      "project": "extensions",
+      "types": [
+        "ServiceCollectionExtensions"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+---
+title: "VideoCodec"
+type: "enum"
+namespace: "LingFan.Media.Abstractions"
+source: "src/Infrastructure/LingFan.Media.Abstractions/Enums/VideoCodec.cs"
+generated: true
+generator: "scripts/gen-api.mjs"
+symbols: ["VideoCodec", "H264", "H265", "AV1", "VP9", "MPEG2", "MPEG4", "Unknown"]
+lang: "zh-CN"
+---
+# VideoCodec
+
+源码: [`VideoCodec.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/VideoCodec.cs)
+
+视频编解码器类型。
+
+## 声明
+
+```csharp
+namespace LingFan.Media.Abstractions;
+
+public enum VideoCodec : int
+```
+
+## 枚举值
+
+| 值 | 说明 |
+| --- | --- |
+| `H264` | H.264 / AVC。 |
+| `H265` | H.265 / HEVC。 |
+| `AV1` | AV1。 |
+| `VP9` | VP9。 |
+| `MPEG2` | MPEG-2。 |
+| `MPEG4` | MPEG-4。 |
+| `Unknown` | 未知编解码器。 |

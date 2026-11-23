@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'src/Infrastructure/LingFan.Media.Abstractions/**'
+      - 'src/Infrastructure/LingFan.Media.Extensions/**'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
@@ -40,9 +42,17 @@ jobs:
         working-directory: docs
         run: pnpm install --frozen-lockfile
 
-      - name: Build
+      - name: Drift gate (committed docs vs source)
         working-directory: docs
-        run: pnpm build
+        run: pnpm docs:check
+
+      - name: Generate API reference
+        working-directory: docs
+        run: pnpm docs:gen
+
+      - name: Build site
+        working-directory: docs
+        run: pnpm docs:build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

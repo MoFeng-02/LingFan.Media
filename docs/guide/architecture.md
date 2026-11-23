@@ -1,65 +1,108 @@
+---
+title: Architecture
+sources: ["src/Infrastructure/LingFan.Media.Core/MediaPlayer/MediaPlayer.cs", "src/Infrastructure/LingFan.Media.Core/Playback/VideoPipeline.cs", "src/Infrastructure/LingFan.Media.Core/Playback/FrameChannel.cs", "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IFrameChannel.cs", "src/Infrastructure/LingFan.Media.Consumers/ProcessingFrameSink.cs"]
+symbols: ["IMediaPlayer", "IFrameChannel", "IFrameSink", "IVideoRenderer", "IAudioOutput", "IMediaClock", "IBufferManager", "IMediaSession", "IHeadlessFrameConsumer", "IHeadlessAudioConsumer", "VideoFrame", "AudioFrame"]
+lang: en
+---
+
 # Architecture
 
-LingFan.Media is organised as a **contract layer** (`Abstractions`) above a set of **infrastructure modules**, with pluggable **backends**, **renderers**, **outputs**, and a **UI** layer on top. The defining principle: *the contract layer is the foundation; everything else adapts to it.*
+LingFan.Media is a layered, contract-driven system. The contract layer is the
+"law" every other layer depends on; the core orchestrates playback without
+knowing any concrete backend or UI; backends, renderers and outputs plug in
+through dependency injection.
 
-## Dependency inversion is the whole point
+## Module map
 
-`Abstractions` contains only signatures, auto-properties, and pure data models. It depends on **nothing** outside BCL + `Microsoft.Extensions.Logging.Abstractions`. Because of that:
+| Module | Responsibility |
+|---|---|
+| Abstractions | Pure contracts: interfaces, models, enums, events. Zero implementation, zero external references. |
+| Core | Playback orchestration: clock, buffering, frame routing, pipeline host, session lifetime. Knows no backend or UI. |
+| Sources | Media origins: file, network (HTTP/HTTPS), wrapped streams; stream factory and SSRF guard. |
+| Formats | Container parsing and demuxing helpers, format detection. |
+| Video | Video track model, processing chain and configuration. |
+| Audio | Audio track model, mixing, effects and configuration. |
+| Backends | Pluggable decoding/demuxing: FFmpeg, LibVLC, Media Foundation, MediaCodec, AVFoundation. |
+| Renderers | GPU video output: D3D11, Vulkan, OpenGL, OpenGL ES, Metal. |
+| Outputs | Audio output: WASAPI, OpenAL, OpenSL ES, AAudio, AVAudioEngine. |
+| Platforms | Platform services and native interop helpers. |
+| Extensions | DI composition root: `AddLingFanMedia()` and the module registration extensions. |
+| UI (Avalonia) | Optional presentation layer: `VideoView`, presenters, controls. Depends on Core, never the reverse. |
 
-- Backends, renderers, outputs, platforms, and UI can be added, removed, or rewritten without touching the contract.
-- The contract layer is allowed to *grow* (new method signatures may be added), but it must **never reference a concrete backend type** — that would break the dependency-inversion boundary.
+## Dependency direction
 
-> **Rule of thumb:** if a type is referenced by two or more layers, it belongs in `Abstractions`. If only one module uses it, it stays in that module.
+Dependencies point one way, toward the contracts:
 
-## The 12 logical modules
-
-| # | Module | Responsibility |
-|---|--------|----------------|
-| 01 | `Abstractions` | Cross-layer contracts: interfaces, models, enums, events (zero implementation) |
-| 02 | `Core` | `MediaPlayer`, `MediaSession`, `VideoPipeline`, `AudioPipeline`, `MediaClock`, `Synchronizer`, `BufferManager` |
-| 03 | `Sources` | `FileMediaSource` / `NetworkMediaSource` / `StreamMediaSource` + `MediaStreamFactory` |
-| 04 | `Formats` | `FormatDetector`, `DemuxerFactory`, metadata extraction |
-| 05 | `Video` | Video track, processor chain, deinterlace/scale/color, stats |
-| 06 | `Audio` | Audio track, mixer, volume, effects chain, stats |
-| 07 | `Backends` | `FFmpeg` / `VLC` / `MediaFoundation` (real); `WebRTC` (stub) |
-| 08 | `Renderers` | `D3D11` (real); `Vulkan` (validated, FFmpeg zero-copy, Windows) / `Metal` / `OpenGL` (partials) |
-| 09 | `Outputs` | `WASAPI`, `OpenAL`, `OpenSL ES`, `AAudio`, … |
-| 10 | `Platforms` | Platform capability detection & interop |
-| 11 | `Avalonia` | `VideoView`, `MediaControl`, Skia / Composition presenters |
-| 12 | `Extensions` | `AddLingFanMedia()`, `MediaBuilder`, codec registry, backend auto-selection |
-
-## Frame routing — one path, many sinks
-
-There is exactly **one** route a video frame takes out of the pipeline:
-
+```mermaid
+flowchart TD
+    UI["UI (Avalonia)"] --> Core
+    Ext["Extensions (composition root)"] --> Core
+    Core --> Abs["Abstractions (contracts)"]
+    Sources --> Abs
+    Formats --> Abs
+    Backends --> Abs
+    Renderers --> Abs
+    Outputs --> Abs
+    Video --> Abs
+    Audio --> Abs
 ```
-VideoPipeline → _videoFrameSink(frame) → _frameChannel.Emit(frame) → every subscribed IFrameSink
+
+- `Abstractions` references nothing but the BCL and logging abstractions.
+- `Core` references `Abstractions` only — it never references a backend, renderer
+  or UI framework.
+- Backends, renderers and outputs reference `Abstractions` (and GPU glue layers),
+  not each other and not the UI.
+- A type referenced by two or more layers lives in `Abstractions`; a type used by
+  a single module stays inside that module.
+
+## Frame routing
+
+Video frames flow through a single channel. There is no second, divergent
+delivery path for headless versus UI consumers.
+
+```mermaid
+flowchart LR
+    VP["VideoPipeline"] --> Sink["_videoFrameSink"]
+    Sink --> CH["FrameChannel.Emit"]
+    CH --> S1["IFrameSink subscriber"]
+    CH --> S2["IFrameSink subscriber"]
+    CH --> EV["VideoFrameAvailable event facade"]
 ```
 
-`MediaPlayer` injects a single sink delegate into the pipeline: `frame => _frameChannel.Emit(frame)`. The pipeline never branches on backend or renderer. `FrameChannel.Emit` fans out to all subscribed `IFrameSink`s. A headed renderer (`Composition` / `Skia` / `D3D11`) and a headless consumer (`ProcessingFrameSink`) implement the *same* `IFrameSink` contract and drink from the same channel — they differ only in terminal action (present vs. feed an algorithm) and capability (can they consume a GPU texture frame).
+- `IFrameChannel` is the port: `Subscribe(IFrameSink)`, `Unsubscribe(IFrameSink)`,
+  `Emit(VideoFrame)`. `IFrameSink.OnFrame(VideoFrame)` receives a **read-only
+  borrow** — a sink must not dispose the frame or hold a reference after the call
+  returns (with multicast subscribers, doing so causes use-after-free).
+- The public `IMediaPlayer.VideoFrameAvailable` event is an `Action<VideoFrame>`
+  adapter over this same channel. Advanced consumers (recording, thumbnails,
+  inference) can implement `IFrameSink` and subscribe directly.
+- The headless consumer helpers (`ProcessingFrameSink`, `ProcessingAudioSink`)
+  implement `IHeadlessFrameConsumer` / `IHeadlessAudioConsumer` and attach to the
+  pipeline; the UI `VideoView` subscribes to the channel and presents frames.
 
-> **Zero-copy is a Sink capability, not a separate branch.** Whether a frame is presented zero-copy depends on what the Sink can do, not on which fork of code produced it.
+## Unified ports (and one intentional asymmetry)
 
-## Unified output ports
-
-Production and consumption are deliberately decoupled. "Making changes" only ever happens *inside* the unified ports.
-
-- **Video output port = `IFrameChannel` + `IFrameSink`.** All three decode backends produce frames into this one channel. New terminal capabilities (recorder Sink, thumbnail Sink, transform chain) are added by subscribing a new `IFrameSink` — no backend or pipeline changes.
-- **Audio output port = `IAudioOutput`.** `AudioPipeline` normalises every backend's decoded audio into `IAudioOutput.Submit`. Audio is submitted **directly to `IAudioOutput` and bypasses the synchronizer** — the audio/video asymmetry is intentional; we do not add a sync branch to audio just for symmetry. The headless consumer (`ProcessingAudioSink`) shares the `IAudioOutput` contract with `WASAPIOutput`.
+- **Video** is routed through `IFrameChannel` / `IFrameSink`, so any number of
+  consumers can observe the same decoded frames.
+- **Audio** is submitted directly to `IAudioOutput.Submit`, bypassing the video
+  synchronizer. This asymmetry is intentional: audio is the timing master and is
+  pushed to the device on its own clock, while video is paced against that clock.
 
 ## Headless-first
 
-The headed path is literally *the headless pipeline plus a subscribing Present Sink*:
+`IVideoRenderer.Present` is driven by the same frame channel a headless consumer
+uses. In a UI, `VideoView` subscribes to the channel and presents through the
+platform compositor (DirectComposition, CAMetalLayer, SurfaceFlinger, Wayland
+subsurface). The core never creates a native window of its own — rendering is
+always composed into the host's surface, so UI controls can freely overlay video.
 
-```
-IVideoRenderer.Present  ←  VideoView.PresentFrame  ←  (subscribed to IFrameChannel)
-```
+## Session isolation and DI lifetimes
 
-A `VideoView` subscribes to the frame channel and bridges it to `IVideoRenderer.Present`. The contract stays neutral; only the terminal Sink differs.
-
-## Session isolation & DI layering
-
-- **System-level factories are `Singleton`.** `IMediaStreamFactory`, `IFormatDetector`, `ICodecRegistry`, the backend factories, and `BackendFallbackMediaPlayerFactory` live for the process lifetime.
-- **Per-playback state is `Transient` (a Session).** `MediaPlayer` creates its `MediaSession`, `MediaClock`, `BufferManager`, and pipelines inside `OpenAsync`. Each `IMediaPlayer` owns an independent session; tearing one down never disturbs another.
-
-> The public facade is `MediaPlayer` (in `Core`) and `FallbackMediaPlayer` / `BackendFallbackMediaPlayerFactory` (in `Playback`). There is no single `MediaGraph` type — playback is composed from these facades plus the DI container.
+- System-level factories (stream factory, decoder/renderer/output factories,
+  codec registry) are **singletons** registered once in the composition root.
+- Each `IMediaPlayer` owns an independent **session** (`IMediaSession`): its own
+  `IMediaClock`, `IBufferManager` and pipelines. Session objects are created
+  inside `OpenAsync`, not in the constructor, so a player can be constructed
+  cheaply and opened later.
+- This keeps concurrent players fully isolated — no shared clock, buffer or
+  pipeline state between sessions.

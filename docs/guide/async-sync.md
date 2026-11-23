@@ -1,95 +1,147 @@
+---
+title: Async & Sync Discipline
+sources: ["src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs", "src/Infrastructure/LingFan.Media.Core/MediaPlayer/MediaPlayer.Dispose.cs", "src/Infrastructure/LingFan.Media.Core/Playback/AudioPipeline.cs", "src/Infrastructure/LingFan.Media.Sources/Streams/NetworkMediaStream.cs"]
+symbols: ["IMediaPlayer", "IVideoRenderer", "IAudioOutput", "IMediaClock", "VideoFrame", "AudioFrame"]
+lang: en
+---
+
 # Async & Sync Discipline
 
-This guide describes the concurrency model. Violating these guidelines causes deadlocks, performance regression, and memory leaks.
+Async and sync are not interchangeable here. Mixing them incorrectly causes
+deadlocks, performance regressions and leaks. This page is the reader-facing
+summary of the rule the code follows; the exact per-method classification lives
+in the [API Reference](/api/).
 
-## Total strategy
+## The total strategy
 
-| Situation | Correct choice |
-|-----------|----------------|
-| Real I/O or blocking (network, file, device, decode, pipeline `await`) | **Real async** — `await`, return `Task` / `ValueTask` |
-| Pure in-memory / CPU / GPU / native release | **Sync** — `void` or sync return |
-| Interface contract requires `Task` but impl is pure in-memory | Return `Task.CompletedTask` (acceptable, **not** pseudo-async) |
+| Situation | Shape |
+|---|---|
+| Real I/O or blocking work (network, file, device, demux) | Truly async: `await`, returning `Task` / `ValueTask`. |
+| Pure in-memory / CPU / GPU / native release | Synchronous: `void` or a synchronous return. |
+| An async contract implemented by pure in-memory work | Returning `Task.CompletedTask` is correct and is **not** pseudo-async. |
 
-**Absolutely forbidden:** hiding blocking inside `Task` via `.Wait()` / `.Result` / `GetAwaiter().GetResult()` / `Task.Run(() => syncBlock)`.
+Never hide blocking inside a `Task` with `.Wait()`, `.Result` or
+`GetAwaiter().GetResult()`.
 
-## Sync/async dual support (prefer async)
+## Dual support, async preferred
 
-- **Direction A — real async I/O → you MUST add an `XxxAsync` signature.** If a method has a real `await` internally but only exposes a sync signature, add the async overload. Do not force callers into `.Wait()` / `.Result`.
-- **Direction B — pure in-memory → keep it sync-only, do NOT add async.** COM interop calls, in-memory decoder state switches, pool `Get` / `Return`, `Reset`, config / state queries — adding `async` returning `Task` is pseudo-async; don't.
+Public APIs support both sync and async where it makes sense, with async as the
+default. Two complementary rules:
 
-Resource types follow the built-in template: `Dispose` + `DisposeAsync`, `Initialize` + `InitializeAsync`. The default preferred public method is the async version; the sync version is a fallback for boundaries that cannot `await` (native callbacks, `void` lifecycle overrides).
+- **Direction A — real async I/O must expose an async signature.** If a method
+  internally awaits real I/O but only exposes a sync signature, add an `XxxAsync`
+  counterpart. Do not leave only a sync signature that blocks the caller.
+- **Direction B — pure in-memory work stays sync-only.** COM interop calls,
+  in-memory state switches, pool get/return/reset and configuration queries do
+  not get an async wrapper; that would be pseudo-async.
 
-**Mnemonic:** internal real `await` → give an async signature (preferred); internal pure in-memory → give a sync signature (only). Don't cross the lines.
+Resource and initialization types follow a symmetric template: `Dispose` +
+`DisposeAsync`, `Initialize` + `InitializeAsync`. The async version is the
+default; the sync version serves boundaries that cannot await (native callbacks,
+`void` lifecycle overrides).
 
-## Pseudo-async hard definition
+## What pseudo-async means
 
-Pseudo-async = returns `Task` but the body contains **hidden blocking** (`.Wait()` / `.Result` / `GetResult()` / `Task.Run(() => syncBlock)`), moving the block from the caller thread to a pool thread. The block is unchanged in nature.
+Pseudo-async is a method that returns `Task` but hides blocking in its body
+(`.Wait()` / `.Result` / `GetResult()`, or `Task.Run(() => /* blocking */)`).
+Moving the block to a thread-pool thread does not make it async.
 
-> **`Task.CompletedTask` is not pseudo-async.** The mark of pseudo-async is *hidden blocking*, not returning `Task.CompletedTask`. A pure-in-memory method implementing an async interface by returning `Task.CompletedTask` is normal and safe.
+The marker is **hidden blocking**, not the return type. A pure in-memory method
+that implements an async interface by returning `Task.CompletedTask` is normal
+and safe. (`await Task.Run(...)` is also evaluated case by case and annotated in
+source when used.)
 
-## Must stay synchronous (real sync, do not async-ify)
+## What must stay synchronous
 
-- `IVideoRenderer.Present` / D3D11 GPU upload (pure GPU work)
-- `IAudioOutput.Submit` (native COM back-pressure, bounded — a normal mechanism)
-- `SafeHandle.Dispose` / FFmpeg native release (`avcodec_close`, etc.)
-- `MediaClock` / `Synchronizer` (pure in-memory, use `lock` / `Interlocked`)
-- Parameterised `Initialize(int,int)` / `Initialize(codec, settings)`
-- `DecodeAsync` returns `ValueTask` (hot path — keep `ValueTask`, don't change to `Task`)
+- `IVideoRenderer.Present` and GPU texture uploads (pure GPU work).
+- `IAudioOutput.Submit` (native back-pressure is a bounded, normal mechanism).
+- `SafeHandle.Dispose` and native release calls.
+- `IMediaClock` and the synchronizer (pure in-memory, using `lock` / `Interlocked`).
+- Parameter/configuration `Initialize(...)` overloads.
+- `DecodeAsync` keeps `ValueTask` on the hot path (do not widen it to `Task`).
 
 ## Pipeline method layering
 
-| Method | Returns | Reason |
-|--------|---------|--------|
-| `VideoPipeline.Start()` | `void` | set flag + `Task.Run` fire-and-forget, pure in-memory |
-| `VideoPipeline.Pause()` / `Flush()` / `Stop()` / `Clear()` | `void` | pure in-memory; `Stop()` only calls `cts.Cancel()`, does **not** wait for the thread |
-| `AudioPipeline.StartAsync()` | `Task` | a fresh audio start truly `await`s device buffer preroll (`BeginStreamingAsync`) to fix start-of-playback silence |
-| `MediaPipelineHost.Start/Pause/Flush/Stop` | `void` | thin wrapper delegating to pipeline sync methods |
-| `IMediaPlayer.OpenAsync` | `Task` | real `await` (demuxer open + buffer start + stream read) |
-| `IMediaPlayer.PlayAsync/PauseAsync/StopAsync` | `Task` | pure in-memory → `Task.CompletedTask` |
-| `IMediaPlayer.SeekAsync` | `Task` | real `await` (demuxer seek depends on stream seek/read) |
-| `IMediaPlayer.DisposeAsync` | `ValueTask` | real `await` (thread join + GPU flush + network close) |
+| Layer | Methods | Shape |
+|---|---|---|
+| Video pipeline | Start / Pause / Flush / Stop / Clear | `void`, in-memory. Start sets a flag and launches the loop; Stop only signals cancellation. |
+| Audio pipeline | StartAsync | `Task`, truly awaits device buffer pre-roll so playback does not begin into a silent window. Pause / Flush / Stop / Clear remain sync. |
+| Pipeline host | Start / Pause / Flush / Stop | Thin sync delegates (Start follows the audio-first async upgrade). |
+| `IMediaPlayer` | OpenAsync / SeekAsync / DisposeAsync | Truly async (I/O, thread join, resource release). |
+| `IMediaPlayer` | PlayAsync / PauseAsync / StopAsync | Async contract, pure in-memory body returning `Task.CompletedTask`. |
 
-> `Stop()` is a fast signal (`cts.Cancel`); `DisposeAsync()` is the graceful wait (join + release). Responsibility is separated.
+`Stop` is an O(1) cancellation signal; it never waits for threads. The thread
+join happens in `DisposeAsync`, which cancels the pipeline and awaits its task
+with a bounded timeout, then releases resources in guarded steps. This separation
+keeps `Stop` non-blocking and disposal graceful.
 
-## Thread join belongs in DisposeAsync, not Stop
+## Blocking points and their async replacements
 
-`DisposeAsync` step 1 joins the pipeline thread: `cts.Cancel(); await _pipelineTask.WaitAsync(5s, ct)`. Each of its ~11 steps is wrapped in its own `try/catch`.
+| Blocking pattern | Replacement |
+|---|---|
+| `_pipelineTask.Wait(timeout)` | `cts.Cancel(); await _pipelineTask.WaitAsync(timeout, ct)` |
+| `channel.Reader.ReadAsync()...GetResult()` | `await channel.Reader.ReadAsync(ct)` |
+| Synchronous blocking `Dequeue()` | `ValueTask<T> DequeueAsync(ct)`; keep `TryDequeue` sync for consumers |
+| `Dispose()` calling `DisposeAsync().GetResult()` | A separate synchronous cleanup path in `Dispose()` |
 
-## Blocking → real-async replacements
+## Synchronous Dispose is a fallback
 
-| Old blocking | Real-async replacement |
-|-------------|------------------------|
-| `_pipelineTask.Wait(5s)` | `cts.Cancel(); await _pipelineTask.WaitAsync(5s, ct)` |
-| `channel.Reader.ReadAsync().AsTask().GetAwaiter().GetResult()` | `await channel.Reader.ReadAsync(ct)` |
-| sync `void Dequeue()` blocks | `ValueTask<T> DequeueAsync(ct)` wrapping `await ReadAsync`; keep `TryDequeue` sync |
-| `Dispose()` calls `DisposeAsync().GetResult()` | sync `Dispose()` does its own sync cleanup; **never** call `DisposeAsync().GetResult()` inside sync `Dispose` |
+`Dispose()` exists so resources are not leaked when a caller did not await
+disposal. It runs its **own** synchronous cleanup path; it must never call
+`DisposeAsync().GetResult()` or `.Wait()`. The recommended path remains
+`await DisposeAsync()`; a synchronous dispose may drop a few in-flight GPU frames
+but does not leak resources.
 
-## Sync Dispose fallback
+## Async locks
 
-- Sync `Dispose()` is a safety net (ensures no leak if the caller didn't `await`).
-- **Hard rule:** sync `Dispose()` must **never** call `DisposeAsync().GetResult()` / `.Wait()` (pseudo-async).
-- Sync `Dispose()` does its own synchronous cleanup (call `pipeline.Stop()` + release native resources directly).
-- A few frames may be lost if the GPU queue isn't flushed — but **resources never leak**.
-- Preferred path is always `await DisposeAsync()`; sync `Dispose()` is purely a fallback.
+- Shared state across an `await` → `SemaphoreSlim` with `await WaitAsync()`.
+- Pure synchronous shared state (clock, synchronizer) → keep `lock` / `Interlocked`.
+- `Channel<T>` is already thread-safe; usually no extra lock is needed.
+- Never `await` inside a `lock`. If a method awaits, it needs an async lock.
 
-## Async lock rules
+## Caller contract: no async void
 
-- Shared state across `await` → `SemaphoreSlim` + `await sem.WaitAsync()`.
-- Pure-sync shared state (Clock / Synchronizer) → keep `lock` / `Interlocked`, **don't** switch to `SemaphoreSlim`.
-- `Channel<T>` is thread-safe by itself; usually no lock needed.
-- **Hard rule:** never `await` inside a `lock`.
+`async void` is forbidden — exceptions escape unobserved and can crash the
+process. `async Task` / `async ValueTask` are fine, but a `void` override cannot
+change its signature; add a separate async method instead.
 
-## `async void` is absolutely forbidden
+- `VideoView.OnDetachedFromVisualTree` is a `void` override → a separate
+  `DisposePlayerAsync()` is provided for callers to await; the override uses the
+  synchronous `Dispose()` fallback.
+- `VideoView.OnPlayerChanged` is a `void` callback → open the player
+  (`await player.OpenAsync()`) **before** assigning the `Player` property.
 
-Any `void` method (event callback, lifecycle override) must **not** be made `async` — exceptions would be swallowed, the caller cannot `await`, and the process may crash. Use `async Task` / `async ValueTask` instead, and add a separate async method for `void` overrides.
+## HttpClient comes from the factory
 
-Examples:
+Any `HttpClient` is obtained through `IHttpClientFactory.CreateClient()`, not
+`new HttpClient()` (except rare custom-handler cases such as SSL bypass, which
+must set `PooledConnectionLifetime`). Repeatedly constructing clients exhausts
+sockets through `TIME_WAIT` accumulation. Cookies travel as request headers
+rather than a `CookieContainer`, so they work with the factory's shared handlers.
 
-- `VideoView.OnDetachedFromVisualTree` is a `void` override → add `public async ValueTask DisposePlayerAsync()` for callers; the `void` override calls sync `Dispose()` as fallback.
-- `VideoView.OnPlayerChanged` is a `void` callback → the caller should `await player.OpenAsync()` *before* binding the `Player` property.
+## One sanctioned exception
 
-## HttpClient must use IHttpClientFactory
+The FFmpeg demuxer's native AVIO read callback has a synchronous `read_packet`
+signature, so it bridges to the async stream with `GetResult()` inside the
+callback. This runs on an FFmpeg worker thread (not the UI thread), is an
+unavoidable native boundary, and is annotated in source — it is not pseudo-async
+to be "optimized away".
 
-Anywhere an `HttpClient` is needed, obtain it via `IHttpClientFactory.CreateClient()` — **never `new HttpClient()`** (except rare SSL-bypass cases that set `PooledConnectionLifetime`). `MediaStreamFactory` is a Singleton holding an `IHttpClientFactory` reference. Network streams use the pooled client. Cookies travel via request headers, not `CookieContainer`, to stay compatible with the shared handler.
+## Diagnosing stutter and frame stalls
 
+When playback stalls, jitters or rebounds, the first hypothesis is **not** "add
+async / `Task.Run`". In this codebase such symptoms have consistently been
+synchronous-logic errors, checked in this order:
 
+1. Queue semantics (head vs tail, peek-then-dequeue safety, accidental drops).
+2. Clock interpolation (master-clock interpolation, audio device cursor
+   quantization, present-threshold spin safety).
+3. COM thread affinity (native objects with thread affinity must stay on a single
+   dedicated scheduler/thread).
+4. Decoder / demuxer contracts (e.g. a transform that rejects input until its
+   output is drained).
+5. Undue synchronous blocking at an I/O boundary.
+
+Covering a synchronous bug with async introduces cross-thread COM corruption,
+shutdown hangs and new scheduling races — worse than the original bug. Async
+belongs only at real I/O boundaries; hot paths stay synchronous.

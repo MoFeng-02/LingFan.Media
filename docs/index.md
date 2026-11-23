@@ -1,31 +1,30 @@
 ---
 layout: home
-
+title: LingFan.Media
+sources: ["README.zh.md", "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs"]
+symbols: ["IMediaPlayer", "IFrameChannel", "IFrameSink", "IFrameResource"]
+lang: en
 hero:
   name: LingFan.Media
   text: .NET 10 AOT Media Infrastructure
-  tagline: A cross-platform, AOT-first, pluggable media infrastructure for the .NET platform.
+  tagline: A contract-driven, headless-first, cross-platform playback pipeline — pluggable backends, GPU zero-copy, and AOT-ready native interop.
   actions:
     - theme: brand
       text: Get Started
-      link: /guide/introduction
+      link: /guide/getting-started
     - theme: alt
       text: Architecture
       link: /guide/architecture
-
+    - theme: alt
+      text: API Reference
+      link: /api/
 features:
   - title: AOT-first
-    details: Zero reflection, zero [ComImport], [LibraryImport]-only P/Invoke. Deterministic under NativeAOT publishing.
+    details: Zero reflection activation, no ComImport, source-generated LibraryImport for every native call. Every library declares IsAotCompatible.
   - title: Pluggable backends
-    details: FFmpeg / VLC / MediaFoundation behind one contract layer and one frame-routing primitive. No per-backend branches.
+    details: FFmpeg, LibVLC, Media Foundation, MediaCodec and AVFoundation behind one contract and one frame-routing path. Swap a backend with a single DI registration.
   - title: Headless by default
-    details: Frame data flows through IFrameChannel / IFrameSink. UI is just a subscribing Sink — same API for headless and headed.
+    details: The same pipeline drives servers, off-screen jobs and UIs. Decoded frames flow through IFrameChannel / IFrameSink; a renderer is just another subscriber.
   - title: GPU zero-copy
-    details: Video frames travel as IFrameResource (CPU or GPU). Zero-copy is a Sink capability, not a separate code path.
+    details: Hardware-decoded frames travel as IFrameResource GPU resources where the platform supports import, with a correct CPU fallback elsewhere.
 ---
-
-## About LingFan.Media
-
-LingFan.Media is a cross-platform media infrastructure for the .NET platform, built on .NET 10 with a 100% AOT compatibility target.
-
-> Full references: [Contract Layer (Abstractions)](/api/abstractions/) · [Infrastructure Layer](/api/infrastructure/).

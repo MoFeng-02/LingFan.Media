@@ -1,89 +1,107 @@
+---
+title: 快速开始
+sources: ["src/Infrastructure/LingFan.Media.Extensions/ServiceCollectionExtensions.cs", "src/Infrastructure/LingFan.Media.Extensions/ModuleExtensions.cs", "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs", "src/Infrastructure/LingFan.Media.Sources/Sources/FileMediaSource.cs"]
+symbols: ["IMediaPlayer", "IMediaPlayerFactory", "IMediaSource", "FileMediaSource", "VideoFrame", "AudioFrame", "MediaState"]
+lang: zh
+---
+
 # 快速开始
 
-本指南通过依赖注入接入 LingFan.Media 并播放一个文件——包含无界面（无头）与有界面（有界面）两种情形。
+本页演示如何注册媒体服务，并以三种形态播放文件：有头 UI、无头消费者，以及后端回退装配。
 
 ## 1. 注册服务
 
-LingFan.Media 完全通过 `Microsoft.Extensions.DependencyInjection` 组装。唯一的入口是 `AddLingFanMedia()`，它返回一个流畅的 `MediaBuilder`。随后你链式调用 后端 与 渲染器/输出 的注册。
+LingFan.Media 通过依赖注入装配。先加入核心，再加入所需的后端、渲染器与音频输出。注册顺序对回退有意义（见下文）。
 
 ```csharp
-using LingFan.Media.Extensions;
-using LingFan.Media.Abstractions;
+using LingFan.Media.Extensions;                 // AddLingFanMedia
+using LingFan.Media.Backends.FFmpeg;            // AddFFmpeg
+using LingFan.Media.Backends.MediaFoundation;   // AddMediaFoundation
+using LingFan.Media.Renderers.D3D11;            // AddD3D11Renderer
+using LingFan.Media.Outputs.Wasapi;             // AddWasapiOutput
 using Microsoft.Extensions.DependencyInjection;
 
 var services = new ServiceCollection();
 
-services
-    .AddLingFanMedia()          // core + fallback middleware (auto-mounted)
-    .AddFFmpeg()                 // FFmpeg backend (cross-platform)
-    .AddMediaFoundation()        // Windows MediaFoundation backend
-    .AddD3D11Renderer()          // D3D11 GPU renderer (Windows)
-    .AddWasapiOutput();          // WASAPI audio output (Windows)
-
-// 在 Apple / Android 上，FFmpeg + VLC 今天已可用；第一方原生后端
-//（AVFoundation、MediaCodec）将逐步加入。Linux 不是目标平台。
+services.AddLingFanMedia()        // 核心：时钟、缓冲、帧路由、会话
+        .AddFFmpeg()              // 跨平台解码后端（主用）
+        .AddMediaFoundation()     // Windows 原生后端（可选回退）
+        .AddD3D11Renderer()       // Windows GPU 渲染器
+        .AddWasapiOutput();       // Windows 音频输出
 
 var provider = services.BuildServiceProvider();
 ```
 
-`AddLingFanMedia()` 会自动挂载 `BackendFallbackMediaPlayerFactory`，因此运行时会为你挑选一个可用的 后端，并在某个 后端 抛错时回退。
+`AddLingFanMedia()` 挂载共享基础设施（流工厂、格式探测器、编解码注册表、带 SSRF 防护的命名 `HttpClient`）以及后端回退播放器工厂。每个 `AddXxx()` 注册该组件的工厂；解封装工厂以有序集合注册，使播放器可按序尝试。
 
-## 2. 打开并播放（无界面 无头）
+> 请选择与目标平台匹配的渲染器与音频输出。完整矩阵见[平台支持](/zh/guide/platforms)。例如在 Linux 上，应使用 Vulkan 或 OpenGL 渲染器搭配 OpenAL 输出，而非 D3D11 / WASAPI。
 
-在无界面模式下，你订阅 `VideoFrameAvailable` / `AudioDataAvailable` 并自行消费帧——无需 UI。
+## 2. 无头播放
+
+无头消费者直接订阅解码帧——没有窗口，没有 UI 框架。这与 UI 使用的是同一条管线。
 
 ```csharp
 using LingFan.Media.Abstractions;
 using LingFan.Media.Sources;
 
-// Resolve the factory (auto-mounted by AddLingFanMedia).
 var factory = provider.GetRequiredService<IMediaPlayerFactory>();
-var player = factory.Create();
+await using var player = factory.Create();
 
-// Build a source for a local file.
-IMediaSource source = new FileMediaSource("sample.mp4");
-
-player.VideoFrameAvailable += frame =>
+// 帧在回调内只读借用。需要同步拷贝所需数据；
+// 返回后切勿 Dispose 该帧，也不要持有引用。
+player.VideoFrameAvailable += (VideoFrame frame) =>
 {
-    // frame is a read-only borrow — do NOT Dispose it.
-    Console.WriteLine($"frame {frame.Width}x{frame.Height} @ {frame.Timestamp}");
+    // 例如读取 frame.Width / frame.Height、拷贝像素、跑推理……
 };
 
-await player.OpenAsync(source);
+player.StateChanged += (_, e) => Console.WriteLine(e.State);
+
+await player.OpenAsync(new FileMediaSource("path/to/video.mp4"));
 await player.PlayAsync();
 
-// ... keep the process alive while playback runs ...
+// ……播放……
+
 await player.StopAsync();
-await player.DisposeAsync();
 ```
 
-`IMediaPlayer` 暴露完整的契约：`State`、`Position`、`Duration`、`Volume`、`PlaybackRate`、`VideoDroppedFrames`，以及 `StateChanged`、`ErrorOccurred`、`PositionChanged` 与 `SubtitleReceived` 事件。
+关键生命周期规则：
 
-## 3. 打开并播放（有界面 有界面，Avalonia）
+- `OpenAsync` / `SeekAsync` / `StopAsync` 执行真实 I/O，接受 `CancellationToken`。`PlayAsync` / `PauseAsync` 是纯内存态切换，同步完成。
+- 传给 `VideoFrameAvailable`（及 `AudioDataAvailable`）的帧是**只读借用**。在回调返回前拷贝所需数据；切勿释放它或跨线程持有。
+- 优先 `await player.DisposeAsync()`；同步 `Dispose()` 是兜底，释放资源但不等待管线线程。
 
-对于屏幕上的播放器，将 `IMediaPlayer` 绑定到 Avalonia 的 `VideoView`。UI 订阅同一个 `VideoFrameAvailable` 通道，并将其桥接到 `IVideoRenderer.Present`——无需改动 后端。
+## 3. 有头播放（Avalonia）
+
+使用 Avalonia UI 层时，把播放器绑定到 `VideoView`。请**先**打开播放器再赋值，因为属性变更回调是同步 `void`，无法 await。
 
 ```csharp
-// After AddLingFanMedia().AddFFmpeg().AddD3D11Renderer().AddWasapiOutput()
-// and AddAvaloniaControls() (UI layer):
-var player = provider.GetRequiredService<IMediaPlayerFactory>().Create();
-await player.OpenAsync(new FileMediaSource("sample.mp4"));
-myVideoView.Player = player;   // VideoView subscribes to the frame channel
+await player.OpenAsync(new FileMediaSource("path/to/video.mp4"));
+myVideoView.Player = player;   // VideoView 订阅帧通道并呈现
 await player.PlayAsync();
 ```
 
-## 4. 后端 选择与回退
+`VideoView` 与无头消费者订阅同一帧通道，并经平台合成器呈现帧——不存在第二条分歧的投递路径。
 
-你通常不需要挑选 后端。`BackendFallbackMediaPlayerFactory` 按 DI 注册顺序尝试各个 后端，并按文件以及按 `(container, codec)` 对记住可用的那一个。要强制使用特定 后端，可使用 `IMediaPlayerFactory.Create(...)` 重载并显式传入 解复用器/解码器 工厂。
+## 4. 后端回退
 
-> **开箱即不支持：** 循环播放（没有 `Loop` 属性——请订阅 `StateChanged` 并在 `Ended` 时调用 `PlayAsync()`）、播放列表，以及跨进程的持久 后端 内存。
+注册了多个后端时，默认工厂按注册顺序尝试，并记住某个 `(容器, 编解码)` 组合下成功的后端，后续打开直接跳到可用后端。
+
+```csharp
+services.AddLingFanMedia()
+        .AddFFmpeg()            // 先尝试
+        .AddMediaFoundation();  // FFmpeg 无法打开时尝试
+```
+
+若要无视回退强制指定后端，使用接受后端组的 `IMediaPlayerFactory.Create(...)` 显式重载。
 
 ## 关键类型
 
-| Type | Namespace | Role |
-|------|-----------|------|
-| `IMediaPlayer` | `LingFan.Media.Abstractions` | 播放门面（facade） |
-| `IMediaPlayerFactory` | `LingFan.Media.Abstractions` | 创建播放器；默认实现为 `BackendFallbackMediaPlayerFactory` |
-| `IMediaSource` / `FileMediaSource` | `LingFan.Media.Abstractions` / `LingFan.Media.Sources` | 描述要播放的内容 |
-| `AddLingFanMedia()` | `LingFan.Media.Extensions` | DI 入口 |
-| `MediaBuilder` | `LingFan.Media.Extensions` | 流畅的注册链 |
+| 类型 | 职责 |
+|---|---|
+| `IMediaPlayer` | 播放会话：打开 / 播放 / 暂停 / 定位 / 停止 / 释放，状态与位置，帧事件。 |
+| `IMediaPlayerFactory` | 创建播放器会话；解析后端组。 |
+| `IMediaSource` | 描述媒体来源（文件、网络、流）。 |
+| `VideoFrame` / `AudioFrame` | 经帧通道 / 音频输出投递的解码帧。 |
+| `MediaState` | 会话状态机（Idle、Opening、Buffering、Playing、Paused、Stopped、Ended、Error）。 |
+
+上述每个公共类型在 [API 参考](/zh/api/) 下都有参考页，含精确签名与备注。
