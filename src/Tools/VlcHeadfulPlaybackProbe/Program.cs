@@ -158,7 +158,7 @@ internal static partial class Program
         }
 
         var (sp, player, countingFactory) = BuildPlayer(
-            verbose, doVideo, doAudio, enableCategory, exclusiveMode, pollingMode, saveFrames, saveDir);
+            verbose, useHw, doVideo, doAudio, enableCategory, exclusiveMode, pollingMode, saveFrames, saveDir);
         await using var _sp = sp;
 
         // 音频进度观测量（确认音频经 VLC 回调捕获并真实出声）

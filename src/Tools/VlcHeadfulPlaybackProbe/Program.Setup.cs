@@ -26,7 +26,7 @@ internal static partial class Program
 {
     /// <summary>构建 VLC 后端/D3D11 渲染器/音频输出 DI 容器与播放器（含计数装饰器）。容器由调用方负责释放。</summary>
     private static (ServiceProvider Sp, IMediaPlayer Player, CountingVideoRendererFactory? Counting) BuildPlayer(
-        bool verbose, bool doVideo, bool doAudio,
+        bool verbose, bool useHw, bool doVideo, bool doAudio,
         bool enableCategory, bool exclusiveMode, bool pollingMode, int saveFrames, string saveDir)
     {
         var loggerFactory = LoggerFactory.Create(b => b
