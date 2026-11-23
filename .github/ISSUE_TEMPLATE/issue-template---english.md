@@ -36,8 +36,8 @@ What actually happened? Include error messages, unexpected behaviour, or any rel
 
 ### 5. Environment details (can be in English or common terms)
 - Operating system and version (e.g., Windows 11, macOS 14, Ubuntu 22.04, Android 14, iOS 17):
-- .NET runtime and version (e.g., .NET 8, .NET 10; NativeAOT?):
-- LingFan.Media version (e.g., v1.2.3 or commit hash):
+- .NET runtime and version (e.g., .NET 10; NativeAOT?):
+- LingFan.Media version (e.g., v1.2.3):
 - UI framework (Avalonia / MAUI / console · no UI / other):
 - Media file info (container, video/audio codecs, resolution; or a link to a shareable sample file):
 - GPU model; hardware decoding on or off (does the issue only happen with hardware or software decoding?):

@@ -36,8 +36,8 @@ assignees: ''
 
 ### 5. 环境信息（母语或通用术语）
 - 操作系统与版本（如 Windows 11, macOS 14, Ubuntu 22.04, Android 14, iOS 17）：
-- .NET 运行时与版本（如 .NET 8 / .NET 10，是否 NativeAOT）：
-- LingFan.Media 版本（如 v1.2.3 或 commit 哈希）：
+- .NET 运行时与版本（NET 10，是否 NativeAOT）：
+- LingFan.Media 版本（如 v1.2.3）：
 - UI 框架（Avalonia / MAUI / 控制台·无 UI / 其他）：
 - 媒体文件信息（容器、视频/音频编码、分辨率，或可分享的样本文件链接）：
 - GPU 型号；硬解开/关（问题是否只出现在硬解或软解下？）：
