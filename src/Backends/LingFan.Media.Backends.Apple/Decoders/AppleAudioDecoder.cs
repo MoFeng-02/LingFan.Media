@@ -19,10 +19,12 @@ namespace LingFan.Media.Backends.Apple.Decoders;
 /// <para><b>输出格式</b>：AAC 由 AudioSpecificConfig 解析采样率/声道；MP3 于首包懒解析 MPEG 帧头回填
 /// <see cref="OutputSampleRate"/> / <see cref="OutputChannels"/>；其余编码（Opus/FLAC/AC3）当前诚实拒绝，待扩展。</para>
 /// <para><b>仅 Apple 可用</b>：非 Apple 运行时 <see cref="Initialize"/> 抛 <see cref="PlatformNotSupportedException"/>。</para>
+/// <para><b>分部划分</b>：Convert 分部管转换通路（FillComplexBuffer/输入回调/排空）；
+/// Bitstream 分部管 AAC/MP3 码流头解析。本文件为初始化、契约入口与生命周期。</para>
 /// </remarks>
 [UnconditionalSuppressMessage("Trimming", "IL2050",
     Justification = "无 [ComImport]，使用原始 [LibraryImport] P/Invoke，不会被裁剪器移除。仅 Apple 运行时使用。")]
-internal sealed unsafe class AppleAudioDecoder : IAudioDecoder
+internal sealed unsafe partial class AppleAudioDecoder : IAudioDecoder
 {
     private readonly AppleBackend _backend;
     private readonly ILogger<AppleAudioDecoder> _logger;
@@ -38,20 +40,6 @@ internal sealed unsafe class AppleAudioDecoder : IAudioDecoder
     private int _outputChannels;
     private int _bytesPerOutputPacket;   // S16：2 * 声道
     private int _framesPerPacket;        // AAC=1024；写入包描述的提示
-
-    // 输出缓冲（固定容量，单包解出的 PCM 远小于此；HE-AAC 多声道亦覆盖）
-    private byte[] _outBuffer = Array.Empty<byte>();
-    private int _outCapacity;
-    private AppleRuntime.AudioBufferList _outList;
-
-    // 输入回调（AudioConverterComplexInputDataProc）相关状态
-    private GCHandle _gcHandle;          // refCon → this
-    private nint _inputProcPtr;          // 静态回调的函数指针
-    private bool _inputHasData;          // 当前包是否仍有未供应的压缩数据
-    private nint _inputPtr;              // 当前包数据指针（fixed 块内有效）
-    private int _inputLength;
-    private AppleRuntime.AudioStreamPacketDescription _pd; // 单包描述（fixed 块内被引用）
-    private nint _pdPtr;
 
     private bool _initialized;
     private bool _disposed;
@@ -209,136 +197,6 @@ internal sealed unsafe class AppleAudioDecoder : IAudioDecoder
         _inputHasData = false;
     }
 
-    private void FeedAndDecode()
-    {
-        while (_pendingInput.Count > 0)
-        {
-            var pkt = _pendingInput.Dequeue();
-            try
-            {
-                DecodeOne(pkt);
-            }
-            finally
-            {
-                pkt.Dispose();
-            }
-        }
-    }
-
-    private unsafe void DecodeOne(MediaPacket pkt)
-    {
-        byte[] data = pkt.Data.ToArray();
-        int total = data.Length;
-        if (total == 0) return;
-
-        // MP3 等未知采样率：首包懒解析 MPEG 帧头回填 Output*（转换器输出率按输入推导，无需重建）
-        if (_codecType == AudioCodec.MP3 && _outputSampleRate == 0
-            && TryParseMp3FrameHeader(data, out int sr, out int ch))
-        {
-            _outputSampleRate = sr;
-            _outputChannels = ch;
-            _bytesPerOutputPacket = 2 * _outputChannels;
-        }
-
-        _inputLength = total;
-        _inputHasData = true;
-        _pd.mStartOffset = 0;
-        _pd.mDataByteSize = (uint)total;
-        _pd.mVariableFramesInPacket = (uint)_framesPerPacket;
-
-        nint refCon = GCHandle.ToIntPtr(_gcHandle);
-        fixed (byte* pIn = data)
-        fixed (AppleRuntime.AudioStreamPacketDescription* pPd = &_pd)
-        fixed (byte* pOut = _outBuffer)
-        fixed (AppleRuntime.AudioBufferList* pList = &_outList)
-        {
-            _inputPtr = (nint)pIn;
-            _pdPtr = (nint)pPd;
-            while (true)
-            {
-                pList->mNumberBuffers = 1;
-                pList->mBuffers.mNumberChannels = (uint)_outputChannels;
-                pList->mBuffers.mData = (nint)pOut;
-                pList->mBuffers.mDataByteSize = (uint)_outCapacity;
-
-                int req = _outCapacity / _bytesPerOutputPacket;
-                int outPackets = req;
-                _ = AppleRuntime.AudioConverterFillComplexBuffer(
-                    _converter, _inputProcPtr, refCon, ref outPackets, (nint)pList, nint.Zero);
-                if (outPackets <= 0) break;
-
-                int produced = outPackets * _bytesPerOutputPacket;
-                var pcm = new byte[produced];
-                new ReadOnlySpan<byte>(pOut, produced).CopyTo(pcm);
-                int frameCount = produced / (2 * _outputChannels);
-                _pendingFrames.Enqueue(new AudioFrame(
-                    pcm, _outputSampleRate, _outputChannels, SampleFormat.S16,
-                    pkt.Timestamp, TimeSpan.Zero, frameCount));
-
-                if (!_inputHasData) break; // 当前包已耗尽且输出排空
-            }
-        }
-        _inputHasData = false;
-    }
-
-    private unsafe void DrainConverter()
-    {
-        if (_converter == nint.Zero) return;
-        _inputHasData = false;
-        nint refCon = GCHandle.ToIntPtr(_gcHandle);
-        fixed (byte* pOut = _outBuffer)
-        fixed (AppleRuntime.AudioBufferList* pList = &_outList)
-        {
-            while (true)
-            {
-                pList->mNumberBuffers = 1;
-                pList->mBuffers.mNumberChannels = (uint)_outputChannels;
-                pList->mBuffers.mData = (nint)pOut;
-                pList->mBuffers.mDataByteSize = (uint)_outCapacity;
-
-                int req = _outCapacity / _bytesPerOutputPacket;
-                int outPackets = req;
-                _ = AppleRuntime.AudioConverterFillComplexBuffer(
-                    _converter, _inputProcPtr, refCon, ref outPackets, (nint)pList, nint.Zero);
-                if (outPackets <= 0) break;
-
-                int produced = outPackets * _bytesPerOutputPacket;
-                var pcm = new byte[produced];
-                new ReadOnlySpan<byte>(pOut, produced).CopyTo(pcm);
-                int frameCount = produced / (2 * _outputChannels);
-                _pendingFrames.Enqueue(new AudioFrame(
-                    pcm, _outputSampleRate, _outputChannels, SampleFormat.S16,
-                    TimeSpan.Zero, TimeSpan.Zero, frameCount));
-            }
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static unsafe int InputProc(nint converter, uint* ioNumberDataPackets, nint ioData,
-        nint* outDataPacketDescription, nint userData)
-    {
-        var dec = GCHandle.FromIntPtr(userData).Target as AppleAudioDecoder;
-        if (dec is null) return AppleRuntime.noErr;
-
-        // 无更多压缩数据：告知转换器停止拉取（其将输出已缓冲 PCM 或返回）
-        if (!dec._inputHasData)
-        {
-            *ioNumberDataPackets = 0;
-            return AppleRuntime.noErr;
-        }
-
-        var abl = (AppleRuntime.AudioBufferList*)ioData;
-        abl->mNumberBuffers = 1;
-        abl->mBuffers.mNumberChannels = (uint)dec._outputChannels;
-        abl->mBuffers.mData = dec._inputPtr;
-        abl->mBuffers.mDataByteSize = (uint)dec._inputLength;
-
-        *ioNumberDataPackets = 1;
-        *outDataPacketDescription = dec._pdPtr;
-        dec._inputHasData = false; // 当前包已交付，下次拉取返回 0
-        return AppleRuntime.noErr;
-    }
-
     private AudioFrame? ReadOutput()
         => _pendingFrames.Count > 0 ? _pendingFrames.Dequeue() : null;
 
@@ -346,65 +204,6 @@ internal sealed unsafe class AppleAudioDecoder : IAudioDecoder
     {
         if (!_initialized || _converter == nint.Zero)
             throw new InvalidOperationException("AppleAudioDecoder 尚未 Initialize。");
-    }
-
-    // AAC AudioSpecificConfig（ISO/IEC 14496-3 §1.6.2.1）解析
-    private static readonly int[] AacSampleRates =
-        { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350 };
-
-    private static bool TryParseAacAudioSpecificConfig(ReadOnlyMemory<byte> asc, out int sampleRate, out int channels)
-    {
-        sampleRate = 0;
-        channels = 0;
-        var s = asc.Span;
-        if (s.Length < 2) return false;
-
-        int b0 = s[0];
-        int b1 = s[1];
-        int srIndex = ((b0 & 0x07) << 1) | (b1 >> 7);
-        int chConfig = (b1 >> 3) & 0x0F;
-        if (srIndex >= AacSampleRates.Length) return false;
-
-        sampleRate = AacSampleRates[srIndex];
-        channels = chConfig switch
-        {
-            1 => 1,
-            2 => 2,
-            3 => 3,
-            4 => 4,
-            5 => 5,
-            6 => 6,
-            7 => 8,
-            11 => 7,
-            _ => 0,
-        };
-        return sampleRate > 0 && channels > 0;
-    }
-
-    // MP3 帧头（MPEG1 Layer III 为主）解析，用于懒回填 Output*
-    private static bool TryParseMp3FrameHeader(ReadOnlyMemory<byte> data, out int sampleRate, out int channels)
-    {
-        sampleRate = 0;
-        channels = 0;
-        var s = data.Span;
-        if (s.Length < 4) return false;
-        if (s[0] != 0xFF || (s[1] & 0xE0) != 0xE0) return false;
-
-        int version = (s[1] >> 3) & 0x03;   // 11=MPEG1, 10=MPEG2, 00=MPEG2.5
-        int srIndex = (s[2] >> 2) & 0x03;
-        int chMode = (s[3] >> 6) & 0x03;      // 11=单声道
-
-        int ver = version switch
-        {
-            3 => 1,   // MPEG1
-            2 => 2,   // MPEG2
-            _ => 25,  // MPEG2.5
-        };
-        int[] sr1 = { 44100, 48000, 32000, 0 };
-        int[] sr2 = { 22050, 24000, 16000, 0 };
-        sampleRate = ver == 1 ? sr1[srIndex] : sr2[srIndex];
-        channels = chMode == 3 ? 1 : 2;
-        return sampleRate > 0;
     }
 
     /// <inheritdoc/>
