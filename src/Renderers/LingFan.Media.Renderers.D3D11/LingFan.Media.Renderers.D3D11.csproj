@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -19,5 +19,9 @@
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Composition\LingFan.Media.Composition.csproj" />
     <ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
   </ItemGroup>
+
+
+  <!-- BT.601 着色器系数唯一真源注入（Targets/Colorimetry），构建期生成 Bt601Shaders.g.cs -->
+  <Import Project="..\..\..\Targets\Colorimetry\Bt601ShaderSources.targets" />
 
 </Project>

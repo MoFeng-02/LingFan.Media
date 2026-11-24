@@ -81,7 +81,8 @@ internal sealed unsafe partial class GlesShaderPipeline : IDisposable
         """;
 
     // YUV 三平面（BT.601 全范围，系数与 D3D11 YuvToRgb 一致，色彩不漂移）
-    private const string YuvFragmentSource = """
+    // BT.601 系数模板（可读真源落点 Targets/Colorimetry/Bt601FullRange.props，构建期注入生成 Bt601Shaders.YuvFragmentSource）
+    private const string YuvFragmentSourceTemplate = """
         #version 300 es
         precision highp float;
         in vec2 vUV;
@@ -100,8 +101,11 @@ internal sealed unsafe partial class GlesShaderPipeline : IDisposable
         }
         """;
 
+    private static string YuvFragmentSource => Bt601Shaders.YuvFragmentSource;
+
     // NV12/NV21 半平面（UV 交错；uSwap 区分 NV12(U=R,V=G) 与 NV21(V=R,U=G)）
-    private const string NvFragmentSource = """
+    // BT.601 系数模板（可读真源落点 Targets/Colorimetry/Bt601FullRange.props，构建期注入生成 Bt601Shaders.NvFragmentSource）
+    private const string NvFragmentSourceTemplate = """
         #version 300 es
         precision highp float;
         in vec2 vUV;
@@ -120,6 +124,8 @@ internal sealed unsafe partial class GlesShaderPipeline : IDisposable
             fragColor = vec4(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0), 1.0);
         }
         """;
+
+    private static string NvFragmentSource => Bt601Shaders.NvFragmentSource;
 
     private readonly ILogger? _logger;
     private bool _disposed;

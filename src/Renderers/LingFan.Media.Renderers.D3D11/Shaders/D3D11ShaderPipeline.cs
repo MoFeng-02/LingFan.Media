@@ -28,7 +28,8 @@ namespace LingFan.Media.Renderers.D3D11.Shaders;
 internal sealed partial class D3D11ShaderPipeline : IDisposable
 {
     // HLSL 源（内嵌常量；VS 全屏三角形 + 4 个 PS 入口）
-    private const string HlslSource = """
+    // BT.601 系数模板（可读真源落点 Targets/Colorimetry/Bt601FullRange.props，构建期注入生成 Bt601Shaders.HlslSource）
+    private const string HlslSourceTemplate = """
         // Fullscreen triangle: SV_VertexID in {0,1,2} -> oversized triangle covering screen (no vertex buffer)
         struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
@@ -119,6 +120,8 @@ internal sealed partial class D3D11ShaderPipeline : IDisposable
             return float4(YuvToRgb(y, vu.y, vu.x), 1.0);
         }
         """;
+
+    private static string HlslSource => Bt601Shaders.HlslSource;
 
     private readonly ID3D11Device _device;
     private readonly ID3D11DeviceContext _context;

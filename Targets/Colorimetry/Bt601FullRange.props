@@ -1,0 +1,16 @@
+<Project>
+
+  <!-- BT.601 全范围（JFIF）YUV→RGB 系数——着色器侧唯一真源。
+       C# CPU 侧真源：src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/Bt601FullRange.cs。
+       两处数值由 Bt601ShaderSources.targets 的 CheckBt601Consistency 构建期强制一致。
+       修改系数：同时改本文件与 Bt601FullRange.cs，并重编译 Targets/Vulkan/Shaders/yuv.frag 的 .spv
+       （Vulkan 着色器为预编译 SPIR-V，不走字符串注入；glslang 可用时构建期自动重编译）。 -->
+
+  <PropertyGroup>
+    <Bt601Rv>1.402</Bt601Rv>
+    <Bt601Gu>0.344136</Bt601Gu>
+    <Bt601Gv>0.714136</Bt601Gv>
+    <Bt601Bu>1.772</Bt601Bu>
+  </PropertyGroup>
+
+</Project>

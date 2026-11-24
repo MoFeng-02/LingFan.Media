@@ -10,7 +10,8 @@ namespace LingFan.Media.Renderers.Metal;
 internal sealed unsafe partial class MetalShaderPipeline
 {
     // Metal Shading Language 源码（运行期编译；顶点缩放 + YUV→RGB BT.601 全范围）
-    private const string MslSource = """
+    // BT.601 系数模板（可读真源落点 Targets/Colorimetry/Bt601FullRange.props，构建期注入生成 Bt601Shaders.MslSource）
+    private const string MslSourceTemplate = """
         #include <metal_stdlib>
         using namespace metal;
 
@@ -76,6 +77,8 @@ internal sealed unsafe partial class MetalShaderPipeline
             return c;
         }
         """;
+
+    private static string MslSource => Bt601Shaders.MslSource;
 
     private nint _library;
     private nint _vbo;

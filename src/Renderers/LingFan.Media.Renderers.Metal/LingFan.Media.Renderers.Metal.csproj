@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!-- 零反射原生绑定（Apple.Shared/AppleRuntime：libobjc + Metal + QuartzCore，经 objc_msgSend 多固定签名重载）使用 unsafe 上下文 + [LibraryImport]，必须开启。 -->
@@ -14,5 +14,9 @@
     <ProjectReference Include="..\LingFan.Media.Renderers.Shared\LingFan.Media.Renderers.Shared.csproj" />
     <ProjectReference Include="..\..\Apple\LingFan.Media.Apple.Shared\LingFan.Media.Apple.Shared.csproj" />
   </ItemGroup>
+
+
+  <!-- BT.601 着色器系数唯一真源注入（Targets/Colorimetry），构建期生成 Bt601Shaders.g.cs -->
+  <Import Project="..\..\..\Targets\Colorimetry\Bt601ShaderSources.targets" />
 
 </Project>
