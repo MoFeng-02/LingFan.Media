@@ -414,10 +414,10 @@ public sealed partial class SkiaVideoPresenter : IVideoPresenter
 
     // YUV → BGRA 转换（BT.601 全范围 JFIF 矩阵，预计算 LUT）
 
-    private static readonly short[] Rv = BuildYuvLut(d => 1.402f * d);
-    private static readonly short[] Gu = BuildYuvLut(d => -0.344136f * d);
-    private static readonly short[] Gv = BuildYuvLut(d => -0.714136f * d);
-    private static readonly short[] Bu = BuildYuvLut(d => 1.772f * d);
+    private static readonly short[] Rv = BuildYuvLut(d => (float)Bt601FullRange.Rv * d);
+    private static readonly short[] Gu = BuildYuvLut(d => (float)-Bt601FullRange.Gu * d);
+    private static readonly short[] Gv = BuildYuvLut(d => (float)-Bt601FullRange.Gv * d);
+    private static readonly short[] Bu = BuildYuvLut(d => (float)Bt601FullRange.Bu * d);
 
     /// <inheritdoc/>
     public void Clear()

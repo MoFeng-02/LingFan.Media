@@ -6,8 +6,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 本工程为仓级 D3D11 原生互操作底座：仅引用 Abstractions + 原生 P/Invoke（d3d11.dll / dxgi.dll），
-         不引 Vortice / SharpGen（其源生成 COM 非真零反射）。AOT 100% 友好：手写 vtable、零反射、零 [ComImport]。 -->
+    <!-- 本工程为仓级 D3D11 原生互操作底座：GPU 转换/共享句柄路径仅引用 Abstractions + 原生 P/Invoke
+         （d3d11.dll / dxgi.dll），手写 vtable、零反射、零 [ComImport]。
+         例外：Readback/ CPU 回读路径使用 Vortice 源生成 COM 封送（staging/Map 便利 API，
+         与消费方 FFmpeg/MF/GL 的既有回读实现同源），AOT 兼容（源生成、零运行时反射）。 -->
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
   </ItemGroup>
 
   <ItemGroup>

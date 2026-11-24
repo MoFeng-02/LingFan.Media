@@ -143,10 +143,10 @@ internal sealed partial class FFmpegVideoDecoder
         byte* dst = (byte*)pin.Pointer;
 
         // BT.601 全范围系数（与 NV12 着色器、Skia LUT 一致）
-        const double rV = 1.402;
-        const double gU = 0.344136;
-        const double gV = 0.714136;
-        const double bU = 1.772;
+        const double rV = Bt601FullRange.Rv;
+        const double gU = Bt601FullRange.Gu;
+        const double gV = Bt601FullRange.Gv;
+        const double bU = Bt601FullRange.Bu;
 
         for (int y = 0; y < height; y++)
         {
@@ -210,10 +210,10 @@ internal sealed partial class FFmpegVideoDecoder
         byte* dst = (byte*)pin.Pointer;
 
         // BT.601 全范围系数（与 P010 / NV12 着色器 / Skia LUT 完全一致，色彩不漂移）
-        const double rV = 1.402;
-        const double gU = 0.344136;
-        const double gV = 0.714136;
-        const double bU = 1.772;
+        const double rV = Bt601FullRange.Rv;
+        const double gU = Bt601FullRange.Gu;
+        const double gV = Bt601FullRange.Gv;
+        const double bU = Bt601FullRange.Bu;
 
         for (int y = 0; y < height; y++)
         {
