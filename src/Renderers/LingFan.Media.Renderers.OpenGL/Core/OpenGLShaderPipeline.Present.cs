@@ -169,7 +169,9 @@ internal sealed unsafe partial class OpenGLShaderPipeline
         // （Firefox SharedSurfaceD3D11Interop.cpp 与本项目 ReadbackToCpu 均显式 AcquireSync）。
         // 桥接设备须在 lock 之前先 AcquireSync(0) 取得转换器（ffmpeg 设备）ReleaseSync(0) 释放的访问权，
         // GL 才能读到有效像素；否则纹理处于未授权访问态，采样结果为未定义（全黑）。
-        // 绘制结束再 ReleaseSync(0)。S_OK≠被接受：AcquireSync 失败（栅栏未就绪）则跳过本帧，避免死锁/黑屏蔓延。
+        // 绘制结束再 ReleaseSync(0)。
+        // 有限超时（与 D3D11/Vulkan 共享表面源同口径）：上游转换器未及时释放栅栏时丢帧而非阻塞呈现线程——
+        // INFINITE 等待会把上游停顿放大为整条呈现链冻结。超时覆盖数帧预算，容忍正常调度抖动。
         IDXGIKeyedMutex? keyedMutex = null;
         bool acquired = false;
         try { keyedMutex = tex.D3dTexture.QueryInterface<IDXGIKeyedMutex>(); }
@@ -177,10 +179,10 @@ internal sealed unsafe partial class OpenGLShaderPipeline
 
         if (keyedMutex is not null)
         {
-            try { keyedMutex.AcquireSync(0, unchecked((int)0xFFFFFFFF)); acquired = true; }
+            try { keyedMutex.AcquireSync(0, InteropAcquireTimeoutMs); acquired = true; }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "[OPENGL-ZEROCOPY] 桥接设备 AcquireSync 失败，跳过本帧绘制（防死锁）。");
+                _logger?.LogWarning(ex, "[OPENGL-ZEROCOPY] 桥接设备 AcquireSync 超时/失败，跳过本帧绘制（防呈现链冻结）。");
                 keyedMutex.Dispose();
                 return;
             }

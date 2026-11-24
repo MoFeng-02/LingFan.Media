@@ -23,6 +23,10 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// </remarks>
 internal sealed unsafe partial class OpenGLShaderPipeline : IDisposable
 {
+    // WGL 互操作 keyed mutex 取锁超时（毫秒）：覆盖数帧预算容忍调度抖动；
+    // 超时=上游转换器未及时释放栅栏 → 丢帧而非阻塞呈现线程（与 D3D11/Vulkan 共享表面源有限超时同口径）。
+    private const int InteropAcquireTimeoutMs = 100;
+
     // GL 常量（桌面 GL 3.3 core）
     private const int GlTexture2D = 0x0DE1;
     private const int GlRgba8 = 0x8058;
