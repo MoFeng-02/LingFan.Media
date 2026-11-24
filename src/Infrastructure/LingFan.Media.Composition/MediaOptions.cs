@@ -1,4 +1,4 @@
-namespace LingFan.Media.Extensions;
+namespace LingFan.Media.Composition;
 
 /// <summary>
 /// 媒体全局配置选项。

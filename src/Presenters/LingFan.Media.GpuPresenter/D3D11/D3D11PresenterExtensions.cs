@@ -1,5 +1,5 @@
 using LingFan.Media.Abstractions;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using LingFan.Media.Presenters;
 using LingFan.Media.Presenters.D3D11;
 using LingFan.Media.Renderers.D3D11;

@@ -9,6 +9,7 @@ using LingFan.Media.AvaloniaTools.Views;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.MediaFoundation;
 using LingFan.Media.Backends.VLCNative;
+using LingFan.Media.Composition;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
 using LingFan.Media.Outputs.OpenSLES;

@@ -1,6 +1,6 @@
 using LingFan.Media.Backends.MediaCodec.Decoders;
 using LingFan.Media.Backends.MediaCodec.Demuxer;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 
 namespace LingFan.Media.Backends.MediaCodec;
 

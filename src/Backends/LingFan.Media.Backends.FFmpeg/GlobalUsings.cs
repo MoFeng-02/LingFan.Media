@@ -9,3 +9,6 @@ global using LingFan.Media.Backends.FFmpeg.Interop;
 global using System.Runtime.InteropServices;
 // DI 命名空间全局引入（AddSingleton 扩展方法）
 global using Microsoft.Extensions.DependencyInjection;
+
+// 组合共享叶子（MediaBuilder/MediaOptions/LazySupport）
+global using LingFan.Media.Composition;

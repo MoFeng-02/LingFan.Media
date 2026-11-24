@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using MediaBuilder = LingFan.Media.Extensions.MediaBuilder;
+using MediaBuilder = LingFan.Media.Composition.MediaBuilder;
 
 namespace LingFan.Media.Avalonia;
 

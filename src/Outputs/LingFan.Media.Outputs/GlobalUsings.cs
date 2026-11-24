@@ -5,9 +5,11 @@ global using LingFan.Media.Abstractions;
 global using Microsoft.Extensions.Logging;
 // DI 命名空间全局引入（AddSingleton 扩展方法）
 global using Microsoft.Extensions.DependencyInjection;
-// Extensions 命名空间（MediaBuilder）
-global using LingFan.Media.Extensions;
+// Composition 命名空间（MediaBuilder/MediaOptions）
+global using LingFan.Media.Composition;
 // Marshal / COM interop
 global using System.Runtime.InteropServices;
 // COM vtable 槽位读取唯一实现（LingFan.Media.Interop.ComVTable）
 global using LingFan.Media.Interop;
+
+// 组合共享叶子（MediaBuilder/MediaOptions/LazySupport）

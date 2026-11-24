@@ -1,6 +1,6 @@
 using System;
 
-namespace LingFan.Media.Extensions;
+namespace LingFan.Media.Composition;
 
 /// <summary>
 /// 媒体服务构建器。提供 fluent API 链式注册后端、渲染器、输出等组件。

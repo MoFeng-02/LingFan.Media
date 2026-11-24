@@ -12,6 +12,7 @@ using LingFan.Media.Abstractions;
 using LingFan.Media.Backends.FFmpeg;
 using LingFan.Media.Backends.VulkanVideo;
 using LingFan.Media.Consumers;
+using LingFan.Media.Composition;
 using LingFan.Media.Extensions;
 using LingFan.Media.Outputs.Wasapi;
 using LingFan.Media.Renderers.Vulkan;

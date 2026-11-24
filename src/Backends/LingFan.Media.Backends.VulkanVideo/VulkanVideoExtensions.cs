@@ -1,5 +1,5 @@
 using LingFan.Media.Backends.VulkanVideo.Decoders;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 

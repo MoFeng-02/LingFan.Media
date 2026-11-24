@@ -5,3 +5,6 @@ global using LingFan.Media.Abstractions;
 global using Microsoft.Extensions.Logging;
 // DI 命名空间全局引入
 global using Microsoft.Extensions.DependencyInjection;
+
+// 组合共享叶子（MediaBuilder/MediaOptions/LazySupport）
+global using LingFan.Media.Composition;

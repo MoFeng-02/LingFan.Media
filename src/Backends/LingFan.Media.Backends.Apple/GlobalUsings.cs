@@ -14,3 +14,6 @@ global using System.Runtime.Versioning;
 global using System.Diagnostics.CodeAnalysis;
 // Apple 共享绑定层（全仓唯一 Apple objc/Core* 绑定源）
 global using LingFan.Media.Apple.Shared;
+
+// 组合共享叶子（MediaBuilder/MediaOptions/LazySupport）
+global using LingFan.Media.Composition;

@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace LingFan.Media.Extensions;
+namespace LingFan.Media.Composition;
 
 /// <summary>
 /// 为 Microsoft.Extensions.DependencyInjection 补充 <see cref="Lazy{T}"/> 自动解析支持。

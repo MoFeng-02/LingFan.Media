@@ -1,4 +1,4 @@
-namespace LingFan.Media.Extensions;
+namespace LingFan.Media.Composition;
 
 /// <summary>
 /// 平台后端注册器：共享层（如 net10.0 的 AvaloniaTools）与平台入口（如 net10.0-android）之间的 DI 注入钩子，

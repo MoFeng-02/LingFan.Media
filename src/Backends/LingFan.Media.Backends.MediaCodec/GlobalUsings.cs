@@ -13,3 +13,6 @@ global using System.Runtime.InteropServices;
 global using System.Runtime.Versioning;
 // 代码分析抑制命名空间（DoesNotReturn / MaybeNull 等）
 global using System.Diagnostics.CodeAnalysis;
+
+// 组合共享叶子（MediaBuilder/MediaOptions/LazySupport）
+global using LingFan.Media.Composition;

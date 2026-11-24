@@ -7,5 +7,7 @@ global using Microsoft.Extensions.Logging;
 global using Microsoft.Extensions.DependencyInjection;
 // SafeHandle 所在命名空间
 global using System.Runtime.InteropServices;
-// Extensions 命名空间（MediaBuilder）
-global using LingFan.Media.Extensions;
+// Composition 命名空间（MediaBuilder/MediaOptions）
+global using LingFan.Media.Composition;
+
+// 组合共享叶子（MediaBuilder/MediaOptions/LazySupport）

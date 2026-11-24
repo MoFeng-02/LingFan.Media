@@ -1,6 +1,6 @@
 using System;
 using LingFan.Media.Abstractions;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LingFan.Media.Consumers;

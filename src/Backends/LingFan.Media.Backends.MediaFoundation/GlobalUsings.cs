@@ -13,6 +13,8 @@ global using LingFan.Media.Interop;
 global using System.Runtime.Versioning;
 // 代码分析抑制命名空间
 global using System.Diagnostics.CodeAnalysis;
+// 组合共享叶子（MediaBuilder/MediaOptions/LazySupport）
+global using LingFan.Media.Composition;
 
 // 程序集级平台标注：MediaFoundation 仅 Windows 可用
 [assembly: SupportedOSPlatform("windows")]

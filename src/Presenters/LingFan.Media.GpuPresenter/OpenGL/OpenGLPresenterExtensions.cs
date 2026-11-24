@@ -1,5 +1,5 @@
 using LingFan.Media.Abstractions;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using LingFan.Media.Presenters.OpenGL;
 using LingFan.Media.Renderers.OpenGL;
 using Microsoft.Extensions.DependencyInjection;

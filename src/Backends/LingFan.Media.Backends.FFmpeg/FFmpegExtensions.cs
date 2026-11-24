@@ -1,6 +1,6 @@
 using LingFan.Media.Backends.FFmpeg.Decoders;
 using LingFan.Media.Backends.FFmpeg.Demuxer;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LingFan.Media.Backends.FFmpeg;

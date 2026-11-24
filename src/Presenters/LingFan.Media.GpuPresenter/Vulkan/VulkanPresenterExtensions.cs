@@ -1,5 +1,5 @@
 using LingFan.Media.Abstractions;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using LingFan.Media.Presenters.Vulkan;
 using LingFan.Media.Renderers.Vulkan;
 using Microsoft.Extensions.DependencyInjection;

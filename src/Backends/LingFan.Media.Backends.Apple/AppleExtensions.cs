@@ -1,6 +1,6 @@
 using LingFan.Media.Backends.Apple.Decoders;
 using LingFan.Media.Backends.Apple.Demuxer;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 
 namespace LingFan.Media.Backends.Apple;
 

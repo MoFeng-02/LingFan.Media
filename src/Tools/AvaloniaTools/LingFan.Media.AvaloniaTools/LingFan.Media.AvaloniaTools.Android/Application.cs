@@ -2,7 +2,7 @@ using Android.Runtime;
 using Avalonia;
 using Avalonia.Android;
 using LingFan.Media.Backends.MediaCodec;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using LingFan.Media.Avalonia.Android;
 using LingFan.Media.Abstractions;
 using LingFan.Media.GPUShare.Vulkan;

@@ -1,6 +1,6 @@
 using LingFan.Media.Backends.MediaFoundation.Decoders;
 using LingFan.Media.Backends.MediaFoundation.Demuxer;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LingFan.Media.Backends.MediaFoundation;

@@ -1,5 +1,5 @@
 using LingFan.Media.Abstractions;
-using LingFan.Media.Extensions;
+using LingFan.Media.Composition;
 using LingFan.Media.Presenters.Metal;
 using LingFan.Media.Renderers.Metal;
 using Microsoft.Extensions.DependencyInjection;
