@@ -31,6 +31,9 @@ public sealed class RenderContext : IGpuDeviceContext
     /// <summary>图形渲染队列族索引（VK_QUEUE_GRAPHICS_BIT）；供 Vulkan 硬解 DPB 跨队列族并发共享。</summary>
     public uint GraphicsQueueFamilyIndex { get; }
 
+    /// <summary>设备是否已启用 videoMaintenance1 特性（DPB 可用 VIDEO_PROFILE_INDEPENDENT 位）。</summary>
+    public bool SupportsVideoProfileIndependent { get; }
+
     /// <summary>GPU 设备能力（由工厂注入，纯内存快照）。</summary>
     public GpuDeviceCapabilities Capabilities { get; }
 
@@ -51,6 +54,7 @@ public sealed class RenderContext : IGpuDeviceContext
     /// <param name="sharedPhysicalDevice">共享 GPU 物理设备对象（Vulkan 零拷贝需同物理设备对齐时提供，盒装 PhysicalDevice；可为 null）。</param>
     /// <param name="videoQueueFamilyIndex">视频解码队列族索引（VK_QUEUE_VIDEO_DECODE_BIT_KHR）；无视频解码能力时为 uint.MaxValue。</param>
     /// <param name="graphicsQueueFamilyIndex">图形渲染队列族索引（VK_QUEUE_GRAPHICS_BIT，供 Vulkan 硬解 DPB 跨队列族并发共享）；未知时为 uint.MaxValue。</param>
+    /// <param name="supportsVideoProfileIndependent">设备是否已启用 videoMaintenance1 特性（DPB 可用 VIDEO_PROFILE_INDEPENDENT 位绕过 flags 子集检查）。</param>
     public RenderContext(
         GPUApiType gpuApiType,
         GpuDeviceCapabilities capabilities,
@@ -59,7 +63,8 @@ public sealed class RenderContext : IGpuDeviceContext
         IntPtr contextHandle = default,
         object? sharedPhysicalDevice = null,
         uint videoQueueFamilyIndex = uint.MaxValue,
-        uint graphicsQueueFamilyIndex = uint.MaxValue)
+        uint graphicsQueueFamilyIndex = uint.MaxValue,
+        bool supportsVideoProfileIndependent = false)
     {
         GpuApiType = gpuApiType;
         Capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
@@ -69,6 +74,7 @@ public sealed class RenderContext : IGpuDeviceContext
         SharedPhysicalDevice = sharedPhysicalDevice;
         VideoQueueFamilyIndex = videoQueueFamilyIndex;
         GraphicsQueueFamilyIndex = graphicsQueueFamilyIndex;
+        SupportsVideoProfileIndependent = supportsVideoProfileIndependent;
     }
 
     // IGpuDeviceContext 实现（接口契约，无真实 I/O）

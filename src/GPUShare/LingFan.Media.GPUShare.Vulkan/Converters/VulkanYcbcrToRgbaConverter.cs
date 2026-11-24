@@ -45,8 +45,14 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter : IDisposable
     private PipelineLayout _pipelineLayout;
     private Pipeline _pipeline;
     private RenderPass _renderPass;
+
+    /// <summary>当前 RenderPass（供持有方建帧缓冲；管线未建时为空句柄）。</summary>
+    internal RenderPass RenderPassForFramebuffer => _renderPass;
     private Format _pipelineTargetFormat = (Format)0;
     private ulong _pipelineExternalFormat;      // 当前管线对应的 externalFormat（0=未建）
+    private Format _pipelineSourceFormat = (Format)0;   // 具体格式入口的源多平面格式（0=未建）
+    private SamplerYcbcrModelConversion _pipelineYcbcrModel;
+    private SamplerYcbcrRange _pipelineYcbcrRange;
 
     // 帧缓冲缓存：须<b>存活至引用它的命令缓冲执行完毕</b>。记录后立即销毁会让命令缓冲悬挂引用
     // 已释放对象，Adreno 在 vkEndCommandBuffer 收拢时解引用它 → 进程级原生崩溃（空指针解引用）。
@@ -73,36 +79,61 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter : IDisposable
     /// 调用方在命令提交完成后须经 <see cref="DestroyImageView"/> 销毁（视图为瞬态，不缓存）。
     /// </summary>
     public ImageView CreateImageView(Image ahbImage)
+        => CreateImageViewCore(ahbImage, Format.Undefined, 0);
+
+    /// <summary>
+    /// 为<b>具体多平面格式</b>图像（NV12 DPB）创建整图多平面采样视图
+    /// （format=源格式 + YCbCr 转换 pNext，aspect=Color，指定数组层）。
+    /// 多平面视图格式与图像格式一致，不要求 MUTABLE_FORMAT（VUID-12397 仅约束格式不同的视图）。
+    /// 调用方在命令提交完成后须经 <see cref="DestroyImageView"/> 销毁。
+    /// </summary>
+    /// <param name="nv12Image">NV12 多平面 VkImage（硬解 DPB）。</param>
+    /// <param name="sourceFormat">源多平面格式（与图像创建格式一致）。</param>
+    /// <param name="baseArrayLayer">DPB 槽对应的数组层。</param>
+    /// <returns>整图多平面采样视图。</returns>
+    public ImageView CreateMultiPlaneView(Image nv12Image, Format sourceFormat, uint baseArrayLayer)
+        => CreateImageViewCore(nv12Image, sourceFormat, baseArrayLayer);
+
+    private ImageView CreateImageViewCore(Image image, Format viewFormat, uint baseArrayLayer)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_ycbcrConversion.Handle == 0)
             throw new InvalidOperationException("YCbCr 转换尚未创建（须先调用 EnsurePipeline）。");
 
-        // 规范：外部格式图像的视图 format 须为 UNDEFINED，且挂与采样器相同的 YCbCr 转换。
+        // 规范：外部格式视图 format=UNDEFINED；具体多平面格式视图 format=源格式（整图多平面视图）。
+        // 两者均挂与采样器相同的 YCbCr 转换（VUID-06415）。
         var ycbcrInfo = new SamplerYcbcrConversionInfo
         {
             SType = StructureType.SamplerYcbcrConversionInfo,
             Conversion = _ycbcrConversion,
         };
+        // usage 子集仅 Sampled：VIDEO_PROFILE_INDEPENDENT 图像的视图不得含 VIDEO_DECODE_SRC
+        //（VUID-08335），亦避免继承图像 decode 用法触发多平面采样限制。
+        ImageViewUsageCreateInfo viewUsage = new()
+        {
+            SType = StructureType.ImageViewUsageCreateInfo,
+            PNext = &ycbcrInfo,
+            Usage = ImageUsageFlags.SampledBit,
+        };
         ImageViewCreateInfo vi = new()
         {
             SType = StructureType.ImageViewCreateInfo,
-            Image = ahbImage,
+            Image = image,
             ViewType = ImageViewType.Type2D,
-            Format = Format.Undefined,
+            Format = viewFormat,
             SubresourceRange = new ImageSubresourceRange
             {
                 AspectMask = ImageAspectFlags.ColorBit,
                 BaseMipLevel = 0,
                 LevelCount = 1,
-                BaseArrayLayer = 0,
+                BaseArrayLayer = baseArrayLayer,
                 LayerCount = 1,
             },
-            PNext = &ycbcrInfo,
+            PNext = &viewUsage,
         };
         ImageView view;
         if (VulkanNative.CreateImageView(_device, &vi, null, out view) != Result.Success)
-            throw new InvalidOperationException("vkCreateImageView（AHB 外部格式采样视图）失败。");
+            throw new InvalidOperationException("vkCreateImageView（YCbCr 采样视图）失败。");
         return view;
     }
 
@@ -163,13 +194,39 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter : IDisposable
 
     /// <summary>核心绘制：AHB 源 → ShaderReadOnlyOptimal（采样），渲染进 RGBA 目标并置于 TransferSrcOptimal。</summary>
     private void RenderInto(CommandBuffer cmd, Image ahbSource, ImageView ahbView, uint width, uint height, Image rgbaImage, Framebuffer framebuffer)
+        => RenderIntoCore(cmd, ahbSource, ahbView, ImageLayout.Undefined, 0, width, height, rgbaImage, framebuffer);
+
+    /// <summary>
+    /// 具体多平面格式源（NV12 DPB）的转换绘制入口：源交付布局/数组层由调用方给定，
+    /// 其余与 AHB 路径同构（整图多平面视图 + YCbCr 采样器一次取回 RGB）。
+    /// </summary>
+    /// <param name="cmd">正在记录的命令缓冲。</param>
+    /// <param name="nv12Source">NV12 多平面源图像（硬解 DPB）。</param>
+    /// <param name="nv12View">经 <see cref="CreateMultiPlaneView"/> 创建的整图采样视图。</param>
+    /// <param name="srcLayout">源交付布局（硬解 DPB = VideoDecodeDpbKhr）。</param>
+    /// <param name="baseArrayLayer">DPB 槽数组层。</param>
+    /// <param name="width">宽度（像素）。</param>
+    /// <param name="height">高度（像素）。</param>
+    /// <param name="rgbaTarget">调用方提供的 RGBA 目标（转后 TransferSrcOptimal）。</param>
+    /// <param name="framebuffer">绑定 rgbaTarget 视图的帧缓冲。</param>
+    public void ConvertMultiPlane(CommandBuffer cmd, Image nv12Source, ImageView nv12View, ImageLayout srcLayout,
+        uint baseArrayLayer, uint width, uint height, Image rgbaTarget, Framebuffer framebuffer)
     {
-        // AHB 源 → ShaderReadOnlyOptimal：导入内存由解码器（Vulkan 之外）写入，
-        // 用「全屏障」等价覆盖外部写入（src=AllCommands+MemoryWrite），与硬解 DPB 路径同源手法。
-        TransitionImageLayout(cmd, ahbSource, ImageLayout.Undefined, ImageLayout.ShaderReadOnlyOptimal,
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_pipeline.Handle == 0)
+            throw new InvalidOperationException("管线尚未创建（须先调用 EnsurePipelineForFormat）。");
+        RenderIntoCore(cmd, nv12Source, nv12View, srcLayout, baseArrayLayer, width, height, rgbaTarget, framebuffer);
+    }
+
+    private void RenderIntoCore(CommandBuffer cmd, Image source, ImageView sourceView, ImageLayout srcLayout,
+        uint baseArrayLayer, uint width, uint height, Image rgbaImage, Framebuffer framebuffer)
+    {
+        // 源 → ShaderReadOnlyOptimal：写入方（外部解码器 / Vulkan video 队列）的写入
+        // 用「全屏障」等价覆盖（src=AllCommands+MemoryWrite），与硬解 DPB 路径同源手法。
+        TransitionImageLayout(cmd, source, srcLayout, ImageLayout.ShaderReadOnlyOptimal,
             AccessFlags.MemoryWriteBit, AccessFlags.ShaderReadBit,
             PipelineStageFlags.AllCommandsBit, PipelineStageFlags.FragmentShaderBit,
-            ImageAspectFlags.ColorBit);
+            ImageAspectFlags.ColorBit, baseArrayLayer);
 
         // RGBA 目标 → ColorAttachmentOptimal（render pass loadOp=Clear）
         TransitionImageLayout(cmd, rgbaImage, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
@@ -177,7 +234,7 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter : IDisposable
             PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.ColorAttachmentOutputBit,
             ImageAspectFlags.ColorBit);
 
-        UpdateDescriptorSet(ahbView);
+        UpdateDescriptorSet(sourceView);
 
         var clear = new ClearColorValue { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 0 };
         var clearValue = new ClearValue { Color = clear };
@@ -227,14 +284,15 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter : IDisposable
     }
 
     private void TransitionImageLayout(CommandBuffer cmd, Image image, ImageLayout oldLayout, ImageLayout newLayout,
-        AccessFlags srcAccess, AccessFlags dstAccess, PipelineStageFlags srcStage, PipelineStageFlags dstStage, ImageAspectFlags aspect)
+        AccessFlags srcAccess, AccessFlags dstAccess, PipelineStageFlags srcStage, PipelineStageFlags dstStage,
+        ImageAspectFlags aspect, uint baseArrayLayer = 0)
     {
         ImageSubresourceRange range = new()
         {
             AspectMask = aspect,
             BaseMipLevel = 0,
             LevelCount = 1,
-            BaseArrayLayer = 0,
+            BaseArrayLayer = baseArrayLayer,
             LayerCount = 1,
         };
         ImageMemoryBarrier barrier = new()
@@ -262,5 +320,6 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter : IDisposable
         if (_descriptorSetLayout.Handle != 0) { VulkanNative.DestroyDescriptorSetLayout(_device, _descriptorSetLayout, null); _descriptorSetLayout = default; }
         ReleaseConversionAndSampler();
         _pipelineTargetFormat = (Format)0;
+        _pipelineSourceFormat = (Format)0;
     }
 }

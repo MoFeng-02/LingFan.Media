@@ -63,6 +63,15 @@ public interface IGpuDeviceContext
     /// </summary>
     uint GraphicsQueueFamilyIndex { get; }
 
+    /// <summary>
+    /// 设备是否已启用 video-maintenance1 能力（Vulkan <c>VK_KHR_video_maintenance1</c> 的
+    /// <c>videoMaintenance1</c> 特性）。启用后 DPB 图像可带
+    /// <c>VK_IMAGE_CREATE_VIDEO_PROFILE_INDEPENDENT_BIT_KHR</c>，绕过「flags ⊆ 驱动格式支持集」
+    /// 检查（VUID-06811），使 per-plane 视图所需的 MUTABLE_FORMAT 在支持集 flags=0 的驱动上仍合法。
+    /// 非 Vulkan 后端恒 <see langword="false"/>。默认 false（DIM 兼容既有实现）。
+    /// </summary>
+    bool SupportsVideoProfileIndependent => false;
+
     /// <summary>设备是否已初始化（共享设备已创建）。</summary>
     bool IsInitialized { get; }
 

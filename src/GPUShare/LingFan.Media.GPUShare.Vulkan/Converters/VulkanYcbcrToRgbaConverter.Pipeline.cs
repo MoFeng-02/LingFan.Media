@@ -31,6 +31,68 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter
             _fragModule = CreateShaderModule(EmbeddedShaders.ycbcr_frag);
         }
         if (_ycbcrConversion.Handle == 0) CreateYcbcrConversion(externalFormat, formatProps);
+        EnsurePipelineCore(targetFormat);
+        _pipelineExternalFormat = externalFormat;
+    }
+
+    /// <summary>
+    /// 确保对<b>具体多平面格式</b>（如 NV12 G8_B8R8_2PLANE_420_UNORM）的转换管线就绪（幂等）。
+    /// 供 Vulkan Video 硬解 DPB 路径：图像为具体格式（非 AHB 外部格式），整图多平面视图 +
+    /// YCbCr 采样器一次 texture() 取回转换后 RGB——无需 per-plane R8/R8G8 视图，
+    /// 因而不要求图像带 MUTABLE_FORMAT（部分驱动视频格式支持集 flags=0 不含该位）。
+    /// </summary>
+    /// <param name="targetFormat">RGBA 目标格式（须与下游 SwapChain 一致）。</param>
+    /// <param name="sourceFormat">源多平面格式（NV12）。</param>
+    /// <param name="ycbcrModel">YCbCr 模型（BT.601/709 等，按流色彩元数据选择）。</param>
+    /// <param name="ycbcrRange">YCbCr 范围（Full/ItuNarrow，按流色彩元数据选择）。</param>
+    public void EnsurePipelineForFormat(Format targetFormat, Format sourceFormat,
+        SamplerYcbcrModelConversion ycbcrModel, SamplerYcbcrRange ycbcrRange)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // 源格式/模型变化：整体重建（与 externalFormat 分支同口径）。
+        if ((_pipelineSourceFormat != sourceFormat || _pipelineYcbcrModel != ycbcrModel || _pipelineYcbcrRange != ycbcrRange)
+            && _ycbcrConversion.Handle != 0)
+            ReleaseAll();
+
+        if (_vertModule.Handle == 0 || _fragModule.Handle == 0)
+        {
+            _vertModule = CreateShaderModule(EmbeddedShaders.yuv_vert);
+            _fragModule = CreateShaderModule(EmbeddedShaders.ycbcr_frag);
+        }
+        if (_ycbcrConversion.Handle == 0)
+        {
+            // 具体格式：format 填真实格式、无 ExternalFormat pNext；色度中心/重建按规范默认。
+            var ci = new SamplerYcbcrConversionCreateInfo
+            {
+                SType = StructureType.SamplerYcbcrConversionCreateInfo,
+                Format = sourceFormat,
+                YcbcrModel = ycbcrModel,
+                YcbcrRange = ycbcrRange,
+                Components = new ComponentMapping
+                {
+                    R = ComponentSwizzle.Identity,
+                    G = ComponentSwizzle.Identity,
+                    B = ComponentSwizzle.Identity,
+                    A = ComponentSwizzle.Identity,
+                },
+                XChromaOffset = ChromaLocation.CositedEven,
+                YChromaOffset = ChromaLocation.Midpoint,
+                ChromaFilter = Filter.Linear,
+                ForceExplicitReconstruction = false,
+            };
+            if (VulkanNative.CreateSamplerYcbcrConversion(_device, &ci, null, out _ycbcrConversion) != Result.Success)
+                throw new InvalidOperationException("vkCreateSamplerYcbcrConversion（NV12 具体格式）失败。");
+        }
+        EnsurePipelineCore(targetFormat);
+        _pipelineSourceFormat = sourceFormat;
+        _pipelineYcbcrModel = ycbcrModel;
+        _pipelineYcbcrRange = ycbcrRange;
+    }
+
+    /// <summary>管线公共段：采样器/描述符/布局/RenderPass（两种 EnsurePipeline 入口共用）。</summary>
+    private void EnsurePipelineCore(Format targetFormat)
+    {
         if (_sampler.Handle == 0) EnsureSampler();
         if (_descriptorSetLayout.Handle == 0) EnsureDescriptorSetLayout();
         if (_descriptorPool.Handle == 0) EnsureDescriptorPoolAndSet();
@@ -41,7 +103,6 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter
         ReleasePipelineAndRenderPass();
         CreateRenderPassAndPipeline(targetFormat);
         _pipelineTargetFormat = targetFormat;
-        _pipelineExternalFormat = externalFormat;
     }
 
     private void CreateYcbcrConversion(ulong externalFormat, in AndroidHardwareBufferFormatPropertiesANDROID formatProps)
@@ -105,9 +166,10 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter
     private void EnsureDescriptorSetLayout()
     {
         if (_descriptorSetLayout.Handle != 0) return;
-        // 可变采样器：DescriptorImageInfo.Sampler 由 UpdateDescriptorSet 显式写入（规避 Adreno 读空 immutable 字段）。
-        // YCbCr 转换所需的 VkSamplerYcbcrConversion 经由 _sampler 创建时的 PNext 链携带，运行时在描述符里绑定，
-        // 不依赖 immutable 布局固定——Android/Adreno 上 immutable YCbCr sampler 布局存在驱动兼容性空指针风险。
+        // 规范 VUID-02738/08114：视图带 YCbCr 转换时，描述符布局必须以 immutable sampler 固定
+        // 同一转换的采样器（可变写入非法）。AHB 路径此前用可变写入规避 Adreno 空指针风险，
+        // 但那是驱动缺陷 workaround；规范正解是 immutable。此处按规范用 immutable sampler。
+        var sampler = _sampler;
         var bindings = stackalloc DescriptorSetLayoutBinding[1];
         bindings[0] = new DescriptorSetLayoutBinding
         {
@@ -115,7 +177,7 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter
             DescriptorType = DescriptorType.CombinedImageSampler,
             DescriptorCount = 1,
             StageFlags = ShaderStageFlags.FragmentBit,
-            PImmutableSamplers = null,
+            PImmutableSamplers = &sampler,
         };
         DescriptorSetLayoutCreateInfo layoutInfo = new()
         {
@@ -154,10 +216,11 @@ public sealed unsafe partial class VulkanYcbcrToRgbaConverter
 
     private void UpdateDescriptorSet(ImageView ahbView)
     {
-        // 可变采样器：显式写入带 YCbCr 转换（创建时经 PNext 链携带）的 _sampler；Adreno 不能依赖 immutable 布局固定。
+        // immutable sampler 已在布局固定（含 YCbCr 转换）；此处 Sampler 留空（immutable 时忽略），
+        // 仅写视图与布局。规范 VUID-02738：带转换的视图必须配 immutable sampler 布局。
         var info = new DescriptorImageInfo
         {
-            Sampler = _sampler,
+            Sampler = default,
             ImageView = ahbView,
             ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
         };

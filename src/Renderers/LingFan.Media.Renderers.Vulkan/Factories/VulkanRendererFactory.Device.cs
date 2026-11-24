@@ -75,6 +75,8 @@ public sealed unsafe partial class VulkanRendererFactory
             uint queueFamilyIndex = 0;
             RenderContext? renderContext = null;
             string devName = "Unknown";
+            // videoMaintenance1 启用状态（try 内探测/启用，try 外 RenderContext 构造消费，故声明在 try 外）。
+            bool videoProfileIndependentEnabled = false;
 
             try
             {
@@ -169,8 +171,12 @@ public sealed unsafe partial class VulkanRendererFactory
                 // AHB 导入路径由生产者 TryImport 失败回落软解（能力自报 + 行为副作用双判据，不假绿）。
                 PhysicalDeviceSamplerYcbcrConversionFeatures ycbcrFeatures = default;
                 bool enableYcbcrFeatures = false;
-                if (OperatingSystem.IsAndroid()
+                // samplerYcbcrConversion 需求方：① Android AHB 外部格式直采；② Vulkan Video 硬解
+                // DPB 的 NV12 整图 YCbCr 采样（videoMaintenance1 路径，无需 MUTABLE 的 per-plane 视图）。
+                bool needsYcbcr = (OperatingSystem.IsAndroid()
                     && Array.IndexOf(devExts, "VK_ANDROID_external_memory_android_hardware_buffer") >= 0)
+                    || Array.IndexOf(devExts, "VK_KHR_video_decode_queue") >= 0;
+                if (needsYcbcr)
                 {
                     PhysicalDeviceSamplerYcbcrConversionFeatures probe = new()
                     {
@@ -225,6 +231,39 @@ public sealed unsafe partial class VulkanRendererFactory
                 // 该族需 2 条队列（idx0=graphics, idx1=video），否则 graphics 族仅 1 条。
                 bool videoSameFamily = _videoQueueFamilyIndex != uint.MaxValue && _videoQueueFamilyIndex == queueFamilyIndex;
 
+                // videoMaintenance1 特性探测（能力自报）：扩展在列表且 Features2 报告支持才链入启用。
+                // 用途：DPB 图像带 VIDEO_PROFILE_INDEPENDENT 位绕过「flags ⊆ 驱动格式支持集」检查
+                // （部分驱动支持集 flags=0 不含 MUTABLE，per-plane 视图必需的 MUTABLE 会触发 VUID-06811）。
+                PhysicalDeviceVideoMaintenance1FeaturesKHR videoMaintenance1Features = default;
+                bool enableVideoMaintenance1 = false;
+                if (_videoQueueFamilyIndex != uint.MaxValue
+                    && Array.IndexOf(devExts, "VK_KHR_video_maintenance1") >= 0)
+                {
+                    PhysicalDeviceVideoMaintenance1FeaturesKHR vm1Probe = new()
+                    {
+                        SType = StructureType.PhysicalDeviceVideoMaintenance1FeaturesKhr,
+                    };
+                    PhysicalDeviceFeatures2 vm1Features2 = new()
+                    {
+                        SType = StructureType.PhysicalDeviceFeatures2,
+                        PNext = &vm1Probe,
+                    };
+                    Result vm1Result = VulkanNative.GetPhysicalDeviceFeatures2(physicalDevice, &vm1Features2);
+                    enableVideoMaintenance1 = vm1Result == Result.Success && vm1Probe.VideoMaintenance1;
+                    if (enableVideoMaintenance1)
+                    {
+                        videoMaintenance1Features = new PhysicalDeviceVideoMaintenance1FeaturesKHR
+                        {
+                            SType = StructureType.PhysicalDeviceVideoMaintenance1FeaturesKhr,
+                            VideoMaintenance1 = true,
+                        };
+                    }
+                    _logger.LogInformation(
+                        "Vulkan videoMaintenance1 探测：扩展在列表=True，特性支持={Supported}（probeResult={Result}）→ 启用={Enabled}",
+                        enableVideoMaintenance1, vm1Result, enableVideoMaintenance1);
+                }
+                videoProfileIndependentEnabled = enableVideoMaintenance1;
+
                 float queuePriority = 1.0f;
                 var queueInfo = new DeviceQueueCreateInfo
                 {
@@ -258,6 +297,12 @@ public sealed unsafe partial class VulkanRendererFactory
                 // Android AHB 零拷贝：链入 samplerYcbcrConversion 特性（局部变量存活至 CreateDevice 返回）。
                 if (enableYcbcrFeatures)
                     devInfo.PNext = &ycbcrFeatures;
+                // videoMaintenance1：链头插入（pNext 链：vm1 → ycbcr → null；两者独立可并存）。
+                if (enableVideoMaintenance1)
+                {
+                    videoMaintenance1Features.PNext = devInfo.PNext;
+                    devInfo.PNext = &videoMaintenance1Features;
+                }
 
                 fixed (DeviceQueueCreateInfo* pQueueInfos = queueInfos)
                 {
@@ -355,7 +400,8 @@ public sealed unsafe partial class VulkanRendererFactory
                     IntPtr.Zero,
                     physicalDevice,
                     _videoQueueFamilyIndex,
-                    graphicsQueueFamilyIndex: queueFamilyIndex);
+                    graphicsQueueFamilyIndex: queueFamilyIndex,
+                    supportsVideoProfileIndependent: videoProfileIndependentEnabled);
             }
             catch
             {

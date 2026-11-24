@@ -161,4 +161,77 @@ public sealed unsafe partial class VulkanNv12ToRgbaConverter
         if (_rgbaMemory.Handle != 0) { VulkanNative.FreeMemory(_device, _rgbaMemory, null); _rgbaMemory = default; }
         _rgbaW = 0; _rgbaH = 0; _rgbaFormat = (Format)0;
     }
+
+    // ── YCbCr 整图采样路径（硬解 DPB 专用，无需 MUTABLE_FORMAT）──────────────────
+    // 部分驱动视频格式支持集 flags=0（不含 MUTABLE），per-plane R8/R8G8 视图不可建；
+    // 改经整图多平面视图 + YCbCr 采样器一次 texture() 取回转换后 RGB（ycbcr.frag）。
+    // 复用 VulkanYcbcrToRgbaConverter 的转换/管线机制，本类仅持有其实例与 DPB 视图缓存。
+
+    private VulkanYcbcrToRgbaConverter? _ycbcrConverter;
+    private readonly Dictionary<(ulong ImageHandle, uint Layer), ImageView> _dpbMultiPlaneViews = new();
+    private Framebuffer _ycbcrFramebuffer;
+    private ImageView _ycbcrFramebufferView;
+    private uint _ycbcrFbW, _ycbcrFbH;
+
+    /// <summary>
+    /// 把硬解 DPB 的 NV12 图像经 YCbCr 整图采样转 RGBA（内部缓存目标，转后 TransferSrcOptimal）。
+    /// 与 <see cref="Convert(CommandBuffer, Image, ImageLayout, uint, uint, uint, Format, out Image)"/>
+    /// 的区别：不建 per-plane 视图、不要求源图像带 MUTABLE_FORMAT。
+    /// </summary>
+    /// <param name="cmd">正在记录的命令缓冲。</param>
+    /// <param name="nv12Source">NV12 DPB 图像。</param>
+    /// <param name="srcLayout">源交付布局（VideoDecodeDpbKhr）。</param>
+    /// <param name="baseArrayLayer">DPB 槽数组层。</param>
+    /// <param name="width">宽度（像素）。</param>
+    /// <param name="height">高度（像素）。</param>
+    /// <param name="targetFormat">RGBA 目标格式（与 SwapChain 一致）。</param>
+    /// <param name="rgbaTarget">转出的 RGBA VkImage（TransferSrcOptimal）。</param>
+    public void ConvertViaYcbcr(CommandBuffer cmd, Image nv12Source, ImageLayout srcLayout, uint baseArrayLayer,
+        uint width, uint height, Format targetFormat, out Image rgbaTarget)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _ycbcrConverter ??= new VulkanYcbcrToRgbaConverter(_device, _physicalDevice, _logger);
+        // BT.601 全范围（与 yuv.frag NV12 数学同口径；色彩元数据驱动的模型选择为后续增强）。
+        _ycbcrConverter.EnsurePipelineForFormat(targetFormat, Format.G8B8R82Plane420Unorm,
+            SamplerYcbcrModelConversion.Ycbcr601, SamplerYcbcrRange.Full);
+        EnsureRgbaTarget(width, height, targetFormat);
+        EnsureYcbcrFramebuffer(width, height);
+
+        var key = (nv12Source.Handle, baseArrayLayer);
+        if (!_dpbMultiPlaneViews.TryGetValue(key, out var view))
+        {
+            view = _ycbcrConverter.CreateMultiPlaneView(nv12Source, Format.G8B8R82Plane420Unorm, baseArrayLayer);
+            _dpbMultiPlaneViews[key] = view;
+        }
+
+        _ycbcrConverter.ConvertMultiPlane(cmd, nv12Source, view, srcLayout, baseArrayLayer,
+            width, height, _rgbaImage, _ycbcrFramebuffer);
+        rgbaTarget = _rgbaImage;
+    }
+
+    private void EnsureYcbcrFramebuffer(uint width, uint height)
+    {
+        if (_ycbcrFramebuffer.Handle != 0 && _ycbcrFramebufferView.Handle == _rgbaView.Handle
+            && _ycbcrFbW == width && _ycbcrFbH == height) return;
+        if (_ycbcrFramebuffer.Handle != 0)
+        {
+            VulkanNative.DestroyFramebuffer(_device, _ycbcrFramebuffer, null);
+            _ycbcrFramebuffer = default;
+        }
+        var view = _rgbaView;
+        FramebufferCreateInfo fbInfo = new()
+        {
+            SType = StructureType.FramebufferCreateInfo,
+            RenderPass = _ycbcrConverter!.RenderPassForFramebuffer,
+            AttachmentCount = 1,
+            PAttachments = &view,
+            Width = width,
+            Height = height,
+            Layers = 1,
+        };
+        if (VulkanNative.CreateFramebuffer(_device, &fbInfo, null, out _ycbcrFramebuffer) != Result.Success)
+            throw new InvalidOperationException("vkCreateFramebuffer（YCbCr DPB 转换）失败。");
+        _ycbcrFramebufferView = _rgbaView;
+        _ycbcrFbW = width; _ycbcrFbH = height;
+    }
 }

@@ -40,9 +40,13 @@ internal sealed unsafe partial class VulkanRenderer
             // Transfer 路径：BGRA/RGBA 软帧与 GPU 纹理零拷贝 Present。
             // Undefined→TransferDst 首屏障 srcStage 必须等于信号量 waitDstStageMask（TransferBit），
             // 才能与 _imageAvailableSemaphore 的等待形成依赖链。
+            // 例外：硬解 DPB（VulkanVideoFrameResource）走 YCbCr RenderPass 路径，首阶段为
+            // DPB 布局屏障（AllCommands），waitStage 须 ColorAttachmentOutput（见 usedShaderPath 置位）。
+            bool dpbYcbcrPath = frame.Resource is VulkanVideoFrameResource;
             TransitionImageLayout(swapchainImage, ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
                 AccessFlags.None, AccessFlags.TransferWriteBit,
-                PipelineStageFlags.TransferBit, PipelineStageFlags.TransferBit);
+                dpbYcbcrPath ? PipelineStageFlags.ColorAttachmentOutputBit : PipelineStageFlags.TransferBit,
+                PipelineStageFlags.TransferBit);
 
             switch (frame.Resource)
             {
@@ -57,11 +61,17 @@ internal sealed unsafe partial class VulkanRenderer
                 case VulkanVideoFrameResource vvfr:
                     // 硬解 DPB 的 NV12 VkImage → 经中性转换器（GPUShare.Vulkan）转 RGBA → 再 blit 到 SwapChain。
                     // 零拷贝、GPU 内 YUV→RGB，无 CPU 回读；转换器与下游 SwapChain 同格式以走零缩放 Copy 快路径。
+                    // 走 YCbCr 整图采样路径：部分驱动视频格式支持集 flags=0 不含 MUTABLE，
+                    // per-plane R8/R8G8 视图不可建（VUID-12397/01564）；整图多平面视图 + YCbCr 采样器
+                    // 一次 texture() 取回转换后 RGB，无需 MUTABLE。
                     if (_nv12Converter is null)
                         throw new InvalidOperationException("NV12→RGBA 转换器未初始化（Attach 失败）。");
                     decodeDoneSem = vvfr.DecodeDoneSemaphore; // 跨队列依赖：等待 video 队列解码写入完成
+                    // 首阶段是 RenderPass 前的 DPB 布局屏障（AllCommands→FragmentShader），
+                    // imgAvail 等待阶段须覆盖它（ColorAttachmentOutput 不覆盖屏障，会 00067/09600）。
+                    usedShaderPath = true;
                     PixelFormat nv12TargetFmt = swapchainIsBgra ? PixelFormat.BGRA32 : PixelFormat.RGBA32;
-                    _nv12Converter.Convert(_commandBuffer, vvfr.Image, vvfr.CurrentLayout, (uint)vvfr.SlotIndex,
+                    _nv12Converter.ConvertViaYcbcr(_commandBuffer, vvfr.Image, vvfr.CurrentLayout, (uint)vvfr.SlotIndex,
                         (uint)vvfr.Width, (uint)vvfr.Height, _swapchainFormat, out var rgbaImage);
                     BlitVulkanImageResource(rgbaImage, nv12TargetFmt, ImageLayout.TransferSrcOptimal,
                         vvfr.Width, vvfr.Height, swapchainImage);

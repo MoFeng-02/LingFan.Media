@@ -110,10 +110,21 @@ internal sealed unsafe partial class VulkanVideoDecoder
             throw new NotSupportedException(
                 $"驱动视频格式支持集缺 decode 必需 usage（supported=0x{(uint)supportedUsage:X}），Vulkan 硬解不可用。");
         // flags：支持集剔除 SPARSE 三位（未启用 sparse 特性，VUID-01924/00987）。
-        // MUTABLE_FORMAT 为 per-plane 视图必需（VUID-12397）；支持集无则 per-plane 采样不可建，fail-fast。
+        // per-plane R8/R8G8 视图必需 MUTABLE_FORMAT（VUID-12397/01564）；部分驱动（本机 AMD）
+        // 支持集 flags=0 不含 MUTABLE——设备已启用 videoMaintenance1 时加 VIDEO_PROFILE_INDEPENDENT
+        // 豁免位（规范 resources 章：该位不受「flags ⊆ 支持集」检查约束，VUID-08329 要求 usage 含
+        // DECODE_DST，本 DPB 为 Coincide 模式恒含）。
+        // 注意：豁免只覆盖 VIDEO_PROFILE_INDEPENDENT 一位——MUTABLE/EXTENDED_USAGE 仍须在支持集内，
+        // 支持集 flags=0 时不可加（06811 检查 flags & allowed == flags）。此分支仅补豁免位本身，
+        // 使 DPB 图像创建合法；per-plane 视图缺 MUTABLE 的问题由转换器侧另行处理（见勘察报告）。
         ImageCreateFlags sparseMask = ImageCreateFlags.CreateSparseBindingBit | ImageCreateFlags.CreateSparseResidencyBit
                                     | ImageCreateFlags.CreateSparseAliasedBit;
         ImageCreateFlags dpbCreateFlags = supportedFlags & ~sparseMask;
+        if (_gpuContext!.SupportsVideoProfileIndependent)
+        {
+            dpbCreateFlags |= ImageCreateFlags.CreateVideoProfileIndependentBitKhr;
+            Console.WriteLine("[DIAG-FMT] videoMaintenance1 已启用 → DPB 加 VIDEO_PROFILE_INDEPENDENT（豁免位，支持集 flags 之外的唯一合法附加位）");
+        }
         Console.WriteLine($"[DIAG-FMT] DPB 格式构造: format=G8B8R82Plane420Unorm createFlags=0x{(uint)dpbCreateFlags:X} usage=0x{(uint)dpbUsage:X} (queryOk={fmtOk})");
 
         var imageCi = new ImageCreateInfo

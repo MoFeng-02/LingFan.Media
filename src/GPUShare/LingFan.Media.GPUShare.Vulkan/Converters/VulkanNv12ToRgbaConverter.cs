@@ -233,6 +233,14 @@ public sealed unsafe partial class VulkanNv12ToRgbaConverter : IDisposable
         }
         _planeViews.Clear();
 
+        // YCbCr 整图采样路径资源（DPB 视图缓存 / 帧缓冲 / 内嵌转换器）。
+        foreach (var kv in _dpbMultiPlaneViews)
+            if (kv.Value.Handle != 0) VulkanNative.DestroyImageView(_device, kv.Value, null);
+        _dpbMultiPlaneViews.Clear();
+        if (_ycbcrFramebuffer.Handle != 0) { VulkanNative.DestroyFramebuffer(_device, _ycbcrFramebuffer, null); _ycbcrFramebuffer = default; }
+        _ycbcrConverter?.Dispose();
+        _ycbcrConverter = null;
+
         ReleaseFramebuffer();
         ReleasePipelineAndRenderPass();
         if (_pipelineLayout.Handle != 0) { VulkanNative.DestroyPipelineLayout(_device, _pipelineLayout, null); _pipelineLayout = default; }

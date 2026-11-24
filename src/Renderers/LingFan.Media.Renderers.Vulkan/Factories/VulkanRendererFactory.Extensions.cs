@@ -83,6 +83,11 @@ public sealed unsafe partial class VulkanRendererFactory
         AddIfAvail("VK_KHR_video_decode_queue");
         AddIfAvail("VK_KHR_video_decode_h264");
         AddIfAvail("VK_KHR_video_decode_h265");
+        // video-maintenance1：提供 VIDEO_PROFILE_INDEPENDENT 图像创建位——部分驱动（如本机 AMD）
+        // 对 decode profile 的格式支持集返回 flags=0（不含 MUTABLE），per-plane 视图必需的
+        // MUTABLE_FORMAT 会触发 VUID-06811；该位可绕过 flags 子集检查（规范 resources 章明示）。
+        // 特性支持性在设备创建处经 Features2 探测后链入启用（能力自报，缺失不链）。
+        AddIfAvail("VK_KHR_video_maintenance1");
 
         return exts.ToArray();
     }
