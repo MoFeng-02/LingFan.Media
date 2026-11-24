@@ -59,6 +59,7 @@
     <Project Path="src/Tools/MediaSourceProbe/MediaSourceProbe.csproj" />
     <Project Path="src/Tools/OpenGLHeadfulPlaybackProbe/OpenGLHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/PlaybackProbe/PlaybackProbe.csproj" />
+    <Project Path="src/Tools/ProbeShared/ProbeShared.csproj" />
     <Project Path="src/Tools/VlcHeadfulPlaybackProbe/VlcHeadfulPlaybackProbe.csproj" />
     <Project Path="src/Tools/VlcNativePlaybackProbe/VlcNativePlaybackProbe.csproj" />
     <Project Path="src/Tools/VulkanHeadfulPlaybackProbe/VulkanHeadfulPlaybackProbe.csproj" />

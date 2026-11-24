@@ -23,6 +23,7 @@ using Microsoft.Extensions.Logging;
 using Vortice.DXGI;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
+using ProbeShared;
 
 namespace VulkanHeadfulPlaybackProbe;
 

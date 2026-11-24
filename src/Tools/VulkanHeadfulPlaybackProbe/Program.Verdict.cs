@@ -22,6 +22,7 @@ using Microsoft.Extensions.Logging;
 using Vortice.DXGI;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
+using ProbeShared;
 
 namespace VulkanHeadfulPlaybackProbe;
 
@@ -60,7 +61,7 @@ internal static partial class Program
             // 诊断：分相计时——定位每帧开销归属（CPU 转换 vs GPU 同步 QueueWaitIdle）。
             // 若 GPU 同步占比极高 → 瓶颈在每帧全队列同步，需改 fence 环消除串行；
             // 若 CPU 转换占比极高 → 瓶颈在软解 NV12→BGRA，需 SIMD/降分辨率上传等。
-            string? prof = countingFactory?.Last?.GetInnerProfile();
+            string? prof = countingFactory?.Last?.InnerAs<LingFan.Media.Renderers.Vulkan.IRendererProfiler>()?.GetProfile();
             if (prof is not null) Console.WriteLine($"[HEADFUL-VIDEO-PROFILE] {prof}");
         }
         if (doAudio)

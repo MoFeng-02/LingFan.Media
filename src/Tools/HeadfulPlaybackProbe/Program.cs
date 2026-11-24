@@ -24,6 +24,7 @@ using Vortice.DXGI;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ProbeShared;
 
 namespace HeadfulPlaybackProbe;
 
@@ -254,7 +255,7 @@ internal static partial class Program
             {
                 // 真实可见窗口：专用 STA 线程 + 消息泵（D3D11 SwapChain 需要有效 HWND + 消息循环）。
                 // 加 --visible 可肉眼确认上屏。
-                win = new RenderWindow(windowW, windowH, visible);
+                win = new RenderWindow(windowW, windowH, visible, "LingFanProbeWnd", 0);
                 if (win.Hwnd == IntPtr.Zero)
                 {
                     Console.WriteLine("窗口创建失败（HWND=0），视频有头验证将不可靠。");

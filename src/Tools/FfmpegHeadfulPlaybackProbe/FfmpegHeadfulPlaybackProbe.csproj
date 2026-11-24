@@ -37,6 +37,7 @@
 
 	<ItemGroup>
 		<!-- 有头全链路：FFmpeg 解码（HEVC 等 MF 后端不可达的编码）+ D3D11 上屏（渲染器） + WASAPI 出声（输出）。 -->
+		<ProjectReference Include="..\ProbeShared\ProbeShared.csproj" />
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
 		<!-- 硬件加速 + 零拷贝需 IGpuDeviceContext（由 D3D11 渲染器提供）；软解上屏也走 D3D11Renderer 上传 NV12。 -->
 		<ProjectReference Include="..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />

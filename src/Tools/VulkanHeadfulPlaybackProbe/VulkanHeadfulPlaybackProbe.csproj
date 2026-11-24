@@ -54,6 +54,7 @@
 
 	<ItemGroup>
 		<!-- 有头全链路：MF 软解（H264 → CPU NV12）→ Vulkan 上传上屏（渲染器）+ WASAPI 出声（输出）。 -->
+		<ProjectReference Include="..\ProbeShared\ProbeShared.csproj" />
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
 		<!-- 验收多后端经同一 Vulkan 渲染器上屏：ffmpeg / vlc 强制软解产出 CPU 帧喂给 Vulkan。 -->
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />

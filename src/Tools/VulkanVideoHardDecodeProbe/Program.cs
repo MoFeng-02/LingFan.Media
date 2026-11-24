@@ -18,6 +18,7 @@ using LingFan.Media.Renderers.Vulkan;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ProbeShared;
 
 namespace VulkanVideoHardDecodeProbe;
 
@@ -219,7 +220,7 @@ internal static partial class Program
             if (doVideo)
             {
                 // 真实可见窗口：专用 STA 线程 + 消息泵（Vulkan SwapChain 需要有效 HWND + 消息循环）。
-                win = new RenderWindow(windowW, windowH, visible);
+                win = new RenderWindow(windowW, windowH, visible, "LingFanVulkanVideoProbeWnd", 0);
                 if (win.Hwnd == IntPtr.Zero)
                 {
                     Console.WriteLine("窗口创建失败（HWND=0），视频有头验证将不可靠。");
@@ -328,7 +329,7 @@ internal static partial class Program
                 // 诊断：视频丢帧数。与 present 计数对照可判断尾帧是被 Synchronizer 判定丢弃还是已呈现。
                 Console.WriteLine($"[HEADFUL-VIDEO-DROP] droppedFrames={player.VideoDroppedFrames} present={presentCount}");
                 // 诊断：分相计时——定位每帧开销归属（CPU 转换 vs GPU 同步 QueueWaitIdle）。
-                string? prof = countingFactory?.Last?.GetInnerProfile();
+                string? prof = countingFactory?.Last?.InnerAs<LingFan.Media.Renderers.Vulkan.IRendererProfiler>()?.GetProfile();
                 if (prof is not null) Console.WriteLine($"[HEADFUL-VIDEO-PROFILE] {prof}");
             }
             if (doAudio)

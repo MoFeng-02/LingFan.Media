@@ -16,6 +16,7 @@ using LingFan.Media.Renderers.OpenGL;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ProbeShared;
 
 namespace OpenGLHeadfulPlaybackProbe;
 

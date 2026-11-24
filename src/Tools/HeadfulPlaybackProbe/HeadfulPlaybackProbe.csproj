@@ -39,6 +39,7 @@
 
 	<ItemGroup>
 		<!-- 有头全链路：MF 解码 + D3D11 上屏（渲染器） + WASAPI 出声（输出）。 -->
+		<ProjectReference Include="..\ProbeShared\ProbeShared.csproj" />
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
 		<!-- 回退下家：MF 只经系统 MFT 支持 H264/H265，VP9/AV1（.webm）会判定 Unknown 直接失败。
 		     没有下家时 BackendFallbackMediaPlayerFactory 只能报「没有已注册的后端能够打开该媒体源」。 -->

@@ -25,6 +25,7 @@ using Vortice.DXGI;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ProbeShared;
 
 namespace HeadfulPlaybackProbe;
 

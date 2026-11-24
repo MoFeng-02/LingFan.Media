@@ -45,6 +45,7 @@
 		     (1) VulkanVideo —— VK_KHR_video_decode_h264 硬解，产出 NV12 VkImage 与渲染器同设备 → 零拷贝上屏；
 		         仅 H.264，且要求共享 IGpuDeviceContext.VideoQueueFamilyIndex 有效（设备启用 video-decode 扩展）。
 		     (2) FFmpeg —— 解封装 + 音频解码 + 视频软解回退（VulkanVideo 不支持 VP9/AV1 或 GPU 无 video-decode 时）。 -->
+		<ProjectReference Include="..\ProbeShared\ProbeShared.csproj" />
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.VulkanVideo\LingFan.Media.Backends.VulkanVideo.csproj" />
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
 		<!-- Vulkan 渲染器（契约层：仅引用 IVideoRendererFactory / IGpuDeviceContext，不越级）。 -->

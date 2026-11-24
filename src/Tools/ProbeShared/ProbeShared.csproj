@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- 探针共享底座：有头探针家族的窗口/计数装饰/帧落盘/重播判据唯一实现。
+	     仅供 src/Tools/ 探针消费，不打包、不被生产库引用（验证载体独立于生产代码）。
+	     各探针保留自己的 Setup/Verdict（差异真实存在），共享层只收敛逐字复制段。 -->
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<IsPackable>false</IsPackable>
+		<!-- LibraryImport 源生成封送需要 unsafe -->
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
+	</ItemGroup>
+
+</Project>

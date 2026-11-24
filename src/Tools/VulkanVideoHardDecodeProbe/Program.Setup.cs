@@ -19,6 +19,7 @@ using LingFan.Media.Renderers.Vulkan;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ProbeShared;
 
 namespace VulkanVideoHardDecodeProbe;
 
@@ -60,7 +61,7 @@ internal static partial class Program
             var vulkanFactory = new VulkanRendererFactory(loggerFactory);
             vulkanFactory.ScaleMode = scaleMode;
             gpuCtx = vulkanFactory.Context;
-            countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir);
+            countingFactory = new CountingVideoRendererFactory(vulkanFactory, saveFrames, saveDir, maxDumpFrames: 3, printPixelStats: true);
             builder.Services.AddSingleton<IVideoRendererFactory>(countingFactory);
             builder.Services.AddSingleton<IGpuDeviceContext>(gpuCtx);
         }

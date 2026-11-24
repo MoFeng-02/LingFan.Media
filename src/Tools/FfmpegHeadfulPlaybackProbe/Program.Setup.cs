@@ -13,6 +13,7 @@ using LingFan.Media.Renderers.D3D11;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ProbeShared;
 
 namespace FfmpegHeadfulPlaybackProbe;
 

@@ -13,6 +13,7 @@ using LingFan.Media.Renderers.D3D11;
 using LingFan.Media.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ProbeShared;
 
 namespace FfmpegHeadfulPlaybackProbe;
 
@@ -182,7 +183,7 @@ internal static partial class Program
 
             if (doVideo)
             {
-                win = new RenderWindow(windowW, windowH, visible);
+                win = new RenderWindow(windowW, windowH, visible, "LingFanFfmpegProbeWnd", 0);
                 if (win.Hwnd == IntPtr.Zero)
                 {
                     Console.WriteLine("窗口创建失败（HWND=0），视频有头验证将不可靠。");

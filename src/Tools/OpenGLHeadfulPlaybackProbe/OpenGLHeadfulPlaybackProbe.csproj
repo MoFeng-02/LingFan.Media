@@ -29,6 +29,7 @@
 
 	<ItemGroup>
 		<!-- 有头全链路：MF 软解（H264 → CPU SoftwareFrameResource）→ OpenGL 上传上屏（WGL）+ WASAPI 出声（输出）。 -->
+		<ProjectReference Include="..\ProbeShared\ProbeShared.csproj" />
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.MediaFoundation\LingFan.Media.Backends.MediaFoundation.csproj" />
 		<!-- FFmpeg 后端（backend=ffmpeg 验收用）：软解 H264/WebM 等。 -->
 		<ProjectReference Include="..\..\Backends\LingFan.Media.Backends.FFmpeg\LingFan.Media.Backends.FFmpeg.csproj" />
