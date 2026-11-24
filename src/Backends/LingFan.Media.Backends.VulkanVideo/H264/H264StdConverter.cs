@@ -99,6 +99,7 @@ internal sealed unsafe class H264ParameterSet : IDisposable
             if (chromaFmt == 3)
             {
                 separateColourPlaneFlag = (byte)r.ReadBit();
+                SeparateColourPlaneFlag = separateColourPlaneFlag;
                 Sps.Flags.SeparateColourPlaneFlag = separateColourPlaneFlag;
             }
             Sps.BitDepthLumaMinus8 = (byte)r.ReadUe();
