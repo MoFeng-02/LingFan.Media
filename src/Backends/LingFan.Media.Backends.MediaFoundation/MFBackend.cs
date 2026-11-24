@@ -52,7 +52,7 @@ public sealed class MFBackend : IDisposable
     /// 预热 MediaFoundation：提前打开一次样例媒体、强制激活解码器 MFT，把「进程首次
     /// <c>MFCreateSourceReaderFromURL</c> 激活 H.264/AAC 解码器」的冷启动成本挪到
     /// 调用方认为合适的位置（例如真实 App 的启动闪屏期、或探针创建可见窗口之前）。
-    /// 正式 <see cref="MFDemuxer.OpenAsync"/> 复用已加载的解码器 DLL，打开几乎瞬时完成。
+    /// 正式 <see cref="Demuxer.MFDemuxer.OpenAsync"/> 复用已加载的解码器 DLL，打开几乎瞬时完成。
     /// </summary>
     /// <remarks>
     /// <para>幂等且容错：失败仅记 Debug 日志并静默返回，绝不抛异常影响正式打开。

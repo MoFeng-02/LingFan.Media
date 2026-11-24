@@ -13,7 +13,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Interop;
 /// 故解封装侧必须自持平台引用（「有意泄漏」路径护得住 IMFSourceReader，护不住平台本身）。
 /// <b>不变量</b>：凡持有 MF 原生对象者，必须自己持一份平台引用，且该引用与其原生对象<b>同进退</b>——
 /// 释放路径成对递减，泄漏路径一律不递减。
-/// <see cref="MediaPlayer"/> 释放顺序为「先 Dispose 解码器（→Shutdown）→ 后 Close 解封装器」；
+/// <c>MediaPlayer</c> 释放顺序为「先 Dispose 解码器（→Shutdown）→ 后 Close 解封装器」；
 /// 若解码器释放即直接拆平台，解封装器读取线程可能仍有 in-flight 原生 <c>ReadSample</c>，
 /// 会触发原生访问违规（非确定性的原生堆损坏）。</para>
 /// <para>本封装把 Startup/Shutdown 做成引用计数：仅当<b>最后一个</b>消费者释放（计数归 0）时才真正 <c>MFShutdown</c>。

@@ -16,11 +16,24 @@ namespace LingFan.Media.Avalonia;
 // 字段与核心编排（ctor/Attach/Present/PresentUi/Dispose）在主文件；DirectComposition GPU 互操作导入与表面布局。
 internal sealed partial class CompositionVideoRenderer
 {
+    // 把生产者描述符携带的 SharedGpuSurfaceFormat 映射到合成器导入所需的 PlatformGraphicsExternalImageFormat。
+    // Android 零拷贝路径生产者用 R8G8B8A8（AHB 唯一等价格式，B8G8R8A8 无 AHB 等价），须对应 R8G8B8A8UNorm，
+    // 否则合成器以 BGRA 采样会致通道互换；Windows/Linux 仍走 B8G8R8A8UNorm（与 D3D/Vulkan 约定一致）。
     private static PlatformGraphicsExternalImageFormat ToExternalFormat(SharedGpuSurfaceFormat fmt) =>
         fmt == SharedGpuSurfaceFormat.R8G8B8A8UNorm
             ? PlatformGraphicsExternalImageFormat.R8G8B8A8UNorm
             : PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm;
 
+    /// <summary>
+    /// Android（SyncMode.None）专用：每帧重新解析 interop 并导入当前帧外部图像。
+    /// 依据（Avalonia 12.1.1 源码）：CompositionImportedGpuImage 在导入时把
+    /// <c>Context = compositor.Server.RenderInterface.Value</c> 一次性冻结；<c>CompositionImportedGpuImage.IsUsable</c>
+    /// 要求呈现时 <c>RenderInterface.Value</c> 与该 Context 为同一实例。Android 合成器 RenderInterface
+    /// 跨帧重建，跨帧缓存导入必失配（PlatformGraphicsContextLostException）。每帧重解析+重导+await
+    /// <c>ICompositionGpuImportedObject.ImportCompleted</c>，保证呈现瞬间 Context 与 Value 一致。
+    /// </summary>
+    /// <param name="desc">共享表面描述符（句柄/尺寸/格式/互斥键）。</param>
+    /// <returns>本帧导入图像；任一环节失败返回 <see langword="null"/>（调用方应跳过本帧）。</returns>
     private async Task<ICompositionImportedGpuImage?> ImportFreshAsync(SharedGpuSurfaceDescriptor desc)
     {
         var interop = await _compositor!.TryGetCompositionGpuInterop().ConfigureAwait(true);

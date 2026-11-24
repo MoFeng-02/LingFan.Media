@@ -286,7 +286,7 @@ internal sealed unsafe partial class VulkanVideoDecoder
     }
 
     /// <summary>
-    /// 确保指定 DPB 槽图像在视频解码前处于 <see cref="ImageLayout.VideoDecodeDpbBitKhr"/> 布局。
+    /// 确保指定 DPB 槽图像在视频解码前处于 <see cref="ImageLayout.VideoDecodeDpbKhr"/> 布局。
     /// 规范 VU：video decode 操作要求所有被访问图像子资源（解码输出/重建/参考）解码前即处于该布局，
     /// 解码器不会隐式转换——输出槽经 COINCIDE 模式同时作为解码输出与重建，亦须此布局。
     /// DPB 图像以 <c>VK_SHARING_MODE_CONCURRENT</c> 跨 video/graphics 双队列族共享，
@@ -313,7 +313,7 @@ internal sealed unsafe partial class VulkanVideoDecoder
 
     /// <summary>
     /// 把 DPB 槽 NV12 双平面（PLANE_0=Y、PLANE_1=UV）由 <paramref name="oldLayout"/> 转至
-    /// <see cref="ImageLayout.VideoDecodeDpbBitKhr"/>，供后续 CmdDecodeVideoKHR 访问。
+    /// <see cref="ImageLayout.VideoDecodeDpbKhr"/>，供后续 CmdDecodeVideoKHR 访问。
     /// </summary>
     private void TransitionDpbSlotToDecodeLayout(int slot, ImageLayout oldLayout, PipelineStageFlags srcStage, AccessFlags srcAccess)
     {

@@ -214,6 +214,7 @@ internal sealed partial class D3D11ShaderPipeline : IDisposable
     /// <param name="rtv">渲染目标视图（BackBuffer RTV）。</param>
     /// <param name="targetWidth">渲染目标宽度（像素）。</param>
     /// <param name="targetHeight">渲染目标高度（像素）。</param>
+    /// <param name="mode">宽高比模式（拉伸/等比留边等）。</param>
     /// <param name="flipY">是否在采样时翻转 UV.y。共享纹理经 Avalonia Composition 导入时，
     /// 合成器按 OpenGL 风格（原点在左下）采样，需在写入共享纹理时预翻转；默认 false。</param>
     internal void Present(SoftwareFrameResource sw, ID3D11RenderTargetView rtv, int targetWidth, int targetHeight, AspectRatioMode mode, bool flipY = false)

@@ -108,7 +108,7 @@ internal sealed partial class FFmpegVideoDecoder
     /// <remarks>
     /// <para>缓冲必须用 <c>av_malloc</c> 分配：<c>avcodec_free_context</c> 经
     /// <c>av_freep(&amp;avctx->extradata)</c> 释放，须与分配器匹配。勿改用
-    /// <see cref="Marshal.AllocHGlobal"/> + <see cref="Marshal.FreeHGlobal"/>——与 av_freep 分配器错配，
+    /// <see cref="Marshal.AllocHGlobal(nint)"/> + <see cref="Marshal.FreeHGlobal"/>——与 av_freep 分配器错配，
     /// 且退出时双重释放（先 HGlobal 释放、av_freep 再释放）→ 原生访问违例。</para>
     /// <para>重播重建 BSF 时先经 <c>av_free</c> 释放旧缓冲（同分配器）。</para>
     /// </remarks>

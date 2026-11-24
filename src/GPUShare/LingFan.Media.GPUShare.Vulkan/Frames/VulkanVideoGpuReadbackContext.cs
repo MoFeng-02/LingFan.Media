@@ -11,8 +11,8 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// 不影响零拷贝上屏主流。Vulkan 视频 Decode 命令的输出（DPB 图像）原生支持 <c>vkCmdCopyImageToBuffer</c>
 /// 转 TransferSrcOptimal 后拷到 host-visible buffer，再 map 出来供 CPU 读。</para>
 /// <para><b>布局不变性</b>：内部两条屏障 —— 解码布局 → TransferSrcOptimal（拷贝）→ VideoDecodeDpbKhr（还原）。
-/// 不破坏渲染器后续经 <see cref="VulkanNv12ToRgbaConverter.Convert"/> 自 VideoDecodeDpbKhr 起的 transition 链。</para>
-/// <para><b>异步策略</b>：<see cref="ReadbackNv12AsBgra32"/> 同步（native 分类）—— 同帧 fence 自等，CPU 阻塞拿结果，与诊断路径的同步调用场景一致。</para>
+/// 不破坏渲染器后续经 <see cref="VulkanNv12ToRgbaConverter.Convert(CommandBuffer, Image, ImageLayout, uint, uint, uint, Format, out Image)"/> 自 VideoDecodeDpbKhr 起的 transition 链。</para>
+/// <para><b>异步策略</b>：<see cref="ReadbackNv12AsBgra32"/> 同步 —— 同帧 fence 自等，CPU 阻塞拿结果，与诊断路径的同步调用场景一致。</para>
 /// <para><b>AOT</b>：零反射、零 Silk.NET 运行期依赖（走 <see cref="VulkanNative"/> 零反射绑定）；dispose 释放所有 Vk 句柄。</para>
 /// </remarks>
 public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
@@ -87,6 +87,7 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
     /// <param name="w">图像宽度（像素）。</param>
     /// <param name="h">图像高度（像素）。</param>
     /// <param name="srcLayout">交付时的图像布局（Vulkan 硬解 DPB = <see cref="ImageLayout.VideoDecodeDpbKhr"/>）。</param>
+    /// <param name="layer">源图像数组层（D3D11VA/Vulkan 硬解纹理数组切片索引；单切片为 0）。</param>
     /// <returns>紧凑 BGRA32，长度 = <c>w * h * 4</c>。</returns>
     public byte[] ReadbackNv12AsBgra32(Image src, uint w, uint h, ImageLayout srcLayout, uint layer)
     {

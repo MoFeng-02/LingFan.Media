@@ -20,6 +20,14 @@ internal sealed partial class D3D11ShaderPipeline
     /// 可通过 plane-specific SRV 实现完全零拷贝。</para>
     /// <para>调用方持锁；本方法同步 GPU 提交，无 I/O。</para>
     /// </remarks>
+    /// <param name="srcTexture">源 GPU 纹理（硬解输出，须持锁访问）。</param>
+    /// <param name="subresourceIndex">源纹理数组切片索引（D3D11VA 纹理数组；单切片为 0）。</param>
+    /// <param name="srcWidth">源纹理宽度（像素）。</param>
+    /// <param name="srcHeight">源纹理高度（像素）。</param>
+    /// <param name="rtv">渲染目标视图。</param>
+    /// <param name="targetWidth">渲染目标宽度（像素）。</param>
+    /// <param name="targetHeight">渲染目标高度（像素）。</param>
+    /// <param name="mode">宽高比模式（拉伸/等比留边等）。</param>
     /// <param name="flipY">是否在采样时翻转 UV.y。共享纹理经 Avalonia Composition 导入时，
     /// 合成器按 OpenGL 风格（原点在左下）采样，需在写入共享纹理时预翻转；默认 false。</param>
     internal void PresentFromGpuTexture(
@@ -120,6 +128,15 @@ internal sealed partial class D3D11ShaderPipeline
     /// 替代原先抛 <see cref="NotSupportedException"/> 的行为——帧尺寸本应逐帧可变（源分辨率 ≠ 窗口尺寸属正常缩放场景）。</para>
     /// <para>调用方持锁；本方法同步 GPU 提交，无 I/O。</para>
     /// </remarks>
+    /// <param name="srcTexture">源 GPU 纹理（硬解输出，须持锁访问）。</param>
+    /// <param name="subresourceIndex">源纹理数组切片索引（D3D11VA 纹理数组；单切片为 0）。</param>
+    /// <param name="srcWidth">源纹理宽度（像素）。</param>
+    /// <param name="srcHeight">源纹理高度（像素）。</param>
+    /// <param name="srcFormat">源像素格式（BGRA32/RGBA32）。</param>
+    /// <param name="rtv">渲染目标视图。</param>
+    /// <param name="targetWidth">渲染目标宽度（像素）。</param>
+    /// <param name="targetHeight">渲染目标高度（像素）。</param>
+    /// <param name="mode">宽高比模式（拉伸/等比留边等）。</param>
     /// <param name="flipY">是否在采样时翻转 UV.y。共享纹理经 Avalonia Composition 导入时，
     /// 合成器按 OpenGL 风格（原点在左下）采样，需在写入共享纹理时预翻转；默认 false。</param>
     internal void PresentFromBgraGpuTexture(

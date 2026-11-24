@@ -16,7 +16,7 @@ namespace LingFan.Media.Backends.MediaFoundation.Decoders;
 internal sealed partial class MFVideoDecoder
 {
     /// <summary>
-    /// 尝试把 <see cref="MFDemuxer"/> 的「已解码直通包」直接包成 <see cref="VideoFrame"/>，跳过本类 MFT。
+    /// 尝试把 <see cref="Demuxer.MFDemuxer"/> 的「已解码直通包」直接包成 <see cref="VideoFrame"/>，跳过本类 MFT。
     /// </summary>
     /// <param name="packet">待判定的包。</param>
     /// <returns>直通帧；非直通包（压缩裸流）返回 <see langword="null"/>，由调用方走原 MFT 路径。</returns>

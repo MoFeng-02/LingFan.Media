@@ -18,9 +18,9 @@ namespace LingFan.Media.Presenters.D3D11;
 /// <para><b>依赖倒置</b>：仅依赖 Abstractions 的 IVideoRenderer/IVideoRendererFactory 与 Presenters 的 IGpuPresenter；
 /// 不引用 Avalonia 或具体 GPU 类型。D3D11Renderer 由 DI 注入的工厂创建。</para>
 /// <para><b>线程安全</b>：Present（管线线程）与 Resize/Dispose/Initialize（UI 线程）通过 _rendererLock 互斥，
-/// 防止 Detach 释放 SwapChain 与 Present 使用 SwapChain 原生竞态。<see cref="D3D11Renderer"/> 内部亦以
+/// 防止 Detach 释放 SwapChain 与 Present 使用 SwapChain 原生竞态。<c>D3D11Renderer</c> 内部亦以
 /// <c>_gate</c> 锁串行化所有原生方法，是跨调用方（Core 管线 + UI Presenter）的最终序列化点。</para>
-/// <para><b>生命周期（缓存单例）</b>：<see cref="IVideoRenderer"/> 为 <see cref="D3D11RendererFactory"/> 的缓存单例
+/// <para><b>生命周期（缓存单例）</b>：<see cref="IVideoRenderer"/> 为 <c>D3D11RendererFactory</c> 的缓存单例
 /// （Core 管线与 UI Presenter 共享同一实例）。本 Presenter 仅负责 Attach/Detach（管理 SwapChain 与 HWND 的绑定），
 /// <b>不 Dispose 共享单例</b>——释放交由工厂在应用关闭（或播放器释放后重建）时处理。Attach 失败时仅置空引用，
 /// 由 UI 层捕获并降级到 SkiaVideoPresenter。</para>

@@ -13,12 +13,12 @@ namespace LingFan.Media.Backends.VulkanVideo.H264;
 /// <para>Vulkan H.264 解码契约（权威规范 VK_KHR_video_decode_h264 §42.11.1 + VkVideoDecodeH264PictureInfoKHR）：
 /// <c>vkCmdDecodeVideoKHR</c> 的 <see cref="VideoDecodeInfoKHR.SrcBuffer"/> 承载「<b>不含</b> NAL 起始码（00 00 01）前缀」
 /// 的 slice NAL 序列——每个 slice 的 NAL 头字节（如 IDR=0x65、非 IDR=0x41）须直接位于缓冲起点，
-/// <see cref="VideoDecodeInfoKHR.PSliceOffsets"/> 指向各 slice 的「slice header 起点」（即 NAL 头字节）。
+/// <c>StdPictureInfoH264.pSliceOffsets</c> 指向各 slice 的「slice header 起点」（即 NAL 头字节）。
 /// 起始码是 Annex-B 帧封装细节、非 NAL 单元的一部分；若保留起始码，解码器会把起始码首字节误读为 NAL 头
 /// （type=0 未定义 NAL）→ 静默丢弃全部切片 → DPB 全零 NV12 → 恒绿（绿屏成因）。</para>
 /// <para>本方法去除 avcC 长度前缀 / Annex-B 起始码后，直接拼接 NAL 单元（NAL 头 + RBSP，emulation prevention 字节保留——
 /// 硬件解码器自行处理），并为每个 slice 记录「指向 NAL 头」的对齐偏移。</para>
-/// <para>本类同时支持 avcC 长度前缀包（<paramref name="nalLengthSize"/> &gt; 0）与 Annex-B 起始码包（= 0）。</para>
+/// <para>本类同时支持 avcC 长度前缀包（<c>nalLengthSize</c> &gt; 0）与 Annex-B 起始码包（= 0）。</para>
 /// </remarks>
 internal static unsafe class H264SliceInfo
 {
@@ -29,6 +29,9 @@ internal static unsafe class H264SliceInfo
     /// 把 packet 中的 slice NAL 拼为解码比特流（去除长度前缀/Annex-B 起始码，再为每个 slice 重新加回
     /// 00 00 01 NAL 起始码），返回指向各 slice 起始码的切片偏移（已按 <paramref name="bitstreamOffsetAlign"/> 对齐）。
     /// </summary>
+    /// <param name="packet">原始包字节（avcC 长度前缀或 Annex-B 起始码封装）。</param>
+    /// <param name="nalLengthSize">avcC NAL 长度前缀字节数（1/2/4）；0=Annex-B 起始码封装。</param>
+    /// <param name="sliceOffsets">输出：各 slice 在返回比特流中的起始偏移（已对齐）。</param>
     /// <param name="bitstreamOffsetAlign">VkVideoCapabilitiesKHR::minBitstreamBufferOffsetAlignment（切片偏移对齐）。</param>
     public static byte[] BuildBitstream(ReadOnlySpan<byte> packet, int nalLengthSize, out int[] sliceOffsets, ulong bitstreamOffsetAlign = 1)
     {

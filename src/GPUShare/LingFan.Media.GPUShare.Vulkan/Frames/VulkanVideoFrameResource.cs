@@ -9,7 +9,7 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// </summary>
 /// <remarks>
 /// <para>实现 <see cref="IFrameResource"/> + <see cref="IGpuTextureResource"/>，供 VulkanVideoDecoder 产出、渲染器消费
-/// （<see cref="VulkanRenderer"/> 经 pattern matching 匹配此类型，直接 blit 同设备 NV12 VkImage，零拷贝上屏）。</para>
+/// （<c>VulkanRenderer</c> 经 pattern matching 匹配此类型，直接 blit 同设备 NV12 VkImage，零拷贝上屏）。</para>
 /// <para><b>资源所有权（与 VulkanImageResource 关键区别）</b>：DPB 图像须跨多帧复用（被后续帧作为参考帧引用），
 /// 因此本类 <see cref="Dispose"/> <b>不</b>调用 vkDestroyImage / vkFreeMemory——仅通知解码器该帧已被消费
 /// （构造参数 <c>onReleased</c> 回调，传回槽位索引），由解码器 DPB 管理器决定何时复用该槽位。
@@ -94,7 +94,7 @@ public sealed unsafe class VulkanVideoFrameResource : IFrameResource, IGpuTextur
     /// <inheritdoc/>
     /// <remarks>调用 <see cref="VulkanVideoGpuReadbackContext"/> 同步拷两平面到 host-visible staging buffer + CPU 软转 NV12→BGRA32。
     /// 内部 barrier 保证图像布局不变（解码后 VideoDecodeDpbKhr → TransferSrcOptimal → VideoDecodeDpbKhr），
-    /// 不破坏渲染器后续经 <see cref="VulkanNv12ToRgbaConverter.Convert"/> 自 VideoDecodeDpbKhr 起的 transition 链。
+    /// 不破坏渲染器后续经 <see cref="VulkanNv12ToRgbaConverter.Convert(CommandBuffer, Image, ImageLayout, uint, uint, uint, Format, out Image)"/> 自 VideoDecodeDpbKhr 起的 transition 链。
     /// 若解码器未注入 <c>readbackContext</c>（生产场景：仅零拷贝上屏），则按零拷贝路径约定抛 <see cref="NotSupportedException"/>。</remarks>
     GpuTextureReadback IGpuTextureResource.ReadbackToCpu()
     {

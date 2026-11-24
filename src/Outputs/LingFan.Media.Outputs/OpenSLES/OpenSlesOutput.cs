@@ -19,7 +19,7 @@ namespace LingFan.Media.Outputs.OpenSLES;
 /// <item><see cref="Submit"/>：同步边界（原生调用），拷贝 PCM 到原生缓冲并 <c>Enqueue</c>；缓冲满时由缓冲队列计数做背压（阻塞等待）。</item>
 /// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步，SetPlayState(PAUSED/PLAYING)/BufferQueue.Clear。</item>
 /// <item><see cref="GetPlaybackPosition"/>：同步，主时钟消费记账（首帧 PTS 锚点 + 已完成缓冲采样数），
-/// 等价 AudioTrack.playbackHeadPosition 语义；<see cref="GetPlaybackPositionDirect"/> 默认转发至此。
+/// 等价 AudioTrack.playbackHeadPosition 语义；<see cref="IAudioOutput.GetPlaybackPositionDirect"/> 默认转发至此。
 /// 不读 SLPlayItf::GetPosition（厂商设备半冻结值不可信）。</item>
 /// <item><see cref="Dispose"/>：同步快速释放，Destroy 所有 NDK 对象。</item>
 /// <item><see cref="DisposeAsync"/>：接口契约，委托 <see cref="Dispose"/> + 返回 <see cref="ValueTask.CompletedTask"/>，非伪异步。</item>

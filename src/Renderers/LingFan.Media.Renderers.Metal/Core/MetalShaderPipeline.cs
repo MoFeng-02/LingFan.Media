@@ -12,10 +12,10 @@ namespace LingFan.Media.Renderers.Metal;
 /// <remarks>
 /// <para><b>职责</b>：与 D3D11/Vulkan/桌面 OpenGL/GLES 同源 Shader 管线一致——帧尺寸 ≠ 渲染目标（GPU 缩放）或 YUV 像素格式
 /// （YUV420P/YUV422P/YUV444P/NV12/NV21）时，走全屏 quad + 片元着色器采样呈现。</para>
-/// <para><b>与 OpenGL ES（<see cref="LingFan.Media.Renderers.OpenGLES.Core.GlesShaderPipeline"/>）的差异</b>：</para>
+/// <para><b>与 OpenGL ES（<c>LingFan.Media.Renderers.OpenGLES.Core.GlesShaderPipeline</c>）的差异</b>：</para>
 /// <list type="bullet">
 /// <item>着色器语言为 Metal Shading Language（MSL），而非 GLSL；YUV→RGB 系数（BT.601 全范围）完全同源，色彩不漂移。</item>
-/// <item>MSL 经 <c>newLibraryWithSource:options:error:</c> <b>运行期编译</b>——避免引入 .metal 编译工具链依赖（对本机仅 Windows 构建环境尤其关键）。</li>
+/// <item>MSL 经 <c>newLibraryWithSource:options:error:</c> <b>运行期编译</b>——避免引入 .metal 编译工具链依赖（对本机仅 Windows 构建环境尤其关键）。</item>
 /// <item>顶点缩放（信箱/裁剪）在顶点着色器内以 scale/offset 实现，规避 setViewport/setScissorRect 的结构体按值传参（跨架构 ABI 风险）。</item>
 /// <item>源纹理上传走 <c>replaceRegion:mipmapLevel:withBytes:bytesPerRow:</c>；逐行上传以支持非零 stride 的零拷贝帧。</item>
 /// </list>
@@ -25,7 +25,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// <para><b>线程安全</b>：所有方法由 <see cref="MetalRenderer"/> 在其 <c>_gate</c> 锁内调用，本类不再加锁。</para>
 /// <para><b>资源所有权</b>：设备由渲染器持有（不 Dispose）；库/管线状态/顶点缓冲由本类持有，<see cref="Dispose"/> 释放；
 /// 每帧源纹理（+1）在 Present 内 <see cref="AppleRuntime.objc_release"/>，自动释放对象由渲染器的 autorelease 池回收。</para>
-/// <para><b>AOT 兼容</b>：sealed 类，无反射；Metal 调用经 <see cref="MetalNative"/>（零反射 [LibraryImport]）。</para>
+/// <para><b>AOT 兼容</b>：sealed 类，无反射；Metal 调用经 <c>Apple.Shared</c> 互操作层（零反射 [LibraryImport]）。</para>
 /// <para><b>分部划分</b>：Program 分部管 MSL 源码、管线编译与纹理上传。本文件为呈现主流程与生命周期。</para>
 /// </remarks>
 internal sealed unsafe partial class MetalShaderPipeline : IDisposable

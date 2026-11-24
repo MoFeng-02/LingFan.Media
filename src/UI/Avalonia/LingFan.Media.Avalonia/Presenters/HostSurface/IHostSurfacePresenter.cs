@@ -45,7 +45,7 @@ public interface IHostSurfacePresenter
 }
 
 /// <summary>
-/// 一次包装的产物：<see cref="Image"/> 为可采样图像，<see cref="BackendTexture"/> 为其关联的
+/// 一次包装的产物：<see cref="SkiaWrappedSurface.Image"/> 为可采样图像，<c>BackendTexture</c> 为其关联的
 /// 后端纹理包装（部分宿主组合存在，Vulkan 组合为 <see cref="SkiaSharp.GRBackendTexture"/>）。
 /// 调用方绘制完成后 <see cref="Dispose"/>（先图像后纹理包装及扩展释放）；底层共享表面不受影响。
 /// </summary>

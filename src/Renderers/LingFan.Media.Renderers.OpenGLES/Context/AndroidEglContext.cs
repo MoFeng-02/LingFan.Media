@@ -9,7 +9,7 @@ namespace LingFan.Media.Renderers.OpenGLES.Context;
 /// <para>创建流程：<c>eglGetDisplay(EGL_DEFAULT_DISPLAY)</c> → <c>eglInitialize</c> →
 /// <c>eglBindAPI(EGL_OPENGL_ES_API)</c> → <c>eglChooseConfig</c>（RGBA8 + 深度 24 + 模板 8，GLES 3.0 可渲染）→
 /// <c>eglCreateContext</c>（客户端版本 3）→ <c>eglCreateWindowSurface</c>（ANativeWindow*）→ <c>eglMakeCurrent</c>。</para>
-/// <para><b>与桌面 EGL（<see cref="LingFan.Media.Renderers.OpenGL"/> 的 EglContext）的本质差异</b>：
+/// <para><b>与桌面 EGL（<c>LingFan.Media.Renderers.OpenGL</c> 的 EglContext）的本质差异</b>：
 /// 桌面 GL 绑定 <c>EGL_OPENGL_API</c> + <c>EGL_OPENGL_BIT</c> 渲染类型（桌面 GL 3.3）；
 /// Android GLES 必须绑定 <c>EGL_OPENGL_ES_API</c> + <c>EGL_OPENGL_ES3_BIT</c> 渲染类型（OpenGL ES 3.0），
 /// 且窗口表面由 <c>ANativeWindow*</c>（经 <see cref="IRenderTarget.NativeHandle"/> 以 <see cref="RenderHandleType.Pointer"/> 传入的单一 IntPtr）提供，

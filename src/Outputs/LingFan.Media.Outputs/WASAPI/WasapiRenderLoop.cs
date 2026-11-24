@@ -21,7 +21,7 @@ namespace LingFan.Media.Outputs.Wasapi;
 /// CoInitializeEx + COM 设备枚举均为同步 COM 调用，无 I/O 可 await，非伪异步。</item>
 /// <item><see cref="Initialize"/>：同步（纯 COM 调用，无 I/O），在渲染线程执行 IAudioClient + IAudioRenderClient 创建 +
 /// 格式协商（GetMixFormat / IsFormatSupported）+ 事件驱动初始化（SetEventHandle）。</item>
-/// <item><see cref="Submit"/>/<see cref="SubmitBatch"/>：同步边界（原生 COM 背压），将帧交给渲染线程消费（阻塞等待该帧写入完成，
+/// <item><see cref="Submit(AudioFrame, CancellationToken)"/>/<see cref="SubmitBatch(IEnumerable{AudioFrame}, CancellationToken)"/>：同步边界（原生 COM 背压），将帧交给渲染线程消费（阻塞等待该帧写入完成，
 /// 故调用方在 Submit 返回后可安全归还帧所有权）；缓冲满时由渲染线程的 COM 背压等待，
 /// 调用方无需跨线程往返。</item>
 /// <item><see cref="Pause"/>/<see cref="Resume"/>/<see cref="Flush"/>：同步，渲染线程执行 IAudioClient.Stop/Start/Reset。</item>

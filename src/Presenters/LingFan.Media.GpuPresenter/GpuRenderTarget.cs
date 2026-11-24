@@ -13,6 +13,11 @@ namespace LingFan.Media.Presenters;
 /// </remarks>
 public sealed class GpuRenderTarget : IRenderTarget
 {
+    /// <summary>以窗口句柄构造渲染目标。</summary>
+    /// <param name="hwnd">窗口原生句柄（HWND）。</param>
+    /// <param name="width">窗口客户区宽度（像素）。</param>
+    /// <param name="height">窗口客户区高度（像素）。</param>
+    /// <param name="scale">显示缩放系数（DPI 缩放，1.0=100%）。</param>
     public GpuRenderTarget(IntPtr hwnd, int width, int height, float scale)
     {
         NativeHandle = hwnd;
@@ -21,15 +26,21 @@ public sealed class GpuRenderTarget : IRenderTarget
         Scale = scale;
     }
 
+    /// <inheritdoc/>
     public RenderTargetType Type => RenderTargetType.Window;
 
+    /// <inheritdoc/>
     public RenderHandleType HandleType => RenderHandleType.Pointer;
 
+    /// <inheritdoc/>
     public object NativeHandle { get; }
 
+    /// <inheritdoc/>
     public int Width { get; }
 
+    /// <inheritdoc/>
     public int Height { get; }
 
+    /// <inheritdoc/>
     public float Scale { get; }
 }

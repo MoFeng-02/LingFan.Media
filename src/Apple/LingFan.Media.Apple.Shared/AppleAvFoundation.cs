@@ -4,7 +4,7 @@ namespace LingFan.Media.Apple.Shared;
 
 /// <summary>
 /// AVFoundation / Foundation 托管助手（建 AVAsset / AVAssetReader / NSArray / NSDictionary / NSString 等）。
-/// 全部消费 <see cref="AppleRuntime.objc_msgSend"/> 固定签名重载，不引入第二处 Apple 绑定。
+/// 全部消费 <see cref="AppleRuntime.objc_msgSend(nint, nint)"/> 等固定签名重载，不引入第二处 Apple 绑定。
 /// </summary>
 /// <remarks>
 /// <para>对象所有权遵循 Cocoa 规则：<c>alloc</c>/<c>init</c> 返回 +1（调用方须 <see cref="Release"/>）；
@@ -166,14 +166,14 @@ public static unsafe class AppleAvFoundation
         }
     }
 
-    /// <summary>extern CFString 常量取实际 CFStringRef（二级指针，须 <see cref="Marshal.ReadIntPtr"/> 解引用）。</summary>
+    /// <summary>extern CFString 常量取实际 CFStringRef（二级指针，须 <see cref="Marshal.ReadIntPtr(nint)"/> 解引用）。</summary>
     private static nint GetCoreMediaStringConstant(string symbol)
     {
         nint addr = AppleRuntime.GetGlobalSymbol("CoreMedia", symbol);
         return addr == nint.Zero ? nint.Zero : Marshal.ReadIntPtr(addr);
     }
 
-    /// <summary>取得轨道的编解码器子类型 FourCharCode（如 'avc1' / 'hvc1' / 'aac '），用于映射 <see cref="VideoCodec"/> / <see cref="AudioCodec"/>。</summary>
+    /// <summary>取得轨道的编解码器子类型 FourCharCode（如 'avc1' / 'hvc1' / 'aac '），用于映射 <c>VideoCodec</c> / <c>AudioCodec</c>。</summary>
     public static uint GetTrackCodecSubType(nint track)
     {
         nint fmtDesc = GetFirstTrackFormatDescription(track);
@@ -211,7 +211,7 @@ public static unsafe class AppleAvFoundation
     }
 
     /// <summary>
-    /// 提取轨道的编解码器私有配置（标准 avcC / hvcC 字节），供解码器作为 <see cref="VideoSettings.CodecConfiguration"/> / <see cref="AudioSettings.CodecConfiguration"/>。
+    /// 提取轨道的编解码器私有配置（标准 avcC / hvcC 字节），供解码器作为 <c>VideoSettings.CodecConfiguration</c> / <c>AudioSettings.CodecConfiguration</c>。
     /// 路径：CMFormatDescriptionGetExtension(desc, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms)
     /// → CFDictionary → "avcC"（或 "hvcC"）CFData → 字节。
     /// </summary>

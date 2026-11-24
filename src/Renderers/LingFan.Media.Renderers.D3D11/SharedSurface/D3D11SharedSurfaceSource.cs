@@ -21,10 +21,10 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <item>消费者（Avalonia）：<c>UpdateWithKeyedMutexAsync(img, acquire=1, release=0)</c>
 /// → <c>AcquireSync(1)</c> 采样 → <c>ReleaseSync(0)</c>。</item>
 /// </list>
-/// 故 <see cref="ConsumerAcquireKey"/>=<c>1</c>、<see cref="ConsumerReleaseKey"/>=<c>0</c>；
+/// <para>故 <see cref="ConsumerAcquireKey"/>=<c>1</c>、<see cref="ConsumerReleaseKey"/>=<c>0</c>；
 /// 生产者固定以 <c>0</c> 取锁、以 <c>1</c> 释放。互斥键恒 ≤ UInt32.MaxValue，适配
 /// <c>UpdateWithKeyedMutexAsync</c> 的 <c>UInt32</c> 形参。</para>
-/// <para><b>异步策略</b>：<see cref="TryWriteFrame"/> 同步（native 分类）——GPU 命令提交无真实 I/O await，
+/// <para><b>异步策略</b>：<see cref="TryWriteFrame"/> 同步——GPU 命令提交无真实 I/O await，
 /// 补 async 即伪异步；且用<b>有限超时</b>裸 vtable <c>AcquireSync</c>，超时即丢帧，绝不阻塞管线线程。</para>
 /// <para><b>线程</b>：由管线线程调用；共享 D3D11 设备已开启多线程保护（见 <see cref="D3D11MultithreadInterop"/>），
 /// 且 keyed mutex 负责与 Avalonia 合成线程的跨设备同步。</para>

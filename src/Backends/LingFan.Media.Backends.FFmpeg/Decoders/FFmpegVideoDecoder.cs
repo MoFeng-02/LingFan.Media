@@ -114,6 +114,8 @@ internal sealed partial class FFmpegVideoDecoder : IVideoDecoder, IFramePoolAwar
     /// <param name="logger">日志器。</param>
     /// <param name="gpuContext">可选 GPU 设备上下文（D3D11VA 硬解需要，null=软件解码）。</param>
     /// <param name="options">可选 FFmpeg 配置（含 MediaCodec Surface 注入点）。</param>
+    /// <param name="frameProducers">可选 GPU 帧生产者集合（按激活渲染器 ApiType 匹配，零拷贝导入用；null=无零拷贝路径）。</param>
+    /// <param name="vaApiExport">可选 Linux VAAPI 导出桥（VA Surface → dma_buf；null=非 VAAPI 平台）。</param>
     public FFmpegVideoDecoder(ILogger<FFmpegVideoDecoder> logger, IGpuDeviceContext? gpuContext = null, FFmpegOptions? options = null, IEnumerable<IGpuFrameProducer>? frameProducers = null, IVaApiExport? vaApiExport = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));

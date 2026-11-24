@@ -67,7 +67,7 @@ public sealed class OpenGLRendererFactory : IVideoRendererFactory, IDisposable
     /// </summary>
     /// <remarks>
     /// <para>解析延迟到消费方（解码器）真正请求时才发生，且仅在 <see cref="IGpuDeviceContext.ApiType"/>==OpenGL 时被解码器选用——
-    /// 与 <see cref="LingFan.Media.Renderers.Vulkan.Factories.VulkanRendererFactory.CreateFrameProducer"/> 同源守卫，
+    /// 与 <c>LingFan.Media.Renderers.Vulkan.Factories.VulkanRendererFactory.CreateFrameProducer</c> 同源守卫，
     /// 避免硬编码任一渲染器。</para>
     /// <para>生产者持有工厂级离屏 GL 设备上下文（共享组所有者）用于 MakeCurrent 与共享组根，自身不注册 IGpuDeviceContext。</para>
     /// </remarks>

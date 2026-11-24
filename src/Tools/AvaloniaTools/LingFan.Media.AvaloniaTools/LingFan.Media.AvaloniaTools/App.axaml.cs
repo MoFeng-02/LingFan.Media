@@ -19,11 +19,13 @@ using Microsoft.Extensions.Logging;
 
 namespace LingFan.Media.AvaloniaTools;
 
+/// <summary>示例 App 应用入口：构建全局 DI 容器并装配主视图/主窗口。</summary>
 public partial class App : Application
 {
     /// <summary>全局 DI 容器。VideoView.Services 与 ViewModel 均从此解析。</summary>
     public static IServiceProvider? Services { get; private set; }
 
+    /// <summary>加载 XAML 资源（框架初始化第一阶段）。</summary>
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -37,6 +39,7 @@ public partial class App : Application
 #endif
     }
 
+    /// <summary>框架初始化完成：按生命周期形态装配主视图（单视图/桌面主窗口）。</summary>
     public override void OnFrameworkInitializationCompleted()
     {
 #if DEBUG

@@ -24,10 +24,10 @@ public interface IRendererProfiler
 /// 不依赖 Silk.NET 的 <c>Khr*</c> 扩展对象与加载层。</para>
 /// <para><b>异步策略</b>：</para>
 /// <list type="bullet">
-/// <item><see cref="InitializeAsync"/>：contract，返回 <see cref="Task.CompletedTask"/></item>
-/// <item><see cref="Attach"/>/<see cref="Detach"/>：native sync，UI 线程</item>
-/// <item><see cref="Present"/>/<see cref="Clear"/>：native sync，渲染线程</item>
-/// <item><see cref="DisposeAsync"/>：contract，委托 Dispose + CompletedTask，非伪异步</item>
+/// <item><see cref="InitializeAsync"/>：接口契约，纯内存实现返回 <see cref="Task.CompletedTask"/></item>
+/// <item><see cref="Attach"/>/<see cref="Detach"/>：同步原生调用，UI 线程</item>
+/// <item><see cref="Present"/>/<see cref="Clear"/>：同步原生调用，渲染线程</item>
+/// <item><see cref="DisposeAsync"/>：接口契约，委托 Dispose + CompletedTask，非伪异步</item>
 /// </list>
 /// <para><b>线程安全</b>：<c>_gate</c> 锁串行化所有公开方法。
 /// <see cref="Present"/> 的 vkAcquireNextImage 以 <c>AcquireTimeoutNs</c> 超时
@@ -42,7 +42,7 @@ public interface IRendererProfiler
 /// <para><b>软帧 YUV 平面格式</b>（NV12/NV21/YUV420P/YUV422P/YUV444P）走 GPU Shader 路径：由 Fragment Shader
 /// 采样 Y/U/V 平面并完成 YUV→RGB（与 D3D11 Shader 路径共用 BT.601 全范围矩阵），CPU 仅做原始平面搬运；
 /// 缩放支持三种 <see cref="AspectRatioMode"/>（见 <see cref="ScaleMode"/>）。</para>
-/// ErrorOutOfDateKhr 已由 <c>RecreateSwapchain</c> 就地重建（含信号量重建，消除 signaled 残留）；
+/// <para>ErrorOutOfDateKhr 已由 <c>RecreateSwapchain</c> 就地重建（含信号量重建，消除 signaled 残留）；
 /// 其余 QueuePresent 硬失败仍抛异常，由会话层重新 Attach 恢复（信号量在重 Attach 时重建，无 double-signal 风险）。</para>
 /// <para>AOT 兼容：sealed unsafe 类，无反射，pattern matching。</para>
 /// </remarks>

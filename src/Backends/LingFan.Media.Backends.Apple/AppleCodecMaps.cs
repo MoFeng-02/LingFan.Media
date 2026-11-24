@@ -7,7 +7,7 @@ namespace LingFan.Media.Backends.Apple;
 /// Apple 后端专用编解码器 / 容器映射（AVFoundation / VideoToolbox FourCharCode ↔ 契约枚举）。
 /// </summary>
 /// <remarks>
-/// <para>仅做静态映射，无原生依赖；与 <see cref="Backends.MediaCodec.AndroidCodecMaps"/> 对称。</para>
+/// <para>仅做静态映射，无原生依赖；与 <c>Backends.MediaCodec.AndroidCodecMaps</c> 对称。</para>
 /// <para>FourCharCode 取值来自 CoreMedia <c>CMVideoCodecType</c> / <c>kCMAudioFormatType_*</c>，
 /// 跨 Apple 平台恒定（小端读取的 uint）。</para>
 /// </remarks>

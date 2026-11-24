@@ -32,7 +32,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// <para><b>异步策略</b>：公开异步方法均为真异步签名但无 I/O 阻塞——<see cref="InitializeAsync"/> 返回
 /// <see cref="Task.CompletedTask"/>、<see cref="DisposeAsync"/> 委托 <see cref="Dispose"/> + <see cref="ValueTask.CompletedTask"/>，
 /// 二者皆非伪异步（无 <c>Task.Run</c> 包同步、无 await 硬阻塞）。</para>
-/// <para><b>AOT 兼容</b>：sealed 类，无反射；Metal 调用经 <see cref="MetalNative"/>（零反射 [LibraryImport]，objc_msgSend 多固定签名重载）。</para>
+/// <para><b>AOT 兼容</b>：sealed 类，无反射；Metal 调用经 <c>Apple.Shared</c> 互操作层（零反射 [LibraryImport]，objc_msgSend 多固定签名重载）。</para>
 /// </remarks>
 public sealed class MetalRenderer : IVideoRenderer
 {

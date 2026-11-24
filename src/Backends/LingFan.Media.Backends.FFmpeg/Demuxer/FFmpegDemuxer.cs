@@ -58,7 +58,6 @@ internal sealed partial class FFmpegDemuxer : IMediaDemuxer
 
     /// <summary>
     /// 初始化 <see cref="FFmpegDemuxer"/> 的新实例。
-
     /// </summary>
     /// <param name="stream">媒体数据流。</param>
     /// <param name="logger">日志器。</param>

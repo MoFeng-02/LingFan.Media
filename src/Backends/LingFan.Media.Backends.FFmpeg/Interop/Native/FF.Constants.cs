@@ -5,7 +5,7 @@ namespace LingFan.Media.Backends.FFmpeg.Interop;
 /// <summary>
 /// FFmpeg 原生绑定门面（自绑定，替代 FFmpeg.AutoGen）。
 /// 全部 P/Invoke 使用 <c>[LibraryImport]</c>（AOT 兼容、零反射、零 ComImport），
-/// 原生库由 <see cref="FFmpegLibraryLoader"/> 按平台与版本自适应加载。
+/// 原生库由 <c>FFmpegLibraryLoader</c> 按平台与版本自适应加载。
 /// </summary>
 internal static partial class FF
 {

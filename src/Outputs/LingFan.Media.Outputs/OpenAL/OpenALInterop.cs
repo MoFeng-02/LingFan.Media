@@ -8,7 +8,7 @@ namespace LingFan.Media.Outputs.OpenAL;
 /// </summary>
 /// <remarks>
 /// <para>覆盖推送式缓冲播放（alc* 设备/上下文 + al* 源/缓冲）。</para>
-/// <para><b>AOT 兼容</b>：纯 C API 直接 <see cref="LibraryImport"/>，零 COM、零反射、零动态代码。</para>
+/// <para><b>AOT 兼容</b>：纯 C API 直接 <c>[LibraryImport]</c>，零 COM、零反射、零动态代码。</para>
 /// <para><b>原生库解析</b>：不同平台库名不同，统一用哨兵名 <c>"openal"</c>，
 /// 由静态构造函数注册 <see cref="NativeLibrary.SetDllImportResolver"/> 按 OS 运行时映射到正确文件名。
 /// 宿主须提供对应原生库（Windows=openal32.dll / Linux=libopenal.so.1 / macOS=libopenal.dylib / Android=libopenal.so）。</para>

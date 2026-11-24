@@ -43,7 +43,7 @@ public interface IPlatformServices
     /// 获取 GPU 上下文。
     /// </summary>
     /// <param name="type">GPU API 类型（D3D11 / Vulkan / Metal / OpenGL）。</param>
-    /// <returns>GPU 上下文对象（如 ID3D11Device / VkDevice / id<MTLDevice>），运行时显式 cast，不用反射。</returns>
+    /// <returns>GPU 上下文对象（如 ID3D11Device / VkDevice / Metal 设备对象），运行时显式 cast，不用反射。</returns>
     /// <remarks>
     /// 桩——抛出 <see cref="NotSupportedException"/>。
     /// GPU 设备为 Singleton 共享，但 SwapChain / CommandQueue 是 Session 级。

@@ -9,7 +9,7 @@ namespace LingFan.Media.Renderers.OpenGLES;
 /// <remarks>
 /// <para><b>设计目标</b>：彻底消除 Silk.NET.OpenGL 绑定层的反射——不使用 Silk.NET 运行期 marshaller、
 /// 不依赖 SharpGen 运行时 vtable 包装。NativeAOT 下零 IL2xxx。</para>
-/// <para><b>与桌面 GL（<see cref="LingFan.Media.Renderers.OpenGL"/> 的 GLNative）的本质差异</b>：
+/// <para><b>与桌面 GL（<c>LingFan.Media.Renderers.OpenGL</c> 的 GLNative）的本质差异</b>：
 /// 桌面 GL 1.1 的 thunk（opengl32.dll / libGL.so.1）导出表<b>不含</b>着色器/VBO/VAO 等现代函数，
 /// 必须经 <c>wglGetProcAddress</c> / <c>eglGetProcAddress</c> 运行时解析（GLNative 的 LoadModern 三段式）。
 /// 而 OpenGL ES（libGLESv2.so）的<b>导出表直接包含</b> <c>glCreateShader</c> / <c>glGenVertexArrays</c> 等
@@ -18,7 +18,7 @@ namespace LingFan.Media.Renderers.OpenGLES;
 /// <para><b>跨平台库名</b>：经 <see cref="NativeLibrary.SetDllImportResolver"/> 把中性名重定向——
 /// <c>"GLES"</c> → Android <c>libGLESv2.so</c>（GLES 库名，桌面 GL 不叫这个）；
 /// <c>"EGL"</c> → Linux <c>libEGL.so.1</c> / Android 裸 <c>libEGL.so</c>（EGL 引导符号）。
-/// 本绑定仅覆盖 Android（GLES 上屏）；桌面 GL 由 <see cref="LingFan.Media.Renderers.OpenGL"/> 的 GLNative 覆盖、
+/// 本绑定仅覆盖 Android（GLES 上屏）；桌面 GL 由 <c>LingFan.Media.Renderers.OpenGL</c> 的 GLNative 覆盖、
 /// Apple 由 Metal 后端覆盖。非 Android 调用方以 <see cref="OperatingSystem.IsAndroid"/> 守卫，永不被触发。</para>
 /// <para><b>调用约定</b>：EGL / GLES 在 Android 为 C 默认（cdecl）；<c>[LibraryImport]</c> 默认 <c>Winapi</c> 在
 /// ARM64（Android 主流）上 ABI 单一、等价于 cdecl。函数指针统一 <c>delegate* unmanaged</c>（默认 Winapi），

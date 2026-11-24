@@ -15,8 +15,8 @@ namespace LingFan.Media.GPUShare.Vulkan;
 /// <remarks>
 /// <para><b>零拷贝语义</b>：仅对 NV12 源建两个平面视图（PLANE_0→R8 Y、PLANE_1→R8G8 UV）绑定描述符，
 /// 着色器在 GPU 内完成 YUV→RGB，无任何 CPU 回读（YUV→RGB 一律在 GPU 片元着色器内完成）。</para>
-/// <para><b>复用</b>：Vulkan 硬解路径的渲染器在 Present 时调用 <see cref="Convert"/>，把解码 DPB 的 NV12 图像转 RGBA；
-/// <see cref="VulkanGpuFrameProducer"/> 导入 NV12 外部纹理后亦可调本转换器产出 RGBA 资源——单一 NV12→RGBA 归宿，
+/// <para><b>复用</b>：Vulkan 硬解路径的渲染器在 Present 时调用 <see cref="Convert(CommandBuffer, Image, ImageLayout, uint, uint, uint, Format, out Image)"/>，把解码 DPB 的 NV12 图像转 RGBA；
+/// <c>VulkanGpuFrameProducer</c> 导入 NV12 外部纹理后亦可调本转换器产出 RGBA 资源——单一 NV12→RGBA 归宿，
 /// 渲染器保持 RGBA-only（与 GPUShare.D3D11.D3D11Nv12ToRgbaConverter 对称）。</para>
 /// <para><b>异步策略</b>：全部同步原生调用（无 I/O await），与 Present 的 sync-only 分类一致。</para>
 /// <para><b>AOT</b>：仅依赖 Silk.NET 纯数据定义与已编译 SPIR-V（Shaders.g.cs，运行期零反射）；无 [DllImport]/反射。</para>
@@ -103,7 +103,7 @@ public sealed unsafe partial class VulkanNv12ToRgbaConverter : IDisposable
 
     /// <summary>
     /// 把 NV12 源图像转成<b>调用方提供的</b> RGBA 目标图像（同命令缓冲内记录；目标置于 <see cref="ImageLayout.TransferSrcOptimal"/>）。
-    /// 用于 <see cref="VulkanGpuFrameProducer"/> 导入 NV12 外部纹理场景：RGBA 目标由调用方创建并拥有（交付 <see cref="VulkanImageResource"/>），
+    /// 用于 <c>VulkanGpuFrameProducer</c> 导入 NV12 外部纹理场景：RGBA 目标由调用方创建并拥有（交付 <c>VulkanImageResource</c>），
     /// 转换器不缓存、不持有该目标（避免与内部离屏目标冲突）。平面视图须经 <see cref="CreatePlaneViews"/> 创建、
     /// 命令提交完成后经 <see cref="DestroyPlaneViews"/> 销毁。
     /// </summary>

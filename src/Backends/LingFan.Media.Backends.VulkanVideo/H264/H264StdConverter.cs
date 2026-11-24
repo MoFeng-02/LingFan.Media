@@ -15,7 +15,7 @@ namespace LingFan.Media.Backends.VulkanVideo.H264;
 /// 并持有其引用的原生子结构（scaling lists、offset_for_ref_frame），供
 /// <c>vkCreateVideoSessionParametersKHR</c> 使用。</para>
 /// <para><b>所有权</b>：本类实现 <see cref="IDisposable"/>，<see cref="Dispose"/> 释放所有经
-/// <see cref="Marshal.AllocHGlobal"/> 分配的原生子结构缓冲；SPS/PPS 主结构本身为托管 blittable 值类型，
+/// <see cref="Marshal.AllocHGlobal(nint)"/> 分配的原生子结构缓冲；SPS/PPS 主结构本身为托管 blittable 值类型，
 /// 由其字段内的指针指向本类拥有的原生内存（指针在 VideoSessionParameters 生命周期内持续有效）。</para>
 /// <para><b>AOT 兼容</b>：纯非安全值类型操作 + 原生内存分配，零反射。</para>
 /// </remarks>

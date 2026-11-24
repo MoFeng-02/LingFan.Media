@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace LingFan.Media.Avalonia;
 
 /// <summary>
-/// 后端无关的「无空域、纯控件级」GPU 上屏渲染器（Avalonia <see cref="Avalonia.Rendering.Composition.ICompositionGpuInterop"/>）。
+/// 后端无关的「无空域、纯控件级」GPU 上屏渲染器（Avalonia <c>ICompositionGpuInterop</c>）。
 /// </summary>
 /// <remarks>
 /// <para>经 <see cref="ISharedGpuSurfaceSource"/>（D3D11 适配器等 GPU 适配层）把视频帧写入
@@ -85,6 +85,7 @@ internal sealed partial class CompositionVideoRenderer : IVideoRenderer, IRender
     /// 初始化 <see cref="CompositionVideoRenderer"/> 的新实例。
     /// </summary>
     /// <param name="surfaceFactories">共享表面源工厂集合（DI 注入，按合成器支持筛选）。</param>
+    /// <param name="selector">共享表面源选择器（按宿主合成器能力从工厂集合选定源）。</param>
     /// <param name="logger">日志。</param>
     internal CompositionVideoRenderer(
         IEnumerable<ISharedGpuSurfaceSourceFactory> surfaceFactories,
@@ -174,19 +175,6 @@ internal sealed partial class CompositionVideoRenderer : IVideoRenderer, IRender
             Dispatcher.UIThread.Post(() => { if (_surfaceVisual is not null) _surfaceVisual.Opacity = 0; });
         Unhealthy?.Invoke();
     }
-
-    /// <summary>
-    /// Android（SyncMode.None）专用：每帧重新解析 interop 并导入当前帧外部图像。
-    /// 依据（Avalonia 12.1.1 源码）：CompositionImportedGpuImage 在导入时把
-    /// <c>Context = compositor.Server.RenderInterface.Value</c> 一次性冻结；<see cref="IsUsable"/>
-    /// 要求呈现时 <c>RenderInterface.Value</c> 与该 Context 为同一实例。Android 合成器 RenderInterface
-    /// 跨帧重建，跨帧缓存导入必失配（PlatformGraphicsContextLostException）。每帧重解析+重导+await
-    /// <c>ICompositionGpuImportedObject.ImportCompleted</c>，保证呈现瞬间 Context 与 Value 一致。
-    /// </summary>
-    /// <returns>本帧导入图像；任一环节失败返回 <see langword="null"/>（调用方应跳过本帧）。</returns>
-    // 把生产者描述符携带的 SharedGpuSurfaceFormat 映射到合成器导入所需的 PlatformGraphicsExternalImageFormat。
-    // Android 零拷贝路径生产者用 R8G8B8A8（AHB 唯一等价格式，B8G8R8A8 无 AHB 等价），须对应 R8G8B8A8UNorm，
-    // 否则合成器以 BGRA 采样会致通道互换；Windows/Linux 仍走 B8G8R8A8UNorm（与 D3D/Vulkan 约定一致）。
 
     /// <summary>把出画失败记录封送到 UI 线程（<see cref="NoteSkip"/> 内会触碰 Visual 属性，必须 UI 线程）。</summary>
     private void PostNoteSkip() => Dispatcher.UIThread.Post(NoteSkip);

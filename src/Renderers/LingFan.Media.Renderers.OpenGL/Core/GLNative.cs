@@ -25,7 +25,7 @@ namespace LingFan.Media.Renderers.OpenGL;
 /// GL 1.2+ 核心/扩展函数（着色器、VBO、VAO 等）在 Windows 上 <c>opengl32.dll</c> 导出表不含，
 /// 必须经 <see cref="GetProcAddress"/>（Windows: <c>wglGetProcAddress</c>；Linux: <c>eglGetProcAddress</c>）
 /// 在 GL 上下文 current 后运行时解析——见 <see cref="LoadModern"/>。</para>
-/// <para>此类型仅承载原生绑定；GL 上下文生命周期（<see cref="GLNative.Wgl"/> 引导符号与 GPUShare.EGL <c>EglNative</c> 的使用）由渲染器负责。</para>
+/// <para>此类型仅承载原生绑定；GL 上下文生命周期（<c>GLNative.Wgl</c> 引导符号与 GPUShare.EGL <c>EglNative</c> 的使用）由渲染器负责。</para>
 /// </remarks>
 internal static unsafe partial class GLNative
 {

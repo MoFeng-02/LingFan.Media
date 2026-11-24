@@ -16,7 +16,7 @@ namespace LingFan.Media.Backends.MediaFoundation;
 /// <para><b>依赖倒置</b>：MF 与渲染器互不引用，仅经 <see cref="IGpuDeviceContext"/> 契约协作；本类是该契约在 MF 层的内部实现。</para>
 /// <para><b>生命周期</b>：Singleton（由 <c>AddMediaFoundation</c> 经 <c>TryAddSingleton</c> 注册）。设备延迟创建，仅在 DXVA 实际启用时解析；
 /// 共享同一设备供 N 路解码器统一使用（GPU 视频引擎解码，开销最优）。</para>
-/// <para><b>AOT 兼容</b>：设备经原始 <see cref="MfDxvaInterop.D3D11CreateDevice"/> P/Invoke 创建，输出原生指针，无反射。</para>
+/// <para><b>AOT 兼容</b>：设备经原始 <see cref="MfDxvaInterop.CreateD3D11Device"/> P/Invoke 创建，输出原生指针，无反射。</para>
 /// <para>仅 Windows 可用。</para>
 /// </remarks>
 [SupportedOSPlatform("windows")]

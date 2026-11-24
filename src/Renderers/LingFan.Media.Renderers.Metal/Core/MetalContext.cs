@@ -7,7 +7,7 @@ namespace LingFan.Media.Renderers.Metal;
 /// Metal 上屏上下文（MTLDevice + MTLCommandQueue + CAMetalLayer）。
 /// </summary>
 /// <remarks>
-/// <para>职责类比 <see cref="LingFan.Media.Renderers.OpenGLES.Context.AndroidEglContext"/>（Android EGL/GLES 上下文）：
+/// <para>职责类比 <c>LingFan.Media.Renderers.OpenGLES.Context.AndroidEglContext</c>（Android EGL/GLES 上下文）：
 /// 持有 GPU 设备与命令队列，并管理 CoreAnimation 图层（CAMetalLayer）的生命周期。</para>
 /// <para>创建流程：优先复用宿主 CAMetalLayer 既有 device（避免硬绑定系统默认 GPU 后端），无则 <c>MTLCreateSystemDefaultDevice()</c> 回退
 /// → 配置 CAMetalLayer（pixelFormat=BGRA8Unorm / opaque / drawableSize）→ <c>newCommandQueue</c>。</para>

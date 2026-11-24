@@ -11,13 +11,13 @@ namespace LingFan.Media.Renderers.OpenGLES;
 /// <remarks>
 /// <para><b>职责</b>：与 D3D11/Vulkan/桌面 OpenGL 同源 Shader 管线一致——帧尺寸 ≠ 渲染目标（GPU 缩放）或 YUV 像素格式
 /// （YUV420P/YUV422P/YUV444P/NV12/NV21）时，走全屏 quad + 片元着色器采样呈现，替代纯纹理拷贝的路径限制。</para>
-/// <para><b>与桌面 OpenGL（<see cref="LingFan.Media.Renderers.OpenGL"/> 的 OpenGLShaderPipeline）的差异</b>：
+/// <para><b>与桌面 OpenGL（<c>LingFan.Media.Renderers.OpenGL</c> 的 OpenGLShaderPipeline）的差异</b>：
 /// 仅 GLSL 版本（<c>#version 300 es</c> 替代 <c>#version 330 core</c>、片元着色器加 <c>precision highp float;</c>）。
 /// 着色器逻辑（YUV→RGB BT.601 系数、双线性采样、视口缩放）完全同源——GLES 3.0 与桌面 GL 3.3 的
 /// GLSL 核心语法（layout location、in/out、texture()、clamp()）一致，色彩不漂移。</para>
-/// <para><b>平面布局</b>：与 <see cref="D3D11ShaderPipeline"/>（及桌面 OpenGL）完全同源（FFmpeg 紧凑打包语义）：
+/// <para><b>平面布局</b>：与 <c>D3D11ShaderPipeline</c>（及桌面 OpenGL）完全同源（FFmpeg 紧凑打包语义）：
 /// Y 平面 w×h，色度平面按子采样推导，顺序 Y→U→V（或 Y→UV）；BGRA32/RGBA32 考虑 <see cref="SoftwareFrameResource.Stride"/>。</para>
-/// <para><b>异步策略</b>：全部同步（native 分类）——Shader 编译与 GPU 提交均为同步原生调用，无 I/O await；
+/// <para><b>异步策略</b>：全部同步——Shader 编译与 GPU 提交均为同步原生调用，无 I/O await；
 /// 包 async/Task.Run 即伪异步，禁止。</para>
 /// <para><b>线程安全</b>：所有方法由 <see cref="OpenGLESRenderer"/> 在其 <c>_gate</c> 锁内调用，本类不再加锁。</para>
 /// <para><b>资源所有权</b>：GLES 上下文由渲染器持有（不 Dispose）；Shader/VAO/帧纹理由本类持有，<see cref="Dispose"/> 释放。</para>
@@ -158,7 +158,7 @@ internal sealed unsafe partial class GlesShaderPipeline : IDisposable
     /// <summary>初始化 <see cref="GlesShaderPipeline"/>（仅保存日志器；GLES 资源延迟到首次 <see cref="Present"/>，
     /// 彼时 GLES 上下文已在渲染线程 current）。</summary>
     /// <remarks>构造函数不触碰任何 GLES 调用——创建发生于 <see cref="OpenGLESRenderer.Attach"/> 线程，
-    /// 而该线程在 <see cref="AndroidEglContext"/> 创建后已解绑上下文（线程亲和），
+    /// 而该线程在 <see cref="Context.AndroidEglContext"/> 创建后已解绑上下文（线程亲和），
     /// 若此处编译 Shader 会因无 current 上下文而静默失败。</remarks>
     internal GlesShaderPipeline(ILogger? logger = null)
     {

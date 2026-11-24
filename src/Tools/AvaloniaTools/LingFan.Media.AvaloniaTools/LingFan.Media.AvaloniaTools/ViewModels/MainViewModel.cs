@@ -31,6 +31,8 @@ public partial class MainViewModel : ViewModelBase
     private const int DisposalGraceMs = 2000;  // 批首宽限：新会话启动最脆弱窗口内不启动销毁
     private const int DisposalBatchPaceMs = 800; // 批内节奏：连续多个旧会话逐个错峰释放
 
+    /// <summary>以全局 DI 容器构造主视图模型（播放器工厂等从此解析）。</summary>
+    /// <param name="sp">全局服务提供器。</param>
     public MainViewModel(IServiceProvider sp)
     {
         _sp = sp;

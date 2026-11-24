@@ -9,7 +9,7 @@ namespace LingFan.Media.Renderers.D3D11;
 /// <para>DI 生命周期：Singleton 工厂。持有共享的 <c>ID3D11Device</c> + <c>ID3D11DeviceContext</c>，
 /// <see cref="Create"/> 返回<b>缓存单例</b> <see cref="D3D11Renderer"/>（共享 GPU Device 与唯一 SwapChain）。</para>
 /// <para><b>缓存单例模式</b>：缓存单例消除"双实例/双 SwapChain"——同一工厂多次 <see cref="Create"/>
-/// 返回同一渲染器实例。Core 管线（<see cref="VideoPipeline"/>）与 UI 层（D3D11GpuPresenter）
+/// 返回同一渲染器实例。Core 管线（<c>VideoPipeline</c>）与 UI 层（D3D11GpuPresenter）
 /// 通过同一工厂解析到同一渲染器，UI 层 Attach(HWND) 后管线 Present 即命中已附着实例，视频帧真正经 GPU 呈现。</para>
 /// <para><b>单 HWND 限制</b>：单例渲染器一次仅能附加到<b>一个</b> HWND。同一应用内多个 VideoView 同时走 D3D11
 /// 后端时，后附加者会抢占前者的 HWND（先 Detach 再 Attach），仅最后一个生效。单窗口单 VideoView 为设计目标场景。</para>

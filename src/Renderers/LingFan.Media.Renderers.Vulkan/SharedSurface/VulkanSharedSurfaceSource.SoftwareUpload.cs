@@ -40,12 +40,12 @@ internal sealed unsafe partial class VulkanSharedSurfaceSource
     }
 
     /// <summary>
-    /// Android 稳健层：把已渲染进 plain 内部 <see cref="_convertImage"/> 的帧经 vkCmdCopyImage 拷进 AHB 离屏
-    /// <see cref="_sharedImage"/>（仅 TRANSFER_DST，导出交合成器）。<see cref="_sharedImage"/> 为 AHB 支持内存，
+    /// Android 稳健层：把已渲染进 plain 内部 <c>_convertImage</c> 的帧经 vkCmdCopyImage 拷进 AHB 离屏
+    /// <c>_sharedImage</c>（仅 TRANSFER_DST，导出交合成器）。<c>_sharedImage</c> 为 AHB 支持内存，
     /// 直接作 color attachment 在 Mali 上触发 GROUP_ERROR_FATAL / DEVICE_LOST，故一律经内部图中转。
     /// 软帧路径 srcLayout=ColorAttachmentOptimal（离屏 RenderPass FinalLayout）；AHB 路径 srcLayout=TransferSrcOptimal
-    /// （转换器 Convert 末态）。<see cref="_sharedImage"/> 首帧由 Undefined 转入 TransferDstOptimal，后续帧保持
-    /// TransferDstOptimal（由 <see cref="_sharedCopyReady"/> 追踪，跨命令缓冲持久）。
+    /// （转换器 Convert 末态）。<c>_sharedImage</c> 首帧由 Undefined 转入 TransferDstOptimal，后续帧保持
+    /// TransferDstOptimal（由 <c>_sharedCopyReady</c> 追踪，跨命令缓冲持久）。
     /// </summary>
     private void CopyToSharedImage(CommandBuffer cmd, ImageLayout srcLayout, int w, int h)
     {

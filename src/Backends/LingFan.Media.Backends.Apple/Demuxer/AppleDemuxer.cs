@@ -10,7 +10,7 @@ namespace LingFan.Media.Backends.Apple.Demuxer;
 /// </summary>
 /// <remarks>
 /// <para><b>设计</b>：AVAssetReader 以 <c>outputSettings=nil</c> 直出<b>压缩</b> CMSampleBuffer（不解码），
-/// 与契约要求的「demuxer → decoder 分离」一致：本类只拆包，解码交给 <see cref="AppleVideoDecoder"/> / <see cref="AppleAudioDecoder"/>。</para>
+/// 与契约要求的「demuxer → decoder 分离」一致：本类只拆包，解码交给 <see cref="Decoders.AppleVideoDecoder"/> / <see cref="Decoders.AppleAudioDecoder"/>。</para>
 /// <para><b>多轨交织</b>：为每个视频/音频轨建一个 <c>AVAssetReaderTrackOutput</c>，<see cref="ReadPacketAsync"/> 轮询各输出、
 /// 按轨道索引打标返回；解码器据 <c>TrackIndex</c> 路由。轮询非严格 PTS 有序，但解码器侧有缓冲/重排，可接受。</para>
 /// <para><b>关键帧判定</b>：<c>kCMSampleAttachmentKey_NotSync</c> 标记非同步帧（与 FFmpeg / Mozilla 判定一致）。</para>

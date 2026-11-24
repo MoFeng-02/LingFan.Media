@@ -13,8 +13,14 @@ using Avalonia.Vulkan;
 
 namespace IgnoresAccessChecksProbe;
 
+/// <summary>
+/// IgnoresAccessChecksTo 特性探针：验证程序集级忽略访问检查后，
+/// 跨程序集 typeof/实例化 internal 类型在运行时可行（AOT 兼容性验证载体）。
+/// </summary>
 public static class Program
 {
+    /// <summary>探针入口：逐项验证 internal 类型访问并输出判定。</summary>
+    /// <returns>全部验证通过为 0，否则非 0。</returns>
     public static int Main()
     {
         // (1) internal 类型 typeof

@@ -189,6 +189,8 @@ public static unsafe partial class AppleRuntime
     public static partial nint objc_msgSend(nint receiver, nint selector, double a, double b);
 
     /// <summary>C 字符串参数（stringWithUTF8String:）。</summary>
+    /// <param name="receiver">objc 对象（id）。</param>
+    /// <param name="selector">objc 选择器（SEL）。</param>
     /// <param name="arg0">UTF-8 NUL 结尾字符串指针。</param>
     [LibraryImport("libobjc", EntryPoint = "objc_msgSend")]
     public static partial nint objc_msgSend(nint receiver, nint selector, byte* arg0);

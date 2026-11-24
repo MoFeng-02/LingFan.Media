@@ -9,8 +9,10 @@ using System;
 
 namespace LingFan.Media.AvaloniaTools.Views;
 
+/// <summary>主视图：播放器控件与打开/播放控制（移动端单视图形态亦复用）。</summary>
 public partial class MainView : UserControl
 {
+    /// <summary>加载 XAML 组件。</summary>
     public MainView()
     {
         InitializeComponent();

@@ -168,7 +168,7 @@ internal sealed partial class FFmpegAudioDecoder : IAudioDecoder, IFramePoolAwar
     /// <remarks>
     /// <para>缓冲必须用 <c>av_malloc</c> 分配：<c>avcodec_free_context</c> 经
     /// <c>av_freep(&amp;avctx->extradata)</c> 释放，须与分配器匹配（与视频解码器同款修正——
-    /// <see cref="Marshal.AllocHGlobal"/> 组合会在退出时双重释放 + 分配器错配 → 原生访问违例）。</para>
+    /// <see cref="Marshal.AllocHGlobal(nint)"/> 组合会在退出时双重释放 + 分配器错配 → 原生访问违例）。</para>
     /// </remarks>
     private unsafe void ApplyCodecConfiguration(AVCodecContext* ctx, ReadOnlyMemory<byte> cfg)
     {

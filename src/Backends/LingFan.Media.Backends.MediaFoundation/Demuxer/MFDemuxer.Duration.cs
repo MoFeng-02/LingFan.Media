@@ -18,7 +18,7 @@ internal sealed partial class MFDemuxer
     /// 会「几秒假完成」（duration=0 时首轮即满足）。</para>
     /// <para><b>容错</b>：查询失败 / 属性缺失 / 非 VT_UI8 / 值为 0 时回落 <c>TimeSpan.Zero</c>，不抛异常，
     /// 仅损失时长信息，不影响解码播放。MF_PD_DURATION 为 VT_UI8 标量，输出 PROPVARIANT 无需 PropVariantClear。</para>
-    /// <para><b>槽位</b>：<c>GetPresentationAttribute</c> = 绝对槽 12 → slotIndex 9（见 <see cref="MFComInterfaces"/> 头注释）。</para>
+    /// <para><b>槽位</b>：<c>GetPresentationAttribute</c> = 绝对槽 12 → slotIndex 9（见 <c>MFComInterfaces</c> 头注释）。</para>
     /// </remarks>
     private TimeSpan QueryContainerDuration(IntPtr readerPtr)
     {

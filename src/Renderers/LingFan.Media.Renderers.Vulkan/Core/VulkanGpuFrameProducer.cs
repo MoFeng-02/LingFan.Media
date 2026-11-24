@@ -11,7 +11,7 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <para>注册为 <see cref="IGpuFrameProducer"/>，供解码器经中立桥调用，严守依赖倒置（后端不感知 Vulkan 绑定细节）。</para>
 /// <para><b>导入机制</b>：创建带 VK_KHR_external_memory 的 VkImage，经 vkAllocateMemory +
 /// <c>ImportMemoryWin32HandleInfoKHR</c>（Windows）/ <c>ImportMemoryFdInfoKHR</c>（Linux）绑定原生共享句柄，
-/// vkBindImageMemory 后即为零拷贝 Vulkan 纹理，由 <see cref="VulkanRenderer.BlitVulkanImageResource"/> 直接 blit 到 SwapChain。</para>
+/// vkBindImageMemory 后即为零拷贝 Vulkan 纹理，由 <see cref="VulkanRenderer.BlitVulkanImageResource(VulkanImageResource, Image)"/> 直接 blit 到 SwapChain。</para>
 /// <para><b>能力自报 + 行为副作用双判据（S_OK≠被接受）</b>：扩展不可用 / 句柄无效 / 导入失败 →
 /// <see cref="TryImport"/> 返回 <see langword="false"/>，调用方回落软解并计入 CPU 拷贝统计，绝不报"已就绪"假绿。</para>
 /// <para><b>AOT</b>：VulkanNative 为零反射绑定（vkGetDeviceProcAddr 解析外部内存函数指针）；
@@ -19,7 +19,7 @@ namespace LingFan.Media.Renderers.Vulkan;
 /// <para><b>支持范围</b>：Windows(D3D11→VK) + Linux(VAAPI→VK) + Android(AHB→VK，外部格式 YCbCr 采样转换)。
 /// Apple(IOSurface) 为后续端点，当前返回 false（调用方回落软解），不阻断播放。</para>
     /// <para><b>多切片</b>：按 <see cref="GpuFrameImportSource.ArrayLayers"/> 创建整数组 VkImage，并据
-    /// <see cref="GpuFrameImportSource.SubresourceIndex"/> 在 <see cref="VulkanRenderer.BlitVulkanImageResource"/>
+    /// <see cref="GpuFrameImportSource.SubresourceIndex"/> 在 <see cref="VulkanRenderer.BlitVulkanImageResource(VulkanImageResource, Image)"/>
     /// 选 <c>baseArrayLayer</c>，正确处理 D3D11VA 纹理数组（切片索引=avFrame-&gt;data[1]）。</para>
 /// <para><b>句柄所有权契约（单一责任人）</b>：原生共享句柄（NT HANDLE / dma_buf fd）的所有权自
 /// <see cref="TryImport"/> 调用起转移至本生产者；无论导入成功或失败，生产者均在返回前

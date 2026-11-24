@@ -33,7 +33,7 @@ public sealed unsafe class VulkanImageResource : IFrameResource, IGpuTextureReso
     public PixelFormat Format { get; }
 
     /// <summary>导入纹理的子资源 / 切片索引（D3D11 纹理数组时对应 <c>avFrame->data[1]</c>）。
-    /// 出餐侧 <see cref="VulkanRenderer.BlitVulkanImageResource"/> 据此选 <c>baseArrayLayer</c>。</summary>
+    /// 出餐侧 <see cref="VulkanRenderer.BlitVulkanImageResource(VulkanImageResource, Image)"/> 据此选 <c>baseArrayLayer</c>。</summary>
     public int SubresourceIndex => _subresourceIndex;
 
     /// <summary>Vulkan 图像句柄。</summary>
@@ -75,7 +75,7 @@ public sealed unsafe class VulkanImageResource : IFrameResource, IGpuTextureReso
     }
 
     /// <inheritdoc/>
-    /// <remarks>VkImage 句柄（<c>Image.Handle</c>）作为中立原生纹理句柄，供渲染器零拷贝 Present（<see cref="VulkanRenderer.BlitVulkanImageResource"/>）。</remarks>
+    /// <remarks>VkImage 句柄（<c>Image.Handle</c>）作为中立原生纹理句柄，供渲染器零拷贝 Present（<see cref="VulkanRenderer.BlitVulkanImageResource(VulkanImageResource, Image)"/>）。</remarks>
     IntPtr IGpuTextureResource.NativeTextureHandle => (IntPtr)_image.Handle;
 
     /// <inheritdoc/>
