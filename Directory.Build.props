@@ -12,6 +12,11 @@
 		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 		<SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
 		<TrimmerSingleWarn>false</TrimmerSingleWarn>
+
+		<!-- 全仓文档注释门禁：所有工程常规构建即校验 /// 的 cref 解析、param 完整性与 XML 结构
+		     （CS1570/CS1573/CS1574/CS1591/CS0419 等经 TreatWarningsAsErrors 升级为错误）。
+		     生成的 XML 文件是构建产物（bin/ 内，不入库）；对外 API 参考仍由 docs 工具链从源码 /// 派生。 -->
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 	</PropertyGroup>
 
 	<!-- ============================================================
