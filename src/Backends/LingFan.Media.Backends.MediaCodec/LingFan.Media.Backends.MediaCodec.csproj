@@ -19,9 +19,4 @@
 		<ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Android\LingFan.Media.GPUShare.Android.csproj" />
 	</ItemGroup>
 
-	<ItemGroup>
-		<!-- 内部类型供本工程单元测试直接访问 -->
-		<InternalsVisibleTo Include="LingFan.Media.Backends.MediaCodec.Tests" />
-	</ItemGroup>
-
 </Project>

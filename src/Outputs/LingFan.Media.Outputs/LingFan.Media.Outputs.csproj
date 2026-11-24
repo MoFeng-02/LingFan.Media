@@ -6,10 +6,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="LingFan.Media.Outputs.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Composition\LingFan.Media.Composition.csproj" />
     <!-- COM vtable 槽位读取唯一实现（WASAPI ComVTable / OpenSLES GetVTable 共用）。 -->

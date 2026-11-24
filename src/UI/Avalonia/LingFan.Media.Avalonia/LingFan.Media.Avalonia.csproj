@@ -21,11 +21,6 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<!-- 允许测试项目访问 internal 转换逻辑（YUV→BGRA 等）以做单元测试 -->
-		<InternalsVisibleTo Include="LingFan.Media.Avalonia.Tests" />
-	</ItemGroup>
-
-	<ItemGroup>
 		<AvaloniaXaml Include="Assets\**\*.axaml" />
 	</ItemGroup>
 

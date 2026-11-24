@@ -15,9 +15,4 @@
     <ProjectReference Include="..\..\GPUShare\LingFan.Media.GPUShare.Vulkan\LingFan.Media.GPUShare.Vulkan.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- 内部类型供本工程单元测试直接访问 -->
-    <InternalsVisibleTo Include="LingFan.Media.Backends.VulkanVideo.Tests" />
-  </ItemGroup>
-
 </Project>
