@@ -32,7 +32,6 @@
     <Project Path="src/Renderers/LingFan.Media.Renderers.Vulkan/LingFan.Media.Renderers.Vulkan.csproj" />
   </Folder>
   <Folder Name="/Outputs/">
-    <Project Path="src/Outputs/LingFan.Media.Outputs.Shared/LingFan.Media.Outputs.Shared.csproj" />
     <Project Path="src/Outputs/LingFan.Media.Outputs/LingFan.Media.Outputs.csproj" />
   </Folder>
   <Folder Name="/GPUShare/">

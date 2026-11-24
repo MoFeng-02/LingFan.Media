@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -10,7 +10,6 @@
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Composition\LingFan.Media.Composition.csproj" />
     <!-- COM vtable 槽位读取唯一实现（WASAPI ComVTable / OpenSLES GetVTable 共用）。 -->
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Interop\LingFan.Media.Interop.csproj" />
-    <ProjectReference Include="..\LingFan.Media.Outputs.Shared\LingFan.Media.Outputs.Shared.csproj" />
   </ItemGroup>
 
 </Project>
