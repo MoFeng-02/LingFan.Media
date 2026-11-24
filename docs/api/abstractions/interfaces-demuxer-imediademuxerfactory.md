@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaDemuxerFactory.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Demuxer/IMediaDemuxerFactory.cs)
 
-解封装器工厂接口。
+Decapsulator factory interface.
 
 ## Declaration
 
@@ -24,9 +24,9 @@ public interface IMediaDemuxerFactory
 
 ## Remarks
 
-Singleton 工厂，无状态。每次 Create() 返回新实例（每次播放新建，不共享）。
+Singleton factory, statusless. Each time Create() returns a new instance (each playback is new, no sharing).
 
-优先使用 `CreateAsync`（异步格式探测不阻塞线程，支持 CT）。
+Prioritize using `CreateAsync` (asynchronous format probes without blocking threads, supports CT).
 
 ## Members
 
@@ -36,13 +36,13 @@ Singleton 工厂，无状态。每次 Create() 返回新实例（每次播放新
 IMediaDemuxer Create(IMediaStream stream);
 ```
 
-根据媒体流创建对应的 IMediaDemuxer 实例。
+Create the corresponding IMediaDemuxer instance based on the media stream.
 
 **Parameters**
 
-- `stream`: 媒体数据流。
+- `stream`: Media data stream.
 
-**Returns**: 新创建的解封装器实例（未打开，须调用 `OpenAsync`）。
+**Returns**: Newly created decapsulator instance (not open, must call `OpenAsync`).
 
 ### CreateAsync
 
@@ -50,11 +50,11 @@ IMediaDemuxer Create(IMediaStream stream);
 Task<IMediaDemuxer> CreateAsync(IMediaStream stream, CancellationToken ct = default);
 ```
 
-异步根据媒体流创建对应的 IMediaDemuxer 实例。
+Asynchronously create the corresponding IMediaDemuxer instance based on the media stream.
 
 **Parameters**
 
-- `stream`: 媒体数据流。
-- `ct`: 取消令牌。
+- `stream`: Media data stream.
+- `ct`: Cancel token.
 
-**Returns**: 新创建的解封装器实例。
+**Returns**: Newly created unwrapper instance.

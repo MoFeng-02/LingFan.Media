@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`ISubtitleDecoderFactory.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/ISubtitleDecoderFactory.cs)
 
-字幕解码器工厂接口。
+Subtitle decoder factory interface.
 
 ## Declaration
 
@@ -24,13 +24,13 @@ public interface ISubtitleDecoderFactory
 
 ## Remarks
 
-与 IVideoDecoderFactory / IAudioDecoderFactory 对称：
+Symmetric with IVideoDecoderFactory / IAudioDecoderFactory:
 
-工厂按流（MediaTrack）创建对应的 ISubtitleDecoder 实例。
+The factory creates the corresponding ISubtitleDecoder instance by stream (MediaTrack).
 
-Singleton 工厂，每次 Create() 返回新实例。
+Singleton factory, each time Create() returns a new instance.
 
-优先使用 `CreateAsync`（对称一致性，未来网络字幕加载 I/O，支持 CT）。
+Prioritize using `CreateAsync` (symmetric consistency, future network subtitle loading I/O, supports CT).
 
 ## Members
 
@@ -40,13 +40,13 @@ Singleton 工厂，每次 Create() 返回新实例。
 ISubtitleDecoder Create(MediaTrack track);
 ```
 
-根据字幕轨道创建解码器实例（按 track.SubtitleCodec 预置）。
+Create a decoder instance based on the subtitle track (press track. SubtitleCodec preset).
 
 **Parameters**
 
-- `track`: 字幕轨道。
+- `track`: Subtitle track.
 
-**Returns**: 新创建的字幕解码器实例（编解码器已按轨道预置）。
+**Returns**: Newly created subtitle decoder instance (codec preset by track).
 
 ### CreateAsync
 
@@ -54,11 +54,11 @@ ISubtitleDecoder Create(MediaTrack track);
 Task<ISubtitleDecoder> CreateAsync(MediaTrack track, CancellationToken ct = default);
 ```
 
-异步根据字幕轨道创建解码器实例（按 track.SubtitleCodec 预置）。
+Asynchronously create decoder instances based on subtitle tracks (by track. SubtitleCodec preset).
 
 **Parameters**
 
-- `track`: 字幕轨道。
-- `ct`: 取消令牌。
+- `track`: Subtitle track.
+- `ct`: Cancel token.
 
-**Returns**: 新创建的字幕解码器实例。
+**Returns**: Newly created subtitle decoder instance.

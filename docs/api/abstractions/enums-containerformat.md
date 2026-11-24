@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`ContainerFormat.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/ContainerFormat.cs)
 
-容器格式类型。
+Container format type.
 
 ## Declaration
 
@@ -26,10 +26,10 @@ public enum ContainerFormat : int
 
 | Value | Description |
 | --- | --- |
-| `MP4` | MP4 / MOV 容器。 |
-| `MKV` | Matroska / WebM 容器。 |
-| `AVI` | AVI 容器。 |
-| `TS` | MPEG-TS 传输流。 |
-| `WebM` | WebM 容器（基于 EBML/Matroska）。 |
-| `FLV` | Flash Video 容器。 |
-| `Unknown` | 未知容器格式。 |
+| `MP4` | MP4 / MOV containers. |
+| `MKV` | Matroska / WebM container. |
+| `AVI` | AVI container. |
+| `TS` | MPEG-TS transport stream. |
+| `WebM` | WebM containers (based on EBML/Matroska). |
+| `FLV` | Flash Video container. |
+| `Unknown` | Unknown container format. |

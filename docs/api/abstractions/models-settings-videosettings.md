@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`VideoSettings.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/VideoSettings.cs)
 
-视频解码与渲染设置。
+Video decoding and rendering settings.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class VideoSettings
 public bool EnableHardwareAcceleration { get; init; } = true;
 ```
 
-是否启用硬件加速解码。
+Whether hardware accelerated decoding is enabled.
 
 ### PreferredCodec
 
@@ -38,7 +38,7 @@ public bool EnableHardwareAcceleration { get; init; } = true;
 public VideoCodec? PreferredCodec { get; init; }
 ```
 
-首选编解码器（null 表示自动选择）。
+Preferred codec (null means automatic selection).
 
 ### MaxWidth
 
@@ -46,7 +46,7 @@ public VideoCodec? PreferredCodec { get; init; }
 public int? MaxWidth { get; init; }
 ```
 
-最大解码宽度（null 表示不限制）。
+Maximum decoding width (null means unlimited).
 
 ### MaxHeight
 
@@ -54,7 +54,7 @@ public int? MaxWidth { get; init; }
 public int? MaxHeight { get; init; }
 ```
 
-最大解码高度（null 表示不限制）。
+Maximum decoding height (null means unlimited).
 
 ### Width
 
@@ -62,9 +62,9 @@ public int? MaxHeight { get; init; }
 public int? Width { get; init; }
 ```
 
-源视频宽度（像素，来自轨道信息；null 表示未知）。
-供需要显式宽高的解码后端使用（如 Android MediaCodec 的 `configure` 部分设备/解码器
-要求显式 `width`/`height`，仅 csd-0 推导不足会返回 EINVAL）。
+Source video width (pixels, from track information; null means unknown).
+Used by decoding backends that require explicit width and height (such as Android MediaCodec's `configure` device/decoder).
+Explicit `width`/`height` is required; only insufficient derivation of csd-0 returns EINVAL).
 
 ### Height
 
@@ -72,8 +72,8 @@ public int? Width { get; init; }
 public int? Height { get; init; }
 ```
 
-源视频高度（像素，来自轨道信息；null 表示未知）。
-见 `Width`。
+Source video height (pixels, from track information; null means unknown).
+See `Width`.
 
 ### OutputPixelFormat
 
@@ -81,7 +81,7 @@ public int? Height { get; init; }
 public PixelFormat? OutputPixelFormat { get; init; }
 ```
 
-输出像素格式（null 表示使用源格式）。
+Output pixel format (null means using source format).
 
 ### CodecConfiguration
 
@@ -89,9 +89,9 @@ public PixelFormat? OutputPixelFormat { get; init; }
 public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
 ```
 
-编解码器私有配置（如 H264/H265 的 SPS+PPS / avcC / hvcC），由解封装器在轨道信息中提供，
-透传给解码器设置输入媒体类型（MF 后端经 `MF_MT_MPEG_SEQUENCE_HEADER`，FFmpeg 等后端通常忽略）。
-零外部引用（BCL `ReadOnlyMemory{T}`），符合契约层“只增不改”演进准则。
+Codec private configurations (such as SPS+PPS / avcC / hvcC on H264/H265), provided by the decapsurer in the track information,
+Pass-through to the decoder to set the input media type (MF backend passes through `MF_MT_MPEG_SEQUENCE_HEADER`, FFmpeg and other backends are usually ignored).
+Zero external references (BCL `ReadOnlyMemory{T}`), which complies with the contract layer's "only increments, no changes" evolution criterion.
 
 ### TimeBase
 
@@ -99,5 +99,5 @@ public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
 public Rational TimeBase { get; init; }
 ```
 
-流时间基（`AVStream.time_base`）。透传自轨道信息，供 FFmpeg 等后端写入
-`AVCodecContext.pkt_timebase`，使解码帧 pts/dts 换算为正确秒数。默认 `default`（无效）。
+Flow time base (`AVStream.time_base`). Transmits track information for backends like FFmpeg to write
+`AVCodecContext.pkt_timebase`, converts the decoding frame pts/dts to the correct number of seconds. Default `default` (invalid).

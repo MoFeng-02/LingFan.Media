@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`AudioSettings.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/AudioSettings.cs)
 
-音频解码与输出设置。
+Audio decoding and output settings.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class AudioSettings
 public AudioCodec? PreferredCodec { get; init; }
 ```
 
-首选编解码器（null 表示自动选择）。
+Preferred codec (null means automatic selection).
 
 ### SourceSampleRate
 
@@ -38,9 +38,9 @@ public AudioCodec? PreferredCodec { get; init; }
 public int? SourceSampleRate { get; init; }
 ```
 
-源采样率（Hz，来自轨道信息；null 表示未知）。
-供需要显式参数的解码后端使用（如 Android MediaCodec 的 `configure` 部分解码器
-要求显式 `sample-rate`/`channel-count`，仅 csd-0 推导不足会返回 EINVAL）。
+Source sampling rate (Hz, from orbital information; null means unknown).
+For decoder backends that require explicit parameters (such as the `configure` partial decoder in Android MediaCodec).
+Explicit `sample-rate`/`channel-count` is required; only insufficient derivation of csd-0 returns EINVAL).
 
 ### SourceChannels
 
@@ -48,7 +48,7 @@ public int? SourceSampleRate { get; init; }
 public int? SourceChannels { get; init; }
 ```
 
-源声道数（来自轨道信息；null 表示未知）。见 `SourceSampleRate`。
+Number of source channels (from track information; null means unknown). See `SourceSampleRate`.
 
 ### OutputSampleRate
 
@@ -56,7 +56,7 @@ public int? SourceChannels { get; init; }
 public int? OutputSampleRate { get; init; }
 ```
 
-输出采样率（null 表示使用源采样率）。
+Output sampling rate (null indicates using source sampling rate).
 
 ### OutputChannels
 
@@ -64,7 +64,7 @@ public int? OutputSampleRate { get; init; }
 public int? OutputChannels { get; init; }
 ```
 
-输出声道数（null 表示使用源声道数）。
+Number of output channels (null indicates number of source channels used).
 
 ### OutputSampleFormat
 
@@ -72,7 +72,7 @@ public int? OutputChannels { get; init; }
 public SampleFormat? OutputSampleFormat { get; init; }
 ```
 
-输出采样格式（null 表示使用源格式）。
+Output sample format (null indicates using source format).
 
 ### CodecConfiguration
 
@@ -80,8 +80,8 @@ public SampleFormat? OutputSampleFormat { get; init; }
 public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
 ```
 
-编解码器私有配置（如 AAC 的 AudioSpecificConfig）。透传自轨道 extradata，
-解码器据此设置 ctx-&gt;extradata。无则为默认空。
+Codec private configuration (such as AAC's AudioSpecificConfig). Transmitted from orbit extradata,
+The decoder sets ctx-&gt;extradata accordingly. If none, it is default to null.
 
 ### TimeBase
 
@@ -89,5 +89,5 @@ public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
 public Rational TimeBase { get; init; }
 ```
 
-流时间基（`AVStream.time_base`）。透传自轨道信息，供 FFmpeg 后端写入
-`pkt_timebase` 以正确换算时间戳。默认 `default`（无效）。
+Flow time base (`AVStream.time_base`). Transmitted from orbital information for FFmpeg backend writing
+`pkt_timebase` Correctly convert timestamps. Default `default` (invalid).

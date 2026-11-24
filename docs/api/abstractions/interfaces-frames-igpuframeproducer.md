@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IGpuFrameProducer.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuFrameProducer.cs)
 
-中立 GPU 帧生产者桥：由渲染器程序集实现并注册为 Singleton，解码后端仅依赖此抽象。
+Neutral GPU Frame Producer Bridge: implemented by the renderer assembly and registered as a Singleton, the decoding backend relies solely on this abstraction.
 
 ## Declaration
 
@@ -24,17 +24,17 @@ public interface IGpuFrameProducer
 
 ## Remarks
 
-解码器把其原生解码输出（D3D11 共享句柄 / Linux dma_buf / AHardwareBuffer / IOSurface）
-经本桥导入为当前渲染器 GPU-API 的纹理（`IGpuTextureResource`），实现零拷贝上屏。
-与 `IGpuDeviceContext` 同为 Abstractions 中立桥，严守依赖倒置——
-解码后端不反向引用渲染器程序集，亦不感知具体 GPU-API 绑定的创建细节（VkImage 创建由生产者完成）。
+The decoder outputs its native decoded output (D3D11 shared handle / Linux dma_buf / AHardwareBuffer / IOSurface).
+Import the texture (`IGpuTextureResource`) from the current renderer's GPU-API via this bridge to achieve zero-copy onscreen.
+Along with `IGpuDeviceContext`, it is an Abstractions neutral bridge, strictly adhering to dependency inversion—
+The decoding backend does not backreference renderer assemblies, nor is it aware of the specific details of GPU-API binding creation (VkImage creation is done by the producer).
 
-**能力自报 + 行为副作用双判据（S_OK≠被接受）**：`TryImport` 在扩展不可用、
-原生句柄无效或导入失败时返回 `false`，调用方须回落软件解码并计入 CPU 拷贝统计，
-绝不报"已就绪"假绿。
+**Ability self-report + behavioral side effects dual criteria (S_OK ≠ acceptance)**:`TryImport` Not available in expansion,
+If the native handle is invalid or import fails, `false` is returned. The caller must decode the software and count it in the CPU copy statistics.
+Never report "ready" fake green reports.
 
-**异步策略**：`TryImport` 为同步原生调用——GPU 纹理导入无 I/O await；
-实现保持同步，不补 async（补即伪异步）。
+**Asynchronous Policy**: `TryImport` is a synchronous native call—GPU texture import without I/O await;
+Implements synchronization without async (padding means pseudo-asynchronous).
 
 ## Members
 
@@ -44,7 +44,7 @@ public interface IGpuFrameProducer
 GPUApiType ApiType { get; }
 ```
 
-本生产者面向的 GPU API（须与激活渲染器一致，供解码器按 `ApiType` 匹配）。
+GPU APIs targeted by this producer (must match the activated renderer and be matched by the decoder using `ApiType`).
 
 ### TryImport
 
@@ -52,14 +52,14 @@ GPUApiType ApiType { get; }
 bool TryImport(GpuFrameImportSource source, out IGpuTextureResource? texture);
 ```
 
-尝试将解码原生输出导入为本渲染器 GPU-API 纹理（零拷贝）。
+Try importing the native decoded output as a renderer's GPU-API texture (zero-copy).
 
 **Parameters**
 
-- `source`: 解码原生输出描述（句柄 / 尺寸 / 格式 / 切片）。
-- `texture`: 成功时为本渲染器 GPU-API 纹理（&lt;see cref="IGpuTextureResource"/&gt;），调用方取得所有权；失败时 &lt;see langword="null"/&gt;。
+- `source`: Decode native output descriptions (handle / size / format / slice).
+- `texture`: On success, the renderer's GPU-API texture (&lt;see cref="IGpuTextureResource"/&gt;) is granted, and the caller acquires ownership; On failure&lt;see langword="null"/&gt;.
 
-**Returns**: `true`=零拷贝导入成功；`false`=不可用，调用方回落软解。
+**Returns**: `true`=zero-copy import successful; `false`=Not available, the caller returns to soft resolution.
 
 ### IsImportSupported
 
@@ -67,24 +67,24 @@ bool TryImport(GpuFrameImportSource source, out IGpuTextureResource? texture);
 bool IsImportSupported(GpuFrameImportKind kind) => true;
 ```
 
-预检：本生产者是否支持导入指定类型的解码原生输出（解码器据此决定是否启用对应零拷贝路径）。
+Preflight: Whether this producer supports importing native decoding outputs of specified types (the decoder decides whether to enable the corresponding zero-copy path accordingly).
 
-**与 `TryImport` 的分工**：本方法是「路径启用前」的能力预检（如 Android 解码器
-在 configure 到 ImageReader Surface 前判定 AHB 导入可行性），避免在注定失败的路径上消耗解码器
-重建成本；`TryImport` 仍是运行时导入的行为判据（能力自报 + 行为副作用双判据，不假绿）。
+**Division of labor with `TryImport`**: This method is a pre-test of capabilities before path activation (such as Android decoders).
+Determine AHB import feasibility before configuring to the ImageReader Surface), avoiding decoder consumption on paths destined to fail
+Reconstruction costs; `TryImport` Still the behavior criterion imported at runtime (dual criterion for ability self-report + behavioral side effects, not fake green).
 
-默认实现乐观返回 `true`（与既有消费方行为兼容：由 TryImport 运行时兜底）。
+By default, optimistic returns `true` (compatible with existing consumer behavior: backed by the TryImport runtime).
 
-**对生产者的要求**：默认 `true` 只是兼容既有实现的过渡口径，**不是**
-「全部类型都支持」的授权。新生产者必须按实际支持的 `GpuFrameImportKind` 覆写本方法；
-不覆写即视为向解码器承诺「所有类型都能零拷贝导入」，解码器会据此启用注定失败的路径，
-直到 TryImport 运行时返回 `false` 才回落——期间浪费的是解码器重建成本。
+**Requirements for producers**: Default `true` is only a transitional caliber compatible with existing implementations, **not **
+Authorization for "Supported by All Types." New producers must override this method according to the actual supported `GpuFrameImportKind`;
+Not overwriting is considered a promise to the decoder that "all types can be imported with zero copy," and the decoder will enable the path that is destined to fail accordingly.
+It only fell back when TryImport returned `false` during runtime—during which the decoder rebuild cost was wasted.
 
 **Parameters**
 
-- `kind`: 解码原生输出类型。
+- `kind`: Decode native output types.
 
-**Returns**: `true`=支持导入该类型（可启用对应零拷贝路径）。
+**Returns**: `true`=Supports importing this type (corresponding zero-copy path can be enabled).
 
 ### null
 
@@ -92,18 +92,18 @@ bool IsImportSupported(GpuFrameImportKind kind) => true;
 byte[]? DecodeAdapterLuidHint => null;
 ```
 
-解码设备对齐提示（可选）：生产者声明「解码侧共享句柄应产自哪张 GPU」，供解码器在创建
-自有解码设备前对齐适配器，使跨 API 导入落在同一 GPU 上。
+Decoder device alignment prompt (optional): The producer declares "Which GPU should the decoder-side shared handle be produced from" for the decoder to create
+Align adapters before your own decoding device, ensuring cross-API imports fall on the same GPU.
 
-**为什么需要它**：跨 GPU/跨厂商导入共享句柄会被驱动拒绝。多数渲染器可自由选卡
-（如 Vulkan 按 LUID 对齐到解码卡）；但有的渲染上下文被平台钉死在特定 GPU——典型是
-Windows WGL：GL 上下文绑定窗口所在显示器的 GPU，渲染器无法搬走。此时对齐方向必须反转：
-解码设备向渲染上下文所在 GPU 靠拢。本属性就是该反向对齐的中立通道。
+**Why do you need it?**: Importing shared handles across GPU/vendors will be rejected by the driver. Most renderers allow free card selection
+(For example, Vulkan aligns LUID to the decoder card); But some rendering contexts are pinned to specific GPUs by the platform—typically
+Windows WGL: GL context binds the GPU of the monitor where the window is located; renderers cannot move it. At this point, the alignment direction must be reversed:
+The decoding device moves closer to the GPU where the rendering context is located. This property is the neutral channel to be reverse-aligned.
 
-**语义**：返回 8 字节适配器 LUID（小端，与 DXGI_ADAPTER_DESC1.LUID 一致）表示
-「建议解码设备落在该适配器」；返回 `null` 表示无对齐要求（解码器沿用自身选卡策略）。
-提示是**建议而非强制**：解码器须先验证目标适配器具备所需解码能力，不具备时忽略提示并按自身策略回落。
+**Semantics**: Returns an 8-byte adapter LUID (little-endian, and DXGI_ADAPTER_DESC1. LUID consistent).
+"It is recommended that the decoding device be placed on this adapter"; Returning `null` means no alignment requirement (the decoder retains its own pick strategy).
+The prompt is **suggestion, not mandatory**: The decoder must first verify that the target adapter has the required decoding capability; if not, it ignores the prompt and falls back according to its own strategy.
 
-**异步策略**：同步属性（纯查询或轻量原生调用，无 I/O await）。
+**Asynchronous Policy**: Synchronous properties (pure query or lightweight native calls, no I/O await).
 
-默认实现返回 `null`（无对齐要求，与既有生产者行为兼容）。
+The default implementation returns `null` (no alignment requirement, compatible with existing producer behavior).

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IRenderTarget.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IRenderTarget.cs)
 
-渲染目标接口。
+Render target interface.
 
 ## Declaration
 
@@ -24,11 +24,11 @@ public interface IRenderTarget
 
 ## Remarks
 
-不叫 IRenderSurface——渲染目标不一定是窗口 Surface。
+Not called IRenderSurface—the rendering target is not necessarily a window Surface.
 
-游戏引擎可渲染到 Texture → Material → Mesh。
+The game engine can render to Texture→ Material, → Mesh.
 
-NativeHandle 用 object 而非 IntPtr——AOT 安全（非热路径，显式 cast）。
+NativeHandle uses objects instead of IntPtr—AOT safe (non-hot path, explicit cast).
 
 ## Members
 
@@ -38,7 +38,7 @@ NativeHandle 用 object 而非 IntPtr——AOT 安全（非热路径，显式 ca
 RenderTargetType Type { get; }
 ```
 
-渲染目标类型（Window / Texture / Offscreen / Custom）。
+Render target types (Window / Texture / Offscreen / Custom).
 
 ### HandleType
 
@@ -46,7 +46,7 @@ RenderTargetType Type { get; }
 RenderHandleType HandleType { get; }
 ```
 
-渲染句柄类型（None / Pointer / Texture / Surface / Context）。
+Render handle types (None / Pointer / Texture / Surface / Context).
 
 ### NativeHandle
 
@@ -54,7 +54,7 @@ RenderHandleType HandleType { get; }
 object NativeHandle { get; }
 ```
 
-原生句柄（运行时显式 cast，不用反射）。
+Native handle (runtime explicit cast, no reflection needed).
 
 ### Width
 
@@ -62,7 +62,7 @@ object NativeHandle { get; }
 int Width { get; }
 ```
 
-宽度。
+Width.
 
 ### Height
 
@@ -70,7 +70,7 @@ int Width { get; }
 int Height { get; }
 ```
 
-高度。
+Height.
 
 ### Scale
 
@@ -78,4 +78,4 @@ int Height { get; }
 float Scale { get; }
 ```
 
-DPI 缩放比。
+DPI scaling ratio.

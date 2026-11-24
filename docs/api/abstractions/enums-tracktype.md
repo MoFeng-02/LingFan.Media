@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`TrackType.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/TrackType.cs)
 
-媒体轨道类型。
+Media track type.
 
 ## Declaration
 
@@ -26,6 +26,6 @@ public enum TrackType : int
 
 | Value | Description |
 | --- | --- |
-| `Video` | 视频轨道。 |
-| `Audio` | 音频轨道。 |
-| `Subtitle` | 字幕轨道。 |
+| `Video` | Video track. |
+| `Audio` | Audio track. |
+| `Subtitle` | Subtitle track. |

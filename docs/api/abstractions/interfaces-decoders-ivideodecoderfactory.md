@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IVideoDecoderFactory.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IVideoDecoderFactory.cs)
 
-视频解码器工厂接口。
+Video decoder factory interface.
 
 ## Declaration
 
@@ -24,9 +24,9 @@ public interface IVideoDecoderFactory
 
 ## Remarks
 
-Singleton 工厂，无状态。每次 Create() 返回新实例。
+Singleton factory, statusless. Each time Create() returns a new instance.
 
-优先使用 `CreateAsync`（硬解 GPU 设备初始化可能 I/O，支持 CT）。
+Prioritize using `CreateAsync` (hardware decoded GPU device initialization possible I/O, supports CT).
 
 ## Members
 
@@ -36,14 +36,14 @@ Singleton 工厂，无状态。每次 Create() 返回新实例。
 IVideoDecoder Create(VideoCodec codec, VideoSettings settings);
 ```
 
-根据编解码器和设置创建解码器实例。
+Create a decoder instance based on the codec and settings.
 
 **Parameters**
 
-- `codec`: 视频编解码器。
-- `settings`: 视频设置。
+- `codec`: Video codec.
+- `settings`: Video settings.
 
-**Returns**: 新创建的视频解码器实例（未初始化，须调用 `Initialize`）。
+**Returns**: Newly created video decoder instance (not initialized, requires calling `Initialize`).
 
 ### CreateAsync
 
@@ -51,12 +51,12 @@ IVideoDecoder Create(VideoCodec codec, VideoSettings settings);
 Task<IVideoDecoder> CreateAsync(VideoCodec codec, VideoSettings settings, CancellationToken ct = default);
 ```
 
-异步根据编解码器和设置创建解码器实例。
+Asynchronously create decoder instances based on codecs and settings.
 
 **Parameters**
 
-- `codec`: 视频编解码器。
-- `settings`: 视频设置。
-- `ct`: 取消令牌。
+- `codec`: Video codec.
+- `settings`: Video settings.
+- `ct`: Cancel token.
 
-**Returns**: 新创建的视频解码器实例。
+**Returns**: Newly created video decoder instance.

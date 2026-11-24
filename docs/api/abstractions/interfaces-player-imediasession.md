@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaSession.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaSession.cs)
 
-播放会话接口。持有打开媒体后的所有信息：轨道、元数据、轨道选择。
+Play session interface. Holds all information after opening media: tracks, metadata, track selection.
 
 ## Declaration
 
@@ -24,7 +24,7 @@ public interface IMediaSession
 
 ## Remarks
 
-线程安全：Tracks 等属性在 Open 后只读，可跨线程读取。
+Thread safety: Properties like Tracks are read-only after Open, allowing cross-thread reading.
 
 ## Members
 
@@ -34,7 +34,7 @@ public interface IMediaSession
 IMediaSource Source { get; }
 ```
 
-原始媒体源。
+Original media source.
 
 ### Metadata
 
@@ -42,7 +42,7 @@ IMediaSource Source { get; }
 MediaMetadata Metadata { get; }
 ```
 
-媒体元数据。
+Media metadata.
 
 ### VideoTracks
 
@@ -50,7 +50,7 @@ MediaMetadata Metadata { get; }
 IReadOnlyList<MediaTrack> VideoTracks { get; }
 ```
 
-所有视频轨道。
+All video tracks.
 
 ### AudioTracks
 
@@ -58,7 +58,7 @@ IReadOnlyList<MediaTrack> VideoTracks { get; }
 IReadOnlyList<MediaTrack> AudioTracks { get; }
 ```
 
-所有音频轨道。
+All audio tracks.
 
 ### SubtitleTracks
 
@@ -66,7 +66,7 @@ IReadOnlyList<MediaTrack> AudioTracks { get; }
 IReadOnlyList<MediaTrack> SubtitleTracks { get; }
 ```
 
-所有字幕轨道。
+All subtitle tracks.
 
 ### SelectedVideoTrack
 
@@ -74,7 +74,7 @@ IReadOnlyList<MediaTrack> SubtitleTracks { get; }
 MediaTrack? SelectedVideoTrack { get; set; }
 ```
 
-当前选中视频轨道。
+Currently select the video track.
 
 ### SelectedAudioTrack
 
@@ -82,7 +82,7 @@ MediaTrack? SelectedVideoTrack { get; set; }
 MediaTrack? SelectedAudioTrack { get; set; }
 ```
 
-当前选中音频轨道。
+The audio track is currently selected.
 
 ### SelectedSubtitleTrack
 
@@ -90,7 +90,7 @@ MediaTrack? SelectedAudioTrack { get; set; }
 MediaTrack? SelectedSubtitleTrack { get; set; }
 ```
 
-当前选中字幕轨道。
+Currently selected subtitle track.
 
 ### Duration
 
@@ -98,7 +98,7 @@ MediaTrack? SelectedSubtitleTrack { get; set; }
 TimeSpan Duration { get; }
 ```
 
-总时长。
+Total duration.
 
 ### IsLive
 
@@ -106,7 +106,7 @@ TimeSpan Duration { get; }
 bool IsLive { get; }
 ```
 
-是否直播流。
+Whether it is a live stream.
 
 ### CloseAsync
 
@@ -114,10 +114,10 @@ bool IsLive { get; }
 Task CloseAsync(CancellationToken ct = default);
 ```
 
-关闭会话，释放资源。实际管线资源释放由 MediaPlayer.DisposeAsync 负责。
+Close the session and release resources. Actual pipeline resource release is handled by MediaPlayer.DisposeAsync.
 
 **Parameters**
 
-- `ct`: 取消令牌。
+- `ct`: Cancel token.
 
-**Returns**: 会话关闭完成时结束的任务。
+**Returns**: Tasks that end when the session is closed complete.

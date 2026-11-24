@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`SubtitleFrame.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/SubtitleFrame.cs)
 
-字幕帧。不实现 `IDisposableFrame`（仅 string + TimeSpan，无原生资源）。
+Subtitle frame. Do not implement `IDisposableFrame` (string + TimeSpan only, no native resources).
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class SubtitleFrame
 public string Text { get; init; }
 ```
 
-字幕文本内容。
+Subtitle text content.
 
 ### Start
 
@@ -38,7 +38,7 @@ public string Text { get; init; }
 public TimeSpan Start { get; init; }
 ```
 
-显示开始时间。
+Display start time.
 
 ### End
 
@@ -46,7 +46,7 @@ public TimeSpan Start { get; init; }
 public TimeSpan End { get; init; }
 ```
 
-显示结束时间。
+Display the end time.
 
 ### Style
 
@@ -54,7 +54,7 @@ public TimeSpan End { get; init; }
 public SubtitleStyle? Style { get; init; }
 ```
 
-字幕样式（可能为 null，使用默认）。
+Subtitle style (may be null, use default).
 
 ### Constructor
 
@@ -62,11 +62,11 @@ public SubtitleStyle? Style { get; init; }
 public SubtitleFrame(string text, TimeSpan start, TimeSpan end, SubtitleStyle? style = null);
 ```
 
-初始化 `SubtitleFrame` 的新实例。
+Initialize a new instance of `SubtitleFrame`.
 
 **Parameters**
 
-- `text`: 字幕文本内容。
-- `start`: 显示开始时间。
-- `end`: 显示结束时间。
-- `style`: 字幕样式（可为 null，使用默认）。
+- `text`: Subtitle text content.
+- `start`: Display start time.
+- `end`: Display the end time.
+- `style`: Subtitle style (can be null, use default).

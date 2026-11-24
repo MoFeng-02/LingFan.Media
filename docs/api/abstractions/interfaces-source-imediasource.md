@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaSource.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaSource.cs)
 
-媒体来源描述。
+Media source description.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public interface IMediaSource
 MediaSourceType Type { get; }
 ```
 
-来源类型。
+Source type.
 
 ### Identifier
 
@@ -38,4 +38,4 @@ MediaSourceType Type { get; }
 string Identifier { get; }
 ```
 
-标识符（文件路径或 URL）。
+Identifier (file path or URL).

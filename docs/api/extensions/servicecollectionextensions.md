@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`ServiceCollectionExtensions.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Extensions/ServiceCollectionExtensions.cs)
 
-DI 注册主入口。提供 `AddLingFanMedia(IServiceCollection, Action{MediaOptions})` 扩展方法注册核心媒体服务。
+DI registration main portal. Provides `AddLingFanMedia(IServiceCollection, Action{MediaOptions})` extension method to register core media services.
 
 ## Declaration
 
@@ -24,35 +24,35 @@ public static class ServiceCollectionExtensions
 
 ## Remarks
 
-使用模式：
+Usage Mode:
 
 ```csharp
-services.AddLingFanMedia().AddFFmpeg().AddD3D11Renderer().AddWasapiOutput();
+services. AddLingFanMedia(). AddFFmpeg(). AddD3D11Renderer(). AddWasapiOutput();
 ```
 
-**生命周期模型**：
+**Lifecycle Model**:
 
-Infrastructure（Singleton）：无状态工厂 / 共享资源。
+Infrastructure (Singleton): stateless factory / shared resource.
 
-- `IMediaStreamFactory` → `MediaStreamFactory`（持有 `IHttpClientFactory`）
+- `IMediaStreamFactory` → `MediaStreamFactory` (Hold `IHttpClientFactory`)
 
-- `IMediaDemuxerFactory` → 由各后端 `AddXxx()` 经 TryAddEnumerable 集合注册（不再默认注册，支持多后端并存回退）
+- `IMediaDemuxerFactory` → Registered by each backend `AddXxx()` via the TryAddEnumerable collection (no longer default registration, supports multiple backends concurrent and rollback)
 
-- `IMediaPlayerFactory` → `BackendFallbackMediaPlayerFactory`（运行时回退调度；
-同一实例同时以 `IBackendRegistry` 对外。核心组装工厂 `MediaPlayerFactory` 以 keyed `"composer"` 注册，供回退调度器选定后端组后建 Session）
+- `IMediaPlayerFactory` → `BackendFallbackMediaPlayerFactory` (runtime rollback scheduling;
+The same instance is simultaneously exposed with `IBackendRegistry`. Core assembly factory `MediaPlayerFactory` registered as keyed `"composer"` for the backend scheduler to select a backend group and then create a session)
 
-Session（Transient）：仅注册 `IMediaPlayer`，内部组件由 Factory 手动 new 不走 DI。
+Session (Transient): Only register `IMediaPlayer`; internal components are manually new by the Factory without going through DI.
 
-**以下工厂由各子模块扩展方法注册（不在 AddLingFanMedia 中）**：
+**The following factories are registered by submodule extension methods (not in AddLingFanMedia)**:
 
-- `AddFFmpeg()` / `AddMediaFoundation()` / `AddVLCNative()` → 各以 TryAddEnumerable 集合注册
-`IMediaDemuxerFactory` / `IVideoDecoderFactory` / `IAudioDecoderFactory` / `ISubtitleDecoderFactory`（可多后端并存，按注册顺序回退）
+- `AddFFmpeg()` / `AddMediaFoundation()` / `AddVLCNative()` → Each registered as a TryAddEnumerable collection
+`IMediaDemuxerFactory` / `IVideoDecoderFactory` / `IAudioDecoderFactory` / `ISubtitleDecoderFactory` (Multiple backends can coexist, rollback in registration order)
 
 - `AddD3D11Renderer()` → `IVideoRendererFactory`
 
 - `AddWasapiOutput()` → `IAudioOutputFactory`
 
-此方法为同步配置，无 I/O、无异步。
+This method is a synchronous configuration with no I/O or asynchronous.
 
 ## Members
 
@@ -64,39 +64,39 @@ public static MediaBuilder AddLingFanMedia(
     Action<MediaOptions>? configure = null);
 ```
 
-注册 LingFan.Media 核心服务（工厂 + 播放器）并返回 `MediaBuilder` 供链式注册。
+Register the LingFan.Media core service (factory + player) and return `MediaBuilder` for chain registration.
 
-注册 Infrastructure Lifetime（Singleton）服务：
+Register for Infrastructure Lifetime (Singleton) services:
 
 - `IMediaStreamFactory` → `MediaStreamFactory`
 
-- `IFormatDetector` → `FormatDetector`（回退调度器 Open 前轻量探测格式）
+- `IFormatDetector` → `FormatDetector` (Lightweight probe format before rollback scheduler open)
 
-- `ICodecRegistry` → `CodecRegistry`（静态映射表，纯内存）
+- `ICodecRegistry` → `CodecRegistry` (static mapping table, pure memory)
 
-- `IMediaPlayerFactory` → `BackendFallbackMediaPlayerFactory`（同一实例兼以 `IBackendRegistry` 对外）；
-核心组装工厂 `MediaPlayerFactory` 以 keyed `"composer"` 注册
+- `IMediaPlayerFactory` → `BackendFallbackMediaPlayerFactory` (the same instance also uses `IBackendRegistry` externally);
+Core assembly factory `MediaPlayerFactory` registered with keyed `"composer"`
 
-- `IMediaDemuxerFactory` **不在此注册**：由各后端 `AddXxx()` 经 TryAddEnumerable 集合注册；
-未注册任何后端时 Open 抛 `MediaBackendUnsupportedException`
+- `IMediaDemuxerFactory` **Not registered here**: Registered by each backend `AddXxx()` via the TryAddEnumerable collection;
+Open throw `MediaBackendUnsupportedException` when no backend is registered
 
-注册 Session Lifetime（Transient）播放器：
+Register for Session Lifetime (Transient) Player:
 
-- `IMediaPlayer`（每次解析通过 Factory.Create() 新建）
+- `IMediaPlayer` (Create each parsing via Factory.Create())
 
-注册 `IHttpClientFactory`（`AddHttpClient()`）供 `MediaStreamFactory` 网络流连接池管理，
-并配置命名 client `"LingFanMedia"` 与 `"LingFanMedia_Insecure"`（均挂 SSRF 连接防护）。
+Register `IHttpClientFactory`(`AddHttpClient()`) for `MediaStreamFactory` network flow connection pool management,
+And configure the named client `"LingFanMedia"` and `"LingFanMedia_Insecure"` (both equipped with SSRF connection protection).
 
-注册 `IOptions<MediaOptions>` 与 `IOptions<MediaPlayerOptions>`（后者传播宿主配置的默认音量）。
+Register `IOptions<MediaOptions>` and `IOptions<MediaPlayerOptions>` (the latter propagates the host's default volume).
 
-日志配置由消费方应用的 Host 负责（Extensions 层只依赖 `Logging.Abstractions`）。
+Log configuration is handled by the consumer-side app's Host (the Extensions layer only relies on `Logging.Abstractions`).
 
 **Parameters**
 
-- `services`: DI 服务集合。
-- `configure`: 全局媒体配置回调（可选）。
+- `services`: DI service collection.
+- `configure`: Global media configuration callback (optional).
 
-**Returns**: 媒体构建器，用于链式调用 `AddFFmpeg()` / `AddD3D11Renderer()` 等。
+**Returns**: Media builder for chained calls `AddFFmpeg()` / `AddD3D11Renderer()`, etc.
 
 ### AddLingFanMedia
 
@@ -106,11 +106,11 @@ public static MediaBuilder AddLingFanMedia(
     MediaOptions options);
 ```
 
-注册 LingFan.Media 核心服务并返回 `MediaBuilder` 供链式注册。
+Register the LingFan.Media core service and return `MediaBuilder` for chain registration.
 
 **Parameters**
 
-- `services`: DI 服务集合。
-- `options`: 全局媒体配置。
+- `services`: DI service collection.
+- `options`: Global media configuration.
 
-**Returns**: 媒体构建器，用于链式调用 `AddFFmpeg()` / `AddD3D11Renderer()` 等。
+**Returns**: Media builder for chained calls `AddFFmpeg()` / `AddD3D11Renderer()`, etc.

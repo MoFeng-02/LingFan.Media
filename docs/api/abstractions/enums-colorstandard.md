@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`ColorStandard.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorStandard.cs)
 
-视频的色彩原色与亮度矩阵标准（ITU-R BT 系列），用于 YUV→RGB 转换时选择正确的亮度/色差系数。
+The video color primary color and luminance matrix standard (ITU-R BT series), used to select the correct brightness/chromatic coefficient during YUV→RGB conversion.
 
 ## Declaration
 
@@ -24,14 +24,14 @@ public enum ColorStandard : int
 
 ## Remarks
 
-各后端（MediaCodec / FFmpeg 等）解码时应将自身的色彩标准字段映射到本枚举，
-渲染端据此选择相应转换矩阵。未指定（`Unspecified`）时渲染端回退默认标准。
+Each backend (MediaCodec / FFmpeg, etc.) should map its own color standard fields to this enumeration when decoding,
+The rendering side selects the corresponding transformation matrix accordingly. If (`Unspecified`) is not specified, the rendering side reverts the default standard.
 
 ## Values
 
 | Value | Description |
 | --- | --- |
-| `Unspecified` | 未指定。渲染端回退默认标准。 |
+| `Unspecified` | Not specified. The rendering side rolls back the default standard. |
 | `Bt601` | ITU-R BT.601（SDTV）。`Kr=0.299, Kb=0.114`。 |
 | `Bt709` | ITU-R BT.709（HDTV）。`Kr=0.2126, Kb=0.0722`。 |
 | `Bt2020` | ITU-R BT.2020（UHDTV）。 |

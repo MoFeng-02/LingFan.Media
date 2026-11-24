@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`AspectRatioMode.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/AspectRatioMode.cs)
 
-视频宽高比缩放模式。
+Video aspect ratio zoom mode.
 
 ## Declaration
 
@@ -26,6 +26,6 @@ public enum AspectRatioMode : int
 
 | Value | Description |
 | --- | --- |
-| `Fill` | 拉伸填满目标区域（不保持宽高比）。 |
-| `Uniform` | 保持宽高比，留黑边。 |
-| `UniformToFill` | 保持宽高比，裁剪溢出部分。 |
+| `Fill` | Stretch to fill the target area (without maintaining the aspect ratio). |
+| `Uniform` | Maintain the aspect ratio and leave black borders. |
+| `UniformToFill` | Maintain the aspect ratio and trim the overflowing parts. |

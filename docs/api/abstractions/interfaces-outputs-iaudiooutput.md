@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IAudioOutput.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioOutput.cs)
 
-音频输出接口。
+Audio output interface.
 
 ## Declaration
 
@@ -24,13 +24,13 @@ public interface IAudioOutput : IMediaComponent
 
 ## Remarks
 
-线程模型：Submit 在音频线程调用。
+Thread model: Submit in the audio thread call.
 
-所有权语义：Submit 不接管帧所有权，不 Dispose 帧；调用方负责 Submit 后归还池或释放。
+Ownership semantics: Submit does not take over frame ownership, does not Dispose frames; The caller is responsible for returning the pool or releasing after Submitting.
 
-实现仅同步拷贝 PCM 数据到输出缓冲；调用方（AudioPipeline）负责 Submit 后将帧 Return 到 FramePool 或 Dispose。
+Implements synchronous copying of PCM data to output buffers only; The caller (AudioPipeline) is responsible for returning frames to FramePool or Dispose after Submitting.
 
-IFrameResource 非线程安全，需在单线程内使用。
+IFrameResource is non-thread-safe and must be used within a single thread.
 
 ## Members
 
@@ -40,12 +40,12 @@ IFrameResource 非线程安全，需在单线程内使用。
 void Initialize(int sampleRate, int channels);
 ```
 
-参数化配置：设置采样率和声道数。
+Parametric configuration: Set the sample rate and number of channels.
 
 **Parameters**
 
-- `sampleRate`: 输出采样率（Hz），须为合法固定率。
-- `channels`: 输出声道数。
+- `sampleRate`: Output sampling rate (Hz) must be a legal fixed rate.
+- `channels`: Number of output channels.
 
 ### Submit
 
@@ -53,13 +53,13 @@ void Initialize(int sampleRate, int channels);
 void Submit(AudioFrame frame);
 ```
 
-提交音频帧。不接管帧所有权；仅同步拷贝 PCM 数据，
-调用方负责 Submit 后释放帧（Return 到池或 Dispose）。
-音频线程调用，缓冲满时阻塞（COM 背压，同步阻塞背压是正常机制，非伪异步）。
+Submit the audio frame. Do not take over frame ownership; Synchronize only copy PCM data,
+The caller is responsible for releasing frames after Submit (Return to pool or Dispose).
+Audio thread calls block when buffering is full (COM backpressure; synchronous blocking backpressure is a normal mechanism, not pseudo-asynchronous).
 
 **Parameters**
 
-- `frame`: 待提交的音频帧；所有权仍归调用方。
+- `frame`: Audio frames pending submission; Ownership remains with the caller.
 
 ### Pause
 
@@ -67,7 +67,7 @@ void Submit(AudioFrame frame);
 void Pause();
 ```
 
-暂停播放。
+Pause playback.
 
 ### Resume
 
@@ -75,7 +75,7 @@ void Pause();
 void Resume();
 ```
 
-恢复播放。
+Resume playback.
 
 ### BeginStreamingAsync
 
@@ -83,15 +83,15 @@ void Resume();
 ValueTask BeginStreamingAsync(CancellationToken ct);
 ```
 
-开始流式输出，但在缓冲区预填足够真实 PCM 后再启动设备时钟（preroll 语义），
-返回时音频已开始流动。默认实现直接恢复播放（无预填需求的后端，如无声/无设备输出）；
-WASAPI 重写为解决起播静默窗（引擎抓取的是真实数据而非静音）。
+Start stream output, but start the device clock (preroll semantics) after the buffer is prefilled with enough real PCM,
+Audio has started flowing upon return. By default, playback is directly resumed (backend without pre-filling requirements, such as silent/device-free output);
+WASAPI was rewritten to resolve the silent startup window (the engine fetched real data rather than mute).
 
 **Parameters**
 
-- `ct`: 取消令牌。
+- `ct`: Cancel token.
 
-**Returns**: 音频已开始流动时结束的任务。
+**Returns**: Task ended when audio has started flowing.
 
 ### Flush
 
@@ -99,7 +99,7 @@ WASAPI 重写为解决起播静默窗（引擎抓取的是真实数据而非静�
 void Flush();
 ```
 
-清空输出缓冲。
+Clear the output buffer.
 
 ### GetPlaybackPosition
 
@@ -107,9 +107,9 @@ void Flush();
 TimeSpan GetPlaybackPosition();
 ```
 
-获取已播放位置（用于时钟同步）。
+Get the playback position (for clock synchronization).
 
-**Returns**: 自本遍播放起已输出的音频时长。
+**Returns**: The duration of the audio output since this playback.
 
 ### GetPlaybackPositionDirect
 
@@ -117,14 +117,14 @@ TimeSpan GetPlaybackPosition();
 TimeSpan GetPlaybackPositionDirect() => GetPlaybackPosition();
 ```
 
-高频、线程安全的播放位置读取（可选优化）。默认实现回落到 `GetPlaybackPosition`。
+High-frequency, thread-safe playback position reading (optional optimization). The default implementation falls back to `GetPlaybackPosition`.
 
-**用途**：视频主时钟需要以视频帧率（~30Hz）轮询播放位置。某些后端
-（WASAPI）的 `GetPlaybackPosition` 走跨线程封送，高频调用有成本；
-这类后端应重写本方法，直接读取设备时钟（`IAudioClock::GetPosition` 可由任意线程调用，无需跨线程），
-既平滑又零封送开销。
+**Purpose**: The video master clock needs to poll playback positions based on video frame rate (~30Hz). Certain backends
+(WASAPI)'s `GetPlaybackPosition` cross-thread encapsulation, with high-frequency calls costly;
+Such backends should override the method to directly read the device clock (`IAudioClock::GetPosition` can be called by any thread, no need to cross threads).
+Smooth and free with zero cover and overhead coverage.
 
-**Returns**: 已播放位置；默认实现与 `GetPlaybackPosition` 相同。
+**Returns**: Played position; The default implementation is the same as `GetPlaybackPosition`.
 
 ### ResetPlaybackClock
 
@@ -138,6 +138,6 @@ TimeSpan Latency { get; }
 float Volume { get; set; }
 ```
 
-重播（Ended→Playing）主时钟归零：音频尚未为本遍播放 Start 前，`GetPlaybackPositionDirect`
-应返回 0，避免沿用上一遍播放的时钟锚点导致重播首帧被错判为过期而丢弃。
-默认空实现（无主时钟后端无需处理）；WASAPI 重写为真正的去武装逻辑。
+Ended→Playing: Master clock reset to zero: Before the audio is played for this play Start, `GetPlaybackPositionDirect`
+It should return 0 to avoid using the clock anchor from the previous playback, which could cause the first frame of replay to be misjudged as expired and discarded.
+Default null implementation (no master clock backend required); WASAPI is rewritten as true disarmament logic.

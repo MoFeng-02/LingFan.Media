@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IVideoDecoder.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IVideoDecoder.cs)
 
-视频解码器接口。
+Video decoder interface.
 
 ## Declaration
 
@@ -24,9 +24,9 @@ public interface IVideoDecoder : IMediaComponent
 
 ## Remarks
 
-线程安全：单线程使用（管线线程），非线程安全。
+Thread safety: single-threaded use (pipeline threads), non-thread safe.
 
-热路径方法（DecodeAsync/FlushAsync）无 CancellationToken。
+Hotpath methods (DecodeAsync/FlushAsync) do not have CancellationToken.
 
 ## Members
 
@@ -36,12 +36,12 @@ public interface IVideoDecoder : IMediaComponent
 void Initialize(VideoCodec codec, VideoSettings settings);
 ```
 
-参数化配置：查找编解码器并打开。非生命周期方法。
+Parametric configuration: Find and open codecs. Non-lifecycle approach.
 
 **Parameters**
 
-- `codec`: 视频编解码器。
-- `settings`: 视频配置（含流时间基与解码选项）。
+- `codec`: Video codec.
+- `settings`: Video configuration (including streaming time base and decoding options).
 
 ### DecodeAsync
 
@@ -49,13 +49,13 @@ void Initialize(VideoCodec codec, VideoSettings settings);
 ValueTask<VideoFrame?> DecodeAsync(MediaPacket packet);
 ```
 
-解码一个数据包。无 CancellationToken（热路径）。
+Decode a data packet. No CancellationToken (hot path).
 
 **Parameters**
 
-- `packet`: 待解码的数据包。
+- `packet`: Packets to be decoded.
 
-**Returns**: 解码出的视频帧；返回 `null` 表示需要更多数据（如 B 帧延迟）。
+**Returns**: Decoded video frames; Returning `null` indicates that more data is needed (such as B-frame delay).
 
 ### FlushAsync
 
@@ -63,9 +63,9 @@ ValueTask<VideoFrame?> DecodeAsync(MediaPacket packet);
 ValueTask<VideoFrame?> FlushAsync();
 ```
 
-刷新内部缓冲，取出剩余帧。
+Refresh the internal buffer and remove the remaining frames.
 
-**Returns**: 缓冲中剩余的一个视频帧；返回 `null` 表示缓冲已取尽。
+**Returns**: One remaining video frame in the buffer; Returning `null` indicates that the buffer has been exhausted.
 
 ### Reset
 
@@ -73,7 +73,7 @@ ValueTask<VideoFrame?> FlushAsync();
 void Reset();
 ```
 
-重置解码器状态（Seek 后调用）。
+Reset decoder state (called after Seek).
 
 ### Codec
 
@@ -81,7 +81,7 @@ void Reset();
 VideoCodec Codec { get; }
 ```
 
-当前编解码器。
+Current codec.
 
 ### IsHardwareAccelerated
 
@@ -89,4 +89,4 @@ VideoCodec Codec { get; }
 bool IsHardwareAccelerated { get; }
 ```
 
-是否使用硬件加速。
+Whether hardware acceleration is used.

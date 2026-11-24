@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaCookie.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/MediaCookie.cs)
 
-HTTP Cookie 模型，用于网络流媒体的 Cookie 传递。
+HTTP Cookie model, used for cookie delivery in web streaming.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class MediaCookie
 public string Name { get; }
 ```
 
-Cookie 名称。
+Cookie name.
 
 ### Value
 
@@ -38,7 +38,7 @@ Cookie 名称。
 public string Value { get; }
 ```
 
-Cookie 值。
+Cookie value.
 
 ### Domain
 
@@ -46,7 +46,7 @@ Cookie 值。
 public string? Domain { get; }
 ```
 
-域（可能为 null）。
+Field (possibly null).
 
 ### Path
 
@@ -54,7 +54,7 @@ public string? Domain { get; }
 public string? Path { get; }
 ```
 
-路径（可能为 null）。
+Path (may be null).
 
 ### Secure
 
@@ -62,7 +62,7 @@ public string? Path { get; }
 public bool Secure { get; }
 ```
 
-是否仅 HTTPS。
+Is it HTTPS only?
 
 ### HttpOnly
 
@@ -70,7 +70,7 @@ public bool Secure { get; }
 public bool HttpOnly { get; }
 ```
 
-是否仅 HTTP（不可通过 JS 访问）。
+Whether it is HTTP-only (not accessible via JS).
 
 ### Constructor
 
@@ -84,13 +84,13 @@ public MediaCookie(
     bool httpOnly = false);
 ```
 
-初始化 `MediaCookie` 的新实例。
+Initialize a new instance of `MediaCookie`.
 
 **Parameters**
 
-- `name`: Cookie 名称。
-- `value`: Cookie 值。
-- `domain`: 域（可为 null）。
-- `path`: 路径（可为 null）。
-- `secure`: 是否仅 HTTPS。
-- `httpOnly`: 是否仅 HTTP（不可通过 JS 访问）。
+- `name`: Cookie name.
+- `value`: Cookie value.
+- `domain`: Field (can be null).
+- `path`: Path (can be null).
+- `secure`: Is it HTTPS only?
+- `httpOnly`: Whether it is HTTP-only (not accessible via JS).

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`AudioTrackInfo.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/AudioTrackInfo.cs)
 
-音频轨道详情信息。
+Audio track details.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class AudioTrackInfo
 public int SampleRate { get; init; }
 ```
 
-采样率（Hz，如 44100）。
+Sampling rate (Hz, e.g., 44100).
 
 ### Channels
 
@@ -38,7 +38,7 @@ public int SampleRate { get; init; }
 public int Channels { get; init; }
 ```
 
-声道数。
+Number of sound channels.
 
 ### ChannelLayout
 
@@ -46,7 +46,7 @@ public int Channels { get; init; }
 public string? ChannelLayout { get; init; }
 ```
 
-声道布局（如 "mono"、"stereo"、"5.1"，可能为 null）。
+Channel layout (such as "mono", "stereo", "5.1", which may be null).
 
 ### BitsPerSample
 
@@ -54,7 +54,7 @@ public string? ChannelLayout { get; init; }
 public int BitsPerSample { get; init; }
 ```
 
-每采样位数。
+Number of bits per sample.
 
 ### CodecConfiguration
 
@@ -62,8 +62,8 @@ public int BitsPerSample { get; init; }
 public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
 ```
 
-编解码器私有配置（如 AAC 的 AudioSpecificConfig）。解码器需据此设置 extradata。
-无则为默认空。
+Codec private configuration (such as AAC's AudioSpecificConfig). The decoder needs to set extradata accordingly.
+If none, it is default to null.
 
 ### TimeBase
 
@@ -71,7 +71,7 @@ public ReadOnlyMemory<byte> CodecConfiguration { get; init; }
 public Rational TimeBase { get; init; }
 ```
 
-流时间基（`AVStream.time_base`）。透传给解码器写入 `pkt_timebase` 以正确换算时间戳。
+Flow time base (`AVStream.time_base`). Pass-through to the decoder to write `pkt_timebase` to correctly convert the timestamp.
 
 ### Duration
 
@@ -79,4 +79,4 @@ public Rational TimeBase { get; init; }
 public TimeSpan Duration { get; init; }
 ```
 
-轨道时长。
+Orbital duration.

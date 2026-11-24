@@ -12,8 +12,8 @@ lang: "en-US"
 
 Source: [`DecodePreferencePolicy.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/DecodePreferencePolicy.cs)
 
-解码偏好策略：以"解码成本分"替代纯分辨率阈值，判断内容是否超出软件解码的实时能力，
-从而决定应"优先硬件加速"。成本分 = 宽×高×帧率 × 编码复杂度权重 × 位深权重。
+Decoding preference strategy: Use the "decoding cost score" instead of the pure resolution threshold to determine whether the content exceeds the software's real-time decoding capability,
+Thus, it was decided that "hardware acceleration should be prioritized." Cost score = Wide × High × Frame rate × Encoding complexity weight × bit depth weight.
 
 ## Declaration
 
@@ -25,15 +25,15 @@ public static class DecodePreferencePolicy
 
 ## Remarks
 
-设计动机：纯分辨率阈值会漏掉高帧率（如 1440p@120）与高复杂度编码（AV1/HEVC）场景；
-10-bit 比 8-bit 软件解码更贵约 30%。成本分综合三者，给出更稳的判据。经验值：
-1080p@60 H265≈199M、1440p@60 H265≈354M、4K@60 H264≈498M、4K@60 H265≈796M（单位：加权像素/秒）。
+Design motivation: Pure resolution thresholds miss scenes with high frame rates (such as 1440p@120) and high complexity coding (AV1/HEVC);
+10-bit software decoding is about 30% more expensive than 8-bit software. Cost analysis combines all three factors to provide more stable judgments. Experience points:
+1080p@60 H265≈199M, 1440p@60 H265≈354M, 4K@60 H264≈498M, 4K@60 H265≈796M (unit: weighted pixels per second).
 
-语义为"优先硬件加速"（PreferHardware），而非"强制"：本策略只决定硬解是否应被尝试；
-是否真能走硬解取决于运行时是否有可用 GPU 设备上下文，且硬解失败时必须优雅回落软解（既有保证）。
-用户显式关闭硬件加速的意图始终优先——策略不会覆盖 `EnableHardwareAcceleration` 的 false。
+Semantics are "Preferred Hardware" rather than "Force": This policy only determines whether hard solves should be attempted;
+Whether hardware decryption can be done depends on whether GPU device context is available at runtime, and if hardware decryption fails, it must gracefully switch back to soft decryption (guaranteed by default).
+The user's intention to explicitly disable hardware acceleration always takes precedence—the policy does not override false in `EnableHardwareAcceleration`.
 
-纯静态、无反射、无分配，符合 AOT 零警告要求。
+Pure static, non-reflective, and unallocated to meet AOT Zero Warning requirements.
 
 ## Members
 
@@ -43,8 +43,8 @@ public static class DecodePreferencePolicy
 public const long DefaultSoftwareDecodeThreshold = 300_000_000L;
 ```
 
-默认软件解码能力阈值（成本分）。≈ 2K (2560×1440)@60 H265 8-bit 的加权值，
-作为"建议优先硬解"的默认起点。超过即视为软件解码在典型 CPU 上难以实时。
+Default software decoding capability threshold (cost score). ≈ 2K (2560×1440) @ 60 H265 8-bit weighted value,
+Used as the default starting point for "Recommended Priority Hard Decoding." Exceeding this is considered software decoding difficult in real time on typical CPUs.
 
 ### ComputeScore
 
@@ -52,12 +52,12 @@ public const long DefaultSoftwareDecodeThreshold = 300_000_000L;
 public static long ComputeScore(VideoTrackInfo? info, VideoCodec? codec);
 ```
 
-计算视频轨道的解码成本分（加权像素/秒）。返回 0 表示信息不足（如轨道信息为空）。
+Calculate the decoding cost of video tracks (weighted pixels per second). Returning 0 indicates insufficient information (e.g., track information is empty).
 
 **Parameters**
 
-- `info`: 视频轨道详情（宽/高/帧率/像素格式）。
-- `codec`: 视频编码；未知时按基准权重计。
+- `info`: Video track details (width/height/frame rate/pixel format).
+- `codec`: Video encoding; If unknown, calculate based on the baseline weight.
 
 ### ExceedsSoftwareDecodeCapability
 
@@ -65,13 +65,13 @@ public static long ComputeScore(VideoTrackInfo? info, VideoCodec? codec);
 public static bool ExceedsSoftwareDecodeCapability(VideoTrackInfo? info, VideoCodec? codec, long? threshold = null);
 ```
 
-内容是否超过软件解码实时能力阈值（应优先硬件加速）。
+Whether the content exceeds the software decoding real-time capability threshold (hardware acceleration should be prioritized).
 
 **Parameters**
 
-- `info`: 视频轨道详情。
-- `codec`: 视频编码。
-- `threshold`: 阈值；null 使用 &lt;see cref="DefaultSoftwareDecodeThreshold"/&gt;。
+- `info`: Video track details.
+- `codec`: Video encoding.
+- `threshold`: Threshold; null uses &lt;see cref="DefaultSoftwareDecodeThreshold"/&gt;.
 
 ### BitDepthOf
 
@@ -79,10 +79,10 @@ public static bool ExceedsSoftwareDecodeCapability(VideoTrackInfo? info, VideoCo
 public static int BitDepthOf(PixelFormat format) => format switch;
 ```
 
-像素格式的位深（视频域：10-bit 格式记 10，其余记 8）。
+Bit depth for pixel format (video field: 10 for 10-bit format, 8 for others).
 
 **Parameters**
 
-- `format`: 像素格式。
+- `format`: Pixel format.
 
-**Returns**: 位深：10-bit 格式返回 10，其余返回 8。
+**Returns**: Bit depth: 10 returns 10 in 10-bit format, 8 for others.

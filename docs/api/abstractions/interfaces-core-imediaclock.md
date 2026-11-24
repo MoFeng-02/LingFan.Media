@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaClock.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IMediaClock.cs)
 
-媒体时钟接口。音视频同步的核心组件。
+Media clock interface. Core component of audio and video synchronization.
 
 ## Declaration
 
@@ -24,13 +24,13 @@ public interface IMediaClock
 
 ## Remarks
 
-纯内存操作，无 I/O 等待，不需要 CancellationToken。
+Pure memory operations with no I/O waiting and no need for CancellationToken.
 
-Clock 不能注册 Singleton——多播放器会抢同一时钟。
+Clock cannot register Singleton—multiple players compete for the same clock.
 
-线程安全：所有属性和方法需线程安全（lock 或 Interlocked），
+Thread safety: All properties and methods must be thread-safe (lock or interlocked),
 
-因为视频管线和音频管线都会访问时钟。
+Because both video and audio pipelines access the clock.
 
 ## Members
 
@@ -40,7 +40,7 @@ Clock 不能注册 Singleton——多播放器会抢同一时钟。
 TimeSpan Position { get; }
 ```
 
-当前时钟位置。
+Current clock position.
 
 ### Speed
 
@@ -48,7 +48,7 @@ TimeSpan Position { get; }
 float Speed { get; set; }
 ```
 
-时钟速度（1.0=正常）。
+Clock speed (1.0 = normal).
 
 ### IsRunning
 
@@ -56,7 +56,7 @@ float Speed { get; set; }
 bool IsRunning { get; }
 ```
 
-是否运行。
+Whether to run.
 
 ### SyncSource
 
@@ -64,7 +64,7 @@ bool IsRunning { get; }
 ClockSyncSource SyncSource { get; set; }
 ```
 
-同步源。
+Synchronize the source.
 
 ### SyncThreshold
 
@@ -72,7 +72,7 @@ ClockSyncSource SyncSource { get; set; }
 TimeSpan SyncThreshold { get; set; }
 ```
 
-同步阈值（默认 50ms）。
+Synchronization threshold (default 50ms).
 
 ### DropThreshold
 
@@ -80,7 +80,7 @@ TimeSpan SyncThreshold { get; set; }
 TimeSpan DropThreshold { get; set; }
 ```
 
-丢帧阈值（默认 200ms）。
+Frame loss threshold (default 200ms).
 
 ### Start
 
@@ -88,7 +88,7 @@ TimeSpan DropThreshold { get; set; }
 void Start();
 ```
 
-启动时钟，记录起始时间戳。
+Start the clock and record the start timestamp.
 
 ### Pause
 
@@ -96,7 +96,7 @@ void Start();
 void Pause();
 ```
 
-暂停时钟，冻结当前位置。
+Pause the clock and freeze the current location.
 
 ### Reset
 
@@ -104,7 +104,7 @@ void Pause();
 void Reset();
 ```
 
-重置到 Zero，停止运行。
+Reset to Zero and stop running.
 
 ### SeekTo
 
@@ -112,11 +112,11 @@ void Reset();
 void SeekTo(TimeSpan position);
 ```
 
-跳转到指定位置。
+Jump to the specified location.
 
 **Parameters**
 
-- `position`: 目标时钟位置。
+- `position`: Target clock position.
 
 ### SyncTo
 
@@ -124,8 +124,8 @@ void SeekTo(TimeSpan position);
 void SyncTo(TimeSpan masterPosition);
 ```
 
-同步到主时钟位置。
+Synchronize to the master clock position.
 
 **Parameters**
 
-- `masterPosition`: 主时钟当前位置。
+- `masterPosition`: Current position of the master clock.

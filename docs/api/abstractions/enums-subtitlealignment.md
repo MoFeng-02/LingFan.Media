@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`SubtitleAlignment.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitleAlignment.cs)
 
-字幕对齐方式。
+Subtitle alignment.
 
 ## Declaration
 
@@ -26,6 +26,6 @@ public enum SubtitleAlignment : int
 
 | Value | Description |
 | --- | --- |
-| `Left` | 左对齐。 |
-| `Center` | 居中对齐（默认）。 |
-| `Right` | 右对齐。 |
+| `Left` | Left aligned. |
+| `Center` | Center alignment (default). |
+| `Right` | Align to the right. |

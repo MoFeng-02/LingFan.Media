@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`ColorTransfer.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorTransfer.cs)
 
-光电传输特性（OETF/EOTF 曲线），用于标识内容是否为 HDR。
+Optoelectronic transmission characteristics (OETF/EOTF curves) used to indicate whether content is HDR.
 
 ## Declaration
 
@@ -24,15 +24,15 @@ public enum ColorTransfer : int
 
 ## Remarks
 
-主要为 SDR 内容提供标准 YUV→RGB；HDR 内容（PQ / HLG）暂不在本层做色调映射。
-各后端应将自身的传输特性字段映射到本枚举；未指定（`Unspecified`）时渲染端回退默认。
+Mainly provides standard YUV→RGB for SDR content; HDR content (PQ / HLG) is not currently mapped on this layer.
+Each backend should map its own transmission characteristic fields to this enumeration; If (`Unspecified`) is not specified, the rendering side reverts to default.
 
 ## Values
 
 | Value | Description |
 | --- | --- |
-| `Unspecified` | 未指定。 |
-| `Linear` | 线性。 |
-| `SdrVideo` | SDR 视频（BT.709 / BT.601 标称）。 |
+| `Unspecified` | Not specified. |
+| `Linear` | Linear. |
+| `SdrVideo` | SDR video (BT.709 / BT.601 nominal). |
 | `St2084` | ST2084（PQ，HDR10）。 |
-| `Hlg` | HLG（混合对数伽马）。 |
+| `Hlg` | HLG (mixed logarithmic gamma). |

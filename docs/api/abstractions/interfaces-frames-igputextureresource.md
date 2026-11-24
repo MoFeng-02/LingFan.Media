@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IGpuTextureResource.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IGpuTextureResource.cs)
 
-中立 GPU 纹理帧资源契约（跨层共享，零外部引用）。
+Neutral GPU texture frame resource contract (shared across layers, zero external references).
 
 ## Declaration
 
@@ -24,12 +24,12 @@ public interface IGpuTextureResource : IFrameResource
 
 ## Remarks
 
-由具体渲染器/后端实现（如 `LingFan.Media.Renderers.Vulkan.VulkanImageResource`），
-供 Avalonia / Outputs 等层以平台无关方式消费 GPU 纹理（例如 CPU 回读后送入 Skia WriteableBitmap 回退路径），
-而无需引用具体渲染器模块，严守依赖倒置。与 `IGpuDeviceContext` 同为 Abstractions 中立桥。
+Implemented by specific renderers/backends (e.g., `LingFan.Media.Renderers.Vulkan.VulkanImageResource`),
+allowing layers like Avalonia / Outputs to consume GPU textures in a platform-independent manner (for example, CPU readback and sending a Skia WriteableBitmap fallback path),
+Without referencing specific renderer modules, strictly adhering to dependency inversion. Along with `IGpuDeviceContext`, it is an Abstractions neutral bridge.
 
-**异步策略**：`ReadbackToCpu` 为同步 COM/原生调用——D3D11/GL 纹理回读
-无真实 I/O await。实现保持同步，不补 async（补即伪异步）。
+**Asynchronous Strategy**: `ReadbackToCpu` Synchronizes COM/native calls—D3D11/GL texture readback
+No real I/O await. Implements synchronization without async (padding means pseudo-asynchronous).
 
 ## Members
 
@@ -39,11 +39,11 @@ public interface IGpuTextureResource : IFrameResource
 IntPtr NativeTextureHandle { get; }
 ```
 
-原生 GPU 纹理句柄（如 ID3D11Texture2D* 的 COM 指针）。
-供渲染器直接 GPU 拷贝（零拷贝路径），无需 CPU 回读。
+Native GPU texture handles (such as the COM pointer for ID3D11Texture2D*).
+Allows renderers to copy directly to the GPU (zero-copy path), no CPU readback required.
 
-调用方负责确保使用期间资源不被释放（如渲染器持锁或帧引用计数）。
-句柄所有权归 `IFrameResource` 实现的 `Dispose` 管理。
+The caller is responsible for ensuring that resources are not released during use (such as renderer locks or frame reference counts).
+Handle ownership is managed by `IFrameResource` implemented `Dispose`.
 
 ### SubresourceIndex
 
@@ -51,8 +51,8 @@ IntPtr NativeTextureHandle { get; }
 int SubresourceIndex { get; }
 ```
 
-子资源索引（纹理数组切片索引，非数组时为 0）。
-DXVA 硬解输出纹理数组时，需用此索引通过 CopySubresourceRegion 拷贝正确的切片。
+Sub-resource index (texture array slice index, 0 if not array).
+When hard-decoding texture arrays with DXVA, this index must be used to copy the correct slices via CopySubresourceRegion.
 
 ### ReadbackToCpu
 
@@ -60,7 +60,7 @@ DXVA 硬解输出纹理数组时，需用此索引通过 CopySubresourceRegion �
 GpuTextureReadback ReadbackToCpu();
 ```
 
-将 GPU 纹理回读到 CPU，返回紧凑 BGRA32 像素数据（供 Avalonia Skia 回退路径直接写入 WriteableBitmap）。
-实现负责创建暂存纹理、拷贝、Map 读取，并按源格式转换为 BGRA32。
+GPU textures are read back to the CPU, returning compact BGRA32 pixel data (for Avalonia Skia to write directly to WriteableBitmap).
+Implementation responsible for creating staging textures, copying, Map reading, and converting them to BGRA32 in source format.
 
-**Returns**: CPU 回读结果（中立 `GpuTextureReadback`，由调用方 Dispose）。
+**Returns**: CPU readback results (neutral `GpuTextureReadback`, dispose by the caller).

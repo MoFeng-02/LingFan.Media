@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaStreamFactory.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaStreamFactory.cs)
 
-媒体流工厂接口。
+Media stream factory interface.
 
 ## Declaration
 
@@ -24,11 +24,11 @@ public interface IMediaStreamFactory
 
 ## Remarks
 
-Singleton 工厂。每次 Create() 返回新实例。
+Singleton Factory. Each time Create() returns a new instance.
 
-持有 IHttpClientFactory 引用（用于网络流连接池管理，非纯无状态）。
+Holds an IHttpClientFactory reference (for network stream connection pool management, not purely stateless).
 
-优先使用 `CreateAsync`（网络流场景不阻塞线程，支持 CT）。
+Prioritize using `CreateAsync` (network flow scenarios do not block threads, supports CT).
 
 ## Members
 
@@ -38,13 +38,13 @@ Singleton 工厂。每次 Create() 返回新实例。
 IMediaStream Create(IMediaSource source);
 ```
 
-根据媒体源类型创建对应的 IMediaStream 实例。
+Create the corresponding IMediaStream instance based on the media source type.
 
 **Parameters**
 
-- `source`: 媒体源。
+- `source`: Media source.
 
-**Returns**: 新创建的媒体流实例（网络流须先 `ConnectAsync` 再同步读取）。
+**Returns**: Newly created media stream instance (network streams must be read synchronously with `ConnectAsync` first).
 
 ### CreateAsync
 
@@ -52,11 +52,11 @@ IMediaStream Create(IMediaSource source);
 Task<IMediaStream> CreateAsync(IMediaSource source, CancellationToken ct = default);
 ```
 
-异步根据媒体源类型创建对应的 IMediaStream 实例。
+Asynchronously create the corresponding IMediaStream instance based on the media source type.
 
 **Parameters**
 
-- `source`: 媒体源。
-- `ct`: 取消令牌。
+- `source`: Media source.
+- `ct`: Cancel token.
 
-**Returns**: 新创建的媒体流实例。
+**Returns**: Newly created media stream instance.

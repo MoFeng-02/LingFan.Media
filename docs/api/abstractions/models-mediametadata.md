@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaMetadata.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/MediaMetadata.cs)
 
-媒体元数据。
+Media metadata.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class MediaMetadata
 public string? Title { get; init; }
 ```
 
-标题。
+Title.
 
 ### Artist
 
@@ -38,7 +38,7 @@ public string? Title { get; init; }
 public string? Artist { get; init; }
 ```
 
-艺术家。
+Artist.
 
 ### Album
 
@@ -46,7 +46,7 @@ public string? Artist { get; init; }
 public string? Album { get; init; }
 ```
 
-专辑。
+Album.
 
 ### Year
 
@@ -54,7 +54,7 @@ public string? Album { get; init; }
 public int? Year { get; init; }
 ```
 
-年份。
+Year.
 
 ### Genre
 
@@ -62,7 +62,7 @@ public int? Year { get; init; }
 public string? Genre { get; init; }
 ```
 
-类型/流派。
+Genre/genre.
 
 ### Duration
 
@@ -70,7 +70,7 @@ public string? Genre { get; init; }
 public TimeSpan Duration { get; init; }
 ```
 
-总时长。
+Total duration.
 
 ### ContainerFormat
 
@@ -78,7 +78,7 @@ public TimeSpan Duration { get; init; }
 public ContainerFormat ContainerFormat { get; init; }
 ```
 
-容器格式。
+Container format.
 
 ### ExtraFields
 
@@ -86,4 +86,4 @@ public ContainerFormat ContainerFormat { get; init; }
 public IReadOnlyDictionary<string, string> ExtraFields { get; init; } = System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty;
 ```
 
-自定义字段。
+Custom fields.

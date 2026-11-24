@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`VideoColorInfo.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/VideoColorInfo.cs)
 
-视频帧的色彩空间描述（由解码器从容器/输出格式透传，供渲染端选择正确的 YUV→RGB 转换）。
+Color space description of the video frame (propagated by the decoder from container/output format for rendering to select the correct YUV →RGB conversion).
 
 ## Declaration
 
@@ -24,10 +24,10 @@ public readonly record struct VideoColorInfo(ColorStandard Standard, ColorRange 
 
 ## Remarks
 
-`Standard` 与 `Range` 决定
-YUV→RGB 的亮度/色差矩阵与分量偏移；`Transfer` 标识传输特性。
-前两者均未指定（`IsSpecified` 为 `false`）时，
-渲染端回退 BT.601-Full（保持既有默认行为）。
+`Standard` and `Range` are decided
+YUV → RGB brightness/color difference matrix and component offset; `Transfer` Identify transmission characteristics.
+If neither of the first two is specified (`IsSpecified` is `false`),
+The renderer rolls back BT.601-Full (maintaining the default behavior).
 
 ## Members
 
@@ -37,4 +37,4 @@ YUV→RGB 的亮度/色差矩阵与分量偏移；`Transfer` 标识传输特性�
 public bool IsSpecified => Standard != ColorStandard.Unspecified || Range != ColorRange.Unspecified;
 ```
 
-是否指定了至少一项色彩参数——渲染端据此判断是否需按指定矩阵转换。
+Whether at least one color parameter is specified—the rendering side determines whether to convert according to the specified matrix.

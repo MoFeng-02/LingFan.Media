@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaTrack.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/MediaTrack.cs)
 
-媒体轨道信息。
+Media track information.
 
 ## Declaration
 
@@ -24,8 +24,8 @@ public sealed class MediaTrack
 
 ## Remarks
 
-Codec 字段拆为 `VideoCodec` / `AudioCodec` / `SubtitleCodec`
-三个独立可空属性，不用泛型。
+Codec field split into `VideoCodec` / `AudioCodec` / `SubtitleCodec`
+Three independent empty attributes, no generics needed.
 
 ## Members
 
@@ -35,7 +35,7 @@ Codec 字段拆为 `VideoCodec` / `AudioCodec` / `SubtitleCodec`
 public int Index { get; init; }
 ```
 
-轨道索引（在容器中的流索引）。
+Track index (stream index within the container).
 
 ### Type
 
@@ -43,7 +43,7 @@ public int Index { get; init; }
 public TrackType Type { get; init; }
 ```
 
-轨道类型。
+Track type.
 
 ### VideoCodec
 
@@ -51,7 +51,7 @@ public TrackType Type { get; init; }
 public VideoCodec? VideoCodec { get; init; }
 ```
 
-视频编解码器（仅 Type=Video 时有效，否则 null）。
+Video codec (valid only when Type=Video, otherwise null).
 
 ### AudioCodec
 
@@ -59,7 +59,7 @@ public VideoCodec? VideoCodec { get; init; }
 public AudioCodec? AudioCodec { get; init; }
 ```
 
-音频编解码器（仅 Type=Audio 时有效，否则 null）。
+Audio codec (valid only when Type=Audio, otherwise null).
 
 ### SubtitleCodec
 
@@ -67,7 +67,7 @@ public AudioCodec? AudioCodec { get; init; }
 public SubtitleCodec? SubtitleCodec { get; init; }
 ```
 
-字幕编解码器（仅 Type=Subtitle 时有效，否则 null）。
+Subtitle codec (valid only when Type=Subtitle, otherwise null).
 
 ### Language
 
@@ -75,7 +75,7 @@ public SubtitleCodec? SubtitleCodec { get; init; }
 public string? Language { get; init; }
 ```
 
-语言标签（如 "en"、"zh"，可能为 null）。
+Language tags (such as "en", "zh", which may be null).
 
 ### Title
 
@@ -83,7 +83,7 @@ public string? Language { get; init; }
 public string? Title { get; init; }
 ```
 
-轨道标题（可能为 null）。
+Track title (may be null).
 
 ### IsDefault
 
@@ -91,7 +91,7 @@ public string? Title { get; init; }
 public bool IsDefault { get; init; }
 ```
 
-是否默认轨道。
+Whether to default tracks.
 
 ### BitRate
 
@@ -99,7 +99,7 @@ public bool IsDefault { get; init; }
 public long BitRate { get; init; }
 ```
 
-比特率（bps）。
+Bit rate (bps).
 
 ### VideoInfo
 
@@ -107,7 +107,7 @@ public long BitRate { get; init; }
 public VideoTrackInfo? VideoInfo { get; init; }
 ```
 
-视频详情（仅视频轨道有效，否则 null）。
+Video details (only valid for video tracks, otherwise null).
 
 ### AudioInfo
 
@@ -115,4 +115,4 @@ public VideoTrackInfo? VideoInfo { get; init; }
 public AudioTrackInfo? AudioInfo { get; init; }
 ```
 
-音频详情（仅音频轨道有效，否则 null）。
+Audio details (only audio tracks are valid, otherwise null).

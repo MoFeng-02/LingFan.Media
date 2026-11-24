@@ -12,9 +12,9 @@ lang: "en-US"
 
 Source: [`IHeadlessAudioConsumer.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Consumers/IHeadlessAudioConsumer.cs)
 
-无头音频消费契约（后端数据处理）。`AudioFrame` 经此交给下游计算，不播放到设备。
-简单场景可直接用 `Action{T}` 订阅 `AudioDataAvailable`，无需本接口；
-本接口用于需要结构化生命周期 / 批量汇聚的场景（配合 `LingFan.Media.Consumers.ProcessingAudioSink`）。
+Headless audio consumption contract (backend data processing). `AudioFrame` After this, the data is handed over to downstream for calculation and not played to the device.
+Simple scenarios can be directly used with `Action{T}` to subscribe to `AudioDataAvailable`, no need for this interface;
+This interface is used for scenarios requiring structured lifecycle/batch aggregation (in conjunction with `LingFan.Media.Consumers.ProcessingAudioSink`).
 
 ## Declaration
 
@@ -26,14 +26,14 @@ public interface IHeadlessAudioConsumer : IDisposable, IAsyncDisposable
 
 ## Remarks
 
-零外部引用：仅依赖契约层中立类型（`AudioFrame`）。
+Zero external references: relies only on the contract layer neutral type (`AudioFrame`).
 
-只读借用模型：实现方在 `Consume` 中仅可读、可同步拷贝所需数据，
-**不得 Dispose、不得跨线程持有传入的 `AudioFrame`**——帧所有权归管线，回调返回后即释放。
+Read-only borrowing model: The implementer can only read and synchronously copy the required data in `Consume`,
+**No Dispose, no cross-thread holding of incoming `AudioFrame`** — frame ownership belongs to the pipeline and is released upon the callback.
 
-对称生命周期：实现 `IDisposable` + `IAsyncDisposable`。
+Symmetric lifecycle: implement `IDisposable` + `IAsyncDisposable`.
 
-AOT 兼容：纯接口契约，无反射、无 P/Invoke。
+AOT compatibility: pure interface contract, no reflection, no P/Invoke.
 
 ## Members
 
@@ -43,9 +43,9 @@ AOT 兼容：纯接口契约，无反射、无 P/Invoke。
 void Consume(AudioFrame frame);
 ```
 
-消费一音频帧。音频管线在调用后释放该帧（只读借用）。
-若需跨调用持有数据，须在方法内同步拷贝（PCM 字节 → 自有 buffer）。
+Consume one audio frame. The audio pipeline releases the frame after the call (read-only borrowing).
+If data is held across calls, synchronous copies must be made within the method (PCM bytes → own buffer).
 
 **Parameters**
 
-- `frame`: 当前音频帧（只读借用，回调返回即失效）。
+- `frame`: Current audio frame (read-only borrowed, invalid upon callback return).

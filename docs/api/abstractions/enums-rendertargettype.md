@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`RenderTargetType.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/RenderTargetType.cs)
 
-渲染目标类型。
+Render target type.
 
 ## Declaration
 
@@ -26,7 +26,7 @@ public enum RenderTargetType : int
 
 | Value | Description |
 | --- | --- |
-| `Window` | 窗口表面（SwapChain 绑定到窗口）。 |
-| `Texture` | 纹理目标（渲染到 GPU 纹理，游戏引擎可用）。 |
-| `Offscreen` | 离屏目标（无窗口渲染）。 |
-| `Custom` | 自定义目标。 |
+| `Window` | Window surface (SwapChain bound to window). |
+| `Texture` | Texture targets (rendered to GPU textures, available to game engines). |
+| `Offscreen` | Off-screen target (no window rendering). |
+| `Custom` | Custom targets. |

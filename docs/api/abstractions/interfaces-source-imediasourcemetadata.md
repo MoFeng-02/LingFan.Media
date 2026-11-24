@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaSourceMetadata.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaSourceMetadata.cs)
 
-媒体源元数据接口。
+Media source metadata interface.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public interface IMediaSourceMetadata
 string? Name { get; }
 ```
 
-名称（可能为 null）。
+Name (may be null).
 
 ### ContentType
 
@@ -38,7 +38,7 @@ string? Name { get; }
 string? ContentType { get; }
 ```
 
-MIME 类型（可能为 null）。
+MIME type (may be null).
 
 ### IsLive
 
@@ -46,7 +46,7 @@ MIME 类型（可能为 null）。
 bool IsLive { get; }
 ```
 
-是否直播流。
+Whether it is a live stream.
 
 ### ExtraFields
 
@@ -54,4 +54,4 @@ bool IsLive { get; }
 IReadOnlyDictionary<string, string> ExtraFields { get; }
 ```
 
-自定义字段。
+Custom fields.

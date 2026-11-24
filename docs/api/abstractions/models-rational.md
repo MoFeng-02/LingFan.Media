@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`Rational.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Rational.cs)
 
-有理数（分子/分母），用于表示精确的帧率、宽高比等。
+Rational numbers (numerator/denominator), used to represent precise frame rates, aspect ratios, etc.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public readonly struct Rational : IEquatable<Rational>
 public int Numerator { get; }
 ```
 
-分子。
+Molecule.
 
 ### Denominator
 
@@ -38,7 +38,7 @@ public int Numerator { get; }
 public int Denominator { get; }
 ```
 
-分母。
+Denominator.
 
 ### Constructor
 
@@ -46,12 +46,12 @@ public int Denominator { get; }
 public Rational(int numerator, int denominator);
 ```
 
-初始化 `Rational` 的新实例。
+Initialize a new instance of `Rational`.
 
 **Parameters**
 
-- `numerator`: 分子。
-- `denominator`: 分母。
+- `numerator`: Molecule.
+- `denominator`: Denominator.
 
 ### ToString
 
@@ -59,7 +59,7 @@ public Rational(int numerator, int denominator);
 public override string ToString() => $"{Numerator}/{Denominator}";
 ```
 
-返回 "num/den" 格式的字符串。
+Returns a string in the format "num/den".
 
 ### ToDouble
 
@@ -67,8 +67,8 @@ public override string ToString() => $"{Numerator}/{Denominator}";
 public double ToDouble() => Denominator == 0 ? 0.0 : (double)Numerator / Denominator;
 ```
 
-转换为 double（分母为零时返回 0，避免除零）。用于 ffmpeg 时间戳换算
-（`pts * av_q2d(time_base)` 与反向 `seconds / av_q2d(time_base)`）。
+Convert to double (returns 0 when the denominator is zero, avoiding division by zero). Used for ffmpeg timestamp conversion
+(`pts * av_q2d(time_base)` and reverse `seconds / av_q2d(time_base)`).
 
 ### Equals
 
@@ -101,7 +101,7 @@ Inherits documentation from its base contract.
 public static bool operator ==(Rational left, Rational right) => left.Equals(right);
 ```
 
-相等比较运算符。
+Equal comparison operator.
 
 ### Equals
 
@@ -109,4 +109,4 @@ public static bool operator ==(Rational left, Rational right) => left.Equals(rig
 public static bool operator !=(Rational left, Rational right) => !left.Equals(right);
 ```
 
-不等比较运算符。
+Equal comparison operator.

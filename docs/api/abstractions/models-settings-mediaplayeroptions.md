@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaPlayerOptions.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/MediaPlayerOptions.cs)
 
-播放器默认配置选项（契约层共享配置模型）。
+Player default configuration options (contract layer shared configuration model).
 
 ## Declaration
 
@@ -24,11 +24,11 @@ public sealed class MediaPlayerOptions
 
 ## Remarks
 
-由 Core 的 MediaPlayerFactory 读取，用于设置新创建播放器的默认值；
-由宿主 DI 经 `IOptions<MediaPlayerOptions>` 绑定（Extensions 层 `AddLingFanMedia` 中注册）。
+Read by the Core's MediaPlayerFactory, used to set the default value for newly created players;
+Bound by host DI via `IOptions<MediaPlayerOptions>` (registered in Extensions layer `AddLingFanMedia`).
 
-置于 Abstractions 契约层：该配置同时被 Extensions（配置侧）与 Core（消费侧）使用，属多层共享的中立数据模型，
-符合契约层“纯数据模型、零外部引用”准则（与 `AudioSettings` / `VideoSettings` 同列）。
+Placed at the Abstractions contract layer: This configuration is used by both Extensions (configuration side) and Core (consumption side), forming a multi-layer shared neutral data model,
+Complies with the contract layer "pure data model, zero external references" criterion (co-listed with `AudioSettings` / `VideoSettings`).
 
 ## Members
 
@@ -38,7 +38,7 @@ public sealed class MediaPlayerOptions
 public float DefaultVolume { get; set; } = 1.0f;
 ```
 
-默认音量 (0.0~1.0)。
+Default volume (0.0~1.0).
 
 ### DefaultMuted
 
@@ -46,7 +46,7 @@ public float DefaultVolume { get; set; } = 1.0f;
 public bool DefaultMuted { get; set; }
 ```
 
-默认是否静音。
+Default is mute.
 
 ### DefaultPlaybackRate
 
@@ -54,7 +54,7 @@ public bool DefaultMuted { get; set; }
 public float DefaultPlaybackRate { get; set; } = 1.0f;
 ```
 
-默认播放速率。
+Default playback rate.
 
 ### EnableHardwareAcceleration
 
@@ -62,10 +62,10 @@ public float DefaultPlaybackRate { get; set; } = 1.0f;
 public bool EnableHardwareAcceleration { get; set; } = true;
 ```
 
-是否启用硬件加速解码。
+Whether hardware accelerated decoding is enabled.
 
-用户显式设为 false 时本意必须真实生效（即便内容超过软件解码阈值也不强制硬解）；
-策略仅据此判断是否"尝试"硬解并提供告警。详见 `DecodePreferencePolicy`。
+When the user explicitly sets it to false, the original intent must be genuinely effective (even if the content exceeds the software decoding threshold, hard decryption is not forced);
+The policy only decides whether to "attempt" hard decryption and provides alerts based on this. See `DecodePreferencePolicy` for details.
 
 ### SoftwareDecodeComplexityThreshold
 
@@ -73,10 +73,10 @@ public bool EnableHardwareAcceleration { get; set; } = true;
 public long? SoftwareDecodeComplexityThreshold { get; set; }
 ```
 
-软件解码能力阈值（解码成本分）。内容超过此值将"优先硬件加速"且实际未走硬解时告警。
-null=使用 `DefaultSoftwareDecodeThreshold`（≈2K60 H265）。
+Software decoding capability threshold (decoding cost score). Content exceeding this value will trigger an alarm when "hardware acceleration is prioritized" and hardware decoding is not actually performed.
+null = uses `DefaultSoftwareDecodeThreshold`(≈2K60 H265).
 
-供无头/受限环境按需调高或调低。调低=更早倾向硬解；调高=更宽容忍软件解码。
+Adjustable up or down as needed for headless/confined environments. Lowering = earlier tendency to hard solve; Increase = more tolerant of software decoding.
 
 ### VideoFrameQueueCapacity
 
@@ -84,7 +84,7 @@ null=使用 `DefaultSoftwareDecodeThreshold`（≈2K60 H265）。
 public int VideoFrameQueueCapacity { get; set; } = 30;
 ```
 
-视频帧队列容量。
+Video frame queue capacity.
 
 ### AudioSampleQueueCapacity
 
@@ -92,7 +92,7 @@ public int VideoFrameQueueCapacity { get; set; } = 30;
 public int AudioSampleQueueCapacity { get; set; } = 60;
 ```
 
-音频帧队列容量。
+Audio frame queue capacity.
 
 ### FromSeconds
 
@@ -100,7 +100,7 @@ public int AudioSampleQueueCapacity { get; set; } = 60;
 public TimeSpan LocalBufferTarget { get; set; } = TimeSpan.FromSeconds(5);
 ```
 
-缓冲目标时长（本地文件）。
+Buffer target duration (local file).
 
 ### FromSeconds
 
@@ -108,7 +108,7 @@ public TimeSpan LocalBufferTarget { get; set; } = TimeSpan.FromSeconds(5);
 public TimeSpan NetworkBufferTarget { get; set; } = TimeSpan.FromSeconds(30);
 ```
 
-缓冲目标时长（网络流）。
+Buffer target duration (network flow).
 
 ### AudioOutputSampleRate
 
@@ -116,10 +116,10 @@ public TimeSpan NetworkBufferTarget { get; set; } = TimeSpan.FromSeconds(30);
 public int? AudioOutputSampleRate { get; set; }
 ```
 
-音频输出目标采样率（可选覆盖）。null=使用源媒体采样率。
+Audio output target sample rate (optional override). null = sampling rate using source media.
 
-经 `AudioSettings` 透传至 FFmpegAudioDecoder 重采样。若设置，
-解码器输出与 WASAPI 设备均按此率工作，避免节奏/音高错乱。
+Resampled via `AudioSettings` to FFmpegAudioDecoder. If one were to set it up,
+Decoder output and WASAPI devices operate at this rate to avoid rhythm/pitch confusion.
 
 ### AudioOutputChannels
 
@@ -127,7 +127,7 @@ public int? AudioOutputSampleRate { get; set; }
 public int? AudioOutputChannels { get; set; }
 ```
 
-音频输出目标声道数（可选覆盖）。null=使用源媒体声道数。
+Number of target channels for audio output (optional coverage). null = Number of channels using source media.
 
 ### AudioOutputSampleFormat
 
@@ -135,4 +135,4 @@ public int? AudioOutputChannels { get; set; }
 public SampleFormat? AudioOutputSampleFormat { get; set; }
 ```
 
-音频输出目标采样格式（可选覆盖）。null=使用源媒体采样格式。
+Audio output target sampling format (optional override). null = Use source media sampling format.

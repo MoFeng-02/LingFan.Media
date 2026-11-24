@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`SubtitleCodec.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitleCodec.cs)
 
-字幕编解码器类型。
+Subtitle codec type.
 
 ## Declaration
 
@@ -28,7 +28,7 @@ public enum SubtitleCodec : int
 | --- | --- |
 | `SRT` | SubRip（.srt）。 |
 | `ASS` | Advanced SubStation Alpha（.ass）。 |
-| `PGS` | PGS 图形字幕（位图，当前未实现）。 |
-| `VobSub` | DVD VobSub 图形字幕（位图，当前未实现）。 |
+| `PGS` | PGS graphic subtitles (bitmaps, currently not implemented). |
+| `VobSub` | DVD VobSub graphic subtitles (bitmaps, currently not implemented). |
 | `WebVTT` | WebVTT（.vtt）。 |
-| `Unknown` | 未知字幕编解码器。 |
+| `Unknown` | Unknown subtitle codec. |

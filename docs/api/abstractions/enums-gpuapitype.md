@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`GPUApiType.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/GPUApiType.cs)
 
-GPU API 类型。
+GPU API type.
 
 ## Declaration
 
@@ -29,4 +29,4 @@ public enum GPUApiType : int
 | `D3D11` | Direct3D 11（Windows）。 |
 | `Vulkan` | Vulkan（Windows/Linux/Android）。 |
 | `Metal` | Metal（macOS/iOS）。 |
-| `OpenGL` | OpenGL（桌面兼容备用）。 |
+| `OpenGL` | OpenGL (desktop compatible standby). |

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IAudioDecoder.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioDecoder.cs)
 
-音频解码器接口。
+Audio decoder interface.
 
 ## Declaration
 
@@ -24,7 +24,7 @@ public interface IAudioDecoder : IMediaComponent
 
 ## Remarks
 
-单线程使用（管线线程），非线程安全。热路径方法无 CancellationToken。
+Single-threaded use (pipeline threads), non-thread safe. The hot path method does not have a CancellationToken.
 
 ## Members
 
@@ -34,12 +34,12 @@ public interface IAudioDecoder : IMediaComponent
 void Initialize(AudioCodec codec, AudioSettings settings);
 ```
 
-参数化配置：查找编解码器并打开。
+Parametric configuration: Find and open codecs.
 
 **Parameters**
 
-- `codec`: 音频编解码器。
-- `settings`: 音频配置（含流时间基与可选的重采样目标格式）。
+- `codec`: Audio codec.
+- `settings`: Audio configuration (including stream time base and optional resampling target format).
 
 ### DecodeAsync
 
@@ -47,15 +47,15 @@ void Initialize(AudioCodec codec, AudioSettings settings);
 ValueTask<AudioFrame?> DecodeAsync(MediaPacket packet);
 ```
 
-解码一个数据包。无 CancellationToken（热路径）。
+Decode a data packet. No CancellationToken (hot path).
 
 **Parameters**
 
-- `packet`: 待解码的数据包。
+- `packet`: Packets to be decoded.
 
-**Returns**: 解码出的音频帧；返回 `null` 表示**本次未产出音频帧**
-（需要更多数据、流已到尾，或该包解码失败可跳过），**不代表**解码器失效——
-调用方不得据此判定整体失败或丢弃解码器（与 `DecodeAsync` 的 null 语义一致）。
+**Returns**: Decoded audio frames; Return `null` indicates **no audio frames produced this time**
+(If more data is needed, the stream is already finished, or the packet decoding fails, it can be skipped), ** does not mean the decoder is invalid—
+The caller must not use this to determine the entire failure or discard the decoder (consistent with the null semantics of `DecodeAsync`).
 
 ### FlushAsync
 
@@ -63,9 +63,9 @@ ValueTask<AudioFrame?> DecodeAsync(MediaPacket packet);
 ValueTask<AudioFrame?> FlushAsync();
 ```
 
-刷新内部缓冲，取出剩余帧。
+Refresh the internal buffer and remove the remaining frames.
 
-**Returns**: 缓冲中剩余的一个音频帧；返回 `null` 表示缓冲已取尽。
+**Returns**: One remaining audio frame in the buffer; Returning `null` indicates that the buffer has been exhausted.
 
 ### Reset
 
@@ -73,7 +73,7 @@ ValueTask<AudioFrame?> FlushAsync();
 void Reset();
 ```
 
-重置解码器状态（Seek 后调用）。
+Reset decoder state (called after Seek).
 
 ### Codec
 
@@ -81,7 +81,7 @@ void Reset();
 AudioCodec Codec { get; }
 ```
 
-当前编解码器。
+Current codec.
 
 ### OutputSampleRate
 
@@ -89,20 +89,20 @@ AudioCodec Codec { get; }
 int OutputSampleRate { get; }
 ```
 
-解码器实际输出采样率（源采样率，或重采样目标采样率）。
+Decoder's actual output sampling rate (source sampling rate, or resampled target sampling rate).
 
-由 `Initialize` 建立，MediaPlayer 据此初始化音频输出设备（WASAPI 以固定率开设备）。
+Created by `Initialize`, MediaPlayer initializes the audio output device accordingly (WASAPI opens the device at a fixed rate).
 
-**时序**：`Initialize` 返回后本值**允许为 0**，表示此刻尚无法从码流判定
-（如 AAC/MP3 需先读到首个数据包才能确定采样率）。0 是合法状态，不是错误码、不代表解码失败，
-也不得据此抛异常。
+**Timing**: `Initialize` After returning, **this value **is allowed to be 0**, indicating that the stream cannot be determined at this moment
+(For example, AAC/MP3 requires reading the first packet before determining the sampling rate). 0 is a valid state, not an error code, and does not mean decoding failed.
+Nor should one use this as a basis to make any abnormalities.
 
-**实现义务**：必须在**首个音频帧产出前**（即首次 `DecodeAsync` 返回
-非 null 帧之前）把本值回填为正。回填仍未发生就交出音频帧，属于实现违约。
+**Fulfillment obligation**: Must be before **first audio frame output** (i.e., first `DecodeAsync` returned).
+Before non-null frames, the original value is backfilled to positive. If audio frames are handed over before backfilling occurs, it constitutes a breach of contract.
 
-**消费方义务**：在 `Initialize` 返回后读到 0 时**必须**自行延迟初始化
-输出设备，待首个音频帧到达、本值确定后再初始化——把 0 直接交给输出设备会触发
-`ArgumentOutOfRangeException`（输出设备必须以合法固定率打开）。
+**Consumer obligation**: When `Initialize` returns and reads 0, **must **delay initialization itself**
+Output device, initialize only after the first audio frame arrives and the value is confirmed—directly passing 0 to the output device will trigger it
+`ArgumentOutOfRangeException` (output devices must be turned on at a legal fixed rate).
 
 ### OutputChannels
 
@@ -110,8 +110,8 @@ int OutputSampleRate { get; }
 int OutputChannels { get; }
 ```
 
-解码器实际输出声道数（源声道数，或重采样目标声道数）。
+The actual number of channels output by the decoder (source channels, or resampling target channels).
 
-时序与 `OutputSampleRate` 完全相同：`Initialize` 返回后允许为 0
-（此刻尚不可判定，0 是合法状态），必须在首个音频帧产出前回填为正；消费方读到 0 时必须
-自行延迟初始化输出设备，不得据此判定失败。
+The timing is exactly the same as `OutputSampleRate`: `Initialize` returns and allows 0
+(At this point, it cannot be determined; 0 is a valid state), and the backfill must be positive before the first audio frame is generated; The consumer must read 0
+Delaying the initialization of the output device on its own cannot be considered a failure based on this.

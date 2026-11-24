@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaErrorCode.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/MediaErrorCode.cs)
 
-媒体错误码。
+Media error code.
 
 ## Declaration
 
@@ -26,17 +26,17 @@ public enum MediaErrorCode : int
 
 | Value | Description |
 | --- | --- |
-| `None` | 无错误。 |
-| `SourceNotFound` | 媒体源未找到。 |
-| `SourceOpenFailed` | 媒体源打开失败。 |
-| `FormatNotSupported` | 容器格式不支持。 |
-| `CodecNotSupported` | 编解码器不支持。 |
-| `DecoderError` | 解码器错误。 |
-| `RendererError` | 渲染器错误。 |
-| `AudioOutputError` | 音频输出错误。 |
-| `NetworkError` | 网络错误。 |
-| `BufferUnderrun` | 缓冲不足。 |
-| `SeekFailed` | 定位失败。 |
-| `OutOfMemory` | 内存不足。 |
-| `GPUError` | GPU 错误。 |
-| `Unknown` | 未知错误。 |
+| `None` | No errors. |
+| `SourceNotFound` | Media source not found. |
+| `SourceOpenFailed` | Media source failed to open. |
+| `FormatNotSupported` | Container format is not supported. |
+| `CodecNotSupported` | Codec not supported. |
+| `DecoderError` | Decoder error. |
+| `RendererError` | Renderer error. |
+| `AudioOutputError` | Audio output error. |
+| `NetworkError` | Network error. |
+| `BufferUnderrun` | Insufficient buffering. |
+| `SeekFailed` | Positioning failed. |
+| `OutOfMemory` | Insufficient memory. |
+| `GPUError` | GPU error. |
+| `Unknown` | Unknown error. |

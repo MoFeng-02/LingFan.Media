@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IDisposableFrame.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IDisposableFrame.cs)
 
-帧释放接口。VideoFrame / AudioFrame 实现此接口。
+Frame release interface. VideoFrame / AudioFrame implements this interface.
 
 ## Declaration
 
@@ -24,10 +24,10 @@ public interface IDisposableFrame : IDisposable
 
 ## Remarks
 
-帧所有权转移语义：Decoder → FrameQueue → Renderer，任何时刻只有一个组件持有所有权。
-丢帧必须 Dispose，否则 GPU 资源泄漏。
-必须继承 `IDisposable`：FramePool 满池分支经 `is IDisposable` 判定后 Dispose 帧
-（不继承时判定恒 false、帧静默泄漏——GPU/原生内存随播放持续累积直至耗尽）。
+Frame ownership transfer semantics: Decoder → FrameQueue → Renderer, at any given time, only one component holds ownership.
+Frame loss must be Disposed, otherwise GPU resources will leak.
+Must inherit `IDisposable`: FramePool full branch after `is IDisposable` determines Dispose frame
+(When not inherited, it is always false and frame silent leakage—GPU/native memory continues to accumulate with playback until exhausted).
 
 ## Members
 
@@ -37,4 +37,4 @@ public interface IDisposableFrame : IDisposable
 bool IsDisposed { get; }
 ```
 
-是否已释放。
+Whether it has been released.

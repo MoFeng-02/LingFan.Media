@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`VideoCodec.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/VideoCodec.cs)
 
-视频编解码器类型。
+Video codec type.
 
 ## Declaration
 
@@ -32,4 +32,4 @@ public enum VideoCodec : int
 | `VP9` | VP9。 |
 | `MPEG2` | MPEG-2。 |
 | `MPEG4` | MPEG-4。 |
-| `Unknown` | 未知编解码器。 |
+| `Unknown` | Unknown codec. |

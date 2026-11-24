@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IVideoRenderer.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IVideoRenderer.cs)
 
-视频渲染器接口。
+Video renderer interface.
 
 ## Declaration
 
@@ -24,12 +24,12 @@ public interface IVideoRenderer : IMediaComponent
 
 ## Remarks
 
-线程模型：
+Thread model:
 
-- Attach / Detach 在 UI 线程调用
-- Present / Clear 在渲染线程调用
+- Attach / Detach is called in the UI thread
+- Present / Clear is called in the rendering thread
 
-IFrameResource 非线程安全，需在单线程内使用。
+IFrameResource is non-thread-safe and must be used within a single thread.
 
 ## Members
 
@@ -39,11 +39,11 @@ IFrameResource 非线程安全，需在单线程内使用。
 void Attach(IRenderTarget target);
 ```
 
-绑定渲染目标。UI 线程调用。
+Bind render target. UI thread call.
 
 **Parameters**
 
-- `target`: 渲染目标。
+- `target`: Render the target.
 
 ### Detach
 
@@ -51,7 +51,7 @@ void Attach(IRenderTarget target);
 void Detach();
 ```
 
-解绑渲染目标。UI 线程调用。
+Unbound render target. UI thread call.
 
 ### Present
 
@@ -59,13 +59,13 @@ void Detach();
 void Present(VideoFrame frame);
 ```
 
-呈现一帧。渲染线程调用。
-Present 为同步消费——Renderer 在返回前完成 GPU 资源上传/拷贝，
-调用方即可安全释放帧；若某 Renderer 需异步保留帧，应由该 Renderer 自行接管所有权。
+Present a frame. Render thread call.
+Present means synchronous consumption—the renderer completes the upload/copy of GPU resources before returning,
+The caller can safely release the frame; If a Renderer needs to retain frames asynchronously, that Renderer should take ownership of the frames themselves.
 
 **Parameters**
 
-- `frame`: 待呈现的视频帧；返回后调用方即可释放（除非该 Renderer 文档声明接管所有权）。
+- `frame`: Video frames to be presented; After returning, the caller can release it (unless the Renderer documentation claims ownership).
 
 ### Clear
 
@@ -73,7 +73,7 @@ Present 为同步消费——Renderer 在返回前完成 GPU 资源上传/拷贝
 void Clear();
 ```
 
-清除当前画面。渲染线程调用。
+Clear the current screen. Render thread call.
 
 ### PresentationLatency
 
@@ -81,11 +81,11 @@ void Clear();
 TimeSpan PresentationLatency { get; }
 ```
 
-端到端「调用 `Present` → 画面真正可见」的延迟（即 Present 到像素上屏的真实耗时）。
+End-to-end delay in "calling `Present` → the actual visible screen (i.e., the actual time taken to get to the pixel on the screen).
 
-视频同步据此决定**提前多少调用 Present**，使画面恰好在音频到达该帧 PTS 时可见 ——
-这是音画对齐的真正物理依据，绝非任意同步容差。
+Video synchronization determines how early to call Present** so that the image is visible just when the audio arrives at the frame PTS —
+This is the true physical basis for audio-video alignment, not arbitrary synchronization tolerance.
 
-有头 GPU 路径（D3D11/Vulkan 等，vsync 呈现）应返回显示器**刷新周期**
-（含 DWM/合成器缓冲，约 1~2 个刷新周期）；无头 / 测试桩 / 纯计算 sink 无真实上屏延迟，返回
+Headed GPU paths (D3D11/Vulkan, etc., vsync rendering) should return to the monitor **refresh cycle**
+(Includes DWM/compositor buffer, approximately 1~2 refresh cycles); Headless / Test Stakes / Pure Computation Sink No real upload delay, return
 `Zero`。

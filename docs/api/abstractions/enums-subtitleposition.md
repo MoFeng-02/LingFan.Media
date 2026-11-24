@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`SubtitlePosition.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/SubtitlePosition.cs)
 
-字幕显示位置。
+Subtitle display position.
 
 ## Declaration
 
@@ -26,6 +26,6 @@ public enum SubtitlePosition : int
 
 | Value | Description |
 | --- | --- |
-| `Bottom` | 底部（默认）。 |
-| `Top` | 顶部。 |
-| `Center` | 居中。 |
+| `Bottom` | Bottom (default). |
+| `Top` | Top. |
+| `Center` | Centered. |

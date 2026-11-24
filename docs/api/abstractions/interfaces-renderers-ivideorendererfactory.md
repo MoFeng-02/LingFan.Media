@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IVideoRendererFactory.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IVideoRendererFactory.cs)
 
-视频渲染器工厂接口。
+Video renderer factory interface.
 
 ## Declaration
 
@@ -24,9 +24,9 @@ public interface IVideoRendererFactory
 
 ## Remarks
 
-Singleton 工厂。GPU 设备上下文（IGpuDeviceContext）由工厂持有
+Singleton Factory. The GPU device context (IGpuDeviceContext) is owned by the factory
 
-（Singleton 共享 GPU Device），但 SwapChain 在 Create() 中独立创建。
+(Singleton shares GPU Devices), but SwapChain is created independently in Create().
 
 ## Members
 
@@ -36,6 +36,6 @@ Singleton 工厂。GPU 设备上下文（IGpuDeviceContext）由工厂持有
 IVideoRenderer Create();
 ```
 
-创建新的 IVideoRenderer 实例（共享 GPU Device，独立 SwapChain）。
+Create a new IVideoRenderer instance (sharing GPU Device, independent SwapChain).
 
-**Returns**: 新创建的视频渲染器实例（未绑定渲染目标，须调用 `Attach`）。
+**Returns**: Newly created video renderer instance (without a bound render target, must call `Attach`).

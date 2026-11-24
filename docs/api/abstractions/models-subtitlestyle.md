@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`SubtitleStyle.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/SubtitleStyle.cs)
 
-字幕样式配置。
+Subtitle style configuration.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class SubtitleStyle
 public string? FontFamily { get; init; }
 ```
 
-字体族（可能为 null，使用默认）。
+Font family (may be null, use default).
 
 ### FontSize
 
@@ -38,7 +38,7 @@ public string? FontFamily { get; init; }
 public float? FontSize { get; init; }
 ```
 
-字号（可能为 null，使用默认）。
+Font size (may be null, use default).
 
 ### Color
 
@@ -46,7 +46,7 @@ public float? FontSize { get; init; }
 public string? Color { get; init; }
 ```
 
-前景色（如 "#FFFFFFFF"）。
+foreground color (e.g., "#FFFFFFFF").
 
 ### BackgroundColor
 
@@ -54,7 +54,7 @@ public string? Color { get; init; }
 public string? BackgroundColor { get; init; }
 ```
 
-背景色（可能为 null）。
+Background color (may be null).
 
 ### Position
 
@@ -62,7 +62,7 @@ public string? BackgroundColor { get; init; }
 public SubtitlePosition Position { get; init; } = SubtitlePosition.Bottom;
 ```
 
-字幕位置。
+Subtitle position.
 
 ### Alignment
 
@@ -70,4 +70,4 @@ public SubtitlePosition Position { get; init; } = SubtitlePosition.Bottom;
 public SubtitleAlignment Alignment { get; init; } = SubtitleAlignment.Center;
 ```
 
-字幕对齐方式。
+Subtitle alignment.

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`VideoTrackInfo.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Tracks/VideoTrackInfo.cs)
 
-视频轨道详情信息。
+Video track details.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class VideoTrackInfo
 public int Width { get; init; }
 ```
 
-视频宽度（像素）。
+Video width (pixels).
 
 ### Height
 
@@ -38,7 +38,7 @@ public int Width { get; init; }
 public int Height { get; init; }
 ```
 
-视频高度（像素）。
+Video height (pixels).
 
 ### FrameRate
 
@@ -46,7 +46,7 @@ public int Height { get; init; }
 public float FrameRate { get; init; }
 ```
 
-帧率（FPS）。
+Frame rate (FPS).
 
 ### PixelFormat
 
@@ -54,7 +54,7 @@ public float FrameRate { get; init; }
 public PixelFormat PixelFormat { get; init; }
 ```
 
-像素格式。
+Pixel format.
 
 ### ColorSpace
 
@@ -62,7 +62,7 @@ public PixelFormat PixelFormat { get; init; }
 public string? ColorSpace { get; init; }
 ```
 
-色彩空间（可能为 null）。
+Color space (may be null).
 
 ### Sar
 
@@ -70,7 +70,7 @@ public string? ColorSpace { get; init; }
 public Rational? Sar { get; init; }
 ```
 
-采样宽高比（可能为 null）。
+Sample aspect ratio (may be null).
 
 ### Duration
 
@@ -78,7 +78,7 @@ public Rational? Sar { get; init; }
 public TimeSpan Duration { get; init; }
 ```
 
-轨道时长。
+Orbital duration.
 
 ### CodecConfiguration
 
@@ -86,9 +86,9 @@ public TimeSpan Duration { get; init; }
 public ReadOnlyMemory<byte> CodecConfiguration { get; set; }
 ```
 
-编解码器私有配置（H264/H265 的 SPS+PPS / avcC / hvcC）。由解封装器从轨道媒体类型提取，
-透传给解码器（MF 后端经 `MF_MT_MPEG_SEQUENCE_HEADER`）。契约层“只增不改”演进，零外部引用。
-用可读写属性（非 init）：解封装器在轨道构建后于 ParseTracks 内回填。
+Codec private configuration (SPS+PPS / avcC / hvcC on H264/H265). extracted from track media type by the unwrapper,
+Transmitted to the decoder (MF backend via `MF_MT_MPEG_SEQUENCE_HEADER`). The contract layer evolves with a "only increase, no changes" approach, zero external references.
+Using readable and writable properties (not init): The unwrapper backfills ParseTracks after track construction.
 
 ### TimeBase
 
@@ -96,6 +96,6 @@ public ReadOnlyMemory<byte> CodecConfiguration { get; set; }
 public Rational TimeBase { get; set; }
 ```
 
-流时间基（`AVStream.time_base`）。ffmpeg 解码帧的 pts/dts 以此为单位，须透传给解码器
-写入 `AVCodecContext.pkt_timebase` 才能正确换算时间戳。解码后 `avFrame->time_base` /
-`ctx->time_base` 常为 0，不能直接用于换算（否则帧时间戳全 0）。
+Flow time base (`AVStream.time_base`). The pts/dts of ffmpeg decoding frames are used as units and must be transmitted to the decoder
+Write `AVCodecContext.pkt_timebase` to correctly convert the timestamp. After decoding `avFrame->time_base` /
+`ctx->time_base` is often 0 and cannot be used directly for conversion (otherwise, all frame timestamps are 0).

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IAudioDecoderFactory.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Decoders/IAudioDecoderFactory.cs)
 
-音频解码器工厂接口。
+Audio decoder factory interface.
 
 ## Declaration
 
@@ -24,9 +24,9 @@ public interface IAudioDecoderFactory
 
 ## Remarks
 
-Singleton 工厂，无状态。每次 Create() 返回新实例。
+Singleton factory, statusless. Each time Create() returns a new instance.
 
-优先使用 `CreateAsync`（对称一致性，支持 CT）。
+Prioritize using `CreateAsync` (symmetric consistency, CT supported).
 
 ## Members
 
@@ -36,14 +36,14 @@ Singleton 工厂，无状态。每次 Create() 返回新实例。
 IAudioDecoder Create(AudioCodec codec, AudioSettings settings);
 ```
 
-根据编解码器和设置创建解码器实例。
+Create a decoder instance based on the codec and settings.
 
 **Parameters**
 
-- `codec`: 音频编解码器。
-- `settings`: 音频设置。
+- `codec`: Audio codec.
+- `settings`: Audio settings.
 
-**Returns**: 新创建的音频解码器实例（未初始化，须调用 `Initialize`）。
+**Returns**: Newly created audio decoder instance (not initialized, requires calling `Initialize`).
 
 ### CreateAsync
 
@@ -51,12 +51,12 @@ IAudioDecoder Create(AudioCodec codec, AudioSettings settings);
 Task<IAudioDecoder> CreateAsync(AudioCodec codec, AudioSettings settings, CancellationToken ct = default);
 ```
 
-异步根据编解码器和设置创建解码器实例。
+Asynchronously create decoder instances based on codecs and settings.
 
 **Parameters**
 
-- `codec`: 音频编解码器。
-- `settings`: 音频设置。
-- `ct`: 取消令牌。
+- `codec`: Audio codec.
+- `settings`: Audio settings.
+- `ct`: Cancel token.
 
-**Returns**: 新创建的音频解码器实例。
+**Returns**: Newly created audio decoder instance.

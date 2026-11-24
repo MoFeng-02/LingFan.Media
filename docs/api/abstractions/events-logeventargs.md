@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`LogEventArgs.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Events/LogEventArgs.cs)
 
-日志事件参数。
+Log event parameters.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class LogEventArgs : EventArgs
 public LogLevel Level { get; }
 ```
 
-日志级别。
+Log level.
 
 ### Message
 
@@ -38,7 +38,7 @@ public LogLevel Level { get; }
 public string Message { get; }
 ```
 
-日志消息。
+Log messages.
 
 ### Source
 
@@ -46,7 +46,7 @@ public string Message { get; }
 public string? Source { get; }
 ```
 
-来源模块（可能为 null）。
+Source module (may be null).
 
 ### Exception
 
@@ -54,7 +54,7 @@ public string? Source { get; }
 public Exception? Exception { get; }
 ```
 
-关联异常（如果有）。
+Association exception (if any).
 
 ### Constructor
 
@@ -62,11 +62,11 @@ public Exception? Exception { get; }
 public LogEventArgs(LogLevel level, string message, string? source = null, Exception? exception = null);
 ```
 
-初始化 `LogEventArgs` 的新实例。
+Initialize a new instance of `LogEventArgs`.
 
 **Parameters**
 
-- `level`: 日志级别。
-- `message`: 日志消息。
-- `source`: 来源模块（可为 null）。
-- `exception`: 关联异常（可为 null）。
+- `level`: Log level.
+- `message`: Log messages.
+- `source`: Source module (can be null).
+- `exception`: Association exception (can be null).

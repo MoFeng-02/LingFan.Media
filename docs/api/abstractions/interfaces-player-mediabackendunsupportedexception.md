@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaBackendUnsupportedException.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/MediaBackendUnsupportedException.cs)
 
-当所有已注册后端均无法打开给定媒体源时抛出（运行时回退穷尽）。
+Thrown when all registered backends cannot open the given media source (runtime rollback exhaustion).
 
 ## Declaration
 
@@ -37,8 +37,8 @@ public MediaBackendUnsupportedException(string source, Exception innerException)
     : base($"没有已注册的后端能够打开该媒体源：{source}", innerException) { }
 ```
 
-构造异常，source 为媒体源标识（`Identifier`）。
+Construction exception, source is the media source identifier (`Identifier`).
 
 **Parameters**
 
-- `source`: 媒体源标识。
+- `source`: Media source identifier.

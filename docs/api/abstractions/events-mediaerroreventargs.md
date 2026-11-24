@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaErrorEventArgs.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Events/MediaErrorEventArgs.cs)
 
-媒体错误事件参数。
+Media error event parameters.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class MediaErrorEventArgs : EventArgs
 public MediaErrorCode ErrorCode { get; }
 ```
 
-错误码。
+Error code.
 
 ### Message
 
@@ -38,7 +38,7 @@ public MediaErrorCode ErrorCode { get; }
 public string Message { get; }
 ```
 
-错误消息。
+Error message.
 
 ### Exception
 
@@ -46,7 +46,7 @@ public string Message { get; }
 public Exception? Exception { get; }
 ```
 
-原始异常（如果有）。
+Original exception (if any).
 
 ### IsFatal
 
@@ -54,7 +54,7 @@ public Exception? Exception { get; }
 public bool IsFatal { get; }
 ```
 
-是否致命（不可恢复）。
+Whether it is fatal (irreversible).
 
 ### Recoverable
 
@@ -62,7 +62,7 @@ public bool IsFatal { get; }
 public bool Recoverable { get; }
 ```
 
-是否可恢复。
+Is it recoverable?
 
 ### Constructor
 
@@ -75,12 +75,12 @@ public MediaErrorEventArgs(
     bool recoverable = false);
 ```
 
-初始化 `MediaErrorEventArgs` 的新实例。
+Initialize a new instance of `MediaErrorEventArgs`.
 
 **Parameters**
 
-- `errorCode`: 错误码。
-- `message`: 错误消息。
-- `exception`: 原始异常（可为 null）。
-- `isFatal`: 是否致命（不可恢复）。
-- `recoverable`: 是否可恢复。
+- `errorCode`: Error code.
+- `message`: Error message.
+- `exception`: Original exception (can be null).
+- `isFatal`: Whether it is fatal (irreversible).
+- `recoverable`: Is it recoverable?

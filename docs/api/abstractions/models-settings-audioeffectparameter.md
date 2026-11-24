@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`AudioEffectParameter.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Settings/AudioEffectParameter.cs)
 
-强类型音频效果参数。
+Strong type audio effect parameters.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class AudioEffectParameter
 public string Name { get; }
 ```
 
-参数名（如 "Frequency"、"Gain"）。
+Parameter names (such as "Frequency", "Gain").
 
 ### Value
 
@@ -38,7 +38,7 @@ public string Name { get; }
 public float Value { get; set; }
 ```
 
-参数值。
+Parameter value.
 
 ### MinValue
 
@@ -46,7 +46,7 @@ public float Value { get; set; }
 public float MinValue { get; }
 ```
 
-最小值。
+Minimum value.
 
 ### MaxValue
 
@@ -54,7 +54,7 @@ public float MinValue { get; }
 public float MaxValue { get; }
 ```
 
-最大值。
+Maximum value.
 
 ### Constructor
 
@@ -62,11 +62,11 @@ public float MaxValue { get; }
 public AudioEffectParameter(string name, float value, float minValue, float maxValue);
 ```
 
-初始化 `AudioEffectParameter` 的新实例。
+Initialize a new instance of `AudioEffectParameter`.
 
 **Parameters**
 
-- `name`: 参数名（如 "Frequency"、"Gain"）。
-- `value`: 参数值。
-- `minValue`: 最小值。
-- `maxValue`: 最大值。
+- `name`: Parameter names (such as "Frequency", "Gain").
+- `value`: Parameter value.
+- `minValue`: Minimum value.
+- `maxValue`: Maximum value.

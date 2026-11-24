@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`VideoFrame.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/VideoFrame.cs)
 
-视频帧。实现 `IDisposableFrame`，级联释放 `Resource`。
+Video frame. Achieve `IDisposableFrame`, cascade release `Resource`.
 
 ## Declaration
 
@@ -24,11 +24,11 @@ public sealed class VideoFrame : IDisposableFrame
 
 ## Remarks
 
-帧所有权转移语义：Decoder → FrameQueue → Renderer。
+Frame ownership transfer semantics: Decoder → FrameQueue → Renderer.
 
-Dispose 时必须级联释放 IFrameResource（GPU 纹理/CPU 内存），防止资源泄漏。
+When Disposing, you must cascade and release IFrameResources (GPU textures/CPU memory) to prevent resource leaks.
 
-属性使用 internal set，`Reset` 方法供解码器复用帧实例（帧池化）。
+The property uses the internal set,`Reset` method for the decoder to reuse frame instances (framepooling).
 
 ## Members
 
@@ -38,7 +38,7 @@ Dispose 时必须级联释放 IFrameResource（GPU 纹理/CPU 内存），防止
 public int Width { get; internal set; }
 ```
 
-帧宽度（像素）。
+Frame width (pixels).
 
 ### Height
 
@@ -46,7 +46,7 @@ public int Width { get; internal set; }
 public int Height { get; internal set; }
 ```
 
-帧高度（像素）。
+Frame height (pixels).
 
 ### Format
 
@@ -54,7 +54,7 @@ public int Height { get; internal set; }
 public PixelFormat Format { get; internal set; }
 ```
 
-像素格式。
+Pixel format.
 
 ### Resource
 
@@ -62,10 +62,10 @@ public PixelFormat Format { get; internal set; }
 public IFrameResource? Resource { get; internal set; }
 ```
 
-帧资源（`SoftwareFrameResource`=CPU 内存，或 GPU 纹理=零拷贝句柄）。
+Frame resource (`SoftwareFrameResource`=CPU memory, or GPU texture=zero-copy handle).
 
-可为 null（池中未填充的空壳），`Reset` 填充实际资源。
-消费方通过 pattern matching 访问，null 不会导致 NRE。
+Actual resources can be filled with null (unfilled shells in the pool), `Reset`.
+The consumer accesses via pattern matching; nulls do not cause NRE.
 
 ### Timestamp
 
@@ -73,7 +73,7 @@ public IFrameResource? Resource { get; internal set; }
 public TimeSpan Timestamp { get; internal set; }
 ```
 
-显示时间戳（PTS）。
+Display timestamps (PTS).
 
 ### Duration
 
@@ -81,7 +81,7 @@ public TimeSpan Timestamp { get; internal set; }
 public TimeSpan Duration { get; internal set; }
 ```
 
-帧持续时间。
+Frame duration.
 
 ### KeyFrame
 
@@ -89,7 +89,7 @@ public TimeSpan Duration { get; internal set; }
 public bool KeyFrame { get; internal set; }
 ```
 
-是否关键帧。
+Whether keyframes are available.
 
 ### ColorInfo
 
@@ -97,7 +97,7 @@ public bool KeyFrame { get; internal set; }
 public VideoColorInfo? ColorInfo { get; set; }
 ```
 
-帧的色彩空间描述（可空；渲染端据此选 YUV→RGB 矩阵，null 时用默认矩阵，见 `VideoColorInfo`）。
+Frame color space description (can be empty; The rendering side selects YUV→RGB matrix accordingly, and uses the default matrix when null, see `VideoColorInfo`).
 
 ### RotationDegrees
 
@@ -105,8 +105,8 @@ public VideoColorInfo? ColorInfo { get; set; }
 public int RotationDegrees { get; internal set; }
 ```
 
-显示旋转（度，0/90/180/270）。由容器元数据（如 MP4 tkhd 旋转矩阵）给出，
-解码器输出像素本身不旋转——渲染端须按此角度旋转呈现（90/270° 时显示宽高互换）。
+Display rotation (degrees, 0/90/180/270). Given by container metadata (such as MP4 tkhd rotation matrix),
+The decoder output pixels themselves do not rotate—the rendering side must rotate at this angle for display (width and height reversal displayed at 90/270°).
 
 ### IsDisposed
 
@@ -124,19 +124,19 @@ public VideoFrame(int width, int height, PixelFormat format, IFrameResource reso
     int rotationDegrees = 0);
 ```
 
-初始化 `VideoFrame` 的新实例。
+Initialize a new instance of `VideoFrame`.
 
 **Parameters**
 
-- `width`: 帧宽度（像素）。
-- `height`: 帧高度（像素）。
-- `format`: 像素格式。
-- `resource`: 帧资源（CPU 内存或 GPU 纹理）。
-- `timestamp`: 显示时间戳（PTS）。
-- `duration`: 帧持续时间。
-- `keyFrame`: 是否关键帧。
-- `colorInfo`: 色彩空间描述（可空）。
-- `rotationDegrees`: 显示旋转角度（0/90/180/270）。
+- `width`: Frame width (pixels).
+- `height`: Frame height (pixels).
+- `format`: Pixel format.
+- `resource`: Frame resources (CPU memory or GPU textures).
+- `timestamp`: Display timestamps (PTS).
+- `duration`: Frame duration.
+- `keyFrame`: Whether keyframes are available.
+- `colorInfo`: Color space description (can be left empty).
+- `rotationDegrees`: Display rotation angle (0/90/180/270).
 
 ### Constructor
 
@@ -144,9 +144,9 @@ public VideoFrame(int width, int height, PixelFormat format, IFrameResource reso
 public VideoFrame();
 ```
 
-无参构造函数（供 FramePool 工厂创建空壳）。
+Non-parameter constructor (for FramePool factory to create empty shells).
 
-仅供帧对象池使用。调用方须通过 `Reset` 填充实际数据。
+For use only by frame object pools. The caller must populate the actual data using `Reset`.
 
 ### Reset
 
@@ -156,20 +156,20 @@ public void Reset(int width, int height, PixelFormat format, IFrameResource? res
     int rotationDegrees = 0);
 ```
 
-重置帧状态，供 FramePool 复用。
-释放旧 Resource，设置新属性值，重置 IsDisposed。
+Resets frame state for reuse by FramePool.
+Release the old resource, set the new property value, and reset IsDisposed.
 
 **Parameters**
 
-- `width`: 帧宽度。
-- `height`: 帧高度。
-- `format`: 像素格式。
-- `resource`: 帧资源。
-- `timestamp`: 显示时间戳。
-- `duration`: 帧持续时间。
-- `keyFrame`: 是否关键帧。
-- `colorInfo`: 色彩空间描述（可空）。
-- `rotationDegrees`: 显示旋转角度（0/90/180/270）。
+- `width`: Frame width.
+- `height`: Frame height.
+- `format`: Pixel format.
+- `resource`: Frame resource.
+- `timestamp`: Display timestamps.
+- `duration`: Frame duration.
+- `keyFrame`: Whether keyframes are available.
+- `colorInfo`: Color space description (can be left empty).
+- `rotationDegrees`: Display rotation angle (0/90/180/270).
 
 ### Dispose
 
@@ -177,4 +177,4 @@ public void Reset(int width, int height, PixelFormat format, IFrameResource? res
 public void Dispose();
 ```
 
-释放帧资源，级联释放 `Resource`。
+Release frame resources, cascade release `Resource`.

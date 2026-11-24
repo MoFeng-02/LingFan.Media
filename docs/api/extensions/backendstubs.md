@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`BackendStubs.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Extensions/BackendStubs.cs)
 
-WebRTC 后端配置选项（桩，保留供 API 兼容）。
+WebRTC backend configuration options (stubs, reserved for API compatibility).
 
 ## Declaration
 
@@ -30,4 +30,4 @@ public sealed class WebRTCOptions
 public bool EnableHardwareDecode { get; set; } = true;
 ```
 
-是否启用硬件解码（默认 true）。
+Whether hardware decoding is enabled (default true).

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaStream.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Source/IMediaStream.cs)
 
-媒体数据流接口。
+Media data stream interface.
 
 ## Declaration
 
@@ -24,14 +24,14 @@ public interface IMediaStream
 
 ## Remarks
 
-Read 和 ReadAsync 均采用 caller-allocated buffer 模式。不接受 null buffer。
-buffer 大小为 0 时返回 0。
+Both Read and ReadAsync use the caller-allocated buffer mode. Null buffer is not accepted.
+Returns 0 when buffer size is 0.
 
-优先使用 `ReadAsync`（支持 CancellationToken，不阻塞线程）。
-同步 `Read` 仅用于同步边界（如 FormatDetector 探测、FFmpeg AVIO 回调）。
+Prioritize using `ReadAsync` (supports CancellationToken, does not block threads).
+Synchronization `Read` is only used for synchronizing boundaries (such as FormatDetector detection, FFmpeg AVIO callback).
 
-网络流必须在 `Read` 之前调用 `ConnectAsync` 建立底层连接——
-同步边界（C 函数指针/同步探测）无法 await，故建连必须前置到异步路径。
+Network streams must call `ConnectAsync` before `Read` to establish a low-level connection—
+Synchronous boundaries (C function pointers/synchronous probes) cannot be awaited, so connections must be pre-installed to asynchronous paths.
 
 ## Members
 
@@ -41,17 +41,17 @@ buffer 大小为 0 时返回 0。
 int Read(Span<byte> buffer);
 ```
 
-同步读取数据到指定 buffer。
+Synchronize data read to the specified buffer.
 
-同步边界（C 函数指针 / 同步探测），无法 await。
-网络流必须在 `ConnectAsync` 之后调用，否则抛 `InvalidOperationException`。
-已连接后每帧同步读取会阻塞调用线程直到数据到达（FFmpeg 工作线程，非 UI）。仅在同步上下文使用。
+Synchronization boundaries (C function pointer / synchronous probe), cannot await.
+Network streams must be called after `ConnectAsync`; otherwise, `InvalidOperationException` is thrown.
+After connection, synchronous reads each frame will block the calling thread until data arrives (FFmpeg worker thread, not UI). Use only in synchronization contexts.
 
 **Parameters**
 
-- `buffer`: 目标 buffer（Span 切片）。长度为 0 时返回 0。
+- `buffer`: Target buffer (Span slice). Returns 0 when length is 0.
 
-**Returns**: 实际读取的字节数，0 表示流结束。
+**Returns**: The actual number of bytes read, 0 indicates the end of the stream.
 
 ### ReadAsync
 
@@ -59,20 +59,20 @@ int Read(Span<byte> buffer);
 ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default);
 ```
 
-异步读取数据到指定 buffer。
+Asynchronously read data to the specified buffer.
 
-**建连语义**：`ReadAsync` 允许**隐式建连**（网络流首次读取时才真正
-连到对端），而同步 `Read` 必须工作在已建连状态——实现可在 Open 阶段预先建连，
-也可把建连推迟到首次 `ReadAsync`。
+**Connection Semantics**:`ReadAsync` Allows **implicit connection** (only true when the network stream is first read).
+and synchronization `Read` must operate in an established connection state—enabling pre-establishment during the Open phase,
+You can also postpone the establishment of the chain to the first `ReadAsync`.
 
-建连失败（DNS/连接/握手）须抛出 `IOException`，不得返回 0 冒充流结束。
+If connection fails (DNS/connection/handshake), `IOException` must be thrown, and it cannot return 0 to end the impersonation flow.
 
 **Parameters**
 
-- `buffer`: 目标 buffer。不接受空 buffer。
-- `ct`: 取消令牌（网络流必须支持，本地文件可忽略）。
+- `buffer`: Target buffer. Empty buffers are not accepted.
+- `ct`: Cancel tokens (network streams must be supported, local files can be ignored).
 
-**Returns**: 实际读取的字节数，0 表示流结束。
+**Returns**: The actual number of bytes read, 0 indicates the end of the stream.
 
 ### ConnectAsync
 
@@ -80,17 +80,17 @@ ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default);
 Task ConnectAsync(CancellationToken ct = default);
 ```
 
-异步预建立底层连接（网络流建立 HTTP 连接；文件/透传流为无操作）。
+Asynchronous pre-establishment of underlying connections (network flow establishes HTTP connections; File/Transparent Stream is no operation).
 
-**必须在同步 `Read` 之前调用**：FFmpeg AVIO 原生回调与 FormatDetector 同步探测
-均为同步边界，无法 await 建连。网络流若不预建连，`Read` 会抛
+**Must be called before synchronizing `Read`**: FFmpeg AVIO native callback synchronizes probes with FormatDetector
+All are synchronous boundaries, and you cannot await connections. If the network flow is not pre-established, `Read` will be dropped
 `InvalidOperationException`。
 
 **Parameters**
 
-- `ct`: 取消令牌。
+- `ct`: Cancel token.
 
-**Returns**: 连接建立完成的 Task。
+**Returns**: Task that has been connected to the completed establishment.
 
 ### Length
 
@@ -98,7 +98,7 @@ Task ConnectAsync(CancellationToken ct = default);
 long Length { get; }
 ```
 
-流长度（不可求时为 -1）。
+Stream length (-1 if not available).
 
 ### Position
 
@@ -106,7 +106,7 @@ long Length { get; }
 long Position { get; }
 ```
 
-当前读取位置。
+Current read position.
 
 ### CanSeek
 
@@ -114,7 +114,7 @@ long Position { get; }
 bool CanSeek { get; }
 ```
 
-是否可定位。
+Whether it is positionable.
 
 ### Location
 
@@ -122,12 +122,12 @@ bool CanSeek { get; }
 string? Location { get; }
 ```
 
-流的可定位地址（文件路径或网络 URL）；无法以地址方式打开时为 null。
+Stream's locating address (file path or network URL); Cannot open by address when null.
 
-供需要按地址打开的 backend（如 MediaFoundation 的 `MFCreateSourceReaderFromURL`）使用。
-文件流返回文件路径，网络流返回 URL；内存/透传流无地址返回 null。
+For backends that need to be opened by address (such as MediaFoundation's `MFCreateSourceReaderFromURL`).
+File streams return file paths, network streams return URLs; Memory/pass-through stream returns null without address.
 
-中性契约成员（BCL string），不引用任何具体后端/源类型，遵循依赖倒置。
+Neutral contract members (BCL strings) do not reference any specific backend/source types, following dependency inversion.
 
 ### Seek
 
@@ -135,21 +135,21 @@ string? Location { get; }
 long Seek(long offset, SeekOrigin origin);
 ```
 
-定位到指定偏移。
+Locate to the specified offset.
 
-不可定位的流（如不可 seek 的直播流）须抛 `NotSupportedException`，
-不得返回 0 或静默忽略。
+Unlocating streams (such as unseekable live streams) must be cast `NotSupportedException`,
+Cannot return 0 or silently ignore.
 
-目标位置越界时抛 `IOException`（与读取端错误统一）。
+When the target position exceeds the boundary, `IOException` is thrown (consistent with the error on the read side).
 
-已 `Close` 后调用抛 `ObjectDisposedException`。
+After `Close`, call throw `ObjectDisposedException`.
 
 **Parameters**
 
-- `offset`: 相对 &lt;paramref name="origin"/&gt; 的字节偏移。
-- `origin`: 偏移基准（流首/当前位置/流尾）。
+- `offset`: Byte offset relative to &lt;paramref name="origin"/&gt;.
+- `origin`: Offset reference (stream head/current position/stream tail).
 
-**Returns**: 定位后的新读取位置（绝对字节偏移）。
+**Returns**: The new read position after positioning (absolute byte offset).
 
 ### SuggestedOpenHeaders
 
@@ -157,13 +157,13 @@ long Seek(long offset, SeekOrigin origin);
 IReadOnlyDictionary<string, string>? SuggestedOpenHeaders { get; }
 ```
 
-按 `Location` 地址打开时建议随附的 HTTP 请求头（默认 User-Agent、
-用户自定义头与 Cookie 的合并结果）；非网络流为 null。
+When opening with the `Location` address, the included HTTP request header is recommended (default is User-Agent,
+User-defined header merged with cookies); Non-network stream is null.
 
-供按地址直开的解封装后端（URL 交给后端自身网络栈的场景）在打开地址时透传，
-避免自定义头/Cookie 在地址式打开路径上被静默丢弃（防盗链源必需）。
+For the unencapsulated backend that opens directly by address (where the URL is handed to the backend's own network stack), it is transmitted when opening the address,
+Avoid silently discarding custom headers/cookies on addressable open paths (required for anti-hotlink sources).
 
-中性契约成员（BCL 字典类型，零外部引用）；实现须显式提供该属性（不依赖接口默认实现）。
+Neutral contract member (BCL dictionary type, zero external references); The implementation must explicitly provide this property (not dependent on the default implementation of the interface).
 
 ### Close
 
@@ -171,10 +171,10 @@ IReadOnlyDictionary<string, string>? SuggestedOpenHeaders { get; }
 void Close();
 ```
 
-关闭流。
+Close the stream.
 
-**幂等**：重复调用不得抛异常（已关闭再关闭是空操作）。
+**Idempotence**: Repeated calls must not throw exceptions (closing it again is an empty operation).
 
-关闭后 `ReadAsync` 与 `Seek` 抛 `ObjectDisposedException`。
+After closing `ReadAsync` and `Seek`, throw `ObjectDisposedException`.
 
-关闭须释放底层连接与原生资源，且不等待未完成的读取返回。
+Closing must release the underlying connection and native resources without waiting for incomplete reads to return.

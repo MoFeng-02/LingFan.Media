@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`BufferState.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/BufferState.cs)
 
-缓冲状态。
+Buffer state.
 
 ## Declaration
 
@@ -26,7 +26,7 @@ public enum BufferState : int
 
 | Value | Description |
 | --- | --- |
-| `Empty` | 空，尚未开始缓冲。 |
-| `Buffering` | 正在缓冲。 |
-| `Ready` | 缓冲就绪，可开始播放。 |
-| `Starved` | 缓冲不足，需要重新缓冲。 |
+| `Empty` | Empty, not yet starting to buffer. |
+| `Buffering` | Buffering. |
+| `Ready` | Buffering is ready, playback can begin. |
+| `Starved` | Buffering is insufficient and needs to be re-buffered. |

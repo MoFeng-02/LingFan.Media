@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IFramePoolAware.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFramePoolAware.cs)
 
-帧池感知接口。可选实现，支持帧对象池的组件通过此接口接收池引用。
+Frame pool-aware interface. An optional implementation supports components of the frame object pool to receive pool references through this interface.
 
 ## Declaration
 
@@ -24,13 +24,13 @@ public interface IFramePoolAware<T> where T : class
 
 ## Remarks
 
-解码器等组件可选实现此接口。调用方（如 MediaPlayer）通过 pattern matching 检测并注入池。
+Components such as decoders can optionally implement this interface. The caller (such as MediaPlayer) detects and injects it into the pool through pattern matching.
 
-不修改现有接口（IMediaComponent/IVideoDecoder 等），通过 pattern matching 注入，保持架构兼容。
+Existing interfaces (such as IMediaComponent/IVideoDecoder) are not modified; instead, pattern matching injections are used to maintain architecture compatibility.
 
-**AOT 兼容**：接口 + pattern matching（is 运算符），编译期确定类型，无反射。
+**AOT Compatible**: interface + pattern matching (is operator), compile-time type determined, no reflection.
 
-**异步策略**：同步配置——纯内存设置引用，无 I/O。
+**Asynchronous Policy**: Synchronous configuration—pure memory settings referenced, no I/O.
 
 ## Members
 
@@ -40,8 +40,8 @@ public interface IFramePoolAware<T> where T : class
 void SetFramePool(IFramePool<T>? pool);
 ```
 
-设置帧对象池。传入 null 表示禁用池化，组件将自行创建帧实例。
+Set the frame object pool. Passing null means pooling is disabled, and the component will create frame instances on its own.
 
 **Parameters**
 
-- `pool`: 帧对象池（可为 null）。
+- `pool`: Frame object pool (can be null).

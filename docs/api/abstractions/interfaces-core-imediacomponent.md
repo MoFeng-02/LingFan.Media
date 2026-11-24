@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaComponent.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IMediaComponent.cs)
 
-媒体组件生命周期基接口。
+Media component lifecycle base interface.
 
 ## Declaration
 
@@ -24,13 +24,13 @@ public interface IMediaComponent : IDisposable, IAsyncDisposable
 
 ## Remarks
 
-IDisposable + IAsyncDisposable 双继承：所有组件统一拥有
-void Dispose()（同步快速路径）和 ValueTask DisposeAsync()（异步完整路径，推荐）。
+IDisposable + IAsyncDisposable dual inheritance: all components are unified and owned
+void Dispose() (synchronous fast path) and ValueTask DisposeAsync() (asynchronous full path, recommended).
 
-继承此接口的接口：IVideoDecoder、IAudioDecoder、ISubtitleDecoder、
+Interfaces that inherit this interface: IVideoDecoder, IAudioDecoder, ISubtitleDecoder,
 IVideoRenderer、IAudioOutput、IMediaDemuxer。
 
-不暴露 bool IsInitialized——状态属于实现。
+Do not expose bool IsInitialized—state belongs to implementation.
 
 ## Members
 
@@ -40,10 +40,10 @@ IVideoRenderer、IAudioOutput、IMediaDemuxer。
 Task InitializeAsync(CancellationToken ct = default);
 ```
 
-异步初始化组件。
+Asynchronous initialization component.
 
 **Parameters**
 
-- `ct`: 取消令牌。
+- `ct`: Cancel token.
 
-**Returns**: 初始化完成时结束的任务。
+**Returns**: Tasks that end upon completion of initialization.

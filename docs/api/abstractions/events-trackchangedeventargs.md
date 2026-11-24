@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`TrackChangedEventArgs.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Events/TrackChangedEventArgs.cs)
 
-轨道切换事件参数。
+Track switch event parameters.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class TrackChangedEventArgs : EventArgs
 public TrackType TrackType { get; }
 ```
 
-轨道类型。
+Track type.
 
 ### OldTrack
 
@@ -38,7 +38,7 @@ public TrackType TrackType { get; }
 public MediaTrack? OldTrack { get; }
 ```
 
-旧轨道（可能为 null）。
+Old track (may be null).
 
 ### NewTrack
 
@@ -46,7 +46,7 @@ public MediaTrack? OldTrack { get; }
 public MediaTrack? NewTrack { get; }
 ```
 
-新轨道（可能为 null）。
+New orbit (possibly null).
 
 ### Constructor
 
@@ -54,10 +54,10 @@ public MediaTrack? NewTrack { get; }
 public TrackChangedEventArgs(TrackType trackType, MediaTrack? oldTrack, MediaTrack? newTrack);
 ```
 
-初始化 `TrackChangedEventArgs` 的新实例。
+Initialize a new instance of `TrackChangedEventArgs`.
 
 **Parameters**
 
-- `trackType`: 轨道类型。
-- `oldTrack`: 旧轨道（可为 null）。
-- `newTrack`: 新轨道（可为 null）。
+- `trackType`: Track type.
+- `oldTrack`: Old track (can be null).
+- `newTrack`: New track (can be null).

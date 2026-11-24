@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`SharedGpuSyncModel.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSyncModel.cs)
 
-目标 GPU 适配器身份（中立值对象）。由消费方（宿主合成器）提供，供生产者选择**同一物理设备**。
+Target GPU adapter identity (neutral value object). Provided by the consumer (host compositor) for producers to choose **the same physical device**.
 
 ## Declaration
 
@@ -24,15 +24,15 @@ public sealed class SharedGpuAdapterIdentity
 
 ## Remarks
 
-**为什么需要它**：跨设备共享纹理的导入要求生产者与合成器位于同一物理 GPU
-（多 GPU 机器上尤为关键）。若生产者自行按偏好评分选设备，可能选中与合成器不同的适配器，
-导致导入失败或静默黑屏。消费方把自身适配器身份透传给工厂，生产者据此优选匹配设备，
-无法匹配时应抛 `NotSupportedException` 让调用方干净回退。
+**Why You Need It**: Importing textures to share across devices requires producers and synthesizers to be on the same physical GPU
+(This is especially critical on multi-GPU machines). If producers select equipment based on their own preference scores, they may choose adapters different from synthesizers,
+Causing import failure or silent black screen. The consumer communicates their adapter identity to the factory, and the producer selects the equipment accordingly.
+If no match is possible, `NotSupportedException` should be thrown to have the caller revert cleanly.
 
-**字段来源**：`DeviceUuid` 对应 Vulkan
-`VkPhysicalDeviceIDProperties.deviceUUID`（16 字节）；
-`DeviceLuid` 对应 DXGI 适配器 LUID（8 字节）。
-宿主可能只提供其中之一，甚至都不提供（此时生产者按自身偏好选择）。
+**Field Source**: `DeviceUuid` Corresponds to Vulkan
+`VkPhysicalDeviceIDProperties.deviceUUID` (16 bytes);
+`DeviceLuid` Corresponds to DXGI adapter LUID (8 bytes).
+The host may only provide one of these or even none (in which case the producer chooses according to their own preference).
 
 ## Members
 
@@ -42,7 +42,7 @@ public sealed class SharedGpuAdapterIdentity
 public static SharedGpuAdapterIdentity Unknown { get; } = new(default, default);
 ```
 
-身份未知（宿主未提供任何标识）。生产者应按自身偏好选择设备。
+Identity unknown (host did not provide any identifier). Producers should select equipment according to their own preferences.
 
 ### Constructor
 
@@ -50,12 +50,12 @@ public static SharedGpuAdapterIdentity Unknown { get; } = new(default, default);
 public SharedGpuAdapterIdentity(ReadOnlyMemory<byte> deviceUuid, ReadOnlyMemory<byte> deviceLuid);
 ```
 
-初始化 `SharedGpuAdapterIdentity` 的新实例。
+Initialize a new instance of `SharedGpuAdapterIdentity`.
 
 **Parameters**
 
-- `deviceUuid`: Vulkan 物理设备 UUID（16 字节）；未知时传 &lt;see langword="default"/&gt;。
-- `deviceLuid`: DXGI 适配器 LUID（8 字节）；未知时传 &lt;see langword="default"/&gt;。
+- `deviceUuid`: Vulkan physical device UUID (16 bytes); Unknown time-pass &lt;see langword="default"/&gt;.
+- `deviceLuid`: DXGI adapter LUID (8 bytes); Unknown time-pass &lt;see langword="default"/&gt;.
 
 ### DeviceUuid
 
@@ -63,7 +63,7 @@ public SharedGpuAdapterIdentity(ReadOnlyMemory<byte> deviceUuid, ReadOnlyMemory<
 public ReadOnlyMemory<byte> DeviceUuid { get; }
 ```
 
-Vulkan 物理设备 UUID（16 字节）。长度不为 16 视为未提供。
+Vulkan physical device UUID (16 bytes). Lengths not 16 are considered unprovided.
 
 ### DeviceLuid
 
@@ -71,7 +71,7 @@ Vulkan 物理设备 UUID（16 字节）。长度不为 16 视为未提供。
 public ReadOnlyMemory<byte> DeviceLuid { get; }
 ```
 
-DXGI 适配器 LUID（8 字节）。长度不为 8 视为未提供。
+DXGI adapter LUID (8 bytes). Length not 8 is considered not provided.
 
 ### 16
 
@@ -79,7 +79,7 @@ DXGI 适配器 LUID（8 字节）。长度不为 8 视为未提供。
 public bool HasDeviceUuid => DeviceUuid.Length == 16;
 ```
 
-是否提供了可用的 Vulkan 设备 UUID。
+Whether available Vulkan device UUIDs are provided.
 
 ### 8
 
@@ -87,7 +87,7 @@ public bool HasDeviceUuid => DeviceUuid.Length == 16;
 public bool HasDeviceLuid => DeviceLuid.Length == 8;
 ```
 
-是否提供了可用的 DXGI 适配器 LUID。
+Whether available DXGI adapter LUIDs are provided.
 
 ### HasDeviceLuid
 
@@ -95,7 +95,7 @@ public bool HasDeviceLuid => DeviceLuid.Length == 8;
 public bool IsUnknown => !HasDeviceUuid && !HasDeviceLuid;
 ```
 
-是否未提供任何标识。
+Whether no identification was provided.
 
 ### MatchesDeviceUuid
 
@@ -104,13 +104,13 @@ public bool MatchesDeviceUuid(ReadOnlySpan<byte> candidate)
     => HasDeviceUuid && candidate.Length == 16 && DeviceUuid.Span.SequenceEqual(candidate);
 ```
 
-判断给定的 16 字节 UUID 是否与本身份一致。
+Determine whether the given 16-byte UUID matches the identity.
 
 **Parameters**
 
-- `candidate`: 候选设备 UUID。
+- `candidate`: Candidate device UUID.
 
-**Returns**: 本身份未提供 UUID 时返回 `false`（调用方应视为「无法确认」而非「不匹配」）。
+**Returns**: Returns `false` if the identity does not provide a UUID (caller should consider it "unconfirmed" rather than "mismatch").
 
 ### MatchesDeviceLuid
 
@@ -119,10 +119,10 @@ public bool MatchesDeviceLuid(ReadOnlySpan<byte> candidate)
     => HasDeviceLuid && candidate.Length == 8 && DeviceLuid.Span.SequenceEqual(candidate);
 ```
 
-判断给定的 8 字节 LUID 是否与本身份一致。
+Determine whether the given 8-byte LUID matches the identity.
 
 **Parameters**
 
-- `candidate`: 候选适配器 LUID。
+- `candidate`: Candidate adapter LUID.
 
-**Returns**: 本身份未提供 LUID 时返回 `false`。
+**Returns**: Returns `false` if the identity does not provide a LUID.

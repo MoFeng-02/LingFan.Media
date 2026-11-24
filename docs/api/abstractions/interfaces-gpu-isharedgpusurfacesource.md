@@ -12,8 +12,8 @@ lang: "en-US"
 
 Source: [`ISharedGpuSurfaceSource.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/ISharedGpuSurfaceSource.cs)
 
-`ISharedGpuSurfaceSource` 的工厂（中立契约）。经 DI 注册多个实现，
-由消费方按「宿主合成器支持的句柄类型」挑选可用者。
+`ISharedGpuSurfaceSource` Factory (Neutral Pact). Multiple implementations registered by DI,
+The consumer selects usable users based on the "host compositor-supported handle types."
 
 ## Declaration
 
@@ -25,13 +25,13 @@ public interface ISharedGpuSurfaceSourceFactory
 
 ## Remarks
 
-**注册即插拔**：每个 GPU 后端注册一个工厂；UI 层遍历
-`IEnumerable<ISharedGpuSurfaceSourceFactory>`，选中第一个
-`IsAvailable` 且句柄类型被宿主合成器支持的工厂。
-因此 UI 层不含任何「优先 D3D11 / 其次 Vulkan」的硬编码分支。
+**Register and plug in**: Each GPU backend registers a factory; UI layer traversal
+`IEnumerable<ISharedGpuSurfaceSourceFactory>`, select the first one
+`IsAvailable` Factory where the handle type is supported by the host compositor.
+Therefore, the UI layer does not contain any hard-coded branches that prioritize D3D11 / Vulkan second.
 
-**开箱即用原则**：`IsAvailable` 应为轻量判定（平台/DI 可用性），
-**不得**在此触碰原生资源；真正的设备/纹理创建延迟到 `Create`。
+**Out-of-the-box principle**: `IsAvailable` should be considered lightweight (platform/DI availability),
+**must not** touch native resources here; Actual device/texture creation is delayed to `Create`.
 
 ## Members
 
@@ -41,7 +41,7 @@ public interface ISharedGpuSurfaceSourceFactory
 SharedGpuHandleKind HandleKind { get; }
 ```
 
-本工厂产出的共享句柄类型（不创建实例即可查询）。
+Shared handle types produced by this factory (queries can be made without creating instances).
 
 ### IsAvailable
 
@@ -49,7 +49,7 @@ SharedGpuHandleKind HandleKind { get; }
 bool IsAvailable { get; }
 ```
 
-当前环境下本适配器是否可用（平台匹配、依赖就绪）。轻量判定，不触碰原生资源。
+Is this adapter available in the current environment (platform matching, dependency ready). Lightweight determination, does not touch native resources.
 
 ### Create
 
@@ -57,12 +57,12 @@ bool IsAvailable { get; }
 ISharedGpuSurfaceSource Create(SharedGpuAdapterIdentity? targetAdapter = null);
 ```
 
-创建共享表面源实例。由调用方负责释放。
+Create a shared surface source instance. The caller is responsible for releasing it.
 
 **Parameters**
 
-- `targetAdapter`: 消费方（宿主合成器）所在的物理 GPU 身份（可选）。生产者据此优选&lt;b&gt;同一物理设备&lt;/b&gt;，
-无法匹配时应抛 &lt;see cref="NotSupportedException"/&gt; 让调用方干净回退到下一个工厂。
-为空表示消费方未提供身份，生产者按自身偏好选择。
+- `targetAdapter`: The physical GPU identity of the consumer (host compositor) (optional). Producers then select &lt;b&gt;the same physical equipment&lt;/b&gt; based on this,
+If a match fails, &lt;see cref="NotSupportedException"/&gt; should be thrown to allow the caller to clean back to the next factory.
+Empty means the consumer has not provided an identity, and producers choose according to their own preferences.
 
-**Returns**: 共享表面源。
+**Returns**: Shared surface source.

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaPlayerFactory.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayerFactory.cs)
 
-播放器工厂接口。
+Player factory interface.
 
 ## Declaration
 
@@ -24,10 +24,10 @@ public interface IMediaPlayerFactory
 
 ## Remarks
 
-工厂自身为 Singleton（无状态）。每次 Create() 返回新实例（Session 级，Transient）。
+The factory itself is Singleton (stateless). Each time Create() returns a new instance (Session level, Transient).
 
-新增 `Create(IMediaDemuxerFactory, IVideoDecoderFactory, IAudioDecoderFactory, ISubtitleDecoderFactory?)` 重载以显式指定后端组，
-供中间件 / 高级消费方手动组合或运行时回退使用——该重载只依赖契约接口，不引用任何具体后端，严守依赖倒置。
+Added `Create(IMediaDemuxerFactory, IVideoDecoderFactory, IAudioDecoderFactory, ISubtitleDecoderFactory?)` overload to explicitly specify backend groups,
+For manual combination or runtime rollback by middleware/advanced consumers—this overload relies solely on contract interfaces, does not reference any specific backend, and strictly adheres to dependency inversion.
 
 ## Members
 
@@ -37,9 +37,9 @@ public interface IMediaPlayerFactory
 IMediaPlayer Create();
 ```
 
-创建新的 IMediaPlayer 实例（解析 DI 中已注册的单体工厂）。
+Create a new IMediaPlayer instance (parse the monolithic factory registered in DI).
 
-**Returns**: 新创建的播放器实例（Session 级，未打开媒体）。
+**Returns**: Newly created player instance (Session level, media not open).
 
 ### Create
 
@@ -51,14 +51,14 @@ IMediaPlayer Create(
     ISubtitleDecoderFactory? subtitleDecoderFactory = null);
 ```
 
-创建新的 IMediaPlayer 实例，使用显式指定的后端组工厂（demuxer + 视频/音频/字幕解码器）。
-用于手动组合后端（如 `IBackendRegistry` 选定的某个后端组），不依赖 DI 默认的单体工厂解析。
+Create a new IMediaPlayer instance using the explicitly specified backend group factory (demuxer + video/audio/subtitle decoder).
+Used for manually assembling backends (such as `IBackendRegistry` for a selected backend group), without relying on DI's default monolithic factory parsing.
 
 **Parameters**
 
-- `demuxerFactory`: 解封装器工厂（已注册后端的 Singleton 无状态服务）。
-- `videoDecoderFactory`: 视频解码器工厂。
-- `audioDecoderFactory`: 音频解码器工厂。
-- `subtitleDecoderFactory`: 字幕解码器工厂（可选；部分后端不提供字幕解码，传 null）。
+- `demuxerFactory`: Unpackager factory (registered backend Singleton stateless service).
+- `videoDecoderFactory`: Video decoder factory.
+- `audioDecoderFactory`: Audio decoder factory.
+- `subtitleDecoderFactory`: Subtitle Decoder Factory (optional; Some backends do not provide subtitle decoding, sending null).
 
-**Returns**: 使用指定后端组的新播放器实例（Session 级，未打开媒体）。
+**Returns**: Use a new player instance for the specified backend group (Session level, media not open).

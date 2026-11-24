@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IBackendRegistry.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IBackendRegistry.cs)
 
-只读后端注册表：聚合所有已注册的后端组（按 DI 注册顺序 = 回退优先级）。
+Read-only backend registry: aggregates all registered backend groups (DI registration order = rollback priority).
 
 ## Declaration
 
@@ -24,9 +24,9 @@ public interface IBackendRegistry
 
 ## Remarks
 
-仅暴露工厂接口（`BackendDescriptor`），不暴露具体后端实现，保持依赖倒置。
+Only the factory interface (`BackendDescriptor`) is exposed, without exposing the specific backend implementation, maintaining dependency inversion.
 
-中间件（如 `LingFan.Media.Playback` 的回退调度器）实现此接口，并据此做运行时单次判断回退。
+Middleware (such as the rollback scheduler on `LingFan.Media.Playback`) implements this interface and performs a single checkback at runtime based on it.
 
 ## Members
 
@@ -36,4 +36,4 @@ public interface IBackendRegistry
 IReadOnlyList<BackendDescriptor> Backends { get; }
 ```
 
-所有已注册的后端组，按 DI 注册顺序（即回退优先级，先注册先试）。
+All registered backend groups are registered in DI order (i.e., rollback priority, first to test first).

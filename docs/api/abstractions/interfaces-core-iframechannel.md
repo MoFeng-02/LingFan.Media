@@ -12,8 +12,8 @@ lang: "en-US"
 
 Source: [`IFrameChannel.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IFrameChannel.cs)
 
-统一视频帧投递通道：解码产出 → 通道 → 扇出至所有订阅的 Sink。
-有头与无头共用此通道；零拷贝是 Sink 能力差异（GPU 纹理帧 vs CPU 帧），而非独立分支。
+Unified video frame delivery channel: decode output → channels → fan-out to all subscription sinks.
+Both headed and headless share this passage; zero-copy is a difference in sink capability (GPU texture frames vs. CPU frames), not independent branches.
 
 ## Declaration
 
@@ -25,12 +25,12 @@ public interface IFrameChannel
 
 ## Remarks
 
-公开事件 `IMediaPlayer.VideoFrameAvailable` 即本通道的 `Action{VideoFrame}` 适配外观；
-高级消费者（录制、缩略图等）可直接实现 `IFrameSink` 经本通道订阅，无需委托。
+Public event `IMediaPlayer.VideoFrameAvailable` i.e., the channel `Action{VideoFrame}` adapts to the appearance;
+Advanced consumers (recordings, thumbnails, etc.) can directly implement `IFrameSink` subscriptions through this channel without delegation.
 
-**帧所有权**：`Emit` 由管线在 `try` 内调用，
-其后 `finally` 中由管线 `ReturnFrame` 释放帧——**通道与所有 Sink 均为只读借用，绝不 Dispose**。
-任一 Sink 在 `OnFrame` 内 Dispose 会在多播下破坏后续订阅方，属硬违例。
+**Frame Ownership**: `Emit` Called by the pipeline within `try`,
+Later, in `finally`, pipeline `ReturnFrame` releases the frame—**The channel and all sinks are read-only borrowed, never Dispose**.
+Any Dispose within `OnFrame` will disrupt subsequent subscribers under multiple plays, which is a strict violation.
 
 ## Members
 
@@ -40,13 +40,13 @@ public interface IFrameChannel
 IDisposable Subscribe(IFrameSink sink);
 ```
 
-订阅一个 Sink，返回取消订阅的句柄（Dispose 即退订）。
+Subscribe to a Sink and return the handle to unsubscribe (Dispose means unsubscribe).
 
 **Parameters**
 
-- `sink`: 要订阅的帧消费者。
+- `sink`: Frame consumer to subscribe to.
 
-**Returns**: 取消订阅句柄，Dispose 即退订。
+**Returns**: Unsubscribe from the handle, and Dispose means unsubscribe.
 
 ### Unsubscribe
 
@@ -54,11 +54,11 @@ IDisposable Subscribe(IFrameSink sink);
 void Unsubscribe(IFrameSink sink);
 ```
 
-退订一个 Sink（按引用/相等性匹配）。
+Unsubscribe from a Sink (matched by reference/equivalence).
 
 **Parameters**
 
-- `sink`: 要退订的帧消费者。
+- `sink`: The frame consumer to unsubscribe.
 
 ### Emit
 
@@ -66,8 +66,8 @@ void Unsubscribe(IFrameSink sink);
 void Emit(VideoFrame frame);
 ```
 
-向所有订阅者投递一帧。
+Deliver one frame to all subscribers.
 
 **Parameters**
 
-- `frame`: 待投递的视频帧（只读借用，见 remarks）。
+- `frame`: Video frames to be delivered (read-only borrowed, see remarks).

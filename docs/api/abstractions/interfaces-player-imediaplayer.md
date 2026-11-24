@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IMediaPlayer.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/IMediaPlayer.cs)
 
-最高层媒体播放器接口。
+Top-level media player interface.
 
 ## Declaration
 
@@ -24,13 +24,13 @@ public interface IMediaPlayer : IDisposable, IAsyncDisposable
 
 ## Remarks
 
-线程安全：公共方法线程安全，可在任意线程调用。
+Thread safety: Public methods are thread-safe and can be called by any thread.
 
-CancellationToken 传播策略：
+CancellationToken propagation strategy:
 
-- 需要 CT 的方法：OpenAsync / StopAsync / SeekAsync
-- 不需要 CT 的方法：PlayAsync / PauseAsync——不接 CT 是有意为之：这两个方法签名上不提供取消，
-实现内部可能仍含等待（seek 复位、管线启停），失败经 `ErrorOccurred` 上报而非靠取消令牌
+- Methods requiring CT: OpenAsync / StopAsync / SeekAsync
+- Methods that do not require CT: PlayAsync / PauseAsync—not using CT is intentional: these two methods do not provide cancellation in their signatures,
+Implementations may still include waiting (seek reset, pipeline start/stop), and failures are reported via `ErrorOccurred` instead of revoking tokens
 
 ## Members
 
@@ -40,14 +40,14 @@ CancellationToken 传播策略：
 Task OpenAsync(IMediaSource source, CancellationToken ct = default);
 ```
 
-打开媒体源。支持取消。
+Open the media source. Support cancellation.
 
 **Parameters**
 
-- `source`: 媒体源。
-- `ct`: 取消令牌。
+- `source`: Media source.
+- `ct`: Cancel token.
 
-**Returns**: 表示打开操作的任务；失败时抛出异常（致命错误通道，见 `ErrorOccurred` remarks）。
+**Returns**: Represents the task that opens the operation; Throws exceptions on failure (fatal error channel, see `ErrorOccurred` remarks).
 
 ### PlayAsync
 
@@ -55,17 +55,17 @@ Task OpenAsync(IMediaSource source, CancellationToken ct = default);
 Task PlayAsync();
 ```
 
-开始播放（纯内存状态转换，无 CT）。
+Start playback (pure memory state transition, no CT).
 
-**前置条件**：媒体源须已成功打开，且状态处于就绪（Idle）/Paused/Stopped/Ended；
-未打开、Opening/Buffering/Error 态调用抛 `InvalidOperationException`（不启动管线、不改状态）。
+**Prerequisites**: The media source must have been successfully opened and be in Idle/Paused/Stopped/Ended status;
+Not open, Opening/Buffering/Error state calls throw `InvalidOperationException` (no pipeline started, no state changed).
 
-**幂等**：Playing 态重复调用直接返回，不重启管线。
+**Idempotent** :P laying state repeatedly calls and returns directly without restarting the pipeline.
 
-**失败语义**：守卫拒绝抛异常（不发错误事件）；启动过程中的失败经
-`ErrorOccurred` 上报、不抛出（与既有行为一致）。
+**Failure Semantics**: Guards refuse to throw exceptions (no error events); Failures during the startup process
+`ErrorOccurred` Report, do not throw (consistent with existing behavior).
 
-**Returns**: 表示播放启动操作的任务；启动过程中的失败经 `ErrorOccurred` 上报。
+**Returns**: Represents the task that plays the start operation; Failures during startup are reported by `ErrorOccurred`.
 
 ### PauseAsync
 
@@ -73,9 +73,9 @@ Task PlayAsync();
 Task PauseAsync();
 ```
 
-暂停播放（纯内存状态转换，无 CT）。
+Pause playback (pure memory state transition, no CT).
 
-**Returns**: 表示暂停状态转换的任务。
+**Returns**: Represents a task that pauses state transitions.
 
 ### StopAsync
 
@@ -83,19 +83,19 @@ Task PauseAsync();
 Task StopAsync(CancellationToken ct = default);
 ```
 
-停止播放。不阻塞、不等待管线线程退出；`ct` 当前不受理（保留位）。
+Stop playing. No blocking, no waiting for pipeline threads to exit; `ct` Currently not accepted (reserved bit).
 
-**实现现状**：当前实现只下发停止请求并返回已完成的 Task，**完全忽略 `ct`**，
-也不等待解码/渲染线程真正退出——停止是异步完成的。保留该参数是为了将来支持「等待式停止」时不破坏签名。
+**Current Implementation**: The current implementation only issues stop requests and returns completed Tasks, **completely ignoring `ct`**,
+Nor does it wait for the decoding/rendering thread to actually exit—stopping is done asynchronously. This parameter is retained to prevent signing from being broken when supporting "wait-and-hold stop" in the future.
 
-因此调用方不得把本方法返回视为「管线线程已停」的凭据；需要该保证时应自行等待或重新
+Therefore, the caller must not return this method as a credential that is considered "the pipeline thread has stopped"; If this guarantee is needed, you should wait or redo it yourself
 `OpenAsync`。
 
 **Parameters**
 
-- `ct`: 取消令牌（保留位，当前实现不受理，见 remarks）。
+- `ct`: Cancel tokens (reserved bits, currently implemented not accepted, see remarks).
 
-**Returns**: 下发停止请求后即完成的任务；**不**代表管线线程已退出。
+**Returns**: Tasks completed immediately after issuing a stop request; **No** means the pipeline thread has exited.
 
 ### SeekAsync
 
@@ -103,25 +103,25 @@ Task StopAsync(CancellationToken ct = default);
 Task SeekAsync(TimeSpan position, CancellationToken ct = default);
 ```
 
-定位到指定位置。支持取消。
+Locate to the specified location. Support cancellation.
 
-**失败语义**：定位失败必须**抛异常**而不是静默返回——当前实现先触发
-`ErrorOccurred`（`SeekFailed`）再抛出原异常，调用方据此可只处理异常、
-也可只订阅事件。
+**Failure Semantics**: Location failure requires **throwing an exception** instead of returning silently—the current implementation triggers first
+`ErrorOccurred`(`SeekFailed`) and throws the original exception, allowing the caller to handle only the exception,
+You can also subscribe to events only.
 
-**前置条件**：媒体源须已成功打开且状态非 Opening/Error——此时没有可定位的解封装器，
-定位无从执行。违反前置条件抛 `InvalidOperationException`（守卫拒绝，不发错误事件、
-不动时钟与缓冲）。
+**Prerequisite**: The media source must have been successfully opened and the status is not Opening/Error—there is no locative decapsulator available at this time,
+Positioning cannot be performed. Violation of prerequisites throws `InvalidOperationException` (Guard refuses, no error event issued,
+Still clock and buffer).
 
-**精度**：上层只承诺「已下发定位请求」，落点精度由解封装器决定
-（见 `IMediaDemuxer.SeekAsync` 的返回值语义）。
+**Accuracy**: The upper layer only promises "positioning request issued," and the placement accuracy is determined by the unpacker
+(See the return value semantics of `IMediaDemuxer.SeekAsync`).
 
 **Parameters**
 
-- `position`: 目标位置。
-- `ct`: 取消令牌。
+- `position`: Target location.
+- `ct`: Cancel token.
 
-**Returns**: 表示定位操作的任务；定位失败抛出异常（见 remarks）。
+**Returns**: Tasks representing positioning operations; Location failed to throw an exception (see remarks).
 
 ### State
 
@@ -129,7 +129,7 @@ Task SeekAsync(TimeSpan position, CancellationToken ct = default);
 MediaState State { get; }
 ```
 
-当前播放状态。
+Current playback status.
 
 ### Position
 
@@ -137,7 +137,7 @@ MediaState State { get; }
 TimeSpan Position { get; }
 ```
 
-当前播放位置（从 Clock 读取）。
+Current playback position (read from Clock).
 
 ### Duration
 
@@ -145,7 +145,7 @@ TimeSpan Position { get; }
 TimeSpan Duration { get; }
 ```
 
-媒体总时长。
+Total media time.
 
 ### Volume
 
@@ -153,7 +153,7 @@ TimeSpan Duration { get; }
 float Volume { get; set; }
 ```
 
-音量 (0.0~1.0)。
+Volume (0.0~1.0).
 
 ### IsMuted
 
@@ -161,7 +161,7 @@ float Volume { get; set; }
 bool IsMuted { get; set; }
 ```
 
-是否静音。
+Whether to mute.
 
 ### PlaybackRate
 
@@ -169,7 +169,7 @@ bool IsMuted { get; set; }
 float PlaybackRate { get; set; }
 ```
 
-播放速率 (1.0=正常)。
+Playback rate (1.0 = normal).
 
 ### Mode
 
@@ -177,10 +177,10 @@ float PlaybackRate { get; set; }
 ProcessingMode Mode { get; set; }
 ```
 
-无头 / 服务端处理模式（默认 `RealTime`，可切 `Fastest`）。
-设 `Fastest` 时关掉音视频同步、无头音频输出不实时节流，
-所有视频帧直接放行，适用于转码 / 离线 ML 等越快越好的批量处理场景。
-可在 `OpenAsync` 前后设置；Open 后设置即时生效（同步内存操作，无 I/O）。
+Headless / server-side processing mode (default `RealTime`, switchable `Fastest`).
+When setting `Fastest`, audio-video synchronization is disabled, and headless audio output is not throttled in real time,
+All video frames are released directly, suitable for batch processing scenarios where transcoding or offline ML are faster and better.
+Can be set before or after `OpenAsync`; Set to take effect immediately after opening (synchronized memory operation, no I/O).
 
 ### Session
 
@@ -188,7 +188,7 @@ ProcessingMode Mode { get; set; }
 IMediaSession? Session { get; }
 ```
 
-当前播放会话（未打开时为 null）。
+Current playback session (null when not open).
 
 ### StateChanged
 
@@ -196,9 +196,9 @@ IMediaSession? Session { get; }
 event EventHandler<MediaStateChangedEventArgs> StateChanged;
 ```
 
-状态变更事件。
+State change event.
 
-只通报状态迁移，不承载错误细节；非法/被忽略的迁移不会触发本事件。
+Only state migration is notified, without carrying error details; Illegal/ignored migrations will not trigger this event.
 
 ### ErrorOccurred
 
@@ -206,14 +206,14 @@ event EventHandler<MediaStateChangedEventArgs> StateChanged;
 event EventHandler<MediaErrorEventArgs> ErrorOccurred;
 ```
 
-错误事件。
+Error event.
 
-只通报错误，**不隐式改变状态**：订阅方收到后不得假定 `State` 已变为
+Only report errors, **no implicit state changes**: Subscribers must not assume that `State` has been changed to after receiving it
 `Error`。
 
-致命错误另有通道——`OpenAsync` 会抛出异常并由实现把状态置为 `Error`，
-此时本事件与 `StateChanged` 都会出现，但**两者先后顺序不作保证**，
-订阅方须各自幂等处理，不得依赖次序推断因果。
+Fatal errors have another channel—`OpenAsync` throws an exception and the implementation sets the state to `Error`,
+At this time, both this event and `StateChanged` will appear, but **the order of the two is not guaranteed**,
+Subscribers must handle their own idempotent matters and must not infer causality based on order.
 
 ### PositionChanged
 
@@ -221,7 +221,7 @@ event EventHandler<MediaErrorEventArgs> ErrorOccurred;
 event EventHandler<TimeSpan> PositionChanged;
 ```
 
-位置变更事件。
+Location change event.
 
 ### SubtitleReceived
 
@@ -229,7 +229,7 @@ event EventHandler<TimeSpan> PositionChanged;
 event EventHandler<SubtitleFrame?> SubtitleReceived;
 ```
 
-字幕帧到达事件（null = 无活动字幕，UI 清除显示）。
+Subtitle frame arrival event (null = no active subtitles, UI clears display).
 
 ### AudioDataAvailable
 
@@ -237,13 +237,13 @@ event EventHandler<SubtitleFrame?> SubtitleReceived;
 event Action<AudioFrame>? AudioDataAvailable;
 ```
 
-音频采样数据到达事件（供 AudioVisualizer 等可视化器消费）。
-由音频管线在每帧提交给输出前**同步触发**（音频管线线程），
-订阅方**仅可只读借用**传入的 `AudioFrame`：须在其回调内同步拷贝所需数据
-（PCM 字节 / 采样格式 / 采样率 / 声道数），**不得 Dispose、不得跨线程持有该帧引用**。
-未订阅时不触发（零额外开销）。
+Audio sampled data arrival event (for consumption by visualizers such as AudioVisualizer).
+**synchronously triggered** by the audio pipeline before each frame is submitted to output (audio pipeline thread),
+Subscriber **read-only** incoming `AudioFrame`: must synchronize the required copy within its callback
+(PCM bytes / sample format / sample rate / number of channels), **Do not dispose, do not hold references to this frame across threads**.
+Does not trigger when not subscribed (zero additional overhead).
 
-事件参数为契约层类型 `AudioFrame`，零外部引用合规。
+The event parameter is contract layer type `AudioFrame`, compliant with zero external references.
 
 ### VideoFrameAvailable
 
@@ -251,13 +251,13 @@ event Action<AudioFrame>? AudioDataAvailable;
 event Action<VideoFrame>? VideoFrameAvailable;
 ```
 
-视频帧到达事件（供 Skia 软渲染 Presenter 等消费）。
-由视频管线在 `SyncAction.Present` 分支、且 UI 已订阅（Skia 模式）时**同步触发**
-（视频管线线程），订阅方**仅可只读借用**传入的 `VideoFrame`：须在其回调内同步拷贝所需数据
-（像素缓冲 / 宽高 / 像素格式），**不得 Dispose、不得跨线程持有该帧引用**。
-未订阅（D3D11 原生 GPU 模式）时管线直接 Present 到已 Attach 的共享 SwapChain，不触发此事件，保持零额外开销。
+Video frame arrival events (for consumption such as Skia soft rendering Presenter).
+**Synchronously triggered** when the video pipeline branches at `SyncAction.Present` and the UI is subscribed (Skia mode)
+(Video pipeline thread), subscriber **can only borrow read-only** incoming `VideoFrame`: must synchronously copy the required data within its callback
+(Pixel buffer / width / pixel format), **Do not Dispose, do not hold the frame reference across threads**.
+When unsubscribed (D3D11 native GPU mode), the pipeline is directly presented to the attached shared SwapChain, preventing this event from being triggered and maintaining zero additional overhead.
 
-事件参数为契约层类型 `VideoFrame`，零外部引用合规。
+The event parameter is contract layer type `VideoFrame`, compliant with zero external references.
 
 ### VideoDroppedFrames
 
@@ -265,4 +265,4 @@ event Action<VideoFrame>? VideoFrameAvailable;
 long VideoDroppedFrames { get; }
 ```
 
-累计视频丢帧数（诊断/可观测性，只读）。含播放末段被同步器判 Drop 而非呈现的尾帧。
+Cumulative video frame loss (diagnostic/observable, read-only). Including the final frame of playback that was judged as Drop by the synchronizer rather than rendered.

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IVaApiExport.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IVaApiExport.cs)
 
-VAAPI 表面导出的 dma_buf 描述符（`VADRMPRIMESurfaceDescriptor` 托管载体，零外部引用）。
+dma_buf descriptor exported on the VAAPI surface (`VADRMPRIMESurfaceDescriptor` hosted carrier, zero external references).
 
 ## Declaration
 
@@ -24,11 +24,11 @@ public sealed class VaApiDmaBufDescriptor
 
 ## Remarks
 
-由 `TryExportSurfaceToDmaBuf` 填充。composed NV12 典型布局：
-`ObjectCount=1`（单 fd）、`LayerCount=1`、单层 `PlaneCount=2`（Y / UV），
-两平面共享同一对象索引、各自带 offset / pitch、共享一个 DRM 修饰符。
+Filled by `TryExportSurfaceToDmaBuf`. Typical layout of composed NV12:
+`ObjectCount=1` (single fd), `LayerCount=1`, single-layer `PlaneCount=2` (Y / UV),
+Both planes share the same object index, each with offset/pitch, and share a DRM modifier.
 
-纯托管结构（不跨原生边界封送），供解码器在托管侧 flatten 为 `GpuFrameImportSource` 的逐平面视图。
+Purely managed structure (no native boundary envelope), providing the decoder with flatten `GpuFrameImportSource` on the hosting side.
 
 ## Members
 
@@ -38,7 +38,7 @@ public sealed class VaApiDmaBufDescriptor
 public int Width;
 ```
 
-表面像素宽（像素）。
+Surface pixel width (pixels).
 
 ### Height
 
@@ -46,7 +46,7 @@ public int Width;
 public int Height;
 ```
 
-表面像素高（像素）。
+Surface pixel height (pixels).
 
 ### DrmFourcc
 
@@ -54,7 +54,7 @@ public int Height;
 public uint DrmFourcc;
 ```
 
-DRM fourcc（如 `0x3231564E` = 'NV12'）。
+DRM fourcc (e.g., `0x3231564E` = 'NV12').
 
 ### Modifier
 
@@ -62,7 +62,7 @@ DRM fourcc（如 `0x3231564E` = 'NV12'）。
 public ulong Modifier;
 ```
 
-每对象 DRM 格式修饰符（composed 时单对象，所有平面共享）。
+DRM formatting modifiers for each object (single object when composed, shared across all planes).
 
 ### ObjectCount
 
@@ -70,7 +70,7 @@ public ulong Modifier;
 public int ObjectCount;
 ```
 
-对象数（dma_buf fd 数）。composed NV12 = 1；separate layers = 2。
+Number of objects (dma_buf fd). composed NV12 = 1；separate layers = 2。
 
 ### ObjectFds
 
@@ -78,7 +78,7 @@ public int ObjectCount;
 public int[]? ObjectFds;
 ```
 
-每对象的 dma_buf fd（长度 = `ObjectCount`）。
+dma_buf fd per object (length = `ObjectCount`).
 
 ### LayerCount
 
@@ -86,7 +86,7 @@ public int[]? ObjectFds;
 public int LayerCount;
 ```
 
-层数（NV12 composed = 1 单层含 2 平面；separate = 2）。
+Number of layers (NV12 composed = 1, single layer contains 2 planes; separate = 2）。
 
 ### PlaneObjectIndices
 
@@ -94,7 +94,7 @@ public int LayerCount;
 public uint[]? PlaneObjectIndices;
 ```
 
-每平面所属对象索引（长度随层数 × 4，实际有效数见各层 PlaneCount）。
+Index of objects belonging to each plane (length × 4 per layer; actual effective count is shown in each layer's PlaneCount).
 
 ### PlaneOffsets
 
@@ -102,7 +102,7 @@ public uint[]? PlaneObjectIndices;
 public uint[]? PlaneOffsets;
 ```
 
-每平面在对象内的字节偏移（长度随层数 × 4）。
+Byte offset per plane within the object (length with layers × 4).
 
 ### PlanePitches
 
@@ -110,4 +110,4 @@ public uint[]? PlaneOffsets;
 public uint[]? PlanePitches;
 ```
 
-每平面的行字节步幅（长度随层数 × 4）。
+Row byte step length per plane (length with × 4 layers).

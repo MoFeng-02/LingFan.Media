@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IRendererHealth.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Renderers/IRendererHealth.cs)
 
-渲染器运行期健康通知契约。
+Renderer runtime health notification contract.
 
 ## Declaration
 
@@ -24,21 +24,21 @@ public interface IRendererHealth
 
 ## Remarks
 
-**用途**：渲染器可能在 `Attach` 成功、但运行期持续无法出画
-（如 Composition 合成器导入跨设备纹理失败）。此时若仍静默空白且不回退，违反「不能让某渲染器玩不了」
-的公平性要求。实现本接口的渲染器在持续失败时触发 `Unhealthy`，宿主据此把该渲染器
-拉黑并重建回退链（如 Composition → Skia），保证总有可用路径出画。
+**Purpose**: The renderer may succeed at `Attach` but cannot output during runtime
+(For example, Composition compositor fails to import cross-device textures). If the game remains silent and blank without reverting, it violates the rule of "not allowing a renderer to become unplayable."
+Fairness requirements. The renderer implementing this interface triggers `Unhealthy` when it repeatedly fails, and the host uses this to trigger the renderer
+Block and rebuild the fallback chain (such as Composition → Skia) to ensure there is always an available path to the drawing.
 
-**解耦**：定义在 Abstractions，UI 层（VideoView）只按契约订阅，不引用具体渲染器类型。
+**Decoupling**: Defined in Abstractions, the UI layer (VideoView) subscribes only by contract and does not reference specific renderer types.
 
-**触发口径**：本事件是**单次**信号——同一实例至多触发一次，实现须用原子闸门防止
-管线线程与 UI 线程并发重复触发。「连续失败」的阈值由实现自定，
-契约只要求判据是**连续**失败而非累计失败、且阈值 ≥ 1：突发一次失败不应直接拉黑渲染器。
+**Trigger Diameter**: This event is a **single ** signal—the same instance can trigger at most once, and must be prevented by using an atomic gate
+Pipeline threads and UI threads trigger concurrently and repeatedly. The threshold for "consecutive failures" is self-defined by implementation,
+The contract only requires the criterion to be **consecutive** failures rather than cumulative failures, and threshold ≥ 1: a single burst failure should not directly block the renderer.
 
-**无恢复通道**：本契约不提供「恢复健康」的通知。宿主收到后应把该实例与其工厂类型一起
-移出候选链并回退到下一个渲染器；同一实例不会经本契约回到可用状态，也不得被重新启用。
+**No Recovery Channel**: This contract does not provide "recovery of health" notifications. After receiving it, the host should include the instance along with its factory type
+Move out of the candidate chain and roll back to the next renderer; The same instance will not be restored to availability through this contract, nor can it be re-enabled.
 
-**AOT 兼容**：仅声明事件，无反射。
+**AOT Compatible**: Declare only events, no reflections.
 
 ## Members
 
@@ -48,5 +48,5 @@ public interface IRendererHealth
 event Action? Unhealthy;
 ```
 
-渲染器运行期不健康（连续无法呈现）时触发一次。
-由渲染器在管线线程触发；宿主须切回 UI 线程处理（重建回退链），避免跨线程操作控件。
+Triggered once when the renderer runtime is unhealthy (continuous failure to render).
+Triggered by the renderer in the pipeline thread; The host must switch back to UI thread processing (rebuild the fallback chain) to avoid cross-thread control operations.

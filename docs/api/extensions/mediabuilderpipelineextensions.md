@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaBuilderPipelineExtensions.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Extensions/MediaBuilderPipelineExtensions.cs)
 
-`MediaBuilder` 的管线后处理配置扩展（组合根侧）。
+Pipeline post-processing configuration extension (combined root side) for `MediaBuilder`.
 
 ## Declaration
 
@@ -24,11 +24,11 @@ public static class MediaBuilderPipelineExtensions
 
 ## Remarks
 
-这些方法依赖 Audio/Video 模块的 `AudioPipelineConfig` / `VideoPipelineConfig`，
-故留在组合根 Extensions（唯一全知位置），不下沉到 Composition 叶子——
-插件（后端/渲染器/输出）只需 MediaBuilder 的 Services/Options 注册面，不感知管线配置类型。
+These methods rely on the `AudioPipelineConfig` / `VideoPipelineConfig` of the Audio/Video module,
+Therefore, it stays at the Extensions (the only omniscient position) and does not sink into the Composition leaf—
+Plugins (backend/renderer/output) only need MediaBuilder's Services/Options registration face and do not perceive pipeline configuration types.
 
-调用语法与实例方法一致：`builder.WithAudioPipeline(config)`；各方法为同步配置，无 I/O。
+The syntax of calling is consistent with the instance method: `builder.WithAudioPipeline(config)`; Each method is configured synchronously, with no I/O.
 
 ## Members
 
@@ -38,19 +38,19 @@ public static class MediaBuilderPipelineExtensions
 public static MediaBuilder WithAudioPipeline(this MediaBuilder builder, AudioPipelineConfig config);
 ```
 
-注入音频管线配置，将效果链与重置钩子透传至 Core 音频管线。
+Inject the audio pipeline configuration to pass the effect chain and reset hook to the Core audio pipeline.
 
-宿主可保留 `config` 引用，在运行时通过 `IsEnabled` 调整单个效果启停；
-`ToTransforms()` / `ResetEffects` 闭包捕获的效果实例与此引用相同，运行时切换即时生效。
-不调用本方法则音频后处理与重置钩子为 null。
-如需同时接入音量控制 / 混音，请改用 `WithAudioTransforms` 自行组合（或在本方法之后另行调用以覆盖）。
+The host can keep the `config` reference and adjust the start and stop of individual effects at runtime via `IsEnabled`;
+`ToTransforms()` / `ResetEffects` The effect instance for closure capture is the same as this reference, and the runtime switch takes effect immediately.
+If this method is not called, the audio post-processing and reset hook will be null.
+If you need to access volume control and mixing simultaneously, use `WithAudioTransforms` to combine it yourself (or call it separately after this method to override).
 
 **Parameters**
 
-- `builder`: 媒体构建器。
-- `config`: 音频管线配置（含效果链及混音设置）。
+- `builder`: Media builder.
+- `config`: Audio pipeline configuration (including effect chains and mixing settings).
 
-**Returns**: 同一构建器，便于链式调用。
+**Returns**: The same builder facilitates chained calls.
 
 ### WithAudioTransforms
 
@@ -61,17 +61,17 @@ public static MediaBuilder WithAudioTransforms(
     Action? reset = null);
 ```
 
-直接注入已组合好的音频后处理变换链与重置钩子。
-适用于需将音量控制（`FromVolume`）、混音（`FromMixer`）
-与效果链（`ToTransforms`）组合后再注入的场景。
+Directly inject the assembled audio post-processing transformation chain and reset hook.
+Suitable for those who need to control volume (`FromVolume`) and mix (`FromMixer`)
+Scenes combined with effect chains (`ToTransforms`) and then injected.
 
 **Parameters**
 
-- `builder`: 媒体构建器。
-- `transforms`: 组合后的音频变换链（非 null）。
-- `reset`: 组合后的状态重置钩子（可为 null）。
+- `builder`: Media builder.
+- `transforms`: Combined audio transformation chain (non-null).
+- `reset`: Reset the combined state hook (can be null).
 
-**Returns**: 同一构建器，便于链式调用。
+**Returns**: The same builder facilitates chained calls.
 
 ### WithVideoPipeline
 
@@ -79,17 +79,17 @@ public static MediaBuilder WithAudioTransforms(
 public static MediaBuilder WithVideoPipeline(this MediaBuilder builder, VideoPipelineConfig config);
 ```
 
-注入视频管线配置，将后处理链与重置钩子透传至 Core 视频管线。
+Inject video pipeline configuration to pass the post-processing chain and reset hook to the Core video pipeline.
 
-不调用本方法则视频后处理与重置钩子为 null。
-如需自行组合后处理链与重置钩子，请改用 `WithVideoTransforms`。
+If this method is not called, the video post-processing and reset hook will be null.
+If you need to combine post-processing chains and reset hooks yourself, please use `WithVideoTransforms` instead.
 
 **Parameters**
 
-- `builder`: 媒体构建器。
-- `config`: 视频管线配置（含后处理链）。
+- `builder`: Media builder.
+- `config`: Video pipeline configuration (including post-processing chain).
 
-**Returns**: 同一构建器，便于链式调用。
+**Returns**: The same builder facilitates chained calls.
 
 ### WithVideoTransforms
 
@@ -100,12 +100,12 @@ public static MediaBuilder WithVideoTransforms(
     Action? reset = null);
 ```
 
-直接注入已组合好的视频后处理变换链与重置钩子。
+Directly inject the assembled video post-processing transformation chain and reset hook.
 
 **Parameters**
 
-- `builder`: 媒体构建器。
-- `transforms`: 组合后的视频变换链（非 null）。
-- `reset`: 组合后的状态重置钩子（可为 null）。
+- `builder`: Media builder.
+- `transforms`: Combined video transformation chain (non-null).
+- `reset`: Reset the combined state hook (can be null).
 
-**Returns**: 同一构建器，便于链式调用。
+**Returns**: The same builder facilitates chained calls.

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaStateChangedEventArgs.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Events/MediaStateChangedEventArgs.cs)
 
-播放状态变更事件参数。
+Playback status change event parameters.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class MediaStateChangedEventArgs : EventArgs
 public MediaState OldState { get; }
 ```
 
-变更前的状态。
+The state before the change.
 
 ### NewState
 
@@ -38,7 +38,7 @@ public MediaState OldState { get; }
 public MediaState NewState { get; }
 ```
 
-变更后的状态。
+The status after the change.
 
 ### Constructor
 
@@ -46,9 +46,9 @@ public MediaState NewState { get; }
 public MediaStateChangedEventArgs(MediaState oldState, MediaState newState);
 ```
 
-初始化 `MediaStateChangedEventArgs` 的新实例。
+Initialize a new instance of `MediaStateChangedEventArgs`.
 
 **Parameters**
 
-- `oldState`: 变更前的状态。
-- `newState`: 变更后的状态。
+- `oldState`: The state before the change.
+- `newState`: The status after the change.

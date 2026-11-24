@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`ClockSyncSource.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/ClockSyncSource.cs)
 
-时钟同步源。
+Clock synchronization source.
 
 ## Declaration
 
@@ -26,6 +26,6 @@ public enum ClockSyncSource : int
 
 | Value | Description |
 | --- | --- |
-| `Audio` | 音频时钟为主（IAudioOutput.PlaybackPosition 驱动）。 |
-| `Video` | 视频时钟为主（VideoFrame.Timestamp 驱动）。 |
-| `System` | 系统时钟为主（Stopwatch 驱动，无声时降级）。 |
+| `Audio` | Audio clock is dominant (IAudioOutput.PlaybackPosition driver). |
+| `Video` | Video clock is dominant (driven by VideoFrame.Timestamp). |
+| `System` | System clock is dominant (Stopwatch drive, downgraded when silent). |

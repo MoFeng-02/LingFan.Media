@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`ColorRange.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/ColorRange.cs)
 
-视频分量的取值区间（Full 或 Limited），决定 YUV→RGB 转换前是否需要偏移/缩放补偿。
+The value range of the video component (Full or Limited) determines whether offset/scaling compensation is needed before YUV → RGB conversion.
 
 ## Declaration
 
@@ -24,14 +24,14 @@ public enum ColorRange : int
 
 ## Remarks
 
-Limited（TV 区间）：Y∈[16,235]、色差∈[16,240]，转换前须做偏移与缩放补偿；
-Full（PC 区间）：0..255 直接使用。各后端应将自身范围字段映射到本枚举；
-未指定（`Unspecified`）时渲染端回退默认。
+Limited (TV interval): Y∈ [16,235], Component ∈ [16,240], offset and scaling compensation required before conversion;
+Full (PC interval): 0.. 255 Direct use. Each backend should map its own range fields to this enumeration;
+If (`Unspecified`) is not specified, the rendering side reverts to default.
 
 ## Values
 
 | Value | Description |
 | --- | --- |
-| `Unspecified` | 未指定。 |
+| `Unspecified` | Not specified. |
 | `Full` | Full range（0..255）。 |
-| `Limited` | Limited range（TV 区间）。 |
+| `Limited` | Limited range (TV range). |

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IAudioOutputFactory.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Outputs/IAudioOutputFactory.cs)
 
-音频输出工厂接口。
+Audio output factory interface.
 
 ## Declaration
 
@@ -24,7 +24,7 @@ public interface IAudioOutputFactory
 
 ## Remarks
 
-Singleton 工厂，无状态。每次 Create() 返回新实例（设备句柄独立）。
+Singleton factory, statusless. Each time Create() returns a new instance (device handle independent).
 
 ## Members
 
@@ -34,6 +34,6 @@ Singleton 工厂，无状态。每次 Create() 返回新实例（设备句柄独
 IAudioOutput Create();
 ```
 
-创建新的 IAudioOutput 实例。
+Create a new IAudioOutput instance.
 
-**Returns**: 新创建的音频输出实例（未初始化，须调用 `Initialize`）。
+**Returns**: Newly created audio output instance (not initialized, requires calling `Initialize`).

@@ -12,9 +12,9 @@ lang: "en-US"
 
 Source: [`SharedGpuSourcePolicy.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSourcePolicy.cs)
 
-共享表面源选型策略（宿主层设定，模块层只消费）：当同一环境存在多个可用的共享表面源时
-（如 Android 上 Vulkan 源与 OpenGL 源并存），由**宿主**按其渲染后端声明优先的句柄形态，
-各工厂据此自报 `IsAvailable`。
+Shared surface source selection strategy (host layer setting, module layer consumption only): When multiple available shared surface sources exist in the same environment
+(For example, on Android, Vulkan sources coexist with OpenGL sources), the **host** declares the preferred handle form according to its rendering backend,
+Each factory reported `IsAvailable` accordingly.
 
 ## Declaration
 
@@ -26,11 +26,11 @@ public static class SharedGpuSourcePolicy
 
 ## Remarks
 
-**为什么需要**：源的选择发生在挂载期，而宿主渲染后端（Vulkan / OpenGL ES / 软件）
-只有宿主自己知道；渲染期才发现不匹配会形成「不渲染 ⇒ 不失败 ⇒ 不回退」的死锁——
-因此把选型决策前置到宿主，是对该死锁的结构性规避。
+**Why is it needed**: Source selection occurs during mounting, while host renders backend (Vulkan / OpenGL ES / software)
+Only the host himself knows; During rendering, I discovered that mismatches would create deadlocks of 'no rendering⇒ no failure, ⇒ no rollback'—
+Therefore, pre-positioning selection decisions to the host is a structural avoidance of deadlocks.
 
-**默认值**：`null` = 不干预（各工厂按平台默认自报）。
+**Default value**: `null` = No intervention (each factory reports by default according to the platform).
 
 ## Members
 
@@ -40,6 +40,6 @@ public static class SharedGpuSourcePolicy
 public static SharedGpuHandleKind? PreferredKind;
 ```
 
-宿主期望优先的共享表面句柄形态；`null` 表示不干预（按平台默认）。
+Shared surface handle form preferred by the host; `null` means no intervention (platform default).
 
-跨线程读写经 `Volatile`（宿主启动期写入一次，渲染/管线线程读取）。
+Cross-thread read/write scripture `Volatile` (write once during host startup, read by rendering/pipeline threads).

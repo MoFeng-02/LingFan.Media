@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`RenderHandleType.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/RenderHandleType.cs)
 
-渲染句柄类型。
+Render handle type.
 
 ## Declaration
 
@@ -26,8 +26,8 @@ public enum RenderHandleType : int
 
 | Value | Description |
 | --- | --- |
-| `None` | 无句柄（如 Skia UI 模式不需要原生句柄）。 |
-| `Pointer` | 原始指针句柄（如 HWND / NSView 指针）。 |
-| `Texture` | GPU 纹理句柄（如 D3D11 Texture2D / VkImage）。 |
-| `Surface` | 表面句柄（如 EGLSurface / CAMetalLayer）。 |
-| `Context` | 上下文句柄（如 GLContext / D3D11Device）。 |
+| `None` | No handle (e.g., Skia UI mode does not require native handles). |
+| `Pointer` | Original pointer handles (such as HWND / NSView pointers). |
+| `Texture` | GPU texture handles (such as D3D11 Texture2D / VkImage). |
+| `Surface` | Surface handles (such as EGLSurface / CAMetalLayer). |
+| `Context` | Context handles (such as GLContext / D3D11Device). |

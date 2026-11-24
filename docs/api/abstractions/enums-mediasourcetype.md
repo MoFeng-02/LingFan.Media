@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`MediaSourceType.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/MediaSourceType.cs)
 
-媒体来源类型。
+Type of media source.
 
 ## Declaration
 
@@ -26,6 +26,6 @@ public enum MediaSourceType : int
 
 | Value | Description |
 | --- | --- |
-| `File` | 本地文件。 |
-| `Network` | 网络流。 |
-| `Stream` | 自定义流。 |
+| `File` | Local files. |
+| `Network` | Network flow. |
+| `Stream` | Custom flow. |

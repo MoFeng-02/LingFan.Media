@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IFramePool.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Frames/IFramePool.cs)
 
-帧对象池接口。供解码器等组件复用帧实例，降低分配与 GC 压力。
+Frame object pool interface. Allows components such as decoders to reuse frame instances, reducing allocation and GC load.
 
 ## Declaration
 
@@ -24,15 +24,15 @@ public interface IFramePool<T> where T : class
 
 ## Remarks
 
-**线程**：`Rent` 与 `Return` 必须可从任意线程调用——租借与归还可能
-分别发生在解码线程、管线线程与 UI 线程，实现须自带线程安全（如并发栈），不得要求调用方加锁。
+**Threads**: `Rent` and `Return` must be callable from any thread—lease and return possible
+This occurs in the decoding thread, pipeline thread, and UI thread, and must include thread safety (such as the concurrency stack) without requiring the caller to lock it.
 
-**所有权**：`Rent` 之后帧归调用方，`Return` 之后归池。
-调用方不得在归还后继续访问该帧（池会重置其内容，持有 GPU/缓冲资源的帧会被释放）。
+**Ownership**: After `Rent`, frames belong to the caller; after `Return`, frames belong to the pool.
+The caller must not continue to access the frame after returning it (the pool resets its contents, and frames holding GPU/buffer resources are released).
 
-**生命周期**：本接口自身不承担池的释放——池是否实现 `IDisposable`、
-释放后两个方法如何表现，由实现声明。约定下限：释放后 `Return` 必须**直接释放**
-传入的帧而非入池；`Rent` 允许返回新实例（不要求抛异常），使迟到的归还退化为释放而不是泄漏。
+**Lifecycle**: This interface does not handle pool release—whether the pool is implemented `IDisposable`,
+How the two methods behave after release is declared by implementation. Agreed Lower Limit: After release `Return` must be **released directly**
+Incoming frames rather than inbound frames; `Rent` Allow the return of new instances (no exception throwing), causing delayed returns to degenerate into releases rather than leaks.
 
 ## Members
 
@@ -42,9 +42,9 @@ public interface IFramePool<T> where T : class
 T Rent();
 ```
 
-租用一个帧实例。
+Rent a frame instance.
 
-**Returns**: 可复用的帧实例（池空时为新实例）；所有权归调用方，用毕须 `Return`。
+**Returns**: Reusable frame instances (new instances when the pool is empty); Ownership belongs to the caller, and after use, `Return` is required.
 
 ### Return
 
@@ -52,8 +52,8 @@ T Rent();
 void Return(T frame);
 ```
 
-归还帧实例到池中。
+Return the frame instance to the pool.
 
 **Parameters**
 
-- `frame`: 此前从本池 &lt;see cref="Rent"/&gt; 的帧；归还后不得再访问。
+- `frame`: Previously obtained from this pool &lt;see cref="Rent"/&gt; frame; After returning, no further visits are permitted.

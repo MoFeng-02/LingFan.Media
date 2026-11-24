@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`AudioCodec.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/AudioCodec.cs)
 
-音频编解码器类型。
+Audio codec type.
 
 ## Declaration
 
@@ -31,6 +31,6 @@ public enum AudioCodec : int
 | `Opus` | Opus。 |
 | `FLAC` | FLAC。 |
 | `Vorbis` | Vorbis。 |
-| `PCM` | PCM（无压缩原始音频）。 |
+| `PCM` | PCM (Uncompressed Original Audio). |
 | `AC3` | AC-3 / Dolby Digital。 |
-| `Unknown` | 未知编解码器。 |
+| `Unknown` | Unknown codec. |

@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`IBufferManager.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Core/IBufferManager.cs)
 
-缓冲管理器接口。
+Buffer manager interface.
 
 ## Declaration
 
@@ -24,11 +24,11 @@ public interface IBufferManager
 
 ## Remarks
 
-管理 Demuxer 到 Decoder 之间的数据包缓冲。
+Manage packet buffering between Demuxer and Decoder.
 
-FrameBuffer 无 SubtitleFrameQueue——字幕帧仅含文本和时间戳，
+FrameBuffer No SubtitleFrameQueue — Subtitle frames contain only text and timestamps,
 
-无 GPU 资源、无需 Dispose、无实时性要求。字幕帧由 SubtitleProcessor 内部缓存管理。
+No GPU resources, no Dispose, no real-time requirements. Subtitle frames are managed by the internal cache of the SubtitleProcessor.
 
 ## Members
 
@@ -38,7 +38,7 @@ FrameBuffer 无 SubtitleFrameQueue——字幕帧仅含文本和时间戳，
 TimeSpan BufferedDuration { get; }
 ```
 
-当前已缓存时长。
+Current cached duration.
 
 ### BufferedBytes
 
@@ -46,7 +46,7 @@ TimeSpan BufferedDuration { get; }
 long BufferedBytes { get; }
 ```
 
-当前缓冲大小（字节）。
+Current buffer size (bytes).
 
 ### IsReady
 
@@ -54,7 +54,7 @@ long BufferedBytes { get; }
 bool IsReady { get; }
 ```
 
-是否达到可播放阈值。
+Whether the playable threshold has been reached.
 
 ### State
 
@@ -62,7 +62,7 @@ bool IsReady { get; }
 BufferState State { get; }
 ```
 
-当前缓冲状态。
+Current buffer status.
 
 ### TargetDuration
 
@@ -70,13 +70,13 @@ BufferState State { get; }
 TimeSpan TargetDuration { get; set; }
 ```
 
-目标缓冲时长。
+Target buffer duration.
 
-**副作用**：setter 除更新目标时长外，还会按固定比例（目标的 40%）同步重算「就绪阈值」——
-即把目标调大/调小时，判定「缓冲是否足够、可以开始播放」的门槛会随之变化，调用方无需另行设置。
+**Side Effect**: Besides updating the target duration, the setter also synchronously recalculates the "ready threshold" at a fixed rate (40% of the target)—
+That is, by increasing the target size or setting it down, the threshold for determining whether the buffer is sufficient and playback can start will change accordingly, and the caller does not need to set it separately.
 
-该写入不触发事件、不立即重新评估就绪状态：新阈值在下一次就绪判定时生效；
-运行期改动它只会影响后续判定，不会回溯已进入播放的状态。
+This write does not trigger events or immediately reassess the ready state: the new threshold takes effect on the next ready check;
+Changes during runtime will only affect subsequent decisions and will not revert to the playback state.
 
 ### BufferProgressChanged
 
@@ -84,7 +84,7 @@ TimeSpan TargetDuration { get; set; }
 event EventHandler<BufferProgressEventArgs>? BufferProgressChanged;
 ```
 
-缓冲进度变更事件。
+Buffer progress change events.
 
 ### StartAsync
 
@@ -92,13 +92,13 @@ event EventHandler<BufferProgressEventArgs>? BufferProgressChanged;
 Task StartAsync(CancellationToken ct = default);
 ```
 
-开始缓冲（预读取）。支持取消。
+Start buffering (prefetching). Support cancellation.
 
 **Parameters**
 
-- `ct`: 取消令牌；取消后预读取停止。
+- `ct`: Cancel tokens; Prefetch stops after cancellation.
 
-**Returns**: 预读取完成或被取消时结束的任务。
+**Returns**: Prefetch tasks that end when completed or canceled.
 
 ### Stop
 
@@ -106,7 +106,7 @@ Task StartAsync(CancellationToken ct = default);
 void Stop();
 ```
 
-停止缓冲。
+Stop buffering.
 
 ### Clear
 
@@ -114,4 +114,4 @@ void Stop();
 void Clear();
 ```
 
-清空所有缓冲。
+Clear all buffers.

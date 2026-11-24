@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`BufferProgressEventArgs.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Events/BufferProgressEventArgs.cs)
 
-缓冲进度事件参数。
+Buffer progress event parameters.
 
 ## Declaration
 
@@ -30,7 +30,7 @@ public sealed class BufferProgressEventArgs : EventArgs
 public BufferState State { get; }
 ```
 
-当前缓冲状态。
+Current buffer status.
 
 ### BufferedDuration
 
@@ -38,7 +38,7 @@ public BufferState State { get; }
 public TimeSpan BufferedDuration { get; }
 ```
 
-已缓冲时长。
+Buffered duration.
 
 ### BufferedBytes
 
@@ -46,7 +46,7 @@ public TimeSpan BufferedDuration { get; }
 public long BufferedBytes { get; }
 ```
 
-已缓冲字节数。
+Number of bytes buffered.
 
 ### Progress
 
@@ -54,7 +54,7 @@ public long BufferedBytes { get; }
 public float Progress { get; }
 ```
 
-缓冲进度（0.0~1.0，仅网络流有意义）。
+Buffer progress (0.0~1.0, only network streams are meaningful).
 
 ### Constructor
 
@@ -62,11 +62,11 @@ public float Progress { get; }
 public BufferProgressEventArgs(BufferState state, TimeSpan bufferedDuration, long bufferedBytes, float progress);
 ```
 
-初始化 `BufferProgressEventArgs` 的新实例。
+Initialize a new instance of `BufferProgressEventArgs`.
 
 **Parameters**
 
-- `state`: 当前缓冲状态。
-- `bufferedDuration`: 已缓冲时长。
-- `bufferedBytes`: 已缓冲字节数。
-- `progress`: 缓冲进度（0.0~1.0，仅网络流有意义）。
+- `state`: Current buffer status.
+- `bufferedDuration`: Buffered duration.
+- `bufferedBytes`: Number of bytes buffered.
+- `progress`: Buffer progress (0.0~1.0, only network streams are meaningful).

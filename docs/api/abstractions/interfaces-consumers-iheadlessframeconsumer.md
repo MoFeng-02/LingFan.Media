@@ -12,9 +12,9 @@ lang: "en-US"
 
 Source: [`IHeadlessFrameConsumer.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Consumers/IHeadlessFrameConsumer.cs)
 
-无头帧消费契约（后端数据处理）。`VideoFrame` 经此交给下游计算，不渲染、不显示。
-简单场景可直接用 `Action{T}` 订阅 `VideoFrameAvailable`，无需本接口；
-本接口用于需要结构化生命周期 / 批量汇聚的场景（配合 `LingFan.Media.Consumers.ProcessingFrameSink`）。
+Headless consumption contract (backend data processing). `VideoFrame` This is handed over to downstream computation, no rendering or display.
+Simple scenarios can be directly used with `Action{T}` to subscribe to `VideoFrameAvailable`, no need for this interface;
+This interface is used for scenarios requiring structured lifecycle/batch aggregation (in conjunction with `LingFan.Media.Consumers.ProcessingFrameSink`).
 
 ## Declaration
 
@@ -26,14 +26,14 @@ public interface IHeadlessFrameConsumer : IDisposable, IAsyncDisposable
 
 ## Remarks
 
-零外部引用：仅依赖契约层中立类型（`VideoFrame`）。
+Zero external references: relies only on the contract layer neutral type (`VideoFrame`).
 
-只读借用模型：实现方在 `Consume` 中仅可读、可同步拷贝所需数据，
-**不得 Dispose、不得跨线程持有传入的 `VideoFrame`**——帧所有权归管线，回调返回后即释放。
+Read-only borrowing model: The implementer can only read and synchronously copy the required data in `Consume`,
+**No Dispose, no cross-thread holding of incoming `VideoFrame`** — frame ownership belongs to the pipeline and is released upon the callback.
 
-对称生命周期：实现 `IDisposable` + `IAsyncDisposable`。
+Symmetric lifecycle: implement `IDisposable` + `IAsyncDisposable`.
 
-AOT 兼容：纯接口契约，无反射、无 P/Invoke。
+AOT compatibility: pure interface contract, no reflection, no P/Invoke.
 
 ## Members
 
@@ -43,11 +43,11 @@ AOT 兼容：纯接口契约，无反射、无 P/Invoke。
 void Consume(VideoFrame frame);
 ```
 
-消费一帧。视频管线在调用后释放该帧（只读借用）。
-若需跨调用持有数据，须在方法内同步拷贝
-（CPU: `Data` 的 `ReadOnlySpan{T}` → 自有 buffer；
-GPU: `ReadbackToCpu` 取托管快照交下游）。
+Consume one frame. The video pipeline releases the frame after the call (read-only borrowing).
+If data is held across calls, it must be copied synchronously within the method
+(CPU: `Data`'s `ReadOnlySpan{T}` → own buffer;
+GPU: `ReadbackToCpu` Takes managed snapshots and submits them downstream).
 
 **Parameters**
 
-- `frame`: 当前帧（只读借用，回调返回即失效）。
+- `frame`: Current frame (read-only borrowed, invalid upon return callback).

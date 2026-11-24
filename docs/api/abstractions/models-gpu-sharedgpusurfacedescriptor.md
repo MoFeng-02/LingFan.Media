@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`SharedGpuSurfaceDescriptor.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Models/Gpu/SharedGpuSurfaceDescriptor.cs)
 
-共享 GPU 表面描述符（中立值对象）。描述一块可被宿主合成器导入的跨设备共享纹理。
+Share GPU surface descriptors (neutral value objects). Describes a cross-device shared texture that can be imported by the host compositor.
 
 ## Declaration
 
@@ -41,34 +41,33 @@ public readonly record struct SharedGpuSurfaceDescriptor(
 
 ## Remarks
 
-**纯数据**：不持有所有权，不可释放——底层纹理/内存生命周期归产出它的
-`ISharedGpuSurfaceSource` 管理。
+**Pure Data**: No ownership, no release—underlying textures/memory lifecycles are produced by it
+`ISharedGpuSurfaceSource` Management.
 
-**字段语义表（按 `Kind` 分派，唯一约定）**：
+**Field semantic table (assigned by `Kind`, unique convention)**:
 
 ```csharp
 Kind                              Handle                     NativeImage        NativeDeviceMemory  MemorySize            MemoryOffset
-D3D11TextureGlobalSharedHandle    D3D11 全局共享句柄          0                  0                   可为 0（不做校验）      0
-D3D11TextureNtHandle              D3D11 NT 句柄（暂无生产者）  0                  0                   可为 0                 0
-VulkanOpaqueNtHandle              外部内存 Win32 句柄         0                  0                   必填（严格相等校验）    0
-VulkanOpaquePosixFileDescriptor   外部内存 fd                 0                  0                   必填（严格相等校验）    0
-IOSurfaceRef                      IOSurfaceRef 引用           0                  0                   按导入路径需要时填写    0
-AndroidHardwareBuffer             AHB 引用（溯源/诊断）        0                  0                   分配字节数             0
-VulkanNativeImage                 VkImage（同 NativeImage）    VkImage            VkDeviceMemory      分配字节数             0
-GlTexture                         源 AHB 句柄（溯源/诊断）     EGLImageKHR        0                   0                     0
+D3D11TextureGlobalSharedHandle D3D11 Global shared handle 0 0 can be 0 (no validation) 0
+D3D11TextureNtHandle D3D11 NT handle (no producer available) 0 0 can be 0 0
+VulkanOpaqueNtHandle external memory Win32 handle 0 0 Required (strict equality check) 0
+VulkanOpaquePosixFileDescriptor external memory fd 0 0 Required (strict equality check) 0
+IOSurfaceRef IOSurfaceRef Reference 0 0 Enter 0 as needed for the import path
+AndroidHardwareBuffer AHB reference (traceability/diagnostics) 0 0 allocated bytes 0
+VulkanNativeImage VkImage (and NativeImage) VkImage VkDeviceMemory allocate bytes 0
+GlTexture source AHB handle (traceability/diagnosis) EGLImageKHR 0 0 0
 ```
 
-**填表规则**：表中未列出的原生字段必须保持 0——它们对该 Kind 无意义，
-非 0 会让消费方（或 `HasNativeImage` 这类守卫）误判路径可用。
-同一字段在不同 Kind 下含义不同，消费方必须先看 `Kind` 再解引用句柄。
+**Table Filling Rules**: Native fields not listed in the table must remain 0—they are meaningless for that Kind,
+Non-zero will cause the consumer (or guards like `HasNativeImage`) to misjudge the path as available.
+The same field has different meanings under different Kinds; consumers must first look at `Kind` before interpreting the reference handle.
 
-**句柄存活期**：句柄只在「生产者持有」的这段时间内有效——表内的原生句柄
-（尤其是 `VulkanOpaquePosixFileDescriptor` 的 fd 与
-`IOSurfaceRef` 的引用）由生产者持有至下一次
-`TryWriteFrame` 或该源 `Dispose` 为止。
-消费方若需跨调用持有，必须自行 dup / CFRetain 并承担对应释放责任；只在本帧内使用则无需复制。
+**Handle Lifetime**: The handle is only valid for the "producer-held" period—the native handle in the table
+(Especially the fd of `VulkanOpaquePosixFileDescriptor` and `IOSurfaceRef` citation) is held by the producer until the next time
+`TryWriteFrame` or the source `Dispose`.
+If the consumer wishes to hold across multiple accounts, they must dup/CFRetain themselves and bear the corresponding release responsibility; If used only within this frame, no copying is required.
 
-**AOT 兼容**：readonly record struct，无反射、无装箱路径。
+**AOT Compatible**: readonly record struct, no reflection, no boxing path.
 
 ## Members
 
@@ -78,16 +77,16 @@ GlTexture                         源 AHB 句柄（溯源/诊断）     EGLImage
 public bool IsValid => Handle != IntPtr.Zero && Width > 0 && Height > 0;
 ```
 
-句柄是否有效（非空且尺寸为正）。
+Whether the handle is valid (not empty and dimensionally positive).
 
-**校验范围**：只校验 `Handle` 非空与宽高为正，**不**按 `Kind`
-校验该类型必填的原生字段是否齐备。
+**Verification Scope**: Only verify `Handle` non-null and width/height are positive, **do not press `Kind`
+Verify that the required native fields for this type are complete.
 
-**按 Kind 的完整判据**见 `SharedGpuSurfaceDescriptor` 的字段语义表：
-消费方在真正导入前必须自行对照该表检查本 Kind 的必填字段（如
-`VulkanNativeImage` 须同时具备 NativeImage / NativeDeviceMemory /
-NativeVkFormat / NativeImageLayout / 队列族与 MemorySize；`GlTexture`
-须具备 NativeImage 与 NativeVkFormat）。只凭本属性判定会放过「句柄非空但原生参数不全」的描述符。
+**Complete criteria for Kind** See the field semantics table in `SharedGpuSurfaceDescriptor`:
+Before actual import, consumers must check the required fields for this Kind themselves against the table (such as
+`VulkanNativeImage` Must simultaneously have NativeImage / NativeDeviceMemory /
+NativeVkFormat / NativeImageLayout / Queue Family and MemorySize; `GlTexture`
+Must have NativeImage and NativeVkFormat). This attribute alone determines that descriptors with "handles not empty but native parameters are incomplete" will be overlooked.
 
 ### 0
 
@@ -99,11 +98,9 @@ public bool HasNativeImage =>
     && NativeImageLayout != 0;
 ```
 
-是否携带同 device 直采样所需的全套原生参数（VkImage + VkDeviceMemory + 格式 + 布局）。
+Whether to carry the full set of native parameters required for direct sampling on the same device (VkImage + VkDeviceMemory + format + layout).
 
-**用途**：供消费方在导入前做守卫——为 `false` 表示描述符不足以走
-`VulkanNativeImage` 直采样路径，应回退到导出/导入路径。
+**Purpose**: For consumers to act as guards before import—for `false` descriptors are insufficient
+`VulkanNativeImage` Direct sampling path, which should be backtracked to the export/import path.
 
-**判据只看上述四个字段、不看 `Kind`**：按字段语义表，非
-`VulkanNativeImage` 的 Kind 不应填这些字段，故结果自然为
-`false`。
+**Criteria only look at the above four fields, not `Kind`**: Semantic table by field, not The kind of `VulkanNativeImage` should not be filled in these fields, so the result is naturally `false`。

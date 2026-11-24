@@ -12,7 +12,7 @@ lang: "en-US"
 
 Source: [`VisualizerType.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Enums/VisualizerType.cs)
 
-音频可视化类型。
+Audio visualization type.
 
 ## Declaration
 
@@ -26,6 +26,6 @@ public enum VisualizerType : int
 
 | Value | Description |
 | --- | --- |
-| `Spectrum` | 频谱（FFT 频域分析）。 |
-| `Waveform` | 波形（时域波形）。 |
-| `Bars` | 经典柱状频谱。 |
+| `Spectrum` | Spectrum (FFT frequency domain analysis). |
+| `Waveform` | Waveform (time-domain waveform). |
+| `Bars` | Classic columnar spectrum. |

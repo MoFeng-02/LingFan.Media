@@ -12,8 +12,8 @@ lang: "en-US"
 
 Source: [`BackendDescriptor.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Player/BackendDescriptor.cs)
 
-一个已注册后端的只读描述（工厂接口集合，非实例）。
-由 `IBackendRegistry` 按 DI 注册顺序聚合，供中间件 / 高级消费方查看与选定后端。
+A read-only description of a registered backend (factory interface collection, non-instance).
+Aggregated by `IBackendRegistry` in DI registration order, for middleware/advanced consumers to view and select backends.
 
 ## Declaration
 
@@ -30,16 +30,16 @@ public sealed record BackendDescriptor(
 
 **Parameters**
 
-- `Name`: 后端友好名（如 "FFmpeg" / "MediaFoundation" / "VLC"）。
-- `Demuxer`: 解封装器工厂接口。
-- `VideoDecoder`: 视频解码器工厂接口。
-- `AudioDecoder`: 音频解码器工厂接口。
-- `SubtitleDecoder`: 字幕解码器工厂接口（可选；仅部分后端注册）。
+- `Name`: Backend-friendly names (such as "FFmpeg" / "MediaFoundation" / "VLC").
+- `Demuxer`: Decapsulator factory interface.
+- `VideoDecoder`: Video decoder factory interface.
+- `AudioDecoder`: Audio decoder factory interface.
+- `SubtitleDecoder`: Subtitle decoder factory interface (optional; Only partial backend registration).
 
 ## Remarks
 
-持有的是 **工厂接口**（DI 解析的 Singleton 无状态服务），**不是** player / 后端实例。
+What it holds is the **factory interface** (DI-parsed Singleton stateless service), **not the ** player/backend instance.
 
-命中某个后端组后，应把这些工厂接口交给
+After hitting a backend group, these factory interfaces should be passed on
 `Create(IMediaDemuxerFactory, IVideoDecoderFactory, IAudioDecoderFactory, ISubtitleDecoderFactory?)`
-去创建 Session 级对象。**lookup（接口）与 instance（实例）不可混淆。**
+Go create a Session-level object. ** lookup (interface) and instance (instance) should not be confused. **

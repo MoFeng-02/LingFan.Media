@@ -12,8 +12,8 @@ lang: "en-US"
 
 Source: [`GpuDeviceLostException.cs`](https://github.com/MoFeng-02/LingFan.Media/blob/main/src/Infrastructure/LingFan.Media.Abstractions/Exceptions/GpuDeviceLostException.cs)
 
-GPU 设备丢失异常（D3D11 `DXGI_ERROR_DEVICE_REMOVED`/`DEVICE_RESET`、
-Vulkan `VK_ERROR_DEVICE_LOST` 等）。
+GPU device missing abnormalities (D3D11 `DXGI_ERROR_DEVICE_REMOVED`/`DEVICE_RESET`,
+Vulkan `VK_ERROR_DEVICE_LOST`, etc.).
 
 ## Declaration
 
@@ -25,17 +25,17 @@ public sealed class GpuDeviceLostException : Exception
 
 ## Remarks
 
-**成因**：设备丢失由驱动崩溃/重置（TDR）、GPU 移除（外接显卡拔出）、
-驱动升级等引起——设备及其全部资源（纹理/缓冲/交换链）永久失效，任何后续调用都会失败。
+**Causes**: Device loss caused by driver crash/reset (TDR), GPU removal (external graphics card removed),
+Driver upgrades and similar issues cause permanent failure of the device and all its resources (textures/buffers/swap chains), causing any subsequent calls to fail.
 
-**语义**：渲染器检测到设备丢失时抛出本异常（替代泛化的 `InvalidOperationException`），
-使上层能以类型区分「可通过重建设备恢复的故障」与「逻辑错误」。
+**Semantics**: The renderer throws this exception when it detects a device loss (replacing the generalized `InvalidOperationException`),
+This allows the upper layer to distinguish by type between "failures recoverable by device rebuild" and "logical errors."
 
-**恢复路径**：异常沿 Present/Clear 调用链上抛至会话层；调用方释放当前
-播放会话并重建（重新 OpenAsync → Attach）——渲染器工厂会重新创建设备。
+**Recovery Path**: Exceptions are thrown along the Present/Clear call chain to the session layer; The caller releases the current
+Play the session and rebuild (reopen OpenAsync → Attach) — the renderer factory will recreate the device.
 
-**中立性**：仅 BCL 依赖，不携带任何图形 API 具体类型；诊断细节（DeviceRemovedReason 等）
-以消息文本承载。AOT 兼容：无序列化构造（NativeAOT 下二进制序列化不受支持）。
+**Neutrality**: BCL dependency only, without carrying any graphical API specific types; Diagnostic details (DeviceRemovedReason, etc.)
+Carried by message text. AOT compatibility: non-serialized constructs (binary serialization under Native AOT is not supported).
 
 ## Members
 
@@ -56,4 +56,4 @@ public GpuDeviceLostException(string message, Exception innerException)
     : base(message, innerException) { }
 ```
 
-初始化默认消息的实例。
+Initialize the instance of the default message.
