@@ -66,6 +66,7 @@
     <Project Path="src/Tools/VulkanVideoHardDecodeProbe/VulkanVideoHardDecodeProbe.csproj" />
     <Project Path="src/Tools/WasapiDriverProbe/WasapiDriverProbe.csproj" />
     <Project Path="src/Tools/WasapiSineProbe/WasapiSineProbe.csproj" />
+    <Project Path="src/Tools/GpuPresenterProbe/GpuPresenterProbe.csproj" />
   </Folder>
   <Folder Name="/Tools/AvaloniaTools/">
     <Project Path="src/Tools/AvaloniaTools/LingFan.Media.AvaloniaTools/LingFan.Media.AvaloniaTools.Android/LingFan.Media.AvaloniaTools.Android.csproj">
