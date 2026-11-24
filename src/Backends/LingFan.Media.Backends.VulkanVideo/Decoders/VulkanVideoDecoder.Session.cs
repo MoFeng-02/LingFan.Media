@@ -29,9 +29,15 @@ internal sealed unsafe partial class VulkanVideoDecoder
         h264Profile.StdProfileIdc = _paramSet.Sps.ProfileIdc;
         h264Profile.PictureLayout = (VideoDecodeH264PictureLayoutFlagsKHR)0; // Progressive = 0
 
+        // 解码用途提示（FFmpeg 权威范式：profile.pNext 链 UsageInfo→H264Profile）
+        VideoDecodeUsageInfoKHR decodeUsage;
+        decodeUsage.SType = StructureType.VideoDecodeUsageInfoKhr;
+        decodeUsage.PNext = &h264Profile;
+        decodeUsage.VideoUsageHints = VideoDecodeUsageFlagsKHR.DefaultKhr;
+
         VideoProfileInfoKHR profile;
         profile.SType = StructureType.VideoProfileInfoKhr;
-        profile.PNext = &h264Profile;
+        profile.PNext = &decodeUsage;
         profile.VideoCodecOperation = VideoCodecOperationFlagsKHR.DecodeH264BitKhr;
         profile.ChromaSubsampling = VideoChromaSubsamplingFlagsKHR.Subsampling420BitKhr;
         profile.LumaBitDepth = VideoComponentBitDepthFlagsKHR.Depth8BitKhr;
@@ -59,6 +65,9 @@ internal sealed unsafe partial class VulkanVideoDecoder
         var res = VulkanNative.GetPhysicalDeviceVideoCapabilitiesKHR(_physicalDevice, &profile, &caps);
         if (res != Result.Success)
             throw new NotSupportedException($"vkGetPhysicalDeviceVideoCapabilitiesKHR 失败：{res}");
+        Console.WriteLine($"[DIAG-CAPS] maxLevelIdc={(int)h264Caps.MaxLevelIdc} flags=0x{(uint)caps.Flags:X} " +
+                          $"minCoded={caps.MinCodedExtent.Width}x{caps.MinCodedExtent.Height} " +
+                          $"maxCoded={caps.MaxCodedExtent.Width}x{caps.MaxCodedExtent.Height}");
 
         _maxDpbSlots = (int)Math.Min(caps.MaxDpbSlots, 32);
         if (_maxDpbSlots < 1) _maxDpbSlots = 1;

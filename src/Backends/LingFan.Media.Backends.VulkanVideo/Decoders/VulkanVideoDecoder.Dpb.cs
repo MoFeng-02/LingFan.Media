@@ -39,9 +39,15 @@ internal sealed unsafe partial class VulkanVideoDecoder
         h264Profile.PNext = null;
         h264Profile.StdProfileIdc = _paramSet!.Sps.ProfileIdc;
         h264Profile.PictureLayout = (VideoDecodeH264PictureLayoutFlagsKHR)0; // Progressive
+        // 解码用途提示（FFmpeg 权威范式：profile.pNext 链 UsageInfo→H264Profile；
+        // 缺 UsageInfo 时部分驱动按「无解码用途」处理格式支持集 → 06811）。
+        VideoDecodeUsageInfoKHR decodeUsage;
+        decodeUsage.SType = StructureType.VideoDecodeUsageInfoKhr;
+        decodeUsage.PNext = &h264Profile;
+        decodeUsage.VideoUsageHints = VideoDecodeUsageFlagsKHR.DefaultKhr;
         VideoProfileInfoKHR profile;
         profile.SType = StructureType.VideoProfileInfoKhr;
-        profile.PNext = &h264Profile;
+        profile.PNext = &decodeUsage;
         profile.VideoCodecOperation = VideoCodecOperationFlagsKHR.DecodeH264BitKhr;
         profile.ChromaSubsampling = VideoChromaSubsamplingFlagsKHR.Subsampling420BitKhr;
         profile.LumaBitDepth = VideoComponentBitDepthFlagsKHR.Depth8BitKhr;
@@ -52,44 +58,62 @@ internal sealed unsafe partial class VulkanVideoDecoder
         profileList.ProfileCount = 1;
         profileList.PProfiles = &profile;
 
-        // DPB 图像 usage/flags：按 Khronos Vulkan-Video-Samples 权威范式
-        // 关键约束：视频格式属性查询的「返回值」只能用来确认 format/tiling 支持，
-        // 绝不可把返回的 imageUsageFlags/imageCreateFlags 直接回填给 vkCreateImage——
-        // 本机驱动对 decode profile 返回 0xFC07（含 VIDEO_ENCODE_* 位），直接采用会要求
-        // VK_KHR_video_encode_queue 扩展 → VUID-usage-parameter/04816/06811 → 图像判"profile 无关"
-        // → 解码静默 no-op → 全零 DPB 绿屏。故显式构造 decode-only usage + MUTABLE 标志，忽略查询返回值。
+        // DPB 图像 usage/flags：以视频格式属性查询返回值为权威（VUID-06811 supportedVideoFormat）。
+        // 查询输入必须是「最小 decode usage」（DPB|DST，Coincide 模式）——与 FFmpeg hwcontext_vulkan
+        // 同口径；输入越宽驱动返回的支持集越窄（曾以含 SAMPLED/SRC 的宽 usage 查询得 flags=0）。
+        // 创建图像用「返回支持集」本身（它已含驱动允许的 SAMPLED/TRANSFER_SRC/MUTABLE 等），
+        // 仅剔除 SPARSE 位（未启用 sparse 特性）；不额外添加返回集之外的位（06811 根因）。
         PhysicalDeviceVideoFormatInfoKHR fmtInfo;
         fmtInfo.SType = StructureType.PhysicalDeviceVideoFormatInfoKhr;
         fmtInfo.PNext = &profileList;
-        // 查询用 decode-only usage（Coincide 模式须含 DPB_BIT|DST_BIT），仅用于确认格式支持。
-        fmtInfo.ImageUsage = ImageUsageFlags.VideoDecodeDpbBitKhr | ImageUsageFlags.VideoDecodeDstBitKhr
-                           | ImageUsageFlags.VideoDecodeSrcBitKhr;
+        // 查询 usage 与 FFmpeg vulkan_decode.c 完全一致（Coincide：DPB|DST|TRANSFER_SRC|SAMPLED，
+        // 不含 DECODE_SRC——SRC 是码流缓冲 usage，混入图像查询会改变驱动返回的 flags 支持集）。
+        ImageUsageFlags queryUsage = ImageUsageFlags.VideoDecodeDpbBitKhr | ImageUsageFlags.VideoDecodeDstBitKhr
+                           | ImageUsageFlags.TransferSrcBit | ImageUsageFlags.SampledBit;
+        fmtInfo.ImageUsage = queryUsage;
         uint fmtCount = 0;
         Result fmtRes = VulkanNative.GetPhysicalDeviceVideoFormatPropertiesKHR(_physicalDevice, &fmtInfo, &fmtCount, null);
         bool fmtOk = fmtRes == Result.Success && fmtCount > 0;
+        ImageUsageFlags supportedUsage = 0;
+        ImageCreateFlags supportedFlags = 0;
+        bool fmtSupported = false;
         if (fmtOk)
         {
             var fmtProps = stackalloc VideoFormatPropertiesKHR[(int)fmtCount];
             for (uint fi = 0; fi < fmtCount; fi++)
                 fmtProps[(int)fi].SType = StructureType.VideoFormatPropertiesKhr;
             fmtRes = VulkanNative.GetPhysicalDeviceVideoFormatPropertiesKHR(_physicalDevice, &fmtInfo, &fmtCount, fmtProps);
-            // 仅核对 format 是否受支持（忽略返回的 usage/flags，按权威范式自构）。
-            bool fmtSupported = false;
             for (uint fi = 0; fi < fmtCount; fi++)
-                if (fmtProps[(int)fi].Format == Format.G8B8R82Plane420Unorm) { fmtSupported = true; break; }
+            {
+                if (fmtProps[(int)fi].Format != Format.G8B8R82Plane420Unorm) continue;
+                fmtSupported = true;
+                supportedUsage = fmtProps[(int)fi].ImageUsageFlags;
+                supportedFlags = fmtProps[(int)fi].ImageCreateFlags;
+                Console.WriteLine($"[DIAG-FMT] 驱动支持集: usage=0x{(uint)supportedUsage:X} flags=0x{(uint)supportedFlags:X} " +
+                                  $"imageType={fmtProps[(int)fi].ImageType} tiling={fmtProps[(int)fi].ImageTiling} " +
+                                  $"components=({fmtProps[(int)fi].ComponentMapping.R},{fmtProps[(int)fi].ComponentMapping.G}," +
+                                  $"{fmtProps[(int)fi].ComponentMapping.B},{fmtProps[(int)fi].ComponentMapping.A})");
+                break;
+            }
             if (!fmtSupported)
                 Console.WriteLine($"[DIAG-FMT] 警告：查询未返回 G8B8R82Plane420Unorm（fmtCount={fmtCount}），DPB 格式可能不被支持。");
         }
 
-        // 显式构造（decode-only，无 ENCODE/SPARSE；转换器采样/回读需 SAMPLED|TRANSFER_SRC）：
-        ImageUsageFlags dpbUsage = ImageUsageFlags.VideoDecodeDpbBitKhr
-                                 | ImageUsageFlags.VideoDecodeDstBitKhr
-                                 | ImageUsageFlags.VideoDecodeSrcBitKhr
-                                 | ImageUsageFlags.SampledBit
-                                 | ImageUsageFlags.TransferSrcBit;
-        // MUTABLE_FORMAT_BIT（转换器 per-plane R8/R8G8 视图必需，VUID-12397/01564）；
-        // 含 SAMPLED 的多平面图像再加 EXTENDED_USAGE_BIT（VUID-01564）。权威范式仅 MUTABLE，此处保守补齐两者。
-        ImageCreateFlags dpbCreateFlags = (ImageCreateFlags)0x00000008u | (ImageCreateFlags)0x00000004u;
+        // 创建用支持集（decode 三位必须在内，否则创建期 fail-fast 回落，不静默假绿）：
+        // 创建用支持集 ∩ decode-only（剔除 ENCODE 三位：未启用 video_encode_queue 扩展，
+        // VUID-usage-parameter 要求 usage 位对应扩展已启用）：
+        ImageUsageFlags encodeMask = ImageUsageFlags.VideoEncodeDstBitKhr | ImageUsageFlags.VideoEncodeSrcBitKhr
+                                   | ImageUsageFlags.VideoEncodeDpbBitKhr;
+        ImageUsageFlags dpbUsage = supportedUsage & ~encodeMask;
+        ImageUsageFlags requiredDecode = ImageUsageFlags.VideoDecodeDpbBitKhr | ImageUsageFlags.VideoDecodeDstBitKhr;
+        if ((dpbUsage & requiredDecode) != requiredDecode)
+            throw new NotSupportedException(
+                $"驱动视频格式支持集缺 decode 必需 usage（supported=0x{(uint)supportedUsage:X}），Vulkan 硬解不可用。");
+        // flags：支持集剔除 SPARSE 三位（未启用 sparse 特性，VUID-01924/00987）。
+        // MUTABLE_FORMAT 为 per-plane 视图必需（VUID-12397）；支持集无则 per-plane 采样不可建，fail-fast。
+        ImageCreateFlags sparseMask = ImageCreateFlags.CreateSparseBindingBit | ImageCreateFlags.CreateSparseResidencyBit
+                                    | ImageCreateFlags.CreateSparseAliasedBit;
+        ImageCreateFlags dpbCreateFlags = supportedFlags & ~sparseMask;
         Console.WriteLine($"[DIAG-FMT] DPB 格式构造: format=G8B8R82Plane420Unorm createFlags=0x{(uint)dpbCreateFlags:X} usage=0x{(uint)dpbUsage:X} (queryOk={fmtOk})");
 
         var imageCi = new ImageCreateInfo
@@ -137,13 +161,13 @@ internal sealed unsafe partial class VulkanVideoDecoder
 
         // 单一 layered 解码绑定视图：aspect=COLOR_BIT（VUID-07818：每视图至多一个 multiplanar aspect，
         // PLANE_0|PLANE_1 同时出现非法 → 视图创建失败 → 解码静默 no-op）。
-        // 链 VkImageViewUsageCreateInfo、usage 仅 decode（不含 SAMPLED）→ 避免 VUID-06415
+        // 链 VkImageViewUsageCreateInfo、usage 仅 decode DST|DPB（不含 SAMPLED）→ 避免 VUID-06415
         //（multiplanar 格式 + SAMPLED 须带 VkSamplerYcbcrConversionInfo，解码绑定视图不需要）。
+        // 亦不得含 VIDEO_DECODE_SRC（VUID-08335：该位只属 image 不属 view，解码源是码流缓冲）。
         ImageViewUsageCreateInfo viewUsage;
         viewUsage.SType = StructureType.ImageViewUsageCreateInfo;
         viewUsage.PNext = null;
-        viewUsage.Usage = ImageUsageFlags.VideoDecodeDstBitKhr | ImageUsageFlags.VideoDecodeDpbBitKhr
-                        | ImageUsageFlags.VideoDecodeSrcBitKhr;
+        viewUsage.Usage = ImageUsageFlags.VideoDecodeDstBitKhr | ImageUsageFlags.VideoDecodeDpbBitKhr;
         var viewCi = new ImageViewCreateInfo
         {
             SType = StructureType.ImageViewCreateInfo,

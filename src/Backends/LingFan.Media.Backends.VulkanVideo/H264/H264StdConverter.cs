@@ -320,20 +320,21 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         pDst = sl;
     }
 
-    // 辅助：level_idc 映射
-
+    // 辅助：level_idc 映射（H.264 level_idc=10/11/…/62 → STD 枚举 0..18，
+    // 对照 vulkan_video_codec_h264std.h：1_0=0…1_3=3、2_0=4…2_2=6、3_0=7…3_2=9、
+    // 4_0=10…4_2=12、5_0=13…5_2=15、6_0=16…6_2=18；注意 2.x 只有 3 档、4.x 只有 3 档）
     private static StdVideoH264LevelIdc MapLevel(byte levelIdc)
     {
         int tens = levelIdc / 10;
         int units = levelIdc % 10;
         int v = tens switch
         {
-            1 => units,
-            2 => 4 + units,
-            3 => 7 + units,
-            4 => 10 + units,
-            5 => 13 + units,
-            6 => 16 + units,
+            1 => units,          // 1.0..1.3 → 0..3
+            2 => 4 + units,      // 2.0..2.2 → 4..6
+            3 => 7 + units,      // 3.0..3.2 → 7..9
+            4 => 10 + units,     // 4.0..4.2 → 10..12
+            5 => 13 + units,     // 5.0..5.2 → 13..15
+            6 => 16 + units,     // 6.0..6.2 → 16..18
             _ => 0
         };
         if (v < 0 || v > 18) v = 0;
