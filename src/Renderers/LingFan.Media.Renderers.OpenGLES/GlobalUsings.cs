@@ -9,5 +9,6 @@ global using Microsoft.Extensions.DependencyInjection;
 global using LingFan.Media.Composition;
 // 共享渲染层（中性窗口句柄传输类型，非契约层）
 global using LingFan.Media.Renderers.Shared;
+global using LingFan.Media.Renderers.Shared.Context;
 
 // 组合共享叶子（MediaBuilder/MediaOptions/LazySupport）

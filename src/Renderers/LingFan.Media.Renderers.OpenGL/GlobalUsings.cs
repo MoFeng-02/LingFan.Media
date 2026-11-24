@@ -9,6 +9,7 @@ global using Microsoft.Extensions.DependencyInjection;
 global using LingFan.Media.Composition;
 // 共享渲染层（中性窗口句柄传输类型 X11WindowHandle 等，非契约层）
 global using LingFan.Media.Renderers.Shared;
+global using LingFan.Media.Renderers.Shared.Context;
 // EGL 互操作底座（EglNative / EglDmaBufImport，GPUShare.EGL 唯一真源）
 global using LingFan.Media.GPUShare.EGL;
 

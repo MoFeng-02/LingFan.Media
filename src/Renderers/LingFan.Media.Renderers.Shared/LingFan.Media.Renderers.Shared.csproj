@@ -4,6 +4,12 @@
     <ProjectReference Include="..\..\Infrastructure\LingFan.Media.Abstractions\LingFan.Media.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- IGlContext 为渲染器内部协作契约：仅供桌面 GL 与 GLES 两渲染器实现（同 Composition→Extensions 模式） -->
+    <InternalsVisibleTo Include="LingFan.Media.Renderers.OpenGL" />
+    <InternalsVisibleTo Include="LingFan.Media.Renderers.OpenGLES" />
+  </ItemGroup>
+
   <PropertyGroup>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
