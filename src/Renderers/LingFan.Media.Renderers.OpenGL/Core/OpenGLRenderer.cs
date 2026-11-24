@@ -179,6 +179,36 @@ public sealed class OpenGLRenderer : IVideoRenderer
         }
     }
 
+    /// <summary>
+    /// 在 GL 共享组串行锁内执行一段「绑定→GL 工作→解绑」操作（Attach/Detach/Clear/Dispose 等非 Present 路径共用）。
+    /// </summary>
+    /// <param name="action">在上下文已 current 的前提下执行的 GL 工作。</param>
+    /// <remarks>
+    /// 共享组任一时刻只允许一个线程做绑定+GL 工作（同 <see cref="Present"/>）；
+    /// 无设备上下文（独立渲染器，无共享组）时退化为仅本渲染器 <c>_gate</c> 互斥。
+    /// </remarks>
+    private void WithGlCurrent(Action action)
+    {
+        object? glLock = _deviceContext?.GlAccessLock;
+        if (glLock is not null) Monitor.Enter(glLock);
+        try
+        {
+            _context!.MakeCurrent();
+            try
+            {
+                action();
+            }
+            finally
+            {
+                _context!.ReleaseCurrent();
+            }
+        }
+        finally
+        {
+            if (glLock is not null) Monitor.Exit(glLock);
+        }
+    }
+
     /// <inheritdoc />
     public void Detach()
     {
@@ -186,15 +216,8 @@ public sealed class OpenGLRenderer : IVideoRenderer
         {
             if (_disposed || !_attached) return;
 
-            try
-            {
-                _context?.MakeCurrent();
-                _shaderPipeline?.Dispose();
-            }
-            finally
-            {
-                _context?.ReleaseCurrent();
-            }
+            if (_context is not null)
+                WithGlCurrent(() => _shaderPipeline?.Dispose());
             _shaderPipeline = null;
             _context?.Dispose();
             _context = null;
@@ -219,35 +242,47 @@ public sealed class OpenGLRenderer : IVideoRenderer
                 throw new InvalidOperationException("渲染器未附加渲染目标，无法 Present。");
             }
 
-            _context.MakeCurrent();
+            // GL 共享组串行锁：on-screen 上下文与离屏共享组上下文同组，WGL 驱动对同组上下文的
+            // 跨线程交替绑定可能瞬态拒绝；与生产者导入/帧资源释放共用同一把锁（GlAccessLock），
+            // 保证同组任一时刻只有一个线程在做绑定+GL 工作（_gate 仍保渲染器自身状态互斥）。
+            object? glLock = _deviceContext?.GlAccessLock;
+            if (glLock is not null) Monitor.Enter(glLock);
             try
             {
-                switch (frame.Resource)
+                _context.MakeCurrent();
+                try
                 {
-                    case SoftwareFrameResource sw:
-                        // 统一走 Shader 路径：GPU 缩放（frame→target）+ YUV→RGB / RGB 直通
-                        _shaderPipeline.Present(sw, _attachedWidth, _attachedHeight, _scaleMode);
-                        break;
+                    switch (frame.Resource)
+                    {
+                        case SoftwareFrameResource sw:
+                            // 统一走 Shader 路径：GPU 缩放（frame→target）+ YUV→RGB / RGB 直通
+                            _shaderPipeline.Present(sw, _attachedWidth, _attachedHeight, _scaleMode);
+                            break;
 
-                    case IGpuTextureResource gpu:
-                        // 零拷贝 GPU 纹理路径：解码侧经共享组产出的 GL 纹理（NativeTextureHandle 为 GL 纹理 ID），
-                        // 在当前已 current 的 on-screen 上下文中直接采样，无需 CPU 回读。
-                        _shaderPipeline.PresentGpuTexture(gpu, _attachedWidth, _attachedHeight, _scaleMode);
-                        break;
+                        case IGpuTextureResource gpu:
+                            // 零拷贝 GPU 纹理路径：解码侧经共享组产出的 GL 纹理（NativeTextureHandle 为 GL 纹理 ID），
+                            // 在当前已 current 的 on-screen 上下文中直接采样，无需 CPU 回读。
+                            _shaderPipeline.PresentGpuTexture(gpu, _attachedWidth, _attachedHeight, _scaleMode);
+                            break;
 
-                    default:
-                        throw new NotSupportedException(
-                            $"不支持的帧资源类型：{frame.Resource?.GetType().Name ?? "null"}。" +
-                            "OpenGL 渲染器支持 SoftwareFrameResource。");
+                        default:
+                            throw new NotSupportedException(
+                                $"不支持的帧资源类型：{frame.Resource?.GetType().Name ?? "null"}。" +
+                                "OpenGL 渲染器支持 SoftwareFrameResource。");
+                    }
+
+                    _context.SwapBuffers();
+                    _presentSeq++;
                 }
-
-                _context.SwapBuffers();
-                _presentSeq++;
+                finally
+                {
+                    // GL 上下文线程亲和：渲染完毕后解绑，交还上下文使 Detach/Dispose（主线程）可安全重新绑定。
+                    _context.ReleaseCurrent();
+                }
             }
             finally
             {
-                // GL 上下文线程亲和：渲染完毕后解绑，交还上下文使 Detach/Dispose（主线程）可安全重新绑定。
-                _context.ReleaseCurrent();
+                if (glLock is not null) Monitor.Exit(glLock);
             }
         }
     }
@@ -260,16 +295,11 @@ public sealed class OpenGLRenderer : IVideoRenderer
         {
             if (_disposed || !_attached || _context is null || _shaderPipeline is null) return;
 
-            _context.MakeCurrent();
-            try
+            WithGlCurrent(() =>
             {
-                _shaderPipeline.Clear(_attachedWidth, _attachedHeight);
-                _context.SwapBuffers();
-            }
-            finally
-            {
-                _context.ReleaseCurrent();
-            }
+                _shaderPipeline!.Clear(_attachedWidth, _attachedHeight);
+                _context!.SwapBuffers();
+            });
         }
     }
 
@@ -281,15 +311,8 @@ public sealed class OpenGLRenderer : IVideoRenderer
             if (_disposed) return;
             _disposed = true;
 
-            try
-            {
-                _context?.MakeCurrent();
-                _shaderPipeline?.Dispose();
-            }
-            finally
-            {
-                _context?.ReleaseCurrent();
-            }
+            if (_context is not null)
+                WithGlCurrent(() => _shaderPipeline?.Dispose());
             _shaderPipeline = null;
             _context?.Dispose();
             _context = null;

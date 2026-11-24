@@ -24,6 +24,30 @@ internal static unsafe partial class GLNative
     [LibraryImport("opengl32", EntryPoint = "wglMakeCurrent")]
     public static partial int wglMakeCurrent(nint hdc, nint hglrc);
 
+    // 诊断用：查询调用线程当前绑定的 HGLRC / HDC（绑定失败时用于定位「上下文被谁占用」）。
+    [LibraryImport("opengl32", EntryPoint = "wglGetCurrentContext")]
+    public static partial nint wglGetCurrentContext();
+
+    [LibraryImport("opengl32", EntryPoint = "wglGetCurrentDC")]
+    public static partial nint wglGetCurrentDC();
+
+    // 诊断用：DC 像素格式与归属窗口（绑定失败时区分「DC 失效」vs「上下文被占用」）。
+    [LibraryImport("gdi32", EntryPoint = "GetPixelFormat")]
+    public static partial int GetPixelFormat(nint hdc);
+
+    [LibraryImport("user32", EntryPoint = "WindowFromDC")]
+    public static partial nint WindowFromDC(nint hdc);
+
+    [LibraryImport("user32", EntryPoint = "IsWindow")]
+    public static partial int IsWindow(nint hwnd);
+
+    // 诊断用：窗口创建线程的原生线程 ID（DestroyWindow 跨线程调用会静默失败，须核对归属）。
+    [LibraryImport("kernel32", EntryPoint = "GetCurrentThreadId")]
+    public static partial uint GetCurrentThreadId();
+
+    [LibraryImport("user32", EntryPoint = "GetWindowThreadProcessId")]
+    public static partial uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+
     [LibraryImport("opengl32", EntryPoint = "wglDeleteContext")]
     public static partial int wglDeleteContext(nint hglrc);
 

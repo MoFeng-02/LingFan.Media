@@ -311,8 +311,12 @@ internal sealed unsafe partial class EglContext : IGlContext
 
     public void MakeCurrent()
     {
-        if (_context != nint.Zero)
-            EglNative.eglMakeCurrent(_display, _surface, _surface, _context);
+        if (_context == nint.Zero)
+            throw new InvalidOperationException("EGL：上下文已释放，无法绑定。");
+        // 返回值必须校验（同 WglContext）：绑定失败静默继续会让后续 GL 调用在无效上下文上执行。
+        if (EglNative.eglMakeCurrent(_display, _surface, _surface, _context) == 0)
+            throw new InvalidOperationException(
+                $"EGL：eglMakeCurrent 失败（0x{EglNative.eglGetError():X8}），上下文可能被其他线程占用。");
     }
 
     public void ReleaseCurrent() => EglNative.eglMakeCurrent(_display, nint.Zero, nint.Zero, nint.Zero);

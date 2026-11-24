@@ -181,7 +181,9 @@ internal static partial class Program
                     var wc = new NativeMethods.WNDCLASSEXW
                     {
                         cbSize = (uint)Marshal.SizeOf<NativeMethods.WNDCLASSEXW>(),
-                        style = 0,
+                        // CS_OWNDC(0x0020)：WGL 上下文要求窗口私有 DC，共享 DC 被系统回收复用会让
+                        // wglMakeCurrent 间歇性失败(err=0)——与渲染器离屏窗口类同口径。
+                        style = 0x0020,
                         lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProcKeepAlive),
                         hInstance = IntPtr.Zero,
                         hbrBackground = NativeMethods.GetStockObject(4), // BLACK_BRUSH=4
