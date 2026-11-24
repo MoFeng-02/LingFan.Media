@@ -1,9 +1,23 @@
 name: Docs CI
 
-# Validates the documentation on every pull request that touches the docs or the
-# contract source the API reference is generated from. The drift gate runs against
-# the committed state BEFORE regeneration, so a stale generated reference (source
-# changed but docs not regenerated) fails the check instead of being silently fixed.
+# Documentation quality gate + automatic regeneration.
+#
+# Two complementary jobs:
+#   validate  — PR gate: the committed docs must already be unified with source
+#               (drift gate BEFORE regeneration). Keeps authors honest: run
+#               `pnpm docs:gen` (and translate) locally before opening a PR.
+#   auto-gen  — push to main: regenerate the API reference + refresh translation
+#               memory from source, and commit any drift back automatically.
+#               Forgetting `docs:gen` locally no longer breaks the build/deploy:
+#               CI self-heals the generated artifacts. Only generated files are
+#               touched (docs/api, docs/zh/api, manifest, sidebar, i18n TM);
+#               hand-written guide prose is never auto-edited.
+#
+# The auto-commit uses [skip ci] and only touches docs/** + i18n, so it does not
+# re-trigger Docs CI / Deploy Docs (their paths filters exclude nothing here, but
+# [skip ci] suppresses all push-triggered workflows for that commit). Deploy Docs
+# still runs on the ORIGINAL push and builds from freshly generated output, so the
+# published site is always current even before the auto-commit lands.
 
 on:
   pull_request:
@@ -13,6 +27,13 @@ on:
       - 'src/Infrastructure/LingFan.Media.Extensions/**'
       - '.github/workflows/docs-ci.yml'
       - '.github/workflows/deploy-docs.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'src/Infrastructure/LingFan.Media.Abstractions/**'
+      - 'src/Infrastructure/LingFan.Media.Extensions/**'
+      - '.github/workflows/docs-ci.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,7 +44,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # PR gate: committed docs must be clean BEFORE regeneration (author discipline).
   validate:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -56,3 +79,66 @@ jobs:
       - name: Build site
         working-directory: docs
         run: pnpm docs:build
+
+  # Push to main: regenerate + translate + self-heal commit. Never fails the build
+  # on stale generated docs — it fixes them. Translation network failure is
+  # non-fatal (TM stays partial; gen falls back to source text, site still builds).
+  auto-gen:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit regenerated docs back to main
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history not needed; token must be able to push.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: docs
+        run: pnpm install --frozen-lockfile
+
+      - name: Refresh translation memory (best effort)
+        working-directory: docs
+        continue-on-error: true
+        run: pnpm docs:translate --locale en
+
+      - name: Generate API reference
+        working-directory: docs
+        run: pnpm docs:gen
+
+      - name: Quality gate (post-regeneration)
+        working-directory: docs
+        run: pnpm docs:check
+
+      - name: Build site
+        working-directory: docs
+        run: pnpm docs:build
+
+      - name: Commit regenerated docs (self-heal)
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Only generated artifacts — never hand-written guide prose.
+          git add docs/api docs/zh/api docs/i18n docs/.vitepress/api-sidebar.json
+          if git diff --cached --quiet; then
+            echo "Generated docs already in sync — nothing to commit."
+          else
+            git commit -m "docs: auto-regenerate API reference + translation memory [skip ci]"
+            git push origin HEAD:main
+            echo "Committed regenerated docs back to main."
+          fi

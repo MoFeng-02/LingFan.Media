@@ -5,7 +5,7 @@ namespace: "LingFan.Media.Abstractions"
 source: "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/IGpuDeviceContext.cs"
 generated: true
 generator: "scripts/gen-api.mjs"
-symbols: ["IGpuDeviceContext", "ApiType", "DeviceHandle", "ContextHandle", "SharedDevice", "SharedPhysicalDevice", "VideoQueueFamilyIndex", "GraphicsQueueFamilyIndex", "IsInitialized", "InitializeAsync", "GetCapabilities"]
+symbols: ["IGpuDeviceContext", "ApiType", "DeviceHandle", "ContextHandle", "SharedDevice", "SharedPhysicalDevice", "VideoQueueFamilyIndex", "GraphicsQueueFamilyIndex", "false", "IsInitialized", "InitializeAsync", "GetCapabilities"]
 lang: "en-US"
 ---
 # IGpuDeviceContext
@@ -104,6 +104,18 @@ Graphics rendering queue family index (corresponding to `VK_QUEUE_GRAPHICS_BIT`)
 Vulkan hard-coded DPB images must be shared between the "video-decode queue family" and the "graphic queue family" (cross-queue family zero-copy read/write upload).
 This value is used by the decoder to correctly set the queue family list for `VK_SHARING_MODE_CONCURRENT` when creating the DPB image.
 Only the Vulkan backend makes sense; When not a Vulkan backend or a single queue family, it is `MaxValue` (decoder degenerates to a family exclusive).
+
+### false
+
+```csharp
+bool SupportsVideoProfileIndependent => false;
+```
+
+Whether the device has enabled the video-maintenance1 capability (Vulkan `VK_KHR_video_maintenance1`).
+`videoMaintenance1` Features). After enabled, DPB images can be brought in
+`VK_IMAGE_CREATE_VIDEO_PROFILE_INDEPENDENT_BIT_KHR`, bypass the "flags ⊆ driver format support set"
+Check (VUID-06811) to ensure that the required MUTABLE_FORMAT for per-plane views is still valid on drivers supporting set flags=0.
+Non-Vulkan backends are always `false`. Default false (DIM compatible existing implementation).
 
 ### IsInitialized
 

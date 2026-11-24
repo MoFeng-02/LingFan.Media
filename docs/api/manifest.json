@@ -716,11 +716,12 @@
         "SharedPhysicalDevice",
         "VideoQueueFamilyIndex",
         "GraphicsQueueFamilyIndex",
+        "false",
         "IsInitialized",
         "InitializeAsync",
         "GetCapabilities"
       ],
-      "sourceHash": "72344ec7fd8ede39f1a1a89cc2c422b01384fbf32f10bfb1b2e9d44f615bf0f1",
+      "sourceHash": "912c2be6ef042dfe79aaaa9cfc8fe8e21aba2ef1486106a8c01faecb3adf41fa",
       "project": "abstractions"
     },
     {
@@ -2599,7 +2600,7 @@
       "page": "api/abstractions/interfaces-gpu-igpudevicecontext",
       "pageZh": "zh/api/abstractions/interfaces-gpu-igpudevicecontext",
       "source": "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/IGpuDeviceContext.cs",
-      "sourceHash": "72344ec7fd8ede39f1a1a89cc2c422b01384fbf32f10bfb1b2e9d44f615bf0f1",
+      "sourceHash": "912c2be6ef042dfe79aaaa9cfc8fe8e21aba2ef1486106a8c01faecb3adf41fa",
       "project": "abstractions",
       "types": [
         "IGpuDeviceContext"

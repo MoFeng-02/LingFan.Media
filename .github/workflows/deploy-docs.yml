@@ -42,13 +42,21 @@ jobs:
         working-directory: docs
         run: pnpm install --frozen-lockfile
 
-      - name: Drift gate (committed docs vs source)
+      # Deploy always builds from FRESHLY generated output, so a stale committed
+      # reference (author forgot `pnpm docs:gen`) never breaks the published site.
+      # Translation refresh is best effort; gen falls back to source text on gaps.
+      - name: Refresh translation memory (best effort)
         working-directory: docs
-        run: pnpm docs:check
+        continue-on-error: true
+        run: pnpm docs:translate --locale en
 
       - name: Generate API reference
         working-directory: docs
         run: pnpm docs:gen
+
+      - name: Quality gate (post-regeneration)
+        working-directory: docs
+        run: pnpm docs:check
 
       - name: Build site
         working-directory: docs

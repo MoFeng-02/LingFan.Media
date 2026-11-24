@@ -5,7 +5,7 @@ namespace: "LingFan.Media.Abstractions"
 source: "src/Infrastructure/LingFan.Media.Abstractions/Interfaces/Gpu/IGpuDeviceContext.cs"
 generated: true
 generator: "scripts/gen-api.mjs"
-symbols: ["IGpuDeviceContext", "ApiType", "DeviceHandle", "ContextHandle", "SharedDevice", "SharedPhysicalDevice", "VideoQueueFamilyIndex", "GraphicsQueueFamilyIndex", "IsInitialized", "InitializeAsync", "GetCapabilities"]
+symbols: ["IGpuDeviceContext", "ApiType", "DeviceHandle", "ContextHandle", "SharedDevice", "SharedPhysicalDevice", "VideoQueueFamilyIndex", "GraphicsQueueFamilyIndex", "false", "IsInitialized", "InitializeAsync", "GetCapabilities"]
 lang: "zh-CN"
 ---
 # IGpuDeviceContext
@@ -104,6 +104,18 @@ uint GraphicsQueueFamilyIndex { get; }
 Vulkan 硬解 DPB 图像需在「video-decode 队列族」与「图形队列族」之间共享（跨队列族读写零拷贝上屏），
 此值供解码器在创建 DPB 图像时正确设置 `VK_SHARING_MODE_CONCURRENT` 的队列族列表。
 仅 Vulkan 后端有意义；非 Vulkan 后端或单一队列族时为 `MaxValue`（解码器退化为同族独占）。
+
+### false
+
+```csharp
+bool SupportsVideoProfileIndependent => false;
+```
+
+设备是否已启用 video-maintenance1 能力（Vulkan `VK_KHR_video_maintenance1` 的
+`videoMaintenance1` 特性）。启用后 DPB 图像可带
+`VK_IMAGE_CREATE_VIDEO_PROFILE_INDEPENDENT_BIT_KHR`，绕过「flags ⊆ 驱动格式支持集」
+检查（VUID-06811），使 per-plane 视图所需的 MUTABLE_FORMAT 在支持集 flags=0 的驱动上仍合法。
+非 Vulkan 后端恒 `false`。默认 false（DIM 兼容既有实现）。
 
 ### IsInitialized
 

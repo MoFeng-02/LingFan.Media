@@ -92,6 +92,12 @@
       "engine": "edge-free",
       "reviewed": false
     },
+    "031f1a3336d92d62b78bd8c2a792f86b87e780ca": {
+      "src": "设备是否已启用 video-maintenance1 能力（Vulkan `VK_KHR_video_maintenance1` 的\n`videoMaintenance1` 特性）。启用后 DPB 图像可带\n`VK_IMAGE_CREATE_VIDEO_PROFILE_INDEPENDENT_BIT_KHR`，绕过「flags ⊆ 驱动格式支持集」\n检查（VUID-06811），使 per-plane 视图所需的 MUTABLE_FORMAT 在支持集 flags=0 的驱动上仍合法。\n非 Vulkan 后端恒 `false`。默认 false（DIM 兼容既有实现）。",
+      "dst": "Whether the device has enabled the video-maintenance1 capability (Vulkan `VK_KHR_video_maintenance1`).\n`videoMaintenance1` Features). After enabled, DPB images can be brought in\n`VK_IMAGE_CREATE_VIDEO_PROFILE_INDEPENDENT_BIT_KHR`, bypass the \"flags ⊆ driver format support set\"\nCheck (VUID-06811) to ensure that the required MUTABLE_FORMAT for per-plane views is still valid on drivers supporting set flags=0.\nNon-Vulkan backends are always `false`. Default false (DIM compatible existing implementation).",
+      "engine": "edge-free",
+      "reviewed": false
+    },
     "033a8ada93cd85e1c6683ccea2a3b8edaba48d46": {
       "src": "帧率（FPS）。",
       "dst": "Frame rate (FPS).",
