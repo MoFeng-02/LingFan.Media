@@ -21,7 +21,7 @@
     <Project Path="src/Backends/LingFan.Media.Backends.VulkanVideo/LingFan.Media.Backends.VulkanVideo.csproj" />
   </Folder>
   <Folder Name="/Presenters/">
-    <Project Path="src/Presenters/LingFan.Media.GpuPresenter/LingFan.Media.GpuPresenter.csproj" />
+    <Project Path="src/Presenters/LingFan.Media.Presenters/LingFan.Media.Presenters.csproj" />
   </Folder>
   <Folder Name="/Renderers/">
     <Project Path="src/Renderers/LingFan.Media.Renderers.D3D11/LingFan.Media.Renderers.D3D11.csproj" />

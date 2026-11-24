@@ -52,6 +52,6 @@
 		     由 net10.0-android 入口工程直接引用并经 Extensions 平台注册钩子（MediaBuilderPlatformRegistrar）注入。 -->
 		<ProjectReference Include="..\..\..\..\Renderers\LingFan.Media.Renderers.D3D11\LingFan.Media.Renderers.D3D11.csproj" />
 		<ProjectReference Include="..\..\..\..\Outputs\LingFan.Media.Outputs\LingFan.Media.Outputs.csproj" />
-		<ProjectReference Include="..\..\..\..\Presenters\LingFan.Media.GpuPresenter\LingFan.Media.GpuPresenter.csproj" />
+		<ProjectReference Include="..\..\..\..\Presenters\LingFan.Media.Presenters\LingFan.Media.Presenters.csproj" />
 	</ItemGroup>
 </Project>

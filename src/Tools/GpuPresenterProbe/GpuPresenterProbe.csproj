@@ -10,7 +10,7 @@
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="11.0.0" />
-		<ProjectReference Include="..\..\Presenters\LingFan.Media.GpuPresenter\LingFan.Media.GpuPresenter.csproj" />
+		<ProjectReference Include="..\..\Presenters\LingFan.Media.Presenters\LingFan.Media.Presenters.csproj" />
 		<ProjectReference Include="..\..\Infrastructure\LingFan.Media.Extensions\LingFan.Media.Extensions.csproj" />
 	</ItemGroup>
 

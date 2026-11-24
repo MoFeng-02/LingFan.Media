@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace LingFan.Media.Presenters;
 
 /// <summary>
-/// Vulkan GPU 呈现器的 DI 注册扩展。位于中立的 LingFan.Media.GpuPresenter 项目（无 UI 依赖）。
+/// Vulkan GPU 呈现器的 DI 注册扩展。位于中立的 LingFan.Media.Presenters 项目（无 UI 依赖）。
 /// </summary>
 /// <remarks>
 /// <para><b>落点说明</b>：扩展方法放在 GpuPresenter 项目而非 Extensions 项目——

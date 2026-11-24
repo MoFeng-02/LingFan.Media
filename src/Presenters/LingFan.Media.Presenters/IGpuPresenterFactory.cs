@@ -5,7 +5,7 @@ namespace LingFan.Media.Presenters;
 /// </summary>
 /// <remarks>
 /// <para><b>匹配机制</b>：VideoView 按工厂的 <see cref="PresenterType"/>（Type 对象）匹配已注册工厂，
-/// 无需编译期引用具体 GPU 项目（如 LingFan.Media.GpuPresenter.D3D11），符合依赖倒置。</para>
+/// 无需编译期引用具体 GPU 项目（如 LingFan.Media.Presenters.D3D11），符合依赖倒置。</para>
 /// <para><b>异步策略</b>：config 分类——纯工厂方法，无 I/O。</para>
 /// <para><b>AOT 兼容</b>：实现应为 sealed 类。</para>
 /// </remarks>
