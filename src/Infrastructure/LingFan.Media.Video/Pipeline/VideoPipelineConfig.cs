@@ -1,7 +1,7 @@
 namespace LingFan.Media.Video;
 
 /// <summary>
-/// 视频管线配置快照。由 <see cref="VideoPipeline.BuildConfig"/> 生成，
+/// 视频管线配置快照。由 <see cref="VideoPipelineSetup.BuildConfig"/> 生成，
 /// 供 MediaPlayer 在创建 Core <c>VideoPipeline</c> 执行器时消费。
 /// </summary>
 /// <remarks>

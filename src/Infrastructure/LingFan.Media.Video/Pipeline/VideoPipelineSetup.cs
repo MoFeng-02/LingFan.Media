@@ -10,7 +10,7 @@ namespace LingFan.Media.Video;
 /// (<see cref="VideoPipelineConfig"/>)，供 MediaPlayer 创建 Core 执行器时消费。</para>
 /// <para>非线程安全（配置在播放启动前设置，运行时不可修改）。</para>
 /// </remarks>
-public sealed class VideoPipeline
+public sealed class VideoPipelineSetup
 {
     private readonly List<IVideoProcessor> _processors = [];
     private VideoSettings _settings = new();

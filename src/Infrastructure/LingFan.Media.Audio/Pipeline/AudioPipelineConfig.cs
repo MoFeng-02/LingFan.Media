@@ -1,7 +1,7 @@
 namespace LingFan.Media.Audio;
 
 /// <summary>
-/// 音频管线配置快照。由 <see cref="AudioPipeline.BuildConfig"/> 生成，
+/// 音频管线配置快照。由 <see cref="AudioPipelineSetup.BuildConfig"/> 生成，
 /// 供 MediaPlayer在创建 Core <c>AudioPipeline</c> 执行器时消费。
 /// </summary>
 /// <remarks>
