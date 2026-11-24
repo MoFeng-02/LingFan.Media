@@ -236,6 +236,12 @@
       "engine": "edge-free",
       "reviewed": false
     },
+    "0b913b71be20ad8c6bef48a35843605be9f91954": {
+      "src": "G 通道 U 系数（−0.344136，公式中取负）。",
+      "dst": "G channel U coefficient (−0.344136, negative in the formula).",
+      "engine": "edge-free",
+      "reviewed": false
+    },
     "0bfb86aa406a7cbb14b8558cdb6ec46484ef4e1e": {
       "src": "待消费的视频帧（只读借用，见 summary）。",
       "dst": "Video frames to be consumed (read-only borrowed, see summary).",
@@ -824,6 +830,12 @@
       "engine": "edge-free",
       "reviewed": false
     },
+    "27bc528f395d09f4df6008be9fe0186fb2c74239": {
+      "src": "B 通道 U 系数（+1.772）。",
+      "dst": "B channel U coefficient (+1.772).",
+      "engine": "edge-free",
+      "reviewed": false
+    },
     "27c169378b754977fd5c7e693fd93d01fa3e3095": {
       "src": "**用途**：渲染器可能在 `Attach` 成功、但运行期持续无法出画\n（如 Composition 合成器导入跨设备纹理失败）。此时若仍静默空白且不回退，违反「不能让某渲染器玩不了」\n的公平性要求。实现本接口的渲染器在持续失败时触发 `Unhealthy`，宿主据此把该渲染器\n拉黑并重建回退链（如 Composition → Skia），保证总有可用路径出画。\n\n**解耦**：定义在 Abstractions，UI 层（VideoView）只按契约订阅，不引用具体渲染器类型。\n\n**触发口径**：本事件是**单次**信号——同一实例至多触发一次，实现须用原子闸门防止\n管线线程与 UI 线程并发重复触发。「连续失败」的阈值由实现自定，\n契约只要求判据是**连续**失败而非累计失败、且阈值 ≥ 1：突发一次失败不应直接拉黑渲染器。\n\n**无恢复通道**：本契约不提供「恢复健康」的通知。宿主收到后应把该实例与其工厂类型一起\n移出候选链并回退到下一个渲染器；同一实例不会经本契约回到可用状态，也不得被重新启用。\n\n**AOT 兼容**：仅声明事件，无反射。",
       "dst": "**Purpose**: The renderer may succeed at `Attach` but cannot output during runtime\n(For example, Composition compositor fails to import cross-device textures). If the game remains silent and blank without reverting, it violates the rule of \"not allowing a renderer to become unplayable.\"\nFairness requirements. The renderer implementing this interface triggers `Unhealthy` when it repeatedly fails, and the host uses this to trigger the renderer\nBlock and rebuild the fallback chain (such as Composition → Skia) to ensure there is always an available path to the drawing.\n\n**Decoupling**: Defined in Abstractions, the UI layer (VideoView) subscribes only by contract and does not reference specific renderer types.\n\n**Trigger Diameter**: This event is a **single ** signal—the same instance can trigger at most once, and must be prevented by using an atomic gate\nPipeline threads and UI threads trigger concurrently and repeatedly. The threshold for \"consecutive failures\" is self-defined by implementation,\nThe contract only requires the criterion to be **consecutive** failures rather than cumulative failures, and threshold ≥ 1: a single burst failure should not directly block the renderer.\n\n**No Recovery Channel**: This contract does not provide \"recovery of health\" notifications. After receiving it, the host should include the instance along with its factory type\nMove out of the candidate chain and roll back to the next renderer; The same instance will not be restored to availability through this contract, nor can it be re-enabled.\n\n**AOT Compatible**: Declare only events, no reflections.",
@@ -875,6 +887,12 @@
     "2a7c4121bf361644325c394eb3d89a4004e509bd": {
       "src": "`Standard` 与 `Range` 决定\nYUV→RGB 的亮度/色差矩阵与分量偏移；`Transfer` 标识传输特性。\n前两者均未指定（`IsSpecified` 为 `false`）时，\n渲染端回退 BT.601-Full（保持既有默认行为）。",
       "dst": "`Standard` and `Range` are decided\nYUV → RGB brightness/color difference matrix and component offset; `Transfer` Identify transmission characteristics.\nIf neither of the first two is specified (`IsSpecified` is `false`),\nThe renderer rolls back BT.601-Full (maintaining the default behavior).",
+      "engine": "edge-free",
+      "reviewed": false
+    },
+    "2ab9f050b8800e6b221a7bc0d6d018c634a631e5": {
+      "src": "公式（Y/U/V 为 0..255 整数域，色度中心 128）：\nR = Y + `Rv`·(V−128)；\nG = Y − `Gu`·(U−128) − `Gv`·(V−128)；\nB = Y + `Bu`·(U−128)；结果钳制到 0..255。\n\n归一化域（0..1，色度中心 0.5）使用同一组系数。GPU 着色器路径\n（D3D11 HLSL / GLSL / MSL / SPIR-V）内嵌同一组数值，修改本类时须同步核对各着色器源，\n否则 CPU 兜底与 GPU 主路径色彩漂移。\n\n本类只覆盖 BT.601-Full 默认矩阵；BT.709/BT.2020 与 limited-range 补偿系数\n由消费方按 `VideoColorInfo` 另行选择，不在本类范围。",
+      "dst": "Formula (Y/U/V is 0..255 integer field, chroma center 128):\nR = Y + `Rv`· (V−128)；\nG = Y − `Gu`· (U−128) − `Gv`· (V−128)；\nB = Y + `Bu`· (U−128)； The result was clamped down to 0..255.\n\nNormalized domain (0.. 1. Chromaticity center 0.5) Use the same set of coefficients. GPU shader path\n(D3D11 HLSL / GLSL / MSL / SPIR-V) embeds the same set of values. When modifying this class, you must simultaneously verify all shader sources,\nOtherwise, the CPU backing and GPU main path color drift.\n\nThis class only covers the BT.601-Full default matrix; BT.709/BT.2020 with limited-range compensation factors\nSelected separately by the consumer according to `VideoColorInfo`, not covered by this category.",
       "engine": "edge-free",
       "reviewed": false
     },
@@ -2084,6 +2102,12 @@
       "engine": "edge-free",
       "reviewed": false
     },
+    "61641b560276e8b06df0946a5a84fb7f1506c8b5": {
+      "src": "BT.601 全范围（JFIF）YUV→RGB 转换系数——全仓 CPU 转换路径的唯一常量真源。",
+      "dst": "BT.601 Full Range (JFIF) YUV→RGB Conversion Coefficient — the unique constant true source for the full-chamber CPU conversion path.",
+      "engine": "edge-free",
+      "reviewed": false
+    },
     "61836effef23d8a863019d293a489d4564d9c3dd": {
       "src": "视频解码器工厂接口。",
       "dst": "Video decoder factory interface.",
@@ -3260,6 +3284,12 @@
       "engine": "edge-free",
       "reviewed": false
     },
+    "97e7319f9205a45563a36ba0ee3be69bbad58f6f": {
+      "src": "G 通道 V 系数（−0.714136，公式中取负）。",
+      "dst": "G channel V coefficient (−0.714136, negative in the formula).",
+      "engine": "edge-free",
+      "reviewed": false
+    },
     "987f146dd0bad211bd7fce35570ae867724dc06e": {
       "src": "直接注入已组合好的视频后处理变换链与重置钩子。",
       "dst": "Directly inject the assembled video post-processing transformation chain and reset hook.",
@@ -4163,6 +4193,12 @@
     "bdf027dbcb8ade6f60799c3ee0a011656b97492b": {
       "src": "MP4 / MOV 容器。",
       "dst": "MP4 / MOV containers.",
+      "engine": "edge-free",
+      "reviewed": false
+    },
+    "be32877104ff857ead54318d072e1792279ed51f": {
+      "src": "色度中心（8-bit 整数域，128）。",
+      "dst": "Chroma center (8-bit integer field, 128).",
       "engine": "edge-free",
       "reviewed": false
     },
@@ -5159,6 +5195,12 @@
     "f0225f103794216639b0afcf86fcabc0b1c9343a": {
       "src": "帧高度（像素）。",
       "dst": "Frame height (pixels).",
+      "engine": "edge-free",
+      "reviewed": false
+    },
+    "f0480db931fba104e4d9f1f91c68f7ffebe42c4d": {
+      "src": "R 通道 V 系数（+1.402）。",
+      "dst": "R channel V coefficient (+1.402).",
       "engine": "edge-free",
       "reviewed": false
     },

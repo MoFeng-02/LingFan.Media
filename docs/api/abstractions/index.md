@@ -18,6 +18,7 @@ The contract layer: interfaces, models, enums, events and exceptions. Zero imple
 | [`AudioSettings`](/api/abstractions/models-settings-audiosettings) | class | Audio decoding and output settings. |
 | [`AudioTrackInfo`](/api/abstractions/models-tracks-audiotrackinfo) | class | Audio track details. |
 | [`BackendDescriptor`](/api/abstractions/interfaces-player-backenddescriptor) | record | A read-only description of a registered backend (factory interface collection, non-instance). Aggregated by `IBackendRegistry` in DI registration order, for middleware/advanced consumers to view and select backends. |
+| [`Bt601FullRange`](/api/abstractions/models-frames-bt601fullrange) | class | BT.601 Full Range (JFIF) YUV→RGB Conversion Coefficient — the unique constant true source for the full-chamber CPU conversion path. |
 | [`BufferProgressEventArgs`](/api/abstractions/events-bufferprogresseventargs) | class | Buffer progress event parameters. |
 | [`BufferState`](/api/abstractions/enums-bufferstate) | enum | Buffer state. |
 | [`ClockSyncSource`](/api/abstractions/enums-clocksyncsource) | enum | Clock synchronization source. |

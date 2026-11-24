@@ -12,8 +12,8 @@
       "dir": "src/Infrastructure/LingFan.Media.Extensions"
     }
   ],
-  "typeCount": 114,
-  "pageCount": 102,
+  "typeCount": 115,
+  "pageCount": 103,
   "types": [
     {
       "name": "AspectRatioMode",
@@ -152,6 +152,18 @@
         "SubtitleDecoder"
       ],
       "sourceHash": "8c7c7fd1f5a14b1f95f69e291b09bfda3cfb1f567110b33fa1a3b8b1abc32dc4",
+      "project": "abstractions"
+    },
+    {
+      "name": "Bt601FullRange",
+      "kind": "class",
+      "namespace": "LingFan.Media.Abstractions",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/Bt601FullRange.cs",
+      "page": "api/abstractions/models-frames-bt601fullrange",
+      "pageZh": "zh/api/abstractions/models-frames-bt601fullrange",
+      "symbol": "LingFan.Media.Abstractions.Bt601FullRange",
+      "members": [],
+      "sourceHash": "b04db9e37c18371e75723aad0f8d0106a67c9c4a455377f5a5dbdadfb1e8f01e",
       "project": "abstractions"
     },
     {
@@ -2802,6 +2814,16 @@
       "project": "abstractions",
       "types": [
         "AudioFrame"
+      ]
+    },
+    {
+      "page": "api/abstractions/models-frames-bt601fullrange",
+      "pageZh": "zh/api/abstractions/models-frames-bt601fullrange",
+      "source": "src/Infrastructure/LingFan.Media.Abstractions/Models/Frames/Bt601FullRange.cs",
+      "sourceHash": "b04db9e37c18371e75723aad0f8d0106a67c9c4a455377f5a5dbdadfb1e8f01e",
+      "project": "abstractions",
+      "types": [
+        "Bt601FullRange"
       ]
     },
     {

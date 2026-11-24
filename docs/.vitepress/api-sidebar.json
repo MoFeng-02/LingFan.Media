@@ -429,6 +429,10 @@
                   "link": "/api/abstractions/models-frames-audioframe"
                 },
                 {
+                  "text": "Bt601FullRange",
+                  "link": "/api/abstractions/models-frames-bt601fullrange"
+                },
+                {
                   "text": "GpuTextureReadback",
                   "link": "/api/abstractions/models-frames-gputexturereadback"
                 },
@@ -975,6 +979,10 @@
                 {
                   "text": "AudioFrame",
                   "link": "/zh/api/abstractions/models-frames-audioframe"
+                },
+                {
+                  "text": "Bt601FullRange",
+                  "link": "/zh/api/abstractions/models-frames-bt601fullrange"
                 },
                 {
                   "text": "GpuTextureReadback",

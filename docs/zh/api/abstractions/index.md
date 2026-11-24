@@ -18,6 +18,7 @@ generator: "scripts/gen-api.mjs"
 | [`AudioSettings`](/zh/api/abstractions/models-settings-audiosettings) | class | 音频解码与输出设置。 |
 | [`AudioTrackInfo`](/zh/api/abstractions/models-tracks-audiotrackinfo) | class | 音频轨道详情信息。 |
 | [`BackendDescriptor`](/zh/api/abstractions/interfaces-player-backenddescriptor) | record | 一个已注册后端的只读描述（工厂接口集合，非实例）。 由 `IBackendRegistry` 按 DI 注册顺序聚合，供中间件 / 高级消费方查看与选定后端。 |
+| [`Bt601FullRange`](/zh/api/abstractions/models-frames-bt601fullrange) | class | BT.601 全范围（JFIF）YUV→RGB 转换系数——全仓 CPU 转换路径的唯一常量真源。 |
 | [`BufferProgressEventArgs`](/zh/api/abstractions/events-bufferprogresseventargs) | class | 缓冲进度事件参数。 |
 | [`BufferState`](/zh/api/abstractions/enums-bufferstate) | enum | 缓冲状态。 |
 | [`ClockSyncSource`](/zh/api/abstractions/enums-clocksyncsource) | enum | 时钟同步源。 |
