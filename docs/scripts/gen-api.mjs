@@ -15,11 +15,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { walkCs, parseCsFile, parseDocBlock } from './lib/csharp-doc.mjs';
+import { createTranslator, loadTm } from './lib/i18n.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const docsRoot = path.resolve(here, '..');
 const repoRoot = path.resolve(docsRoot, '..');
 const REPO_URL = 'https://github.com/MoFeng-02/LingFan.Media/blob/main/';
+
+// Offline translation memories: non-source locales render translated prose
+// from the TM; missing/stale segments fall back to the source text and are
+// counted (reported at the end; refreshed by scripts/translate.mjs).
+const TRANSLATORS = {
+  en: createTranslator('en', loadTm('en')),
+  zh: createTranslator('zh', loadTm('zh')),
+};
 
 const PROJECTS = [
   {
@@ -140,34 +149,37 @@ function escProse(md) {
 function paramList(params, locale) {
   if (!params.length) return '';
   const t = L[locale];
+  const tr = TRANSLATORS[locale];
   const items = params
-    .map((p) => `- \`${p.name}\`：${escProse(p.text)}`.replace('：', locale === 'en' ? ': ' : '：'))
+    .map((p) => `- \`${p.name}\`：${escProse(tr.t(p.text))}`.replace('：', locale === 'en' ? ': ' : '：'))
     .join('\n');
   return `**${t.parameters}**\n\n${items}\n`;
 }
 
 function renderMemberBlock(mem, kind, typeName, locale) {
   const t = L[locale];
+  const tr = TRANSLATORS[locale];
   const sig = mem.sig.join('\n').replace(/\s+$/, '').replace(/^ {4}/gm, '');
   const doc = parseDocBlock(mem.doc);
   const name = memberName(sig, kind, typeName);
   const heading = name === 'Constructor' ? t.constructor : name;
   const parts = [`### ${heading}`, '', fence(sig), ''];
-  if (doc.summaryMd) parts.push(escProse(doc.summaryMd), '');
+  if (doc.summaryMd) parts.push(escProse(tr.t(doc.summaryMd)), '');
   if (doc.inheritdoc && !doc.summaryMd) parts.push(t.inherits, '');
-  if (doc.remarksMd) parts.push(escProse(doc.remarksMd), '');
+  if (doc.remarksMd) parts.push(escProse(tr.t(doc.remarksMd)), '');
   if (doc.params.length) parts.push(paramList(doc.params, locale));
-  if (doc.returnsMd) parts.push(`**${t.returns}**：${escProse(doc.returnsMd)}`.replace('：', locale === 'en' ? ': ' : '：'), '');
+  if (doc.returnsMd) parts.push(`**${t.returns}**：${escProse(tr.t(doc.returnsMd))}`.replace('：', locale === 'en' ? ': ' : '：'), '');
   return parts.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
 function renderEnumValues(surface, locale) {
   const t = L[locale];
+  const tr = TRANSLATORS[locale];
   const rows = surfaceMembers(surface).map((mem) => {
     const sig = mem.sig.join('\n').trim();
     const name = (sig.match(/^(\w+)/) || [])[1] || sig;
     const doc = parseDocBlock(mem.doc);
-    const desc = escProse(doc.summaryMd || '').replace(/\|/g, '\\|').replace(/\n+/g, ' ');
+    const desc = escProse(tr.t(doc.summaryMd || '')).replace(/\|/g, '\\|').replace(/\n+/g, ' ');
     return `| \`${name}\` | ${desc} |`;
   });
   return [`| ${t.value} | ${t.description} |`, '| --- | --- |', ...rows].join('\n');
@@ -175,13 +187,14 @@ function renderEnumValues(surface, locale) {
 
 function renderType(type, locale) {
   const t = L[locale];
+  const tr = TRANSLATORS[locale];
   const parts = [];
   parts.push(`# ${type.name}`, '');
   parts.push(
     `${t.source}: [\`${path.basename(type.relSource)}\`](${REPO_URL}${type.relSource})`,
     '',
   );
-  if (type.doc.summaryMd) parts.push(escProse(type.doc.summaryMd), '');
+  if (type.doc.summaryMd) parts.push(escProse(tr.t(type.doc.summaryMd)), '');
 
   // Declaration
   parts.push(`## ${t.declaration}`, '');
@@ -193,7 +206,7 @@ function renderType(type, locale) {
     parts.push(fence(`namespace ${type.namespace};\n\n${decl}`), '');
   }
 
-  if (type.doc.remarksMd) parts.push(`## ${t.remarks}`, '', escProse(type.doc.remarksMd), '');
+  if (type.doc.remarksMd) parts.push(`## ${t.remarks}`, '', escProse(tr.t(type.doc.remarksMd)), '');
 
   if (type.kind === 'enum') {
     parts.push(`## ${t.values}`, '', renderEnumValues(type.surface, locale), '');
@@ -362,7 +375,7 @@ for (const proj of PROJECTS) {
       .sort((a, b) => a.ty.name.localeCompare(b.ty.name))
       .map(({ ty, p }) => {
         const link = (locale === 'en' ? `/api/${proj.key}/` : `/zh/api/${proj.key}/`) + p.slug;
-        const sum = escProse(ty.doc.summaryMd || '').replace(/\|/g, '\\|').replace(/\n+/g, ' ');
+        const sum = escProse(TRANSLATORS[locale].t(ty.doc.summaryMd || '')).replace(/\|/g, '\\|').replace(/\n+/g, ' ');
         return `| [\`${ty.name}\`](${link}) | ${ty.kind} | ${sum} |`;
       });
     const head =
@@ -393,3 +406,11 @@ fs.writeFileSync(path.join(docsRoot, '.vitepress/api-sidebar.json'), JSON.string
 
 console.log(`Generated ${allTypes.length} types across ${pages.length} pages (en + zh).`);
 console.log('Wrote api/manifest.json and .vitepress/api-sidebar.json');
+for (const [locale, tr] of Object.entries(TRANSLATORS)) {
+  if (locale === 'zh') continue;
+  if (tr.stale.size) {
+    console.log(`i18n ${locale}: ${tr.stale.size} untranslated/stale segment(s) fell back to source text — run: node scripts/translate.mjs --locale ${locale}`);
+  } else {
+    console.log(`i18n ${locale}: translation memory fully covers current source.`);
+  }
+}

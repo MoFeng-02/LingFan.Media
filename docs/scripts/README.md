@@ -97,6 +97,31 @@ After changing any contract source, run `docs:gen` then `docs:check`. After writ
 or editing a guide page, run `docs:check`. The build is the final verification that
 links and diagrams resolve.
 
+## Translation memory (non-source locales)
+
+The Chinese prose in C# `///` comments is the single source of truth. Non-source
+locales (currently `en`) render from a per-segment translation memory:
+
+```bash
+pnpm docs:translate            # fill docs/i18n/tm.en.json (free Microsoft/Bing edge endpoint)
+pnpm docs:translate -- --dry-run   # list untranslated/stale segments without network
+pnpm docs:translate -- --locale ja # additional locales use the same pipeline
+```
+
+- Each prose segment is keyed by `sha1(source)`. Editing a comment invalidates
+  only that segment; everything else keeps its cached translation.
+- `docs:gen` reads the memory **offline** (zero network in CI). Missing/stale
+  segments fall back to the source text; `docs:check` reports the gap as a
+  warning (never blocks the build).
+- Inline code spans and contract phrases are masked before machine translation;
+  math/arrow symbols (`→ × ≈ ≠ ≥ ≤ ± ∈ …`) must survive verbatim (conservation
+  check per segment). A domain glossary corrects known term drift.
+- Human-proofread entries can be marked `"reviewed": true` in the TM file;
+  the machine engine never overwrites them while the source hash is unchanged.
+- The free endpoint is an internal Microsoft interface and may change or
+  disappear; the TM keeps the site working regardless, and the engine is a
+  pluggable adapter in `scripts/translate.mjs`.
+
 ## Continuous integration (GitHub Actions)
 
 The generated reference is committed to the repository, so the AI index

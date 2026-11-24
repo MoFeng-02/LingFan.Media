@@ -18,7 +18,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { walkCs, parseCsFile, sha256, stripBom } from './lib/csharp-doc.mjs';
+import { walkCs, parseCsFile, sha256, stripBom, parseDocBlock } from './lib/csharp-doc.mjs';
+import { segKey, collectSegments } from './lib/i18n.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const docsRoot = path.resolve(here, '..');
@@ -302,6 +303,49 @@ function checkSourceDocComments(projects) {
   }
 }
 
+// ---------- 6: translation freshness (warning-level) ----------
+// Non-source locales render from the translation memory; missing/stale
+// segments fall back to source text at generation time. This check reports
+// the gap without blocking: refresh with `node scripts/translate.mjs`.
+function checkTranslationFreshness(projects) {
+  const i18nDir = path.join(docsRoot, 'i18n');
+  if (!fs.existsSync(i18nDir)) return;
+  for (const f of fs.readdirSync(i18nDir)) {
+    const m = f.match(/^tm\.(\w+)\.json$/);
+    if (!m || m[1] === 'zh') continue;
+    const locale = m[1];
+    const tm = JSON.parse(fs.readFileSync(path.join(i18nDir, f), 'utf8'));
+    const segs = new Set();
+    const add = (s) => { if (s && /[\u4e00-\u9fff]/.test(s)) segs.add(s.replace(/\r\n/g, '\n').trim()); };
+    const surfaceMembers = (surface) => {
+      const members = [];
+      let cur = { doc: [], sig: [] };
+      for (const line of surface) {
+        if (line.trim().startsWith('///')) {
+          if (cur.sig.length) { members.push(cur); cur = { doc: [], sig: [] }; }
+          cur.doc.push(line.trim().replace(/^\/\/\/\s?/, ''));
+        } else cur.sig.push(line);
+      }
+      if (cur.sig.length || cur.doc.length) members.push(cur);
+      return members;
+    };
+    for (const proj of projects) {
+      for (const abs of walkCs(path.join(repoRoot, proj.dir))) {
+        const parsed = parseCsFile(abs, repoRoot);
+        for (const type of parsed.types) {
+          for (const s of collectSegments(type, surfaceMembers, parseDocBlock)) add(s);
+        }
+      }
+    }
+    let stale = 0;
+    for (const s of segs) {
+      const e = tm.entries[segKey(s)];
+      if (!e || !e.dst) stale++;
+    }
+    if (stale) warn(`i18n ${locale}: ${stale}/${segs.size} segment(s) untranslated or stale — run: node scripts/translate.mjs --locale ${locale}`);
+  }
+}
+
 // ---------- run ----------
 const manifest = readManifest();
 const projects = manifest ? manifest.projects : [
@@ -313,6 +357,7 @@ checkFreshnessAndCoverage(manifest, projects);
 checkGuidePages(manifest, sourceWords);
 checkDesensitize();
 checkSourceDocComments(projects);
+checkTranslationFreshness(projects);
 
 console.log(`Checked docs against source (${sourceWords.size} source identifiers indexed).`);
 if (warnings.length) {
