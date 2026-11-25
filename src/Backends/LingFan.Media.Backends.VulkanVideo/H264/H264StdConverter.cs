@@ -240,6 +240,12 @@ internal sealed unsafe class H264ParameterSet : IDisposable
 
         Pps.NumRefIdxL0DefaultActiveMinus1 = (byte)r.ReadUe();
         Pps.NumRefIdxL1DefaultActiveMinus1 = (byte)r.ReadUe();
+
+        // H.264 §7.4.2.2 PPS 语法序：num_ref_idx 之后是 weighted_pred_flag(u1) +
+        // weighted_bipred_idc(u2)，然后才是 pic_init_qp/qs_minus26(se) 与 chroma_qp_index_offset(se)。
+        // 顺序读错会使 qp/weighted 全部错位（加权预测素材解码错误）。
+        Pps.Flags.WeightedPredFlag = (byte)r.ReadBit();
+        Pps.WeightedBipredIdc = (StdVideoH264WeightedBipredIdc)r.ReadBits(2);
         Pps.PicInitQpMinus26 = (byte)r.ReadSe();
         Pps.PicInitQsMinus26 = (byte)r.ReadSe();
         Pps.ChromaQpIndexOffset = (byte)r.ReadSe();
@@ -247,10 +253,6 @@ internal sealed unsafe class H264ParameterSet : IDisposable
         Pps.Flags.DeblockingFilterControlPresentFlag = (byte)r.ReadBit();
         Pps.Flags.ConstrainedIntraPredFlag = (byte)r.ReadBit();
         Pps.Flags.RedundantPicCntPresentFlag = (byte)r.ReadBit();
-
-        // weighted_pred_flag / weighted_bipred_idc
-        Pps.Flags.WeightedPredFlag = (byte)r.ReadBit();
-        Pps.WeightedBipredIdc = (StdVideoH264WeightedBipredIdc)r.ReadBits(2);
 
         if (!r.Eof)
         {
@@ -270,6 +272,14 @@ internal sealed unsafe class H264ParameterSet : IDisposable
 
             if (!r.Eof)
                 Pps.SecondChromaQpIndexOffset = (byte)r.ReadSe();
+            else
+                Pps.SecondChromaQpIndexOffset = Pps.ChromaQpIndexOffset;
+        }
+        else
+        {
+            // 无 more_rbsp_data：second_chroma_qp_index_offset 缺省继承 chroma_qp_index_offset
+            //（H.264 §7.4.2.2：未出现时取同值）。
+            Pps.SecondChromaQpIndexOffset = Pps.ChromaQpIndexOffset;
         }
     }
 
