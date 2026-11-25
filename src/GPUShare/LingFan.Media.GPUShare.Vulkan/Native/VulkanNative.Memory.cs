@@ -11,6 +11,18 @@ public static unsafe partial class VulkanNative
         => _getImageMemoryRequirements(device, image, pMemoryRequirements);
 
     /// <summary>
+    /// 查询图像子资源布局（vkGetImageSubresourceLayout：offset/rowPitch/arrayPitch/size）。
+    /// OPTIMAL tiling 图像的行距由驱动私有决定，CPU 回读须按返回的 rowPitch 逐行拷贝，
+    /// 按紧密宽度行距解读会产生周期性条纹（Khronos 官方示例 pattern.cpp 同口径）。
+    /// </summary>
+    /// <param name="device">逻辑设备。</param>
+    /// <param name="image">图像句柄。</param>
+    /// <param name="pSubresource">子资源描述（aspect/mip/arrayLayer）。</param>
+    /// <param name="pLayout">输出布局。</param>
+    public static unsafe void GetImageSubresourceLayout(Device device, Image image, ImageSubresource* pSubresource, SubresourceLayout* pLayout)
+        => _getImageSubresourceLayout(device, image, pSubresource, pLayout);
+
+    /// <summary>
     /// 外部内存导入纹理的需求查询必须用 v2（带回 <see cref="MemoryDedicatedRequirements"/>）取权威 size / memoryTypeBits。
     /// Vulkan 1.1+ 为 core；若设备未提供（1.0 且未启用 VK_KHR_get_memory_requirements2）则为 null，
     /// 调用方应回退到 <see cref="GetImageMemoryRequirements"/>。

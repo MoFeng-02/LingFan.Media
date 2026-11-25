@@ -35,6 +35,17 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
     private uint _stagingW;
     private uint _stagingH;
 
+    // LINEAR tiling 中转图（官方口径：OPTIMAL 解码图先 CmdCopyImage 到 LINEAR 图，
+    // 再按 LINEAR 布局 rowPitch copy-to-buffer；直接对 OPTIMAL 图 copy-to-buffer 在
+    // 部分驱动上 tiling 解释不一致产生周期性条纹）。
+    private Image _linearImage;
+    private DeviceMemory _linearMemory;
+    private uint _linearW;
+    private uint _linearH;
+    private uint _linearYPitch;
+    private uint _linearUvPitch;
+    private ulong _linearUvOffset;
+
     private bool _disposed;
 
     /// <summary>
@@ -94,7 +105,13 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (w == 0 || h == 0) return Array.Empty<byte>();
 
-        EnsureStaging(w, h);
+        // 官方口径：OPTIMAL 解码图先 CmdCopyImage 到 LINEAR 中转图，再按 LINEAR rowPitch
+        // copy-to-buffer。直接对 OPTIMAL 图 copy-to-buffer 在部分驱动上 tiling 解释不一致产生条纹。
+        EnsureLinearImage(w, h);
+        uint yPitch = _linearYPitch;
+        uint uvPitch = _linearUvPitch;
+
+        EnsureStaging(w, h, yPitch, uvPitch);
 
         // 录命令
         CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
@@ -129,44 +146,98 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
             PipelineStageFlags.AllCommandsBit, PipelineStageFlags.TransferBit,
             0, 0, null, 0, null, 1, &toTransferBarrier);
 
-        // Copy plane0 (Y, R8) → offset 0; BufferRowLength = w（每行 stride = w 字节）
-        ulong yPlaneSize = (ulong)w * h;
+        // 官方口径：OPTIMAL 解码图（src layer）→ LINEAR 中转图（layer 0）两平面拷贝。
+        ImageCopy* copyRegions = stackalloc ImageCopy[2];
+        copyRegions[0] = new ImageCopy
+        {
+            SrcSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.Plane0BitKhr, MipLevel = 0, BaseArrayLayer = layer, LayerCount = 1 },
+            DstSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.Plane0BitKhr, MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1 },
+            SrcOffset = new Offset3D(0, 0, 0),
+            DstOffset = new Offset3D(0, 0, 0),
+            Extent = new Extent3D(w, h, 1),
+        };
+        copyRegions[1] = new ImageCopy
+        {
+            SrcSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.Plane1BitKhr, MipLevel = 0, BaseArrayLayer = layer, LayerCount = 1 },
+            DstSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.Plane1BitKhr, MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1 },
+            SrcOffset = new Offset3D(0, 0, 0),
+            DstOffset = new Offset3D(0, 0, 0),
+            Extent = new Extent3D(w / 2, h / 2, 1),
+        };
+        // LINEAR 中转图 Undefined → TransferDstOptimal
+        ImageSubresourceRange linRange = new()
+        {
+            AspectMask = ImageAspectFlags.Plane0BitKhr | ImageAspectFlags.Plane1BitKhr,
+            BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = 1,
+        };
+        ImageMemoryBarrier linToDst = new()
+        {
+            SType = StructureType.ImageMemoryBarrier,
+            SrcAccessMask = AccessFlags.None,
+            DstAccessMask = AccessFlags.TransferWriteBit,
+            OldLayout = ImageLayout.Undefined,
+            NewLayout = ImageLayout.TransferDstOptimal,
+            SrcQueueFamilyIndex = ~0u, DstQueueFamilyIndex = ~0u,
+            Image = _linearImage,
+            SubresourceRange = linRange,
+        };
+        VulkanNative.CmdPipelineBarrier(_commandBuffer,
+            PipelineStageFlags.TopOfPipeBit, PipelineStageFlags.TransferBit,
+            0, 0, null, 0, null, 1, &linToDst);
+        VulkanNative.CmdCopyImage(_commandBuffer, src, ImageLayout.TransferSrcOptimal,
+            _linearImage, ImageLayout.TransferDstOptimal, 2, copyRegions);
+        // LINEAR 中转图 TransferDst → TransferSrc
+        ImageMemoryBarrier linToSrc = new()
+        {
+            SType = StructureType.ImageMemoryBarrier,
+            SrcAccessMask = AccessFlags.TransferWriteBit,
+            DstAccessMask = AccessFlags.TransferReadBit,
+            OldLayout = ImageLayout.TransferDstOptimal,
+            NewLayout = ImageLayout.TransferSrcOptimal,
+            SrcQueueFamilyIndex = ~0u, DstQueueFamilyIndex = ~0u,
+            Image = _linearImage,
+            SubresourceRange = linRange,
+        };
+        VulkanNative.CmdPipelineBarrier(_commandBuffer,
+            PipelineStageFlags.TransferBit, PipelineStageFlags.TransferBit,
+            0, 0, null, 0, null, 1, &linToSrc);
+
+        // LINEAR 中转图 → staging buffer（按 LINEAR rowPitch 线性化，无 tiling 歧义）。
+        // UV 在 staging 的偏移用 LINEAR 布局报告的 plane1 offset（含对齐填充），不可用 yPitch*h 推算。
+        ulong yPlaneSize = _linearUvOffset;
         BufferImageCopy yCopy = new()
         {
             BufferOffset = 0,
-            BufferRowLength = w,
+            BufferRowLength = yPitch,
             BufferImageHeight = h,
             ImageSubresource = new ImageSubresourceLayers
             {
                 AspectMask = ImageAspectFlags.Plane0BitKhr,
                 MipLevel = 0,
-                BaseArrayLayer = layer,
+                BaseArrayLayer = 0,
                 LayerCount = 1,
             },
             ImageOffset = new Offset3D(0, 0, 0),
             ImageExtent = new Extent3D(w, h, 1),
         };
-        VulkanNative.CmdCopyImageToBuffer(_commandBuffer, src, ImageLayout.TransferSrcOptimal, _stagingBuffer, 1, &yCopy);
+        VulkanNative.CmdCopyImageToBuffer(_commandBuffer, _linearImage, ImageLayout.TransferSrcOptimal, _stagingBuffer, 1, &yCopy);
 
-        // Copy plane1 (UV, R8G8) → offset yPlaneSize; UV plane 尺寸 W/2 x H/2，buffer 行 stride = W/2（紧密，2 字节/texel → W 字节/行）。
-        // 此前误用 BufferRowLength=w（texels）→ 每行写 2w 字节，h/2 行共越界 ~0.5·W·H 字节（staging 仅 1.5·W·H），
-        //    GPU 越界写 → 下一 submit（渲染）VK_ERROR_DEVICE_LOST。修正为 w/2 与下方 ui 读取的紧密行距一致。
         BufferImageCopy uvCopy = new()
         {
             BufferOffset = yPlaneSize,
-            BufferRowLength = w / 2,
+            BufferRowLength = uvPitch / 2,
             BufferImageHeight = h / 2,
             ImageSubresource = new ImageSubresourceLayers
             {
                 AspectMask = ImageAspectFlags.Plane1BitKhr,
                 MipLevel = 0,
-                BaseArrayLayer = layer,
+                BaseArrayLayer = 0,
                 LayerCount = 1,
             },
             ImageOffset = new Offset3D(0, 0, 0),
             ImageExtent = new Extent3D(w / 2, h / 2, 1),
         };
-        VulkanNative.CmdCopyImageToBuffer(_commandBuffer, src, ImageLayout.TransferSrcOptimal, _stagingBuffer, 1, &uvCopy);
+        VulkanNative.CmdCopyImageToBuffer(_commandBuffer, _linearImage, ImageLayout.TransferSrcOptimal, _stagingBuffer, 1, &uvCopy);
 
         // Barrier B: TransferSrcOptimal → VideoDecodeDpbKhr（还原为解码器/渲染器约定的交付布局）
         ImageMemoryBarrier backBarrier = new()
@@ -217,11 +288,11 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
         {
             for (int x = 0; x < wInt; x++)
             {
-                int yi = y * wInt + x;
-                int ui = (int)yPlaneSize + (y / 2) * wInt + (x / 2) * 2;
+                int yi = y * (int)yPitch + x;
+                int ui = (int)yPlaneSize + (y / 2) * (int)uvPitch + (x / 2) * 2;
                 int Y = pStaging[yi], U = pStaging[ui], V = pStaging[ui + 1];
                 int c = Y - 16, d = U - 128, e = V - 128;
-                int o = yi * 4;
+                int o = (y * wInt + x) * 4; // 输出紧凑 BGRA，索引用紧凑行距（staging 行距含对齐填充）
                 // BT.601 full range → BGRA 字节顺序
                 bgra[o]     = (byte)Clamp8((298 * c + 516 * d + 128) >> 8);
                 bgra[o + 1] = (byte)Clamp8((298 * c - 100 * d - 208 * e + 128) >> 8);
@@ -232,9 +303,62 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
         return bgra;
     }
 
-    private void EnsureStaging(uint w, uint h)
+    /// <summary>
+    /// 创建/复用 LINEAR tiling NV12 中转图（官方回读口径）。LINEAR 布局的 rowPitch 由
+    /// vkGetImageSubresourceLayout 权威报告，copy-to-buffer 按其线性化无 tiling 歧义。
+    /// </summary>
+    private void EnsureLinearImage(uint w, uint h)
     {
-        ulong required = (ulong)w * h * 3 / 2; // NV12 = Y(W*H) + UV(W/2*H/2*2) = 1.5*W*H
+        if (_linearImage.Handle != 0 && _linearW == w && _linearH == h) return;
+        ReleaseLinearImage();
+
+        var ci = new ImageCreateInfo
+        {
+            SType = StructureType.ImageCreateInfo,
+            ImageType = ImageType.Type2D,
+            Format = Format.G8B8R82Plane420Unorm,
+            Extent = new Extent3D(w, h, 1),
+            MipLevels = 1,
+            ArrayLayers = 1,
+            Samples = SampleCountFlags.Count1Bit,
+            Tiling = ImageTiling.Linear,
+            Usage = ImageUsageFlags.TransferDstBit | ImageUsageFlags.TransferSrcBit,
+            SharingMode = SharingMode.Exclusive,
+            InitialLayout = ImageLayout.Undefined,
+        };
+        if (VulkanNative.CreateImage(_device, ref ci, null, out _linearImage) != Result.Success)
+            throw new InvalidOperationException("readback: 创建 LINEAR 中转图失败");
+        MemoryRequirements req;
+        VulkanNative.GetImageMemoryRequirements(_device, _linearImage, &req);
+        uint memType = FindMemoryType(req.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit);
+        var alloc = new MemoryAllocateInfo { SType = StructureType.MemoryAllocateInfo, AllocationSize = req.Size, MemoryTypeIndex = memType };
+        if (VulkanNative.AllocateMemory(_device, ref alloc, null, out _linearMemory) != Result.Success)
+            throw new InvalidOperationException("readback: 分配 LINEAR 中转图内存失败");
+        VulkanNative.BindImageMemory(_device, _linearImage, _linearMemory, 0);
+
+        ImageSubresource ySub = new() { AspectMask = ImageAspectFlags.Plane0BitKhr, MipLevel = 0, ArrayLayer = 0 };
+        ImageSubresource uvSub = new() { AspectMask = ImageAspectFlags.Plane1BitKhr, MipLevel = 0, ArrayLayer = 0 };
+        SubresourceLayout yL, uvL;
+        VulkanNative.GetImageSubresourceLayout(_device, _linearImage, &ySub, &yL);
+        VulkanNative.GetImageSubresourceLayout(_device, _linearImage, &uvSub, &uvL);
+        _linearYPitch = (uint)yL.RowPitch;
+        _linearUvPitch = (uint)uvL.RowPitch;
+        _linearUvOffset = uvL.Offset;
+        _linearW = w; _linearH = h;
+    }
+
+    private void ReleaseLinearImage()
+    {
+        if (_device.Handle == 0) return;
+        if (_linearImage.Handle != 0) { VulkanNative.DestroyImage(_device, _linearImage, null); _linearImage = default; }
+        if (_linearMemory.Handle != 0) { VulkanNative.FreeMemory(_device, _linearMemory, null); _linearMemory = default; }
+        _linearW = 0; _linearH = 0;
+    }
+
+    private void EnsureStaging(uint w, uint h, uint yPitch, uint uvPitch)
+    {
+        // NV12 = Y(rowPitch×H) + UV(uvPitch×H/2) + 平面间对齐填充；以 LINEAR 布局 plane1 offset+size 为准。
+        ulong required = _linearUvOffset + (ulong)uvPitch * (h / 2);
         if (required < 4096) required = 4096;
         if (_stagingBuffer.Handle != 0 && _stagingW == w && _stagingH == h && _stagingSize >= required) return;
 
@@ -309,6 +433,7 @@ public sealed unsafe class VulkanVideoGpuReadbackContext : IDisposable
         if (_device.Handle != 0)
         {
             ReleaseStaging();
+            ReleaseLinearImage();
             if (_fence.Handle != 0) VulkanNative.DestroyFence(_device, _fence, null);
             if (_commandPool.Handle != 0) VulkanNative.DestroyCommandPool(_device, _commandPool, null);
         }

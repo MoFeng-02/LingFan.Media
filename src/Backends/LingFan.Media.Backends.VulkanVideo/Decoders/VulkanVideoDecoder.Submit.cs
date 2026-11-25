@@ -137,6 +137,40 @@ internal sealed unsafe partial class VulkanVideoDecoder
         for (int i = 0; i < _references.Count; i++)
             EnsureSlotDecodeLayout(_references[i]);
 
+        // 码流缓冲屏障（Khronos 官方 Vulkan-Video-Samples 口径）：CPU 写入（HOST_WRITE）→
+        // 解码引擎读取（VIDEO_DECODE_READ），synchronization2 精确阶段位。
+        // 缺此屏障时解码引擎可能读到未同步的码流数据 → 静默不写入重建图像。
+        if (VulkanNative.HasPipelineBarrier2)
+        {
+            BufferMemoryBarrier2 bitstreamBarrier = new()
+            {
+                SType = StructureType.BufferMemoryBarrier2,
+                PNext = null,
+                SrcStageMask = PipelineStageFlags2.HostBit,
+                SrcAccessMask = AccessFlags2.HostWriteBit,
+                DstStageMask = PipelineStageFlags2.VideoDecodeBitKhr,
+                DstAccessMask = AccessFlags2.VideoDecodeReadBitKhr,
+                SrcQueueFamilyIndex = ~0u,
+                DstQueueFamilyIndex = ~0u,
+                Buffer = _bitstreamBuf,
+                Offset = 0,
+                Size = alignedRange,
+            };
+            DependencyInfo depInfo = new()
+            {
+                SType = StructureType.DependencyInfo,
+                PNext = null,
+                DependencyFlags = DependencyFlags.ByRegionBit,
+                MemoryBarrierCount = 0,
+                PMemoryBarriers = null,
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &bitstreamBarrier,
+                ImageMemoryBarrierCount = 0,
+                PImageMemoryBarriers = null,
+            };
+            VulkanNative.CmdPipelineBarrier2(_commandBuffer, &depInfo);
+        }
+
         VulkanNative.CmdBeginVideoCodingKHR(_commandBuffer, &beginInfo);
         if (_firstFrame)
             VulkanNative.CmdControlVideoCodingKHR(_commandBuffer, &ctrlInfo);

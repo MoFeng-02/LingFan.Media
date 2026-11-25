@@ -311,11 +311,9 @@ internal sealed unsafe partial class VulkanVideoDecoder : IVideoDecoder
                               $"mapped={mp[0]:X2} {mp[1]:X2} {mp[2]:X2} {mp[3]:X2} startCodePresent={hasSc}");
         }
 
-        // 首个 slice：sliceOffsets 已指向 NAL 头（起始码已被 BuildBitstream 剥离），直接取 NAL 头与 RBSP。
-        // 规范要求（VK_KHR_video_decode_h264 42.11.1 节）：pSliceOffsets 须指向「slice header 起点」（即 NAL 头字节），
-        // 比特流缓冲绝不可含起始码前缀（00 00 01）——含起始码会让解码器把起始码首字节当 NAL 头读成 type=0
-        // （未定义 NAL）→ 静默丢弃全部切片 → DPB 全零 NV12 → 恒绿（绿屏成因）。
-        int nalHeaderOff = sliceOffsets[0];
+        // 首个 slice：sliceOffsets 指向起始码（00 00 01）起点（官方 Vulkan-Video-Samples 口径），
+        // NAL 头在起始码后 3 字节；本地解析 slice header 须跳过起始码前缀。
+        int nalHeaderOff = sliceOffsets[0] + 3;
         byte nalHeader = bitstream[nalHeaderOff];
         byte nalRefIdc = (byte)((nalHeader >> 5) & 0x3);
         byte nalUnitType = (byte)(nalHeader & 0x1F);

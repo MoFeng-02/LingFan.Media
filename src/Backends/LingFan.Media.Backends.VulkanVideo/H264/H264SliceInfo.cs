@@ -85,15 +85,17 @@ internal static unsafe class H264SliceInfo
 
     /// <summary>
     /// 向解码比特流追加一个 slice NAL：起始码前导 0 填充至 <paramref name="bitstreamOffsetAlign"/> 边界，
-    /// 再直接写 NAL 原始字节（NAL 头 + RBSP，emulation prevention 字节保留）。
-    /// <paramref name="offsets"/> 记录 NAL 头位置——Vulkan H.264 解码要求 <c>pSliceOffsets</c> 指向 NAL 头
-    /// （slice header 起点），绝不可带起始码前缀，否则解码器静默丢弃（无错误、输出全零 → 绿屏）。
+    /// 写三字节起始码（00 00 01）+ NAL 原始字节（NAL 头 + RBSP，emulation prevention 字节保留）。
+    /// <paramref name="offsets"/> 记录起始码起点——Khronos 官方 Vulkan-Video-Samples 口径：
+    /// 码流缓冲按 Annex-B 字节流组织，pSliceOffsets 指向起始码（HasSliceStartCodeAtOffset 校验），
+    /// 驱动经起始码定界 slice。
     /// </summary>
     private static void AppendNal(List<byte> outBuf, List<int> offsets, ReadOnlySpan<byte> nal, ulong bitstreamOffsetAlign)
     {
         ulong align = bitstreamOffsetAlign < 1 ? 1 : bitstreamOffsetAlign;
-        while ((ulong)outBuf.Count % align != 0) outBuf.Add(0); // 前导 0 填充（解码器不读取前导字节）
-        offsets.Add(outBuf.Count);                        // 指向 NAL 头（slice header 起点，无起始码）
+        while ((ulong)outBuf.Count % align != 0) outBuf.Add(0); // 前导 0 填充（对齐至 minBitstreamBufferOffsetAlignment）
+        offsets.Add(outBuf.Count);                        // 指向起始码起点
+        outBuf.Add(0); outBuf.Add(0); outBuf.Add(1);      // 三字节起始码（官方口径）
         for (int i = 0; i < nal.Length; i++) outBuf.Add(nal[i]);
     }
 

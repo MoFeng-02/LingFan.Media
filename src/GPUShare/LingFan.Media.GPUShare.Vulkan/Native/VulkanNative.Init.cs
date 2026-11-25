@@ -137,6 +137,7 @@ public static unsafe partial class VulkanNative
             _createImage = (delegate* unmanaged[Stdcall]<Device, ImageCreateInfo*, AllocationCallbacks*, Image*, Result>)vkGetDeviceProcAddr(h, "vkCreateImage");
             _destroyImage = (delegate* unmanaged[Stdcall]<Device, Image, AllocationCallbacks*, void>)vkGetDeviceProcAddr(h, "vkDestroyImage");
             _getImageMemoryRequirements = (delegate* unmanaged[Stdcall]<Device, Image, MemoryRequirements*, void>)vkGetDeviceProcAddr(h, "vkGetImageMemoryRequirements");
+            _getImageSubresourceLayout = (delegate* unmanaged[Stdcall]<Device, Image, ImageSubresource*, SubresourceLayout*, void>)vkGetDeviceProcAddr(h, "vkGetImageSubresourceLayout");
             // 外部内存导入纹理的内存需求必须用 v2（带回 VkMemoryDedicatedRequirements）取权威 size/memoryTypeBits；
             // v1 vkGetImageMemoryRequirements 对带 VK_EXTERNAL_MEMORY 的 image 返回的 memoryTypeBits/size 在导入场景下不可靠
             // （NVIDIA 上尤甚，导致 vkAllocateMemory 误判为真实分配 → ErrorOutOfDeviceMemory）。
