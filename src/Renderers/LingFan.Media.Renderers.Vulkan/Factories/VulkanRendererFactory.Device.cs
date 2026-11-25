@@ -264,6 +264,37 @@ public sealed unsafe partial class VulkanRendererFactory
                 }
                 videoProfileIndependentEnabled = enableVideoMaintenance1;
 
+                // synchronization2 特性探测（能力自报）：Vulkan 1.3 核心必选特性，但经
+                // vkCreateDevice（非 1.3 实例路径）创建的设备仍须显式链入 Features2 启用，
+                // 否则 vkCmdPipelineBarrier2 触发 VUID-03848（feature not enabled）。
+                // 用途：video-decode 精确阶段/访问屏障（64 位掩码，核心 32 位不含 video 位）。
+                PhysicalDeviceVulkan13Features vulkan13Features = default;
+                bool enableSync2 = false;
+                if (_videoQueueFamilyIndex != uint.MaxValue)
+                {
+                    PhysicalDeviceVulkan13Features sync2Probe = new()
+                    {
+                        SType = StructureType.PhysicalDeviceVulkan13Features,
+                    };
+                    PhysicalDeviceFeatures2 sync2Features2 = new()
+                    {
+                        SType = StructureType.PhysicalDeviceFeatures2,
+                        PNext = &sync2Probe,
+                    };
+                    Result sync2Result = VulkanNative.GetPhysicalDeviceFeatures2(physicalDevice, &sync2Features2);
+                    enableSync2 = sync2Result == Result.Success && sync2Probe.Synchronization2;
+                    if (enableSync2)
+                    {
+                        vulkan13Features = new PhysicalDeviceVulkan13Features
+                        {
+                            SType = StructureType.PhysicalDeviceVulkan13Features,
+                            Synchronization2 = true,
+                        };
+                    }
+                    _logger.LogInformation("Vulkan synchronization2 探测：特性支持={Supported}（probeResult={Result}）→ 启用={Enabled}",
+                        enableSync2, sync2Result, enableSync2);
+                }
+
                 float queuePriority = 1.0f;
                 var queueInfo = new DeviceQueueCreateInfo
                 {
@@ -302,6 +333,12 @@ public sealed unsafe partial class VulkanRendererFactory
                 {
                     videoMaintenance1Features.PNext = devInfo.PNext;
                     devInfo.PNext = &videoMaintenance1Features;
+                }
+                // synchronization2（Vulkan 1.3 特性结构）：链头插入，与 vm1/ycbcr 独立并存。
+                if (enableSync2)
+                {
+                    vulkan13Features.PNext = devInfo.PNext;
+                    devInfo.PNext = &vulkan13Features;
                 }
 
                 fixed (DeviceQueueCreateInfo* pQueueInfos = queueInfos)

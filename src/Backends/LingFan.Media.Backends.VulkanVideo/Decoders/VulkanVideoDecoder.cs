@@ -127,6 +127,7 @@ internal sealed unsafe partial class VulkanVideoDecoder : IVideoDecoder
             _graphicsQueueFamilyIndex = _gpuContext.GraphicsQueueFamilyIndex;
 
             VulkanNative.InitVideoDevice(_device); // 解析 VK_KHR_video_decode_*；不可用即 InvalidOperationException
+            VulkanNative.InitSync2Device(_device); // 解析 vkCmdPipelineBarrier2（synchronization2；缺失回落核心屏障）
             CreateVideoSession(settings);
             CreateCommandResources();
             CreateDpb();

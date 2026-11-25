@@ -350,11 +350,23 @@ internal sealed unsafe partial class VulkanVideoDecoder
     /// 把 DPB 槽 NV12 双平面（PLANE_0=Y、PLANE_1=UV）由 <paramref name="oldLayout"/> 转至
     /// <see cref="ImageLayout.VideoDecodeDpbKhr"/>，供后续 CmdDecodeVideoKHR 访问。
     /// </summary>
+    /// <remarks>
+    /// 优先走 synchronization2（<c>vkCmdPipelineBarrier2</c>）：64 位掩码可精确表达
+    /// video-decode 阶段位（<c>VIDEO_DECODE</c>）与访问位（<c>VIDEO_DECODE_READ/WRITE</c>），
+    /// 并附全局内存屏障同步解码引擎写入（FFmpeg vulkan_decode.c 同口径）。
+    /// 核心 32 位掩码不含这些位，AllCommands 通用屏障对视频解码引擎缓存的可见性不保证等价。
+    /// synchronization2 不可用时回落核心全屏障路径（规范合法，覆盖语义尽力）。
+    /// </remarks>
     private void TransitionDpbSlotToDecodeLayout(int slot, ImageLayout oldLayout, PipelineStageFlags srcStage, AccessFlags srcAccess)
     {
-        // 原版 vkCmdPipelineBarrier 仅接受核心 PipelineStageFlags/AccessFlags（Silk.NET 2.23.0 的
-        // video-decode 阶段/访问位仅存在于 PipelineStageFlags2/AccessFlags2，对应 synchronization2）。
-        // 用 AllCommandsBit + MemoryRead/WriteBit 的「全屏障」等价覆盖 video-decode 阶段与读写访问，规范合法且零依赖。
+        if (VulkanNative.HasPipelineBarrier2)
+        {
+            TransitionDpbSlotToDecodeLayoutSync2(slot, oldLayout);
+            return;
+        }
+
+        // 回落：原版 vkCmdPipelineBarrier 仅接受核心 PipelineStageFlags/AccessFlags（32 位，
+        // 不含 video-decode 阶段/访问位）。用 AllCommandsBit + MemoryRead/WriteBit 的「全屏障」覆盖。
         var dstStage = PipelineStageFlags.AllCommandsBit;
         var dstAccess = AccessFlags.MemoryReadBit | AccessFlags.MemoryWriteBit;
 
@@ -381,5 +393,77 @@ internal sealed unsafe partial class VulkanVideoDecoder
             };
             VulkanNative.CmdPipelineBarrier(_commandBuffer, srcStage, dstStage, 0, 0, null, 0, null, 1, &barrier);
         }
+    }
+
+    /// <summary>
+    /// synchronization2 精确屏障路径：图像布局屏障（双平面）+ 全局内存屏障一次提交。
+    /// 源阶段/访问按旧布局映射到 64 位掩码；目标恒为 VIDEO_DECODE 阶段 + VIDEO_DECODE_READ|WRITE 访问。
+    /// </summary>
+    /// <param name="slot">DPB 槽索引。</param>
+    /// <param name="oldLayout">槽当前布局（映射源阶段/访问）。</param>
+    private void TransitionDpbSlotToDecodeLayoutSync2(int slot, ImageLayout oldLayout)
+    {
+        // 旧布局 → 64 位源阶段/访问映射（与核心路径的 switch 同语义）。
+        (PipelineStageFlags2 srcStage2, AccessFlags2 srcAccess2) = oldLayout switch
+        {
+            ImageLayout.Undefined => (PipelineStageFlags2.None, AccessFlags2.None),
+            ImageLayout.ShaderReadOnlyOptimal => (PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderReadBit),
+            ImageLayout.TransferSrcOptimal => (PipelineStageFlags2.TransferBit, AccessFlags2.TransferReadBit),
+            ImageLayout.VideoDecodeDpbKhr => (PipelineStageFlags2.VideoDecodeBitKhr,
+                AccessFlags2.VideoDecodeReadBitKhr | AccessFlags2.VideoDecodeWriteBitKhr),
+            _ => (PipelineStageFlags2.None, AccessFlags2.None),
+        };
+
+        ImageMemoryBarrier2* barriers = stackalloc ImageMemoryBarrier2[2];
+        for (int p = 0; p < 2; p++)
+        {
+            barriers[p] = new ImageMemoryBarrier2
+            {
+                SType = StructureType.ImageMemoryBarrier2,
+                PNext = null,
+                SrcStageMask = srcStage2,
+                SrcAccessMask = srcAccess2,
+                DstStageMask = PipelineStageFlags2.VideoDecodeBitKhr,
+                DstAccessMask = AccessFlags2.VideoDecodeReadBitKhr | AccessFlags2.VideoDecodeWriteBitKhr,
+                OldLayout = oldLayout,
+                NewLayout = ImageLayout.VideoDecodeDpbKhr,
+                SrcQueueFamilyIndex = ~0u, // CONCURRENT：忽略所有权转移
+                DstQueueFamilyIndex = ~0u,
+                Image = _dpb[slot].Image,
+                SubresourceRange = new ImageSubresourceRange
+                {
+                    AspectMask = p == 0 ? ImageAspectFlags.Plane0BitKhr : ImageAspectFlags.Plane1BitKhr,
+                    BaseMipLevel = 0,
+                    LevelCount = 1,
+                    BaseArrayLayer = (uint)slot,
+                    LayerCount = 1,
+                },
+            };
+        }
+
+        // 全局内存屏障：解码引擎先前写入 → 本次解码读写（FFmpeg ff_vk_decode_frame 的 mem_bar 同口径）。
+        MemoryBarrier2 memBarrier = new()
+        {
+            SType = StructureType.MemoryBarrier2,
+            PNext = null,
+            SrcStageMask = PipelineStageFlags2.VideoDecodeBitKhr,
+            SrcAccessMask = AccessFlags2.VideoDecodeWriteBitKhr,
+            DstStageMask = PipelineStageFlags2.VideoDecodeBitKhr,
+            DstAccessMask = AccessFlags2.VideoDecodeReadBitKhr | AccessFlags2.VideoDecodeWriteBitKhr,
+        };
+
+        DependencyInfo depInfo = new()
+        {
+            SType = StructureType.DependencyInfo,
+            PNext = null,
+            DependencyFlags = DependencyFlags.ByRegionBit,
+            MemoryBarrierCount = 1,
+            PMemoryBarriers = &memBarrier,
+            BufferMemoryBarrierCount = 0,
+            PBufferMemoryBarriers = null,
+            ImageMemoryBarrierCount = 2,
+            PImageMemoryBarriers = barriers,
+        };
+        VulkanNative.CmdPipelineBarrier2(_commandBuffer, &depInfo);
     }
 }
