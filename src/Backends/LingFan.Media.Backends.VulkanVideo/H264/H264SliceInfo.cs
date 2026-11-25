@@ -109,7 +109,16 @@ internal static unsafe class H264SliceInfo
 
     /// <summary>
     /// 解析首个 slice 的 RBSP（已去 NAL 头与 emulation prevention），结合 SPS 上下文填充图片信息与参考信息。
+    /// 深解析至 dec_ref_pic_marking：长期参考标记（IDR long_term_reference_flag / MMCO op=6）回填
+    /// refInfo.UsedForLongTermReference；带 num_ref_idx_active_override 的流深解析参考数未跟踪，
+    /// 该场景保守置 false（结果不可信时不声明长期参考）。
     /// </summary>
+    /// <param name="firstSliceRbsp">首 slice RBSP。</param>
+    /// <param name="nalRefIdc">NAL 头 nal_ref_idc。</param>
+    /// <param name="nalUnitType">NAL 类型（5=IDR）。</param>
+    /// <param name="sps">SPS/PPS 上下文。</param>
+    /// <param name="picInfo">输出：图片信息。</param>
+    /// <param name="refInfo">输出：参考信息（含长期参考标记）。</param>
     public static void ReadPictureInfo(
         ReadOnlySpan<byte> firstSliceRbsp, byte nalRefIdc, byte nalUnitType, H264ParameterSet sps,
         out StdVideoDecodeH264PictureInfo picInfo, out StdVideoDecodeH264ReferenceInfo refInfo)
@@ -136,7 +145,11 @@ internal static unsafe class H264SliceInfo
         int deltaPicOrderCnt0 = 0;
         int deltaPicOrderCnt1 = 0;
         if (sps.PicOrderCntType == 0)
+        {
             picOrderCntLsb = (int)r.ReadBits(sps.Log2MaxPicOrderCntLsbMinus4 + 4);
+            if (sps.Pps.Flags.BottomFieldPicOrderInFramePresentFlag == 1 && fieldPicFlag == 0)
+                r.ReadSe(); // delta_pic_order_cnt_bottom（不入 STD，仅推进位流供深解析）
+        }
         else if (sps.PicOrderCntType == 1 && fieldPicFlag == 0)
         {
             deltaPicOrderCnt0 = r.ReadSe();
@@ -172,11 +185,106 @@ internal static unsafe class H264SliceInfo
             refInfo.Flags.TopFieldFlag = bottomFieldFlag == 0 ? 1u : 0u;
             refInfo.Flags.BottomFieldFlag = (uint)bottomFieldFlag;
         }
-        refInfo.Flags.UsedForLongTermReference = 0;
         refInfo.Flags.IsNonExisting = 0;
         refInfo.FrameNum = (ushort)frameNum;
         refInfo.PicOrderCnt[0] = picInfo.PicOrderCnt[0];
         refInfo.PicOrderCnt[1] = picInfo.PicOrderCnt[1];
+
+        // 深解析 dec_ref_pic_marking 判定长期参考（IDR：long_term_reference_flag；非 IDR：MMCO op=6）。
+        // 漏置时驱动 DPB 状态与码流不符。带 num_ref_idx_active_override 的流参考数未跟踪，保守置 false。
+        bool longTerm = ReadDecRefPicMarking(ref r, sliceType % 5, nalUnitType == 5, sps, out bool hadOverride);
+        refInfo.Flags.UsedForLongTermReference = (!hadOverride && longTerm) ? 1u : 0u;
+    }
+
+    /// <summary>
+    /// 从 slice 头 pic_order_cnt 之后的位流位置继续解析至 dec_ref_pic_marking（含），判定长期参考标记。
+    /// 语法：redundant_pic_cnt（PPS 声明时）→ direct_spatial_mv_pred（B）→ num_ref_idx_active_override →
+    /// ref_pic_list_modification → pred_weight_table（按 PPS）→ dec_ref_pic_marking。
+    /// </summary>
+    /// <param name="r">位读取器（已消费至 pic_order_cnt 结束）。</param>
+    /// <param name="sliceType">归一化 slice 类型（0=P 1=B 2=I 3=SP 4=SI）。</param>
+    /// <param name="isIdr">是否 IDR。</param>
+    /// <param name="sps">SPS/PPS 上下文。</param>
+    /// <param name="hadOverride">输出：是否出现 num_ref_idx_active_override_flag=1（结果可信度门控）。</param>
+    /// <returns>当前帧是否标记为长期参考。</returns>
+    private static bool ReadDecRefPicMarking(ref H264BitReader r, int sliceType, bool isIdr, H264ParameterSet sps, out bool hadOverride)
+    {
+        hadOverride = false;
+        if (sps.Pps.Flags.RedundantPicCntPresentFlag == 1) r.ReadUe(); // redundant_pic_cnt
+
+        int st = sliceType;
+        if (st == 1) r.ReadBit(); // direct_spatial_mv_pred_flag（B slice）
+        int l0Active = sps.Pps.NumRefIdxL0DefaultActiveMinus1 + 1;
+        int l1Active = sps.Pps.NumRefIdxL1DefaultActiveMinus1 + 1;
+        if (st == 0 || st == 1 || st == 3) // P / SP / B
+        {
+            if (r.ReadBit() == 1) // num_ref_idx_active_override_flag
+            {
+                hadOverride = true;
+                l0Active = r.ReadUe() + 1;
+                if (st == 1) l1Active = r.ReadUe() + 1;
+            }
+            // ref_pic_list_modification（l0：非 I/SI；l1：B）
+            if (st != 2 && st != 4 && r.ReadBit() == 1)
+            {
+                int op;
+                do
+                {
+                    op = r.ReadUe(); // modification_of_pic_nums_idc
+                    if (op == 0 || op == 1 || op == 2) r.ReadUe(); // abs_diff_pic_num_minus1 / long_term_pic_num
+                } while (op != 3 && !r.Eof);
+            }
+            if (st == 1 && r.ReadBit() == 1)
+            {
+                int op;
+                do
+                {
+                    op = r.ReadUe();
+                    if (op == 0 || op == 1 || op == 2) r.ReadUe();
+                } while (op != 3 && !r.Eof);
+            }
+            // pred_weight_table
+            bool weighted = (st == 0 || st == 3) ? sps.Pps.Flags.WeightedPredFlag == 1
+                          : (int)sps.Pps.WeightedBipredIdc == 1;
+            if (weighted)
+            {
+                r.ReadUe(); // luma_log2_weight_denom
+                if (sps.ChromaFormatIdc != 0) r.ReadUe(); // chroma_log2_weight_denom
+                for (int i = 0; i < l0Active; i++)
+                {
+                    if (r.ReadBit() == 1) { r.ReadSe(); r.ReadSe(); } // luma weight + offset
+                    if (sps.ChromaFormatIdc != 0 && r.ReadBit() == 1) { r.ReadSe(); r.ReadSe(); r.ReadSe(); r.ReadSe(); }
+                }
+                if (st == 1)
+                {
+                    for (int i = 0; i < l1Active; i++)
+                    {
+                        if (r.ReadBit() == 1) { r.ReadSe(); r.ReadSe(); }
+                        if (sps.ChromaFormatIdc != 0 && r.ReadBit() == 1) { r.ReadSe(); r.ReadSe(); r.ReadSe(); r.ReadSe(); }
+                    }
+                }
+            }
+        }
+        // dec_ref_pic_marking
+        if (isIdr)
+        {
+            r.ReadBit(); // no_output_of_prior_pics_flag
+            return r.ReadBit() == 1; // long_term_reference_flag
+        }
+        if (r.ReadBit() == 1) // adaptive_ref_pic_marking_mode_flag
+        {
+            int op;
+            do
+            {
+                op = r.ReadUe(); // memory_management_control_operation
+                if (op == 1 || op == 3) r.ReadUe(); // difference_of_pic_nums_minus1
+                if (op == 2) r.ReadUe(); // long_term_pic_num
+                if (op == 3 || op == 6) r.ReadUe(); // long_term_frame_idx
+                if (op == 4) r.ReadUe(); // max_long_term_frame_idx_plus1
+                if (op == 6) return true; // 当前帧标记为长期参考
+            } while (op != 0 && !r.Eof);
+        }
+        return false;
     }
 
     /// <summary>剥离 emulation prevention three byte（00 00 03 → 00 00）。</summary>
